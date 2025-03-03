@@ -3,6 +3,7 @@
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client};
+use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
 use eyre::{Context, ContextCompat};
@@ -18,7 +19,7 @@ use iris_mpc_common::{
         smpc_request::{
             IrisCodeSharesJSON, SharesS3Object, UniquenessRequest, UNIQUENESS_MESSAGE_TYPE,
         },
-        smpc_response::create_message_type_attribute_map,
+        smpc_response::{create_message_type_attribute_map, UniquenessResult},
         sqs_s3_helper::upload_file_to_s3,
     },
     iris_db::{db::IrisDB, iris::IrisCode},
@@ -29,13 +30,14 @@ use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     sync::{Mutex, Semaphore},
+    task::spawn,
     time::sleep,
 };
 use uuid::Uuid;
 
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 64;
-const DEFAULT_N_BATCHES: usize = 5;
+const DEFAULT_N_BATCHES: usize = 3;
 const DEFAULT_N_REPEAT: usize = 0;
 
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
@@ -56,6 +58,9 @@ pub struct Opt {
 
     #[arg(long, env, required = true)]
     pub region: String,
+
+    #[arg(long, env, required = true)]
+    pub response_queue_url: String,
 
     #[arg(long, env)]
     pub db_index: Option<usize>,
@@ -90,6 +95,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
         requests_bucket_name,
         region,
         request_topic_arn,
+        response_queue_url,
         db_index,
         rng_seed,
         n_repeat,
@@ -99,6 +105,8 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
         batch_size,
         max_concurrent_requests,
     } = opts;
+
+    let n_queries: usize = batch_size * n_batches;
 
     // Download public keys for each participant.
     let mut shares_encryption_public_keys: Vec<PublicKey> = Vec::new();
@@ -112,6 +120,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
             PublicKey::from_slice(&public_key_bytes).context("Failed to parse public key")?;
         shares_encryption_public_keys.push(public_key);
     }
+    let region_clone = region.clone();
 
     let region = Region::new(region);
     let shared_config = aws_config::from_env()
@@ -131,6 +140,14 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
 
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sns_client = Client::from_conf(sns_config_builder.build());
+    let region_provider = Region::new(region_clone.to_string());
+    let results_sqs_config = aws_config::from_env().region(region_provider).load().await;
+    let results_sqs_client = SqsClient::new(&results_sqs_config);
+    results_sqs_client
+        .purge_queue()
+        .queue_url(response_queue_url.clone())
+        .send()
+        .await?;
 
     let db = IrisDB::new_random_par(DB_SIZE, &mut StdRng::seed_from_u64(RNG_SEED_SERVER));
 
@@ -141,87 +158,78 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
     let db: Arc<Mutex<IrisDB>> = Arc::new(Mutex::new(db));
     let requests_sns_client: Arc<Client> = Arc::new(sns_client);
 
+    let thread_expected_results = expected_results.clone();
+    // let thread_requests = requests.clone();
+    // let thread_responses = responses.clone();
+
     let semaphore = Arc::new(Semaphore::new(max_concurrent_requests));
 
-    // let recv_thread = spawn(async move {
-    //     let region_provider = Region::new(response_queue_region);
-    //     let results_sqs_config =
-    // aws_config::from_env().region(region_provider).load().await;
-    //     let results_sqs_client = SqsClient::new(&results_sqs_config);
-    //     let mut counter = 0;
-    //     while counter < N_QUERIES * 3 {
-    //         // Receive responses
-    //         let msg = results_sqs_client
-    //             .receive_message()
-    //             .max_number_of_messages(1)
-    //             .queue_url(response_queue_url.clone())
-    //             .send()
-    //             .await
-    //             .context("Failed to receive message")?;
-    //
-    //         for msg in msg.messages.unwrap_or_default() {
-    //             counter += 1;
-    //
-    //             let result: UniquenessResult =
-    //                 serde_json::from_str(&msg.body.context("No body found")?)
-    //                     .context("Failed to parse message body")?;
-    //
-    //             println!("Received result: {:?}", result);
-    //
-    //             let expected_result_option = {
-    //                 let tmp = thread_expected_results.lock().await;
-    //                 tmp.get(&result.signup_id).cloned()
-    //             };
-    //             if expected_result_option.is_none() {
-    //                 eprintln!(
-    //                     "No expected result found for request_id: {}, the SQS
-    // message is likely \                      stale, clear the queue",
-    //                     result.signup_id
-    //                 );
-    //
-    //                 results_sqs_client
-    //                     .delete_message()
-    //                     .queue_url(response_queue_url.clone())
-    //                     .receipt_handle(msg.receipt_handle.unwrap())
-    //                     .send()
-    //                     .await
-    //                     .context("Failed to delete message")?;
-    //
-    //                 continue;
-    //             }
-    //             let expected_result = expected_result_option.unwrap();
-    //
-    //             if expected_result.is_none() {
-    //                 // New insertion
-    //                 assert!(!result.is_match);
-    //                 let request = {
-    //                     let tmp = thread_requests.lock().await;
-    //                     tmp.get(&result.signup_id).unwrap().clone()
-    //                 };
-    //                 {
-    //                     let mut tmp = thread_responses.lock().await;
-    //                     tmp.insert(result.serial_id.unwrap(), request);
-    //                 }
-    //             } else {
-    //                 // Existing entry
-    //                 assert!(result.is_match);
-    //                 assert!(result.matched_serial_ids.is_some());
-    //                 let matched_ids = result.matched_serial_ids.unwrap();
-    //                 assert!(matched_ids.len() == 1);
-    //                 assert_eq!(expected_result.unwrap(), matched_ids[0]);
-    //             }
-    //
-    //             results_sqs_client
-    //                 .delete_message()
-    //                 .queue_url(response_queue_url.clone())
-    //                 .receipt_handle(msg.receipt_handle.unwrap())
-    //                 .send()
-    //                 .await
-    //                 .context("Failed to delete message")?;
-    //         }
-    //     }
-    //     eyre::Ok(())
-    // });
+    let recv_thread = spawn(async move {
+        let mut counter = 0;
+        while counter < n_queries * 3 {
+            // Receive responses
+            let msg = results_sqs_client
+                .receive_message()
+                .max_number_of_messages(1)
+                .queue_url(response_queue_url.clone())
+                .send()
+                .await
+                .context("Failed to receive message")?;
+
+            for msg in msg.messages.unwrap_or_default() {
+                counter += 1;
+
+                let sns_notification: serde_json::Value =
+                    serde_json::from_str(&msg.body.context("No body found")?)
+                        .context("Failed to parse SNS notification")?;
+
+                let sqs_message = sns_notification["Message"]
+                    .as_str()
+                    .context("No Message field in SNS notification")?;
+                let result: UniquenessResult = serde_json::from_str(sqs_message)
+                    .context("Failed to parse UniquenessResult from Message")?;
+
+                println!("Received result: {:?}", result);
+
+                let expected_result_option = {
+                    let tmp = thread_expected_results.lock().await;
+                    tmp.get(&result.signup_id).cloned()
+                };
+                assert!(expected_result_option.is_some());
+                // TODO: add validation of the results
+                // let expected_result = expected_result_option.unwrap();
+
+                // if expected_result.is_none() {
+                //     // New insertion
+                //     assert!(!result.is_match);
+                //     let request = {
+                //         let tmp = thread_requests.lock().await;
+                //         tmp.get(&result.signup_id).unwrap().clone()
+                //     };
+                //     {
+                //         let mut tmp = thread_responses.lock().await;
+                //         tmp.insert(result.serial_id.unwrap(), request);
+                //     }
+                // } else {
+                //     // Existing entry
+                //     assert!(result.is_match);
+                //     assert!(result.matched_serial_ids.is_some());
+                //     let matched_ids = result.matched_serial_ids.unwrap();
+                //     assert!(matched_ids.len() == 1);
+                //     assert_eq!(expected_result.unwrap(), matched_ids[0]);
+                // }
+
+                results_sqs_client
+                    .delete_message()
+                    .queue_url(response_queue_url.clone())
+                    .receipt_handle(msg.receipt_handle.unwrap())
+                    .send()
+                    .await
+                    .context("Failed to delete message")?;
+            }
+        }
+        eyre::Ok(())
+    });
 
     for batch_idx in 0..n_batches {
         let mut handles = Vec::new();
@@ -258,7 +266,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
 
                     match rng.gen_range(0..options) {
                         0 => {
-                            println!("Sending new iris code");
+                            println!("Sending new iris code for request id {}", request_id);
                             {
                                 let mut tmp = thread_expected_results2.lock().await;
                                 tmp.insert(request_id.to_string(), None);
@@ -266,7 +274,7 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                             IrisCode::random_rng(&mut rng)
                         }
                         1 => {
-                            println!("Sending iris code from db");
+                            println!("Sending iris code from db for request id {}", request_id);
                             let db_len = {
                                 let tmp = thread_db2.lock().await;
                                 tmp.db.len()
@@ -282,7 +290,10 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
                             }
                         }
                         2 => {
-                            println!("Sending freshly inserted iris code");
+                            println!(
+                                "Sending freshly inserted iris code for request id {}",
+                                request_id
+                            );
                             let keys_vec = {
                                 let tmp = thread_responses2.lock().await;
                                 tmp.keys().cloned().collect::<Vec<_>>()
@@ -435,6 +446,9 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
         println!("Batch {} sent!", batch_idx);
         sleep(WAIT_AFTER_BATCH).await;
     }
+
+    // Receive all messages
+    recv_thread.await??;
 
     Ok(())
 }

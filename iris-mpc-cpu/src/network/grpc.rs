@@ -191,7 +191,7 @@ impl GrpcNetworking {
                 "session_id",
                 AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
             );
-            let _response = client.value_mut().send_message(request).await?;
+            let _response = client.value_mut().start_message_stream(request).await?;
         }
         Ok(())
     }
@@ -219,7 +219,7 @@ impl GrpcNetworking {
 // Server implementation
 #[async_trait]
 impl PartyNode for GrpcNetworking {
-    async fn send_message(
+    async fn start_message_stream(
         &self,
         request: Request<Streaming<SendRequest>>,
     ) -> TonicResult<Response<SendResponse>> {
@@ -279,6 +279,7 @@ impl Networking for GrpcNetworking {
         receiver: &Identity,
         session_id: &SessionId,
     ) -> eyre::Result<()> {
+        tracing::trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
         let outgoing_stream = self
             .outgoing_streams
             .get_stream(*session_id, receiver.clone())
