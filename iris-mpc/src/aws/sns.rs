@@ -1,11 +1,7 @@
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::Result;
 use iris_mpc_common::{
-    config::Config,
-    helpers::{
-        aws::construct_message_attributes, smpc_response::create_message_type_attribute_map,
-    },
-    job::BatchMetadata,
+    config::Config, helpers::aws::construct_message_attributes, job::BatchMetadata,
 };
 use std::collections::HashMap;
 
@@ -59,8 +55,4 @@ pub async fn send_results_to_sns(
         metrics::counter!("result.sent", "type" => message_type.to_owned()).increment(1);
     }
     Ok(())
-}
-
-pub fn create_message_attributes_map(message_type: &str) -> HashMap<String, MessageAttributeValue> {
-    create_message_type_attribute_map(message_type)
 }

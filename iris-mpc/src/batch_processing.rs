@@ -32,8 +32,7 @@ use std::{
 use tokio::sync::Semaphore;
 
 const MAX_CONCURRENT_REQUESTS: usize = 32;
-
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
+pub static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 pub struct BatchQueryBuilder {
     pub batch_query: BatchQuery,
@@ -137,11 +136,10 @@ pub async fn receive_batch(
 
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let mut current_batch_size = *CURRENT_BATCH_SIZE.lock().unwrap();
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
     // Main processing loop
-    while msg_counter < current_batch_size {
+    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let messages = message_receiver.receive_messages().await?;
         if messages.is_empty() {
             tokio::time::sleep(message_receiver.wait_time).await;
@@ -164,7 +162,6 @@ pub async fn receive_batch(
                         &sqs_message,
                         client,
                         &config.requests_queue_url,
-                        &mut current_batch_size,
                         config.max_batch_size,
                     )
                     .await?;
@@ -481,7 +478,6 @@ pub async fn handle_circuit_breaker_message(
     sqs_message: &aws_sdk_sqs::types::Message,
     client: &Client,
     queue_url: &str,
-    batch_size: &mut usize,
     max_batch_size: usize,
 ) -> eyre::Result<(), ReceiveRequestError> {
     let circuit_breaker_request: CircuitBreakerRequest = serde_json::from_str(&message.message)
@@ -498,7 +494,7 @@ pub async fn handle_circuit_breaker_message(
         .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
 
     if let Some(new_batch_size) = circuit_breaker_request.batch_size {
-        *batch_size = new_batch_size.clamp(1, max_batch_size);
+        *CURRENT_BATCH_SIZE.lock().unwrap() = new_batch_size.clamp(1, max_batch_size);
         tracing::info!(
             "Updating batch size to {} due to circuit breaker message",
             new_batch_size

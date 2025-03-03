@@ -7,7 +7,7 @@ use eyre::{eyre, Context};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::{
     aws::{clients::AwsClients, sns},
-    batch_processing::receive_batch,
+    batch_processing::{receive_batch, CURRENT_BATCH_SIZE},
     utils::{get_check_addresses, initialize_chacha_seeds, initialize_tracing},
 };
 use iris_mpc_common::{
@@ -46,7 +46,7 @@ use std::{
     mem, panic,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, LazyLock, Mutex,
+        Arc,
     },
     time::{Duration, Instant},
 };
@@ -56,7 +56,6 @@ use tokio::{
 };
 
 const RNG_SEED_INIT_DB: u64 = 42;
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -136,12 +135,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Deriving shared secrets");
     let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
-    let uniqueness_result_attributes = sns::create_message_attributes_map(UNIQUENESS_MESSAGE_TYPE);
-    let reauth_result_attributes = sns::create_message_attributes_map(REAUTH_MESSAGE_TYPE);
+    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
+    let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
-        sns::create_message_attributes_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
-        sns::create_message_attributes_map(IDENTITY_DELETION_MESSAGE_TYPE);
+        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
     sns::send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
