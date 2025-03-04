@@ -15,7 +15,7 @@ use crate::{
     shares::share::DistanceShare,
 };
 
-use super::aby3_store::{Aby3Store, SharedIrisesRef, VectorId};
+use super::aby3_store::{prepare_query, Aby3Store, SharedIrisesRef, VectorId};
 
 pub fn setup_local_player_preloaded_db(
     database: Vec<GaloisRingSharedIris>,
@@ -297,7 +297,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
         let role = store.get_owner_index();
         let mut rng_searcher = rng_searcher.clone();
         let queries = (0..database_size)
-            .map(|id| store.prepare_query(shared_irises[id][role].clone()))
+            .map(|id| prepare_query(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         jobs.spawn(async move {
             let mut graph_store = GraphMem::new();

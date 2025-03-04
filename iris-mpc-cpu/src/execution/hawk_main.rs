@@ -6,7 +6,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{prepare_query, Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -310,7 +310,7 @@ impl HawkActor {
         iris: GaloisRingSharedIris,
     ) -> InsertPlan {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng);
-        let query = session.aby3_store.prepare_query(iris);
+        let query = prepare_query(iris);
 
         let (links, set_ep) = search_params
             .search_to_insert(
