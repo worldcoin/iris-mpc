@@ -57,7 +57,7 @@ impl PlaintextIris {
 #[derive(Clone, Default, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextPoint {
     /// Whatever encoding of a vector.
-    pub data:          PlaintextIris,
+    pub data: PlaintextIris,
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
     pub is_persistent: bool,
@@ -118,7 +118,7 @@ impl PlaintextStore {
 
     pub fn prepare_query(&mut self, raw_query: IrisCode) -> <Self as VectorStore>::QueryRef {
         self.points.push(PlaintextPoint {
-            data:          PlaintextIris(raw_query),
+            data: PlaintextIris(raw_query),
             is_persistent: false,
         });
 
