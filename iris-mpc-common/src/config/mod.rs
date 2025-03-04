@@ -185,6 +185,9 @@ pub struct Config {
     /// Server process behaviour can be adjusted as per deployment mode.
     #[serde(default)]
     pub mode_of_deployment: ModeOfDeployment,
+
+    #[serde(default)]
+    pub enable_modifications_sync: bool,
 }
 
 /// Enumeration over set of compute modes.
