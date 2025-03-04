@@ -3,7 +3,7 @@ use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
     database_generators::generate_galois_iris_shares,
-    hawkers::aby3_store::Aby3Store,
+    hawkers::aby3::test_utils::lazy_setup_from_files_with_grpc,
     hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
 };
 use rand::SeedableRng;
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let crate_root = env!("CARGO_MANIFEST_DIR");
     let data_dir = format!("{crate_root}/data");
-    let (_, vectors_graphs) = Aby3Store::lazy_setup_from_files_with_grpc(
+    let (_, vectors_graphs) = lazy_setup_from_files_with_grpc(
         &format!("{data_dir}/store.ndjson"),
         &format!("{data_dir}/graph_{database_size}.dat"),
         &mut rng,

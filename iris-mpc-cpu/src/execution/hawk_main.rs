@@ -6,7 +6,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,

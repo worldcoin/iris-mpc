@@ -389,7 +389,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hawkers::aby3_store::Aby3Store,
+        hawkers::aby3::test_utils::shared_random_setup,
         hnsw::HnswSearcher,
     };
     use aes_prng::AesRng;
@@ -633,7 +633,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
         let searcher = HnswSearcher::default();
-        let mut vectors_and_graphs = Aby3Store::shared_random_setup(
+        let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
             database_size,
             crate::network::NetworkType::GrpcChannel,
