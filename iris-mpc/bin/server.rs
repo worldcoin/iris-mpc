@@ -1064,6 +1064,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
     };
 
+    tracing::info!("Sync state: {:?}", my_state);
+
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
         image_name: String,
@@ -1363,56 +1365,64 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Handle modifications sync (reauth & deletions)
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
-    let (to_update, to_delete) = sync_result.compare_modifications();
-    let to_update: Vec<&Modification> = to_update.iter().collect();
-    let mut tx = store.tx().await?;
-    store.update_modifications(&mut tx, &to_update).await?;
-    store.delete_modifications(&mut tx, &to_delete).await?;
-    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
-    // update irises table for persisted modifications which are missing in local
-    for modification in to_update {
-        if !modification.persisted {
-            tracing::debug!(
-                "Skip writing non-persisted modification to iris table: {:?}",
-                modification
-            );
-            continue;
+    if config.enable_modifications_sync {
+        let (to_update, to_delete) = sync_result.compare_modifications();
+        tracing::info!(
+            "Modifications to update: {:?}, to delete: {:?}",
+            to_update,
+            to_delete
+        );
+        let to_update: Vec<&Modification> = to_update.iter().collect();
+        let mut tx = store.tx().await?;
+        store.update_modifications(&mut tx, &to_update).await?;
+        store.delete_modifications(&mut tx, &to_delete).await?;
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
+        // update irises table for persisted modifications which are missing in local
+        for modification in to_update {
+            if !modification.persisted {
+                tracing::debug!(
+                    "Skip writing non-persisted modification to iris table: {:?}",
+                    modification
+                );
+                continue;
+            }
+            tracing::info!("Applying modification to local node: {:?}", modification);
+            metrics::counter!("db.modifications.rollforward").increment(1);
+            let (lc, lm, rc, rm) = match modification.request_type.as_str() {
+                IDENTITY_DELETION_MESSAGE_TYPE => (
+                    dummy_shares_for_deletions.clone().0,
+                    dummy_shares_for_deletions.clone().1,
+                    dummy_shares_for_deletions.clone().0,
+                    dummy_shares_for_deletions.clone().1,
+                ),
+                REAUTH_MESSAGE_TYPE => {
+                    let (left_shares, right_shares) = get_iris_shares_parse_task(
+                        party_id,
+                        shares_encryption_key_pair.clone(),
+                        Arc::clone(&semaphore),
+                        s3_client.clone(),
+                        config.shares_bucket_name.clone(),
+                        modification.clone().s3_url.unwrap(),
+                    )?
+                    .await?
+                    .unwrap();
+                    (left_shares.0, left_shares.1, right_shares.0, right_shares.1)
+                }
+                _ => {
+                    panic!("Unknown modification type: {:?}", modification);
+                }
+            };
+            store
+                .update_iris(Some(&mut tx), modification.serial_id, &lc, &lm, &rc, &rm)
+                .await?;
         }
-        tracing::info!("Applying modification to local node: {:?}", modification);
-        metrics::counter!("db.modifications.rollforward").increment(1);
-        let (lc, lm, rc, rm) = match modification.request_type.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => (
-                dummy_shares_for_deletions.clone().0,
-                dummy_shares_for_deletions.clone().1,
-                dummy_shares_for_deletions.clone().0,
-                dummy_shares_for_deletions.clone().1,
-            ),
-            REAUTH_MESSAGE_TYPE => {
-                let (left_shares, right_shares) = get_iris_shares_parse_task(
-                    party_id,
-                    shares_encryption_key_pair.clone(),
-                    Arc::clone(&semaphore),
-                    s3_client.clone(),
-                    config.shares_bucket_name.clone(),
-                    modification.clone().s3_url.unwrap(),
-                )?
-                .await?
-                .unwrap();
-                (left_shares.0, left_shares.1, right_shares.0, right_shares.1)
-            }
-            _ => {
-                panic!("Unknown modification type: {:?}", modification);
-            }
-        };
-        store
-            .update_iris(Some(&mut tx), modification.serial_id, &lc, &lm, &rc, &rm)
-            .await?;
-    }
-    tx.commit().await?;
+        tx.commit().await?;
 
-    // reset modifications table's postgres sequence in case we deleted some rows
-    store.reset_modifications_sequence().await?;
+        // reset modifications table's postgres sequence in case we deleted some rows
+        store.reset_modifications_sequence().await?;
+    }
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
