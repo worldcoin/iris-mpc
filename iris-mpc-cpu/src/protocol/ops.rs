@@ -121,17 +121,18 @@ pub async fn batch_signed_lift_vec(
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
 
-/// Computes D2 * T1 - T2 * D1
+/// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
+/// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
+///
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
-    d1: Share<u32>,
-    t1: Share<u32>,
-    d2: Share<u32>,
-    t2: Share<u32>,
+    d1: DistanceShare<u32>,
+    d2: DistanceShare<u32>,
 ) -> eyre::Result<Share<u32>> {
-    let res_a = session.prf_as_mut().gen_zero_share() + &d2 * &t1 - &t2 * &d1;
+    let res_a = session.prf_as_mut().gen_zero_share() + &d2.code_dist * &d1.mask_dist
+        - &d1.code_dist * &d2.mask_dist;
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
@@ -166,12 +167,10 @@ pub(crate) async fn cross_mul(
 /// 32-bit.
 pub async fn cross_compare(
     session: &mut Session,
-    d1: Share<u32>,
-    t1: Share<u32>,
-    d2: Share<u32>,
-    t2: Share<u32>,
+    d1: DistanceShare<u32>,
+    d2: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
-    let diff = cross_mul(session, d1, t1, d2, t2).await?;
+    let diff = cross_mul(session, d1, d2).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bit = single_extract_msb_u32::<32>(session, diff).await?;
     // Open bit
@@ -489,10 +488,14 @@ mod tests {
                     .unwrap();
                 let out_shared = cross_mul(
                     &mut player_session,
-                    four_shares[0].clone(),
-                    four_shares[1].clone(),
-                    four_shares[2].clone(),
-                    four_shares[3].clone(),
+                    DistanceShare {
+                        code_dist: four_shares[0].clone(),
+                        mask_dist: four_shares[1].clone(),
+                    },
+                    DistanceShare {
+                        code_dist: four_shares[2].clone(),
+                        mask_dist: four_shares[3].clone(),
+                    },
                 )
                 .await
                 .unwrap();

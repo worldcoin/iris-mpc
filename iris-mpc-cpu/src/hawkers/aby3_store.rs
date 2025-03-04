@@ -336,19 +336,9 @@ impl VectorStore for Aby3Store {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        let code_dist1 = distance1.code_dist.clone();
-        let mask_dist1 = distance1.mask_dist.clone();
-        let code_dist2 = distance2.code_dist.clone();
-        let mask_dist2 = distance2.mask_dist.clone();
-        cross_compare(
-            &mut self.session,
-            code_dist1,
-            mask_dist1,
-            code_dist2,
-            mask_dist2,
-        )
-        .await
-        .unwrap()
+        cross_compare(&mut self.session, distance1.clone(), distance2.clone())
+            .await
+            .unwrap()
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]

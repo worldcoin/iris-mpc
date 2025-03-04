@@ -9,6 +9,7 @@ use iris_mpc_cpu::{
     protocol::ops::{
         batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
+    shares::share::DistanceShare,
 };
 use rand::SeedableRng;
 use tokio::task::JoinSet;
@@ -90,10 +91,8 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                     .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                        DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
                     )
                     .await
                     .unwrap()
@@ -146,10 +145,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
                         .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                        DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
                     )
                     .await
                     .unwrap();
