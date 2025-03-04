@@ -49,12 +49,44 @@ pub struct Modification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub sns_message_body: Option<String>,
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool) {
+    pub fn mark_completed(&mut self, persisted: bool, sns_message_body: &str) {
         self.status = ModificationStatus::Completed.to_string();
+        self.sns_message_body = Some(sns_message_body.to_string());
         self.persisted = persisted;
+    }
+
+    /// Updates the node_id field in the SNS message JSON to specified one
+    pub fn update_sns_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+        if let Some(message) = &self.sns_message_body {
+            // Parse the JSON message
+            match serde_json::from_str::<serde_json::Value>(message) {
+                Ok(mut json_value) => {
+                    // Update the node_id field if it exists
+                    if let Some(obj) = json_value.as_object_mut() {
+                        // Try to update node_id in the main object
+                        if obj.contains_key("node_id") {
+                            obj.insert(
+                                "node_id".to_string(),
+                                serde_json::Value::Number(serde_json::Number::from(party_id)),
+                            );
+                            self.sns_message_body = Some(serde_json::to_string(&json_value)?);
+                        } else {
+                            return Err(eyre::eyre!("Message body does not contain node_id"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(eyre::eyre!("Invalid JSON message"));
+                }
+            }
+        } else {
+            return Err(eyre::eyre!("SNS message body is None"));
+        }
+        Ok(())
     }
 }
 
@@ -86,7 +118,7 @@ impl SyncResult {
             .collect()
     }
 
-    /// Compare local `modifications` (my_state) to all other parties’
+    /// Compare local `modifications` (my_state) to all other parties'
     /// modifications (all_states), grouping by `id`. Returns: (to_update,
     /// to_delete)
     /// - `to_update`: modifications the local node should add (e.g., mark
@@ -186,7 +218,10 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE};
+    use crate::helpers::{
+        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+        smpc_response::{IdentityDeletionResult, ReAuthResult},
+    };
 
     #[test]
     fn test_compare_states_sync() {
@@ -247,6 +282,7 @@ mod tests {
             s3_url: s3_url.map(|s| s.to_string()),
             status: status.to_string(),
             persisted,
+            sns_message_body: None,
         }
     }
 
@@ -517,6 +553,99 @@ mod tests {
 
         let delete_mod4 = to_delete.iter().find(|m| m.id == 4).unwrap();
         assert_eq!(delete_mod4.clone(), mod4_local);
+    }
+
+    #[test]
+    fn test_update_sns_message_node_id() {
+        // Test 1: ReauthResult
+        let original_reauth_result = ReAuthResult {
+            reauth_id: "test-reauth-123".to_string(),
+            node_id: 1,
+            serial_id: 123,
+            success: true,
+            and_rule_matched_serial_ids: vec![123],
+            or_rule_used: false,
+            or_rule_matched: None,
+            error: None,
+            error_reason: None,
+        };
+
+        // Serialize the original result
+        let serialized_reauth = serde_json::to_string(&original_reauth_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 1,
+            serial_id: 123,
+            request_type: REAUTH_MESSAGE_TYPE.to_string(),
+            s3_url: "http://example.com/123".to_string().into(),
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            sns_message_body: Some(serialized_reauth),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 2;
+        modification
+            .update_sns_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_reauth_result: ReAuthResult =
+            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+        assert_eq!(updated_reauth_result.node_id, new_party_id);
+        assert_eq!(
+            updated_reauth_result.reauth_id,
+            original_reauth_result.reauth_id
+        );
+        assert_eq!(
+            updated_reauth_result.serial_id,
+            original_reauth_result.serial_id
+        );
+        assert_eq!(
+            updated_reauth_result.success,
+            original_reauth_result.success
+        );
+
+        // Test 2: IdentityDeletionResult
+        let original_deletion_result = IdentityDeletionResult {
+            node_id: 2,
+            serial_id: 456,
+            success: true,
+        };
+
+        // Serialize the original result
+        let serialized_deletion = serde_json::to_string(&original_deletion_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 2,
+            serial_id: 456,
+            request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
+            s3_url: None,
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            sns_message_body: Some(serialized_deletion),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 0;
+        modification
+            .update_sns_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_deletion_result: IdentityDeletionResult =
+            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+        assert_eq!(updated_deletion_result.node_id, new_party_id);
+        assert_eq!(
+            updated_deletion_result.serial_id,
+            original_deletion_result.serial_id
+        );
+        assert_eq!(
+            updated_deletion_result.success,
+            original_deletion_result.success
+        );
     }
 
     fn some_state() -> SyncState {
