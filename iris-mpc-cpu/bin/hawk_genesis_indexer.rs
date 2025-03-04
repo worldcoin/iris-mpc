@@ -15,7 +15,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const PROCESS_NAME: &str = "hawk-batch-indexer";
 
 // Main entry point.
-// Runs a job to index an HNSW graph from Iris data persisted within a postgres store.
+// Runs a job to index an HNSW graph from Iris data persisted within a postgres
+// store.
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     fn init_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
