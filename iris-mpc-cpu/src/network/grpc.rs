@@ -9,8 +9,8 @@ use crate::{
     },
 };
 use backoff::{future::retry, ExponentialBackoff};
-use dashmap::DashMap;
 use eyre::eyre;
+use itertools::izip;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
@@ -80,8 +80,7 @@ struct OutgoingStreams {
 }
 
 impl OutgoingStreams {
-    async fn 
-    add_session_stream(
+    async fn add_session_stream(
         &self,
         session_id: SessionId,
         receiver_id: Identity,
@@ -105,7 +104,7 @@ impl OutgoingStreams {
             .ok_or(eyre!(
                 "Streams for session {session_id:?} and receiver {receiver_id:?} not found"
             ))
-            .map(|s| s.clone())
+            .cloned()
     }
 
     async fn count_receivers(&self, session_id: SessionId) -> usize {
@@ -134,6 +133,7 @@ enum GrpcTask {
     Receive(ReceiveTask),
     CreateSession(SessionId),
     WaitForSession(SessionId),
+    ConnectToParty(Identity, String),
 }
 
 enum MessageResult {
@@ -180,6 +180,10 @@ impl GrpcHandle {
                     }
                     GrpcTask::WaitForSession(session_id) => {
                         grpc.wait_for_session(session_id).await;
+                        Ok(MessageResult::Empty)
+                    }
+                    GrpcTask::ConnectToParty(party_id, address) => {
+                        grpc.connect_to_party(party_id, &address).await.unwrap();
                         Ok(MessageResult::Empty)
                     }
                 };
@@ -233,6 +237,12 @@ impl Networking for GrpcHandle {
 
 // Session management
 impl GrpcHandle {
+    pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
+        let task = GrpcTask::ConnectToParty(party_id, address.to_string());
+        let _ = self.submit(task).await?;
+        Ok(())
+    }
+
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
         let task = GrpcTask::CreateSession(session_id);
         let _ = self.submit(task).await?;
@@ -258,7 +268,7 @@ pub struct GrpcConfig {
 pub struct GrpcNetworking {
     party_id:         Identity,
     // other party id -> client to call that party
-    clients:          Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
+    clients:          HashMap<Identity, PartyNodeClient<Channel>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: Arc<OutgoingStreams>,
     // session id -> incoming message streams
@@ -271,7 +281,7 @@ impl GrpcNetworking {
     pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
             party_id,
-            clients: Arc::new(DashMap::new()),
+            clients: HashMap::new(),
             outgoing_streams: Arc::new(OutgoingStreams::default()),
             message_queues: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -288,7 +298,11 @@ impl GrpcNetworking {
         }
     }
 
-    pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
+    pub async fn connect_to_party(
+        &mut self,
+        party_id: Identity,
+        address: &str,
+    ) -> eyre::Result<()> {
         let client = retry(self.backoff(), || async {
             Ok(PartyNodeClient::connect(address.to_string()).await?)
         })
@@ -297,7 +311,7 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<()> {
+    pub async fn create_session(&mut self, session_id: SessionId) -> eyre::Result<()> {
         if self.outgoing_streams.count_receivers(session_id).await > 0 {
             return Err(eyre!(
                 "Player {:?} has already created session {session_id:?}",
@@ -305,10 +319,10 @@ impl GrpcNetworking {
             ));
         }
 
-        for mut client in self.clients.iter_mut() {
+        for (client_id, client) in self.clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams
-                .add_session_stream(session_id, client.key().clone(), tx)
+                .add_session_stream(session_id, client_id.clone(), tx)
                 .await;
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
             let mut request = Request::new(receiving_stream);
@@ -320,7 +334,7 @@ impl GrpcNetworking {
                 "session_id",
                 AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
             );
-            let _response = client.value_mut().start_message_stream(request).await?;
+            let _response = client.start_message_stream(request).await?;
         }
         Ok(())
     }
@@ -496,8 +510,14 @@ pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result
 
     tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
 
+    // Create handles consecutively to preserve the order of players
+    let mut handles = vec![];
+    for player in players {
+        handles.push(GrpcHandle::new(player).await?);
+    }
+
     // Connect to each other
-    for (player, addr) in &players_addresses {
+    for (player, addr) in izip!(handles.iter(), addresses.iter()) {
         for (other_player, other_addr) in &players_addresses.clone() {
             if addr != other_addr {
                 let other_addr = format!("http://{}", other_addr);
@@ -507,12 +527,6 @@ pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result
                     .unwrap();
             }
         }
-    }
-
-    // Create handles consecutively to preserve the order of players
-    let mut handles = vec![];
-    for player in players {
-        handles.push(GrpcHandle::new(player).await?);
     }
 
     Ok(handles)

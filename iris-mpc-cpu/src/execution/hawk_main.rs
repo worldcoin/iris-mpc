@@ -158,6 +158,9 @@ impl HawkActor {
             });
         }
 
+        // Wrap into networking handle
+        let networking = GrpcHandle::new(networking).await?;
+
         // Connect to other players.
         izip!(&identities, &args.addresses)
             .filter(|(_, address)| address != &my_address)
@@ -177,9 +180,6 @@ impl HawkActor {
             .await
             .into_iter()
             .collect::<Result<()>>()?;
-
-        // Wrap into networking handle
-        let networking = GrpcHandle::new(networking).await?;
 
         let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
