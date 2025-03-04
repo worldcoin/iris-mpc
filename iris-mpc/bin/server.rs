@@ -1064,6 +1064,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
     };
 
+    tracing::info!("Sync state: {:?}", my_state);
+
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
         image_name: String,
@@ -1364,6 +1366,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     // Handle modifications sync (reauth & deletions)
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
     let (to_update, to_delete) = sync_result.compare_modifications();
+    tracing::info!(
+        "Modifications to update: {:?}, to delete: {:?}",
+        to_update,
+        to_delete
+    );
     let to_update: Vec<&Modification> = to_update.iter().collect();
     let mut tx = store.tx().await?;
     store.update_modifications(&mut tx, &to_update).await?;
