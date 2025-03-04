@@ -55,19 +55,19 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
-/// - Takes as input two code and mask dot products between two Irises: i, j.
-///   i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>.
+/// - Takes as input two code and mask dot products between two irises,
+///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>.
 /// - Lifts the two dot products to the ring Z_{2^32}.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
-/// - Compares mask_dot * A < code_dot * B.
+/// - Compares mask_dist * A < code_dist * B.
 pub async fn compare_threshold(
     session: &mut Session,
-    code_dot: Share<u32>,
-    mask_dot: Share<u32>,
+    code_dist: Share<u32>,
+    mask_dist: Share<u32>,
 ) -> eyre::Result<Share<Bit>> {
-    let mut x = mask_dot * A as u32;
-    let y = code_dot * B as u32;
+    let mut x = mask_dist * A as u32;
+    let y = code_dist * B as u32;
     x -= y;
 
     single_extract_msb_u32::<32>(session, x).await
@@ -79,11 +79,11 @@ pub async fn compare_threshold(
 /// See compare_threshold for more details.
 pub async fn lift_and_compare_threshold(
     session: &mut Session,
-    code_dot: Share<u16>,
-    mask_dot: Share<u16>,
+    code_dist: Share<u16>,
+    mask_dist: Share<u16>,
 ) -> eyre::Result<Share<Bit>> {
-    let y = mul_lift_2k::<B_BITS>(&code_dot);
-    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dot])).await?;
+    let y = mul_lift_2k::<B_BITS>(&code_dist);
+    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x.pop().expect("Expected a single element in the VecShare");
     x *= A as u32;
     x -= y;
@@ -189,13 +189,13 @@ pub async fn galois_ring_pairwise_distance(
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (x, y) = pair;
-        let code_dot = x.code.trick_dot(&y.code);
-        let mask_dot = x.mask.trick_dot(&y.mask);
-        additive_shares.push(RingElement(code_dot));
+        let code_dist = x.code.trick_dot(&y.code);
+        let mask_dist = x.mask.trick_dot(&y.mask);
+        additive_shares.push(RingElement(code_dist));
         // When applying the trick dot on trimmed masks, we have to multiply with 2 the
         // result The intuition being that a GaloisRingTrimmedMask contains half
         // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dot));
+        additive_shares.push(RingElement(2) * RingElement(mask_dist));
     }
     Ok(additive_shares)
 }
@@ -268,7 +268,7 @@ pub async fn compare_threshold_and_open(
     session: &mut Session,
     distance: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
+    let bit = compare_threshold(session, distance.code_dist, distance.mask_dist).await?;
     let opened = open_bin(session, bit).await?;
     Ok(opened.convert())
 }

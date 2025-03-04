@@ -324,15 +324,18 @@ impl<T: IntRing2k> Shl<u32> for Share<T> {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct DistanceShare<T: IntRing2k> {
-    pub code_dot: Share<T>,
-    pub mask_dot: Share<T>,
+    pub code_dist: Share<T>,
+    pub mask_dist: Share<T>,
 }
 
 impl<T> DistanceShare<T>
 where
     T: IntRing2k,
 {
-    pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
-        DistanceShare { code_dot, mask_dot }
+    pub fn new(code_dist: Share<T>, mask_dist: Share<T>) -> Self {
+        DistanceShare {
+            code_dist,
+            mask_dist,
+        }
     }
 }
