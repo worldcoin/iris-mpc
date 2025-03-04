@@ -177,8 +177,9 @@ impl Aby3Store {
 }
 
 impl Aby3Store {
+    /// Converts distances from u16 secret shares to u32 shares.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn lift_distances(
+    async fn lift_distances(
         &mut self,
         distances: Vec<Share<u16>>,
     ) -> eyre::Result<Vec<DistanceShare<u32>>> {
@@ -194,7 +195,11 @@ impl Aby3Store {
             .collect::<Vec<_>>())
     }
 
+    /// Computes the dot product of the iris codes and masks of the given pairs of irises.
+    /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
+    ///
     /// Assumes that the first iris of each pair is preprocessed.
+    /// This first iris is usually preprocessed when a related query is created, see [prepare_query] for more details.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_pairwise_distances(
         &mut self,
