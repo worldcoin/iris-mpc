@@ -1,1 +1,4 @@
 /data
+/bin/network_stats
+/bin/network_stats_batcher
+searcher_time_tree.txt
