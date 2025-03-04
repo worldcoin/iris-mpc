@@ -1,4 +1,3 @@
-use eyre;
 use iris_mpc_common::config::Config;
 use iris_mpc_cpu::execution::hawk_main::GraphStore as GraphPgresStore;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
@@ -65,7 +64,7 @@ async fn main() -> eyre::Result<()> {
                     )
                     .init();
 
-                return Ok(TracingShutdownHandle {});
+                Ok(TracingShutdownHandle {})
             }
             Some(service) => {
                 let tracing_shutdown_handle = DatadogBattery::init(
@@ -84,9 +83,9 @@ async fn main() -> eyre::Result<()> {
                     metrics::set_global_recorder(recorder)?;
                 }
 
-                panic::set_hook(Box::new(|panic_info| on_execution_panic(panic_info)));
+                panic::set_hook(Box::new(on_execution_panic));
 
-                return Ok(tracing_shutdown_handle);
+                Ok(tracing_shutdown_handle)
             }
         }
     }
@@ -121,6 +120,7 @@ async fn main() -> eyre::Result<()> {
 
 // Information flowing through execution path.
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ExecutionContextInfo {
     // Iris data pulled from a remote store.
     iris: DbStoredIris,
@@ -143,13 +143,12 @@ async fn execute(config: Config) -> eyre::Result<()> {
     let mut stream_of_irises = store_of_irises.stream_irises().await;
     while let Some(item) = stream_of_irises.try_next().await? {
         on_iris_recieved_from_stream(ExecutionContextInfo::new(item)).await;
-        break;
     }
 
     Ok(())
 }
 
-async fn on_iris_recieved_from_stream(ctx: ExecutionContextInfo) {
+async fn on_iris_recieved_from_stream(_: ExecutionContextInfo) {
     println!(
         " TODO - run HNSW MPC search (i.e. `HawkMain::search_to_insert`, `HawkMain::insert`),"
     );
