@@ -9,7 +9,7 @@ use std::{
 
 #[repr(transparent)]
 pub struct RingBytesIter<T: IntRing2k> {
-    bytes:   BytesMut,
+    bytes: BytesMut,
     _marker: std::marker::PhantomData<T>,
 }
 

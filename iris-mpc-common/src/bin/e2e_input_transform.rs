@@ -12,20 +12,20 @@ const RNG_SEED: u64 = 42; // Replace with your seed value
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Signup {
-    signup_id:              String,
-    iris_code_left:         String,
-    iris_code_shares_left:  Option<[String; 3]>,
-    mask_code_left:         String,
-    mask_code_shares_left:  Option<[String; 3]>,
-    iris_code_right:        String,
+    signup_id: String,
+    iris_code_left: String,
+    iris_code_shares_left: Option<[String; 3]>,
+    mask_code_left: String,
+    mask_code_shares_left: Option<[String; 3]>,
+    iris_code_right: String,
     iris_code_shares_right: Option<[String; 3]>,
-    mask_code_right:        String,
+    mask_code_right: String,
     mask_code_shares_right: Option<[String; 3]>,
-    matched_with:           Vec<Match>,
-    whitelisted:            bool,
-    closest_signups:        Vec<Match>,
-    zkp:                    String,
-    idcomm:                 String,
+    matched_with: Vec<Match>,
+    whitelisted: bool,
+    closest_signups: Vec<Match>,
+    zkp: String,
+    idcomm: String,
 }
 
 impl Signup {
@@ -60,10 +60,10 @@ impl Signup {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Match {
-    signup_id:          String,
-    distance_left:      f64,
-    distance_right:     f64,
-    manipulation_type:  String,
+    signup_id: String,
+    distance_left: f64,
+    distance_right: f64,
+    manipulation_type: String,
     normalization_used: bool,
 }
 

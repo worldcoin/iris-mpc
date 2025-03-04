@@ -86,7 +86,7 @@ impl VectorId {
 
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
 pub struct Query {
-    pub query:           GaloisRingSharedIris,
+    pub query: GaloisRingSharedIris,
     pub processed_query: GaloisRingSharedIris,
 }
 
@@ -140,7 +140,7 @@ impl SharedIrisesRef {
         preprocessed_query.mask.preprocess_mask_code_query_share();
 
         Arc::new(Query {
-            query:           raw_query,
+            query: raw_query,
             processed_query: preprocessed_query,
         })
     }
@@ -215,7 +215,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug, Clone)]
 pub struct Aby3Store {
-    pub owner:   Identity,
+    pub owner: Identity,
     pub storage: SharedIrisesRef,
     pub session: Session,
 }

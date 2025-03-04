@@ -16,11 +16,11 @@ mod tests {
         let stats = BucketStatistics {
             buckets: vec![
                 BucketResult {
-                    count:                   10,
+                    count: 10,
                     hamming_distance_bucket: [0.00, 0.10],
                 },
                 BucketResult {
-                    count:                   20,
+                    count: 20,
                     hamming_distance_bucket: [0.10, 0.20],
                 },
             ],
@@ -124,7 +124,7 @@ mod tests {
         // Create an instance
         let original_stats = BucketStatistics {
             buckets: vec![BucketResult {
-                count:                   100,
+                count: 100,
                 hamming_distance_bucket: [0.33, 0.66],
             }],
             n_buckets: 1,
@@ -151,9 +151,10 @@ mod tests {
         // fields, however, should match.
         assert_eq!(roundtrip_stats.buckets.len(), 1);
         assert_eq!(roundtrip_stats.buckets[0].count, 100);
-        assert_eq!(roundtrip_stats.buckets[0].hamming_distance_bucket, [
-            0.33, 0.66
-        ]);
+        assert_eq!(
+            roundtrip_stats.buckets[0].hamming_distance_bucket,
+            [0.33, 0.66]
+        );
 
         assert_eq!(roundtrip_stats.n_buckets, 1);
         assert_eq!(roundtrip_stats.match_distances_buffer_size, 42);

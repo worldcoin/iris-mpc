@@ -46,7 +46,7 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingTrimmedMaskCodeShare {
-        pub id:    usize,
+        pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
@@ -78,7 +78,7 @@ pub mod degree4 {
     impl GaloisRingTrimmedMaskCodeShare {
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingTrimmedMaskCodeShare {
-                id:    party_id,
+                id: party_id,
                 coefs: [0u16; MASK_CODE_LENGTH],
             }
         }
@@ -108,7 +108,7 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
-        pub id:    usize,
+        pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
     }
@@ -136,7 +136,7 @@ pub mod degree4 {
 
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingIrisCodeShare {
-                id:    party_id,
+                id: party_id,
                 coefs: [0u16; IRIS_CODE_LENGTH],
             }
         }
@@ -148,15 +148,15 @@ pub mod degree4 {
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id:    1,
+                    id: 1,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    2,
+                    id: 2,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    3,
+                    id: 3,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
             ];
@@ -190,15 +190,15 @@ pub mod degree4 {
         ) -> [GaloisRingIrisCodeShare; 3] {
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id:    1,
+                    id: 1,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    2,
+                    id: 2,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    3,
+                    id: 3,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
             ];
@@ -229,15 +229,15 @@ pub mod degree4 {
             assert!(IRIS_CODE_LENGTH % 4 == 0);
             let mut shares = [
                 GaloisRingIrisCodeShare {
-                    id:    1,
+                    id: 1,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    2,
+                    id: 2,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
                 GaloisRingIrisCodeShare {
-                    id:    3,
+                    id: 3,
                     coefs: [0; IRIS_CODE_LENGTH],
                 },
             ];

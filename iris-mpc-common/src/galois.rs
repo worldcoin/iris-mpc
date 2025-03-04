@@ -22,7 +22,7 @@ pub mod degree4 {
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
     pub struct GaloisRingElement<B: Basis> {
         pub coefs: [u16; 4],
-        basis:     PhantomData<B>,
+        basis: PhantomData<B>,
     }
 
     impl GaloisRingElement<Monomial> {
@@ -307,7 +307,7 @@ pub mod degree4 {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct ShamirGaloisRingShare {
         pub id: usize,
-        pub y:  GaloisRingElement<Monomial>,
+        pub y: GaloisRingElement<Monomial>,
     }
     impl std::ops::Add for ShamirGaloisRingShare {
         type Output = Self;
@@ -315,7 +315,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y:  self.y + rhs.y,
+                y: self.y + rhs.y,
             }
         }
     }
@@ -325,7 +325,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y:  self.y * rhs.y,
+                y: self.y * rhs.y,
             }
         }
     }
@@ -335,7 +335,7 @@ pub mod degree4 {
             assert_eq!(self.id, rhs.id, "ids must be euqal");
             ShamirGaloisRingShare {
                 id: self.id,
-                y:  self.y - rhs.y,
+                y: self.y - rhs.y,
             }
         }
     }
@@ -374,7 +374,7 @@ pub mod degree4 {
             ];
             let share1 = ShamirGaloisRingShare {
                 id: 1,
-                y:  GaloisRingElement::from_coefs([
+                y: GaloisRingElement::from_coefs([
                     invec[0].wrapping_add(invec[4]),
                     invec[1].wrapping_add(invec[5]),
                     invec[2].wrapping_add(invec[6]),
@@ -383,7 +383,7 @@ pub mod degree4 {
             };
             let share2 = ShamirGaloisRingShare {
                 id: 2,
-                y:  GaloisRingElement::from_coefs([
+                y: GaloisRingElement::from_coefs([
                     invec[0].wrapping_add(invec[7]),
                     invec[1].wrapping_add(invec[4]).wrapping_add(invec[7]),
                     invec[2].wrapping_add(invec[5]),
@@ -392,7 +392,7 @@ pub mod degree4 {
             };
             let share3 = ShamirGaloisRingShare {
                 id: 3,
-                y:  GaloisRingElement::from_coefs([
+                y: GaloisRingElement::from_coefs([
                     share2.y.coefs[0].wrapping_add(invec[4]),
                     share2.y.coefs[1].wrapping_add(invec[5]),
                     share2.y.coefs[2].wrapping_add(invec[6]),
