@@ -44,7 +44,7 @@ mod e2e_test {
 
     #[derive(Clone)]
     pub struct E2ETemplate {
-        left:  IrisCode,
+        left: IrisCode,
         right: IrisCode,
     }
 
@@ -52,8 +52,8 @@ mod e2e_test {
 
     #[derive(Clone)]
     pub struct E2ESharedTemplate {
-        pub left_shared_code:  [GaloisRingIrisCodeShare; 3],
-        pub left_shared_mask:  [GaloisRingTrimmedMaskCodeShare; 3],
+        pub left_shared_code: [GaloisRingIrisCodeShare; 3],
+        pub left_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
         pub right_shared_code: [GaloisRingIrisCodeShare; 3],
         pub right_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
     }
@@ -576,55 +576,55 @@ mod e2e_test {
         /// The returned index of the iris code in the database.
         /// It is None if the iris code is not in the database, and Some(idx) if
         /// there is a match at index idx
-        db_index:                    Option<u32>,
+        db_index: Option<u32>,
         /// The request is a skip persistence request
         is_skip_persistence_request: bool,
         /// Whether the iris code is expected to be in the batch match
         /// This flag indicates that the iris code is expected to match another
         /// iris code in the current batch
-        is_batch_match:              bool,
+        is_batch_match: bool,
         /// Populated only if the request type is REAUTH.
         /// Indicates whether the expected reauth result is successful.
-        is_reauth_successful:        Option<bool>,
+        is_reauth_successful: Option<bool>,
     }
 
     struct TestCaseGenerator {
         /// initial state of the Iris Database
-        initial_db_state:       IrisDB,
+        initial_db_state: IrisDB,
         /// expected results for all of the queries we send
-        expected_results:       HashMap<String, ExpectedResult>,
+        expected_results: HashMap<String, ExpectedResult>,
         /// mapping from request_id to the index of the target entry to be
         /// matched in reauth
-        reauth_target_indices:  HashMap<String, u32>,
+        reauth_target_indices: HashMap<String, u32>,
         /// responses received from the servers, where a new iris code was
         /// inserted. Maps position in the database to the E2ETemplate
-        inserted_responses:     HashMap<u32, E2ETemplate>,
+        inserted_responses: HashMap<u32, E2ETemplate>,
         /// A buffer of indices that have been deleted, to choose a index from
         /// to send for testing against deletions. Once picked, it is removed
         /// from here
         deleted_indices_buffer: Vec<u32>,
         /// The full set of indices that have been deleted
-        deleted_indices:        HashSet<u32>,
+        deleted_indices: HashSet<u32>,
         /// A list of indices that are not allowed to be queried, to avoid
         /// potential false matches
-        disallowed_queries:     Vec<u32>,
+        disallowed_queries: Vec<u32>,
         /// The rng that is used internally
-        rng:                    StdRng,
+        rng: StdRng,
 
         // info for current batch, will be cleared at the start of a new batch
         /// New templates that have been inserted in the current batch.
         /// (position in batch, request_id, template)
-        new_templates_in_batch:           Vec<(usize, String, IrisCode)>,
+        new_templates_in_batch: Vec<(usize, String, IrisCode)>,
         /// skip invalidating requests in the current batch, since we expect
         /// them to be processed
-        skip_invalidate:                  bool,
+        skip_invalidate: bool,
         /// duplicates in the current batch, used to test the batch
         /// deduplication mechanism
-        batch_duplicates:                 HashMap<String, String>,
+        batch_duplicates: HashMap<String, String>,
         /// indices used in the current batch, to avoid deleting those
         db_indices_used_in_current_batch: HashSet<usize>,
         /// items against which the OR rule is used
-        or_rule_matches:                  Vec<String>,
+        or_rule_matches: Vec<String>,
     }
 
     impl TestCaseGenerator {
@@ -795,18 +795,20 @@ mod e2e_test {
                 let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
                 let (batch_idx, duplicate_request_id, template) =
                     self.new_templates_in_batch[random_idx].clone();
-                self.expected_results
-                    .insert(request_id.to_string(), ExpectedResult {
-                        db_index:                    Some(batch_idx as u32),
-                        is_batch_match:              true,
-                        is_reauth_successful:        None,
+                self.expected_results.insert(
+                    request_id.to_string(),
+                    ExpectedResult {
+                        db_index: Some(batch_idx as u32),
+                        is_batch_match: true,
+                        is_reauth_successful: None,
                         is_skip_persistence_request: false,
-                    });
+                    },
+                );
                 self.batch_duplicates
                     .insert(request_id.to_string(), duplicate_request_id);
                 self.skip_invalidate = true;
                 E2ETemplate {
-                    left:  template.clone(),
+                    left: template.clone(),
                     right: template.clone(),
                 }
             } else {
@@ -818,13 +820,15 @@ mod e2e_test {
                 match &option {
                     TestCases::NonMatch => {
                         tracing::info!("Sending new iris code");
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         let template = IrisCode::random_rng(&mut self.rng);
                         self.new_templates_in_batch.push((
                             internal_batch_idx,
@@ -833,23 +837,25 @@ mod e2e_test {
                         ));
                         self.skip_invalidate = true;
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template.clone(),
                         }
                     }
                     TestCases::NonMatchSkipPersistence => {
                         tracing::info!("Sending new iris code with skip persistence");
                         skip_persistence = true;
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: true,
-                            });
+                            },
+                        );
                         let template = IrisCode::random_rng(&mut self.rng);
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template.clone(),
                         }
                     }
@@ -857,15 +863,17 @@ mod e2e_test {
                         tracing::info!("Sending iris code from db");
                         let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                         self.db_indices_used_in_current_batch.insert(db_index);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    Some(db_index as u32),
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: Some(db_index as u32),
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template,
                         }
                     }
@@ -875,15 +883,17 @@ mod e2e_test {
                         self.db_indices_used_in_current_batch.insert(db_index);
                         skip_persistence = true;
                         self.disallowed_queries.push(db_index as u32);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    Some(db_index as u32),
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: Some(db_index as u32),
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: true,
-                            });
+                            },
+                        );
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template,
                         }
                     }
@@ -900,18 +910,18 @@ mod e2e_test {
                                 // however it would afterwards so we no longer pick it
                                 self.disallowed_queries.push(db_index as u32);
                                 ExpectedResult {
-                                    db_index:                    None,
-                                    is_batch_match:              false,
-                                    is_reauth_successful:        None,
+                                    db_index: None,
+                                    is_batch_match: false,
+                                    is_reauth_successful: None,
                                     is_skip_persistence_request: false,
                                 }
                             } else {
                                 // we flip less or equal to than the threshold so this should
                                 // match
                                 ExpectedResult {
-                                    db_index:                    Some(db_index as u32),
-                                    is_batch_match:              false,
-                                    is_reauth_successful:        None,
+                                    db_index: Some(db_index as u32),
+                                    is_batch_match: false,
+                                    is_reauth_successful: None,
                                     is_skip_persistence_request: false,
                                 }
                             },
@@ -921,7 +931,7 @@ mod e2e_test {
                             template.code.flip_bit(i);
                         }
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template,
                         }
                     }
@@ -932,16 +942,18 @@ mod e2e_test {
                             .iter()
                             .choose(&mut self.rng)
                             .expect("we have at least one response");
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    Some(*idx),
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: Some(*idx),
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         self.db_indices_used_in_current_batch.insert(*idx as usize);
                         E2ETemplate {
-                            left:  e2e_template.left.clone(),
+                            left: e2e_template.left.clone(),
                             right: e2e_template.right.clone(),
                         }
                     }
@@ -951,16 +963,18 @@ mod e2e_test {
                         let deleted_idx = self.deleted_indices_buffer[idx];
 
                         self.deleted_indices_buffer.remove(idx);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        None,
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: None,
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         E2ETemplate {
                             right: self.initial_db_state.db[deleted_idx as usize].clone(),
-                            left:  self.initial_db_state.db[deleted_idx as usize].clone(),
+                            left: self.initial_db_state.db[deleted_idx as usize].clone(),
                         }
                     }
                     TestCases::WithOrRuleSet => {
@@ -1005,24 +1019,28 @@ mod e2e_test {
 
                         if will_match {
                             self.or_rule_matches.push(request_id.to_string());
-                            self.expected_results
-                                .insert(request_id.to_string(), ExpectedResult {
-                                    db_index:                    Some(matching_db_index as u32),
-                                    is_batch_match:              false,
-                                    is_reauth_successful:        None,
+                            self.expected_results.insert(
+                                request_id.to_string(),
+                                ExpectedResult {
+                                    db_index: Some(matching_db_index as u32),
+                                    is_batch_match: false,
+                                    is_reauth_successful: None,
                                     is_skip_persistence_request: false,
-                                });
+                                },
+                            );
                         } else {
                             self.db_indices_used_in_current_batch
                                 .insert(matching_db_index);
                             self.disallowed_queries.push(matching_db_index as u32);
-                            self.expected_results
-                                .insert(request_id.to_string(), ExpectedResult {
-                                    db_index:                    None,
-                                    is_batch_match:              false,
-                                    is_reauth_successful:        None,
+                            self.expected_results.insert(
+                                request_id.to_string(),
+                                ExpectedResult {
+                                    db_index: None,
+                                    is_batch_match: false,
+                                    is_reauth_successful: None,
                                     is_skip_persistence_request: false,
-                                });
+                                },
+                            );
                         }
                         template
                     }
@@ -1034,15 +1052,17 @@ mod e2e_test {
                         self.db_indices_used_in_current_batch.insert(db_index);
                         self.reauth_target_indices
                             .insert(request_id.to_string(), db_index as u32);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    Some(db_index as u32),
-                                is_batch_match:              false,
-                                is_reauth_successful:        Some(true),
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: Some(db_index as u32),
+                                is_batch_match: false,
+                                is_reauth_successful: Some(true),
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         E2ETemplate {
-                            left:  template.clone(),
+                            left: template.clone(),
                             right: template,
                         }
                     }
@@ -1062,13 +1082,15 @@ mod e2e_test {
                         let will_match = true;
                         let flip_right = Some(self.rng.gen());
                         let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        Some(false),
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: Some(false),
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         template
                     }
                     TestCases::ReauthOrRuleMatchingTarget => {
@@ -1085,13 +1107,15 @@ mod e2e_test {
                         let will_match = true;
                         let flip_right = Some(self.rng.gen());
                         let template = self.prepare_flipped_codes(db_index, will_match, flip_right);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        Some(true),
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: Some(true),
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         template
                     }
                     TestCases::ReauthOrRuleNonMatchingTarget => {
@@ -1105,13 +1129,15 @@ mod e2e_test {
                         or_rule_indices = vec![db_index as u32];
                         let will_match = false;
                         let template = self.prepare_flipped_codes(db_index, will_match, None);
-                        self.expected_results
-                            .insert(request_id.to_string(), ExpectedResult {
-                                db_index:                    None,
-                                is_batch_match:              false,
-                                is_reauth_successful:        Some(false),
+                        self.expected_results.insert(
+                            request_id.to_string(),
+                            ExpectedResult {
+                                db_index: None,
+                                is_batch_match: false,
+                                is_reauth_successful: Some(false),
                                 is_skip_persistence_request: false,
-                            });
+                            },
+                        );
                         template
                     }
                 }
@@ -1158,7 +1184,7 @@ mod e2e_test {
                 }
             }
             E2ETemplate {
-                left:  code_left,
+                left: code_left,
                 right: code_right,
             }
         }

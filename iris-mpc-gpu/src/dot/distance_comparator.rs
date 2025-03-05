@@ -24,23 +24,23 @@ const MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION: &str = "mergeDbResults
 const ALL_MATCHES_LEN: usize = 256;
 
 pub struct DistanceComparator {
-    pub device_manager:                  Arc<DeviceManager>,
-    pub open_kernels:                    Vec<CudaFunction>,
-    pub open_batch_kernels:              Vec<CudaFunction>,
-    pub merge_db_kernels:                Vec<CudaFunction>,
-    pub merge_batch_kernels:             Vec<CudaFunction>,
+    pub device_manager: Arc<DeviceManager>,
+    pub open_kernels: Vec<CudaFunction>,
+    pub open_batch_kernels: Vec<CudaFunction>,
+    pub merge_db_kernels: Vec<CudaFunction>,
+    pub merge_batch_kernels: Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
-    pub query_length:                    usize,
-    pub opened_results:                  Vec<CudaSlice<u32>>,
-    pub final_results:                   Vec<CudaSlice<u32>>,
-    pub results_init_host:               Vec<u32>,
-    pub final_results_init_host:         Vec<u32>,
-    pub match_counters:                  Vec<CudaSlice<u32>>,
-    pub all_matches:                     Vec<CudaSlice<u32>>,
-    pub match_counters_left:             Vec<CudaSlice<u32>>,
-    pub match_counters_right:            Vec<CudaSlice<u32>>,
-    pub partial_results_left:            Vec<CudaSlice<u32>>,
-    pub partial_results_right:           Vec<CudaSlice<u32>>,
+    pub query_length: usize,
+    pub opened_results: Vec<CudaSlice<u32>>,
+    pub final_results: Vec<CudaSlice<u32>>,
+    pub results_init_host: Vec<u32>,
+    pub final_results_init_host: Vec<u32>,
+    pub match_counters: Vec<CudaSlice<u32>>,
+    pub all_matches: Vec<CudaSlice<u32>>,
+    pub match_counters_left: Vec<CudaSlice<u32>>,
+    pub match_counters_right: Vec<CudaSlice<u32>>,
+    pub partial_results_left: Vec<CudaSlice<u32>>,
+    pub partial_results_right: Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
@@ -68,13 +68,17 @@ impl DistanceComparator {
         for i in 0..devices_count {
             let device = device_manager.device(i);
             device
-                .load_ptx(ptx.clone(), "", &[
-                    OPEN_RESULTS_FUNCTION,
-                    OPEN_RESULTS_BATCH_FUNCTION,
-                    MERGE_DB_RESULTS_FUNCTION,
-                    MERGE_BATCH_RESULTS_FUNCTION,
-                    MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
-                ])
+                .load_ptx(
+                    ptx.clone(),
+                    "",
+                    &[
+                        OPEN_RESULTS_FUNCTION,
+                        OPEN_RESULTS_BATCH_FUNCTION,
+                        MERGE_DB_RESULTS_FUNCTION,
+                        MERGE_BATCH_RESULTS_FUNCTION,
+                        MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
+                    ],
+                )
                 .unwrap();
 
             let open_results_function = device.get_func("", OPEN_RESULTS_FUNCTION).unwrap();

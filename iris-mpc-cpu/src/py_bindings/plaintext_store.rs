@@ -44,7 +44,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     for json_pt in stream {
         let json_pt = json_pt?;
         vector.points.push(PlaintextPoint {
-            data:          PlaintextIris((&json_pt).into()),
+            data: PlaintextIris((&json_pt).into()),
             is_persistent: true,
         });
     }

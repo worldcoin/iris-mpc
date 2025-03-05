@@ -40,8 +40,8 @@ pub enum SharesDecodingError {
     Base64DecodeError,
     #[error("Received error message from server: [{}] {}", .status, .message)]
     ResponseContent {
-        status:  reqwest::StatusCode,
-        url:     String,
+        status: reqwest::StatusCode,
+        url: String,
         message: String,
     },
     #[error("Received error message from S3 for key {}: {}", .key, .message)]
@@ -60,7 +60,7 @@ pub enum SharesDecodingError {
 
 #[derive(Clone, Debug)]
 pub struct SharesEncryptionKeyPairs {
-    pub current_key_pair:  SharesEncryptionKeyPair,
+    pub current_key_pair: SharesEncryptionKeyPair,
     pub previous_key_pair: Option<SharesEncryptionKeyPair>,
 }
 

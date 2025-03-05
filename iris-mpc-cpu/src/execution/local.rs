@@ -95,10 +95,10 @@ impl LocalRuntime {
                     .map(|i| {
                         let identity = identities[i].clone();
                         BootSession {
-                            session_id:       sess_id,
+                            session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking:       Arc::new(network.get_local_network(identity.clone())),
-                            own_identity:     identity,
+                            networking: Arc::new(network.get_local_network(identity.clone())),
+                            own_identity: identity,
                         }
                     })
                     .collect();
@@ -118,10 +118,10 @@ impl LocalRuntime {
                     .map(|i| {
                         let identity = identities[i].clone();
                         BootSession {
-                            session_id:       sess_id,
+                            session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking:       Arc::new(networks[i].clone()),
-                            own_identity:     identity,
+                            networking: Arc::new(networks[i].clone()),
+                            own_identity: identity,
                         }
                     })
                     .collect();
@@ -141,10 +141,13 @@ impl LocalRuntime {
         let mut sessions = HashMap::new();
         while let Some(t) = jobs.join_next().await {
             let (boot_session, prf) = t.unwrap();
-            sessions.insert(boot_session.own_identity(), Session {
-                boot_session,
-                setup: prf,
-            });
+            sessions.insert(
+                boot_session.own_identity(),
+                Session {
+                    boot_session,
+                    setup: prf,
+                },
+            );
         }
         Ok(LocalRuntime { sessions })
     }

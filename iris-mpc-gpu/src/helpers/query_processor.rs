@@ -18,9 +18,9 @@ use std::marker::{Send, Sync};
 
 pub struct StreamAwareCudaSlice<T> {
     pub cu_device_ptr: CUdeviceptr,
-    pub len:           usize,
-    pub stream:        CUstream,
-    pub _phantom:      std::marker::PhantomData<T>,
+    pub len: usize,
+    pub stream: CUstream,
+    pub _phantom: std::marker::PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for StreamAwareCudaSlice<T> {}
@@ -45,10 +45,10 @@ impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
     fn from(value: CudaSlice<T>) -> Self {
         let res = {
             StreamAwareCudaSlice {
-                stream:        *value.device().cu_stream(),
+                stream: *value.device().cu_stream(),
                 cu_device_ptr: *value.device_ptr(),
-                len:           value.len(),
-                _phantom:      std::marker::PhantomData,
+                len: value.len(),
+                _phantom: std::marker::PhantomData,
             }
         };
         // forgetting the slice is ok since we are going to free up the memory using the
@@ -102,8 +102,8 @@ pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
 
 pub struct CompactQuery {
-    pub code_query:        CompactGaloisRingShares,
-    pub mask_query:        CompactGaloisRingShares,
+    pub code_query: CompactGaloisRingShares,
+    pub mask_query: CompactGaloisRingShares,
     pub code_query_insert: CompactGaloisRingShares,
     pub mask_query_insert: CompactGaloisRingShares,
 }
@@ -116,13 +116,13 @@ impl CompactQuery {
         batch_size: usize,
     ) -> eyre::Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
-            code_query:        device.htod_transfer_query(
+            code_query: device.htod_transfer_query(
                 &self.code_query,
                 streams,
                 batch_size,
                 IRIS_CODE_LENGTH,
             )?,
-            mask_query:        device.htod_transfer_query(
+            mask_query: device.htod_transfer_query(
                 &self.mask_query,
                 streams,
                 batch_size,
@@ -145,8 +145,8 @@ impl CompactQuery {
 }
 
 pub struct DeviceCompactQuery {
-    code_query:            CudaVec2DSlicerU8,
-    mask_query:            CudaVec2DSlicerU8,
+    code_query: CudaVec2DSlicerU8,
+    mask_query: CudaVec2DSlicerU8,
     pub code_query_insert: CudaVec2DSlicerU8,
     pub mask_query_insert: CudaVec2DSlicerU8,
 }
@@ -160,8 +160,8 @@ impl DeviceCompactQuery {
         blass: &[CudaBlas],
     ) -> eyre::Result<DeviceCompactSums> {
         Ok(DeviceCompactSums {
-            code_query:        code_engine.query_sums(&self.code_query, streams, blass),
-            mask_query:        mask_engine.query_sums(&self.mask_query, streams, blass),
+            code_query: code_engine.query_sums(&self.code_query, streams, blass),
+            mask_query: mask_engine.query_sums(&self.mask_query, streams, blass),
             code_query_insert: code_engine.query_sums(&self.code_query_insert, streams, blass),
             mask_query_insert: mask_engine.query_sums(&self.mask_query_insert, streams, blass),
         })
@@ -229,8 +229,8 @@ impl DeviceCompactQuery {
     }
 }
 pub struct DeviceCompactSums {
-    code_query:            CudaVec2DSlicerU32,
-    mask_query:            CudaVec2DSlicerU32,
+    code_query: CudaVec2DSlicerU32,
+    mask_query: CudaVec2DSlicerU32,
     pub code_query_insert: CudaVec2DSlicerU32,
     pub mask_query_insert: CudaVec2DSlicerU32,
 }

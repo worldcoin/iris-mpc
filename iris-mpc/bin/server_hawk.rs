@@ -212,15 +212,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
     let my_state = SyncState {
-        db_len:              store_len as u64,
+        db_len: store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
-        modifications:       store.last_modifications(max_sync_lookback).await?,
+        modifications: store.last_modifications(max_sync_lookback).await?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
     struct ReadyProbeResponse {
-        image_name:    String,
-        uuid:          String,
+        image_name: String,
+        uuid: String,
         shutting_down: bool,
     }
 
@@ -230,14 +230,14 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let _health_check_abort = background_tasks.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
         let ready_probe_response = ReadyProbeResponse {
-            image_name:    config.image_name.clone(),
+            image_name: config.image_name.clone(),
             shutting_down: false,
-            uuid:          uuid.clone(),
+            uuid: uuid.clone(),
         };
         let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name:    config.image_name.clone(),
+            image_name: config.image_name.clone(),
             shutting_down: true,
-            uuid:          uuid.clone(),
+            uuid: uuid.clone(),
         };
         let serialized_response = serde_json::to_string(&ready_probe_response)
             .expect("Serialization to JSON to probe response failed");
@@ -552,8 +552,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         .collect();
 
     let hawk_args = HawkArgs {
-        party_index:         config.party_id,
-        addresses:           node_addresses.clone(),
+        party_index: config.party_id,
+        addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         disable_persistence: config.disable_persistence,
     };
@@ -709,13 +709,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .map(|query_idx| {
                     let serial_id = (merged_results[query_idx] + 1) as i64;
                     // Get the original vectors from `receive_batch`.
-                    (serial_id, StoredIrisRef {
-                        id:         serial_id,
-                        left_code:  &left_iris_requests.code[query_idx].coefs[..],
-                        left_mask:  &left_iris_requests.mask[query_idx].coefs[..],
-                        right_code: &right_iris_requests.code[query_idx].coefs[..],
-                        right_mask: &right_iris_requests.mask[query_idx].coefs[..],
-                    })
+                    (
+                        serial_id,
+                        StoredIrisRef {
+                            id: serial_id,
+                            left_code: &left_iris_requests.code[query_idx].coefs[..],
+                            left_mask: &left_iris_requests.mask[query_idx].coefs[..],
+                            right_code: &right_iris_requests.code[query_idx].coefs[..],
+                            right_mask: &right_iris_requests.mask[query_idx].coefs[..],
+                        },
+                    )
                 })
                 .unzip();
 

@@ -13,7 +13,7 @@ pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Eye {
-    Left  = 0,
+    Left = 0,
     Right = 1,
 }
 
