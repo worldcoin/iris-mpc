@@ -26,6 +26,7 @@ async fn send_message(
     Ok(())
 }
 
+
 pub async fn send_error_results_to_sns(
     serialised_json_message: String,
     metadata: &BatchMetadata,
@@ -43,9 +44,8 @@ pub async fn send_error_results_to_sns(
         sns_client,
         format!("party-id-{}", config.party_id),
         message_attributes,
-        message_type.to_owned() + "_error",
-    )
-    .await?;
+        message_type.to_owned()+"_error",
+    ).await?;
     Ok(())
 }
 
@@ -71,8 +71,7 @@ pub async fn send_results_to_sns(
             format!("party-id-{}", config.party_id),
             message_attributes,
             message_type.to_owned(),
-        )
-        .await?;
+        ).await?;
     }
     Ok(())
 }

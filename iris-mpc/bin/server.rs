@@ -8,14 +8,14 @@ use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
-use iris_mpc::aws::clients::AwsClients;
-use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
-use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
+        aws::{
+            SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
+            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
+        },
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
         shutdown_handler::ShutdownHandler,
@@ -59,6 +59,9 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
+use iris_mpc::aws::clients::AwsClients;
+use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
+use iris_mpc::utils::{initialize_chacha_seeds, initialize_tracing};
 
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -778,7 +781,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         &config.environment,
         &config.party_id,
     )
-    .await
+        .await
     {
         Ok(key_pair) => key_pair,
         Err(e) => {
@@ -1275,10 +1278,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let db_chunks_s3_store = S3Store::new(
-                        aws_clients.db_chunks_s3_client.clone(),
-                        s3_chunks_bucket_name.clone(),
-                    );
+                    let db_chunks_s3_store =
+                        S3Store::new(aws_clients.db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
 
                     tokio::runtime::Handle::current().block_on(async {
                         load_db(
