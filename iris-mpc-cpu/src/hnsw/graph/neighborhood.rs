@@ -200,7 +200,7 @@ impl<Vector, Distance> From<SortedNeighborhood<Vector, Distance>> for Vec<(Vecto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::plaintext_store::PlaintextStore;
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
     use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]

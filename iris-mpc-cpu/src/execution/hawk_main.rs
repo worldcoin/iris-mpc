@@ -382,7 +382,7 @@ impl HawkActor {
         session: &mut HawkSession,
         insert_plan: InsertPlan,
     ) -> Result<ConnectPlan> {
-        let inserted = session.aby3_store.insert(&insert_plan.query).await;
+        let inserted = session.aby3_store.storage.insert(&insert_plan.query).await;
         let mut graph_store = session.graph_store.write().await;
 
         let connect_plan = self
@@ -411,6 +411,7 @@ impl HawkActor {
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
                 ],
+                empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
             },
             GraphLoader([
                 self.graph_store[0].write().await,
@@ -424,6 +425,7 @@ pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
     irises: BothEyes<SharedIrisesMut<'a>>,
+    empty_iris: Arc<GaloisRingSharedIris>,
 }
 
 impl<'a> InMemoryStore for IrisLoader<'a> {
@@ -440,14 +442,14 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
             [left_code, right_code],
             [left_mask, right_mask]
         ) {
+            let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
+                .expect("Wrong code or mask size");
             if index >= side.points.len() {
-                side.points.resize(
-                    index + 1,
-                    GaloisRingSharedIris::default_for_party(self.party_id),
-                );
+                side.points.resize_with(index, || self.empty_iris.clone());
+                side.points.push(iris);
+            } else {
+                side.points[index] = iris;
             }
-            side.points[index].code.coefs = code.try_into().unwrap();
-            side.points[index].mask.coefs = mask.try_into().unwrap();
         }
     }
 
@@ -467,9 +469,9 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
     fn fake_db(&mut self, size: usize) {
         *self.db_size = size;
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
         for side in &mut self.irises {
-            side.points
-                .resize(size, GaloisRingSharedIris::default_for_party(self.party_id));
+            side.points.resize(size, iris.clone());
         }
     }
 }

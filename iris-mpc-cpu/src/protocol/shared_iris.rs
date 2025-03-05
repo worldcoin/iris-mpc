@@ -1,3 +1,4 @@
+use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
@@ -6,6 +7,7 @@ use iris_mpc_common::{
 use itertools::izip;
 use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct GaloisRingSharedIris {
@@ -32,6 +34,19 @@ impl GaloisRingSharedIris {
             code: shares.iter().map(|s| s.code.clone()).collect(),
             mask: shares.iter().map(|s| s.mask.clone()).collect(),
         }
+    }
+
+    pub fn try_from_buffers(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Arc<Self>> {
+        Ok(Arc::new(GaloisRingSharedIris {
+            code: GaloisRingIrisCodeShare {
+                id: party_id,
+                coefs: code.try_into()?,
+            },
+            mask: GaloisRingTrimmedMaskCodeShare {
+                id: party_id,
+                coefs: mask.try_into()?,
+            },
+        }))
     }
 
     /// Generate iris code shares of an input iris code using local randomness
