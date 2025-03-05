@@ -98,7 +98,7 @@ type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
-    pub points: Vec<GaloisRingSharedIris>,
+    pub points: Vec<IrisRef>,
 }
 
 #[derive(Clone)]
@@ -124,7 +124,7 @@ impl Default for SharedIrisesRef {
 }
 
 impl SharedIrisesRef {
-    pub fn new(data: Vec<GaloisRingSharedIris>) -> Self {
+    pub fn new(data: Vec<IrisRef>) -> Self {
         let body = SharedIrises { points: data };
         SharedIrisesRef {
             body: Arc::new(RwLock::new(body)),
@@ -152,31 +152,27 @@ impl SharedIrisesRef {
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
         let body = self.body.read().await;
-        // TODO: No clone.
-        Arc::new(body.points[vector.id].clone())
+        Arc::clone(&body.points[vector.id])
     }
 
     pub async fn iter_vectors<'a>(&'a self, vector_ids: &'a [VectorId]) -> Vec<IrisRef> {
         let body = self.body.read().await;
-        // TODO: No clone.
         vector_ids
             .iter()
-            .map(move |v| Arc::new(body.points[v.id].clone()))
+            .map(move |v| Arc::clone(&body.points[v.id]))
             .collect_vec()
     }
 
     pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
         let mut body = self.body.write().await;
-        body.points.push(query.query.clone());
+        body.points.push(Arc::new(query.query.clone()));
 
         let new_id = body.points.len() - 1;
         VectorId { id: new_id.into() }
     }
 }
 
-pub fn setup_local_player_preloaded_db(
-    database: Vec<GaloisRingSharedIris>,
-) -> eyre::Result<SharedIrisesRef> {
+pub fn setup_local_player_preloaded_db(database: Vec<IrisRef>) -> eyre::Result<SharedIrisesRef> {
     let aby3_store = SharedIrisesRef::new(database);
     Ok(aby3_store)
 }
@@ -193,7 +189,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     for iris in plain_store.points.iter() {
         let all_shares = generate_galois_iris_shares(rng, iris.data.0.clone());
         for (i, shares) in all_shares.iter().enumerate() {
-            shared_irises[i].push(shares.clone());
+            shared_irises[i].push(Arc::new(shares.clone()));
         }
     }
 

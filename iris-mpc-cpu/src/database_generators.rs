@@ -1,4 +1,5 @@
 use crate::shares::{ring_impl::RingElement, share::Share};
+use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
@@ -7,6 +8,7 @@ use iris_mpc_common::{
 use itertools::izip;
 use rand::{CryptoRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 type ShareRing = u16;
 type ShareRingPlain = RingElement<ShareRing>;
@@ -36,6 +38,19 @@ impl GaloisRingSharedIris {
             code: shares.iter().map(|s| s.code.clone()).collect(),
             mask: shares.iter().map(|s| s.mask.clone()).collect(),
         }
+    }
+
+    pub fn try_from_buffers(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Arc<Self>> {
+        Ok(Arc::new(GaloisRingSharedIris {
+            code: GaloisRingIrisCodeShare {
+                id: party_id,
+                coefs: code.try_into()?,
+            },
+            mask: GaloisRingTrimmedMaskCodeShare {
+                id: party_id,
+                coefs: mask.try_into()?,
+            },
+        }))
     }
 }
 
