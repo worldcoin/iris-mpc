@@ -1,6 +1,4 @@
-use super::binary::{
-    mul_lift_2k, open_bin_batch, single_extract_msb_u32, single_extract_msb_u32_batch,
-};
+use super::binary::{extract_msb_u32_batch, mul_lift_2k, open_bin_batch, single_extract_msb_u32};
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
@@ -214,9 +212,9 @@ pub async fn cross_compare_batch(
 ) -> eyre::Result<Vec<bool>> {
     let diff = cross_mul_batch(session, distances).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
-    let bit = single_extract_msb_u32_batch(session, &diff).await?;
+    let bits = extract_msb_u32_batch(session, &diff).await?;
     // Open bit
-    let opened_b = open_bin_batch(session, &bit).await?;
+    let opened_b = open_bin_batch(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 

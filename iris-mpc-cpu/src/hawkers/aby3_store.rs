@@ -887,6 +887,84 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
+    async fn test_gr_aby3_store_plaintext_batch() {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let db_size = 10;
+        let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
+        let shared_irises: Vec<_> = cleartext_database
+            .iter()
+            .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
+            .collect();
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
+            .await
+            .unwrap();
+        // Now do the work for the plaintext store
+        let mut plaintext_store = PlaintextStore::default();
+        let plaintext_preps: Vec<_> = (0..db_size)
+            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .collect();
+        let mut plaintext_inserts = Vec::with_capacity(db_size);
+        for p in plaintext_preps.iter() {
+            plaintext_inserts.push(plaintext_store.insert(p).await);
+        }
+
+        // compute distances in plaintext
+        let dist1_plain = plaintext_store
+            .eval_distance_batch(&plaintext_inserts[0], &plaintext_inserts)
+            .await;
+        let dist2_plain = plaintext_store
+            .eval_distance_batch(&plaintext_inserts[1], &plaintext_inserts)
+            .await;
+        let dist_plain = dist1_plain
+            .into_iter()
+            .zip(dist2_plain.into_iter())
+            .collect::<Vec<_>>();
+        let bits_plain = plaintext_store.less_than_batch(&dist_plain).await;
+
+        let mut aby3_inserts = vec![];
+        let mut queries = vec![];
+        for store in local_stores.iter_mut() {
+            let player_index = store.get_owner_index();
+            let player_preps: Vec<_> = (0..db_size)
+                .map(|id| store.prepare_query(shared_irises[id][player_index].clone()))
+                .collect();
+            queries.push(player_preps.clone());
+            let mut player_inserts = vec![];
+            for p in player_preps.iter() {
+                player_inserts.push(store.insert(p).await);
+            }
+            aby3_inserts.push(player_inserts);
+        }
+
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter() {
+            let player_index = store.get_owner_index();
+            let player_inserts = aby3_inserts[player_index].clone();
+            let player_preps = queries[player_index].clone();
+            let mut store = store.clone();
+            jobs.spawn(async move {
+                let dist1_aby3 = store
+                    .eval_distance_batch(&player_preps[0], &player_inserts)
+                    .await;
+                let dist2_aby3 = store
+                    .eval_distance_batch(&player_preps[1], &player_inserts)
+                    .await;
+                let dist_aby3 = dist1_aby3
+                    .into_iter()
+                    .zip(dist2_aby3.into_iter())
+                    .collect::<Vec<_>>();
+                store.less_than_batch(&dist_aby3).await
+            });
+        }
+        let bits_aby3 = jobs.join_all().await;
+
+        assert_eq!(bits_aby3[0], bits_aby3[1]);
+        assert_eq!(bits_aby3[0], bits_aby3[2]);
+        assert_eq!(bits_aby3[0], bits_plain);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;

@@ -629,18 +629,28 @@ pub async fn single_extract_msb_u32<const K: usize>(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn single_extract_msb_u32_batch(
+pub async fn extract_msb_u32_batch(
     session: &mut Session,
     x: &[Share<u32>],
 ) -> eyre::Result<Vec<Share<Bit>>> {
-    extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(x.to_vec()))
-        .await?
-        .iter()
-        .map(|x| {
-            let (a, b) = x.get_ab_ref();
-            Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
-        })
-        .collect::<eyre::Result<Vec<_>>>()
+    let res_len = x.len();
+    let mut res = Vec::with_capacity(res_len);
+
+    let packed_bits =
+        extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(x.to_vec())).await?;
+    let mut packed_bits_iter = packed_bits.into_iter();
+
+    'outer: loop {
+        let (a, b) = packed_bits_iter.next().unwrap().get_ab_ref();
+        for i in 0..64 {
+            if res.len() == res_len {
+                break 'outer;
+            }
+            res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+        }
+    }
+
+    Ok(res)
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
