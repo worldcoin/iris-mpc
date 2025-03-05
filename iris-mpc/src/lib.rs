@@ -1,3 +1,3 @@
-pub mod aws;
 pub mod client;
-pub mod init;
+pub mod server;
+pub mod services;

@@ -29,7 +29,7 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-RUN cargo build --release --bin server-hawk --bin key-manager --bin client
+RUN cargo build --release --bin iris-mpc-hawk --bin key-manager --bin client
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y ca-certificates awscli curl
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/iris-mpc/target/release/server-hawk /bin/server-hawk
+COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-gpu /bin/iris-mpc-gpu
 COPY --from=build-app /src/iris-mpc/target/release/key-manager /bin/key-manager
 COPY --from=build-app /src/iris-mpc/target/release/client /bin/client
 
