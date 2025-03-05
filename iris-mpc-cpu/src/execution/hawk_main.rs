@@ -356,7 +356,7 @@ impl HawkActor {
         session: &mut HawkSession,
         insert_plan: InsertPlan,
     ) -> Result<ConnectPlan> {
-        let inserted = session.aby3_store.insert(&insert_plan.query).await;
+        let inserted = session.aby3_store.storage.insert(&insert_plan.query).await;
         let mut graph_store = session.graph_store.write().await;
 
         let connect_plan = self

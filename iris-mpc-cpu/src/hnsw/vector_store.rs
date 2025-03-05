@@ -38,10 +38,6 @@ pub trait VectorStore: Clone + Debug {
     /// Example: an encrypted distance.
     type DistanceRef: Ref;
 
-    /// Persist a query as a new vector in the store, and return a reference to
-    /// it.
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
-
     /// Evaluate the distance between a query and a vector.
     async fn eval_distance(
         &mut self,
@@ -61,17 +57,6 @@ pub trait VectorStore: Clone + Debug {
     ) -> bool;
 
     // Batch variants.
-
-    /// Persist a batch of queries as new vectors in the store, and return
-    /// references to them. The default implementation is a loop over
-    /// `insert`. Override for more efficient batch insertions.
-    async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
-        let mut results = Vec::with_capacity(queries.len());
-        for query in queries {
-            results.push(self.insert(query).await);
-        }
-        results
-    }
 
     /// Evaluate the distances between a query and a batch of vectors.
     /// The default implementation is a loop over `eval_distance`.
@@ -98,6 +83,25 @@ pub trait VectorStore: Clone + Debug {
         let mut results: Vec<bool> = Vec::with_capacity(distances.len());
         for (d1, d2) in distances {
             results.push(self.less_than(d1, d2).await);
+        }
+        results
+    }
+}
+
+// The operations exposed by a vector store, including mutations.
+#[allow(async_fn_in_trait)]
+pub trait VectorStoreMut: VectorStore {
+    /// Persist a query as a new vector in the store, and return a reference to
+    /// it.
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
+
+    /// Persist a batch of queries as new vectors in the store, and return
+    /// references to them. The default implementation is a loop over
+    /// `insert`. Override for more efficient batch insertions.
+    async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            results.push(self.insert(query).await);
         }
         results
     }

@@ -8,6 +8,7 @@ use crate::{
     hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{
         graph::layered_graph::{GraphMem, Layer},
+        vector_store::VectorStoreMut,
         HnswSearcher, SortedNeighborhood, VectorStore,
     },
     network::NetworkType,
@@ -158,7 +159,7 @@ impl SharedIrisesRef {
         vector_ids.iter().map(move |v| body.points[v.id].clone())
     }
 
-    async fn insert(&mut self, query: &QueryRef) -> VectorId {
+    pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
         let mut body = self.body.write().await;
         body.points.push(query.query.clone());
 
@@ -288,10 +289,6 @@ impl VectorStore for Aby3Store {
     type VectorRef = VectorId; // Point ID of an inserted iris.
     type DistanceRef = DistanceShare<u32>; // Distance represented as shares.
 
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.insert(query).await
-    }
-
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -349,6 +346,12 @@ impl VectorStore for Aby3Store {
         )
         .await
         .unwrap()
+    }
+}
+
+impl VectorStoreMut for Aby3Store {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        self.storage.insert(query).await
     }
 }
 
@@ -839,7 +842,7 @@ mod tests {
                 .collect();
             let mut player_inserts = vec![];
             for p in player_preps.iter() {
-                player_inserts.push(store.insert(p).await);
+                player_inserts.push(store.storage.insert(p).await);
             }
             aby3_inserts.push(player_inserts);
         }

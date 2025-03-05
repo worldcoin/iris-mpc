@@ -4,7 +4,7 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::graph::neighborhood::SortedNeighborhoodV;
+use super::{graph::neighborhood::SortedNeighborhoodV, vector_store::VectorStoreMut};
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -389,7 +389,7 @@ impl HnswSearcher {
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
     #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
-    pub async fn insert<V: VectorStore>(
+    pub async fn insert<V: VectorStoreMut>(
         &self,
         vector_store: &mut V,
         graph_store: &mut GraphMem<V>,

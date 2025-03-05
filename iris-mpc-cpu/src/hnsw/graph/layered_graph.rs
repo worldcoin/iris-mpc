@@ -224,7 +224,7 @@ mod tests {
     use super::*;
     use crate::{
         hawkers::plaintext_store::{PlaintextStore, PointId},
-        hnsw::HnswSearcher,
+        hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -253,15 +253,6 @@ mod tests {
         type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
-        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-            // The query is now accepted in the store. It keeps the same ID.
-            self.points
-                .get_mut(&(query.0 as usize))
-                .unwrap()
-                .is_persistent = true;
-            *query
-        }
-
         async fn eval_distance(
             &mut self,
             query: &Self::QueryRef,
@@ -283,6 +274,17 @@ mod tests {
             distance2: &Self::DistanceRef,
         ) -> bool {
             *distance1 < *distance2
+        }
+    }
+
+    impl VectorStoreMut for TestStore {
+        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+            // The query is now accepted in the store. It keeps the same ID.
+            self.points
+                .get_mut(&(query.0 as usize))
+                .unwrap()
+                .is_persistent = true;
+            *query
         }
     }
 
