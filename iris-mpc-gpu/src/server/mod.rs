@@ -83,26 +83,26 @@ macro_rules! filter_by_indices_with_rotations_and_code_length {
 
 pub struct PreprocessedBatchQuery {
     // Enrollment and reauth specific fields
-    pub request_ids:   Vec<String>,
+    pub request_ids: Vec<String>,
     pub request_types: Vec<String>,
-    pub metadata:      Vec<BatchMetadata>,
+    pub metadata: Vec<BatchMetadata>,
 
-    pub left_iris_requests:               IrisQueryBatchEntries,
-    pub right_iris_requests:              IrisQueryBatchEntries,
-    pub left_iris_rotated_requests:       IrisQueryBatchEntries,
-    pub right_iris_rotated_requests:      IrisQueryBatchEntries,
-    pub left_iris_interpolated_requests:  IrisQueryBatchEntries,
+    pub left_iris_requests: IrisQueryBatchEntries,
+    pub right_iris_requests: IrisQueryBatchEntries,
+    pub left_iris_rotated_requests: IrisQueryBatchEntries,
+    pub right_iris_rotated_requests: IrisQueryBatchEntries,
+    pub left_iris_interpolated_requests: IrisQueryBatchEntries,
     pub right_iris_interpolated_requests: IrisQueryBatchEntries,
 
-    pub or_rule_indices:      Vec<Vec<u32>>,
+    pub or_rule_indices: Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
-    pub valid_entries:        Vec<bool>,
-    pub skip_persistence:     Vec<bool>,
+    pub valid_entries: Vec<bool>,
+    pub skip_persistence: Vec<bool>,
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
     pub reauth_target_indices: HashMap<String, u32>,
-    pub reauth_use_or_rule:    HashMap<String, bool>,
+    pub reauth_use_or_rule: HashMap<String, bool>,
 
     // Only deletion specific fields
     pub deletion_requests_indices: Vec<u32>, // 0-indexed indices of entries to be deleted
@@ -111,10 +111,10 @@ pub struct PreprocessedBatchQuery {
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
 
     // additional fields which are GPU specific
-    pub left_iris_interpolated_requests_preprocessed:  BatchQueryEntriesPreprocessed,
+    pub left_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
     pub right_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
-    pub left_iris_rotated_requests_preprocessed:       BatchQueryEntriesPreprocessed,
-    pub right_iris_rotated_requests_preprocessed:      BatchQueryEntriesPreprocessed,
+    pub left_iris_rotated_requests_preprocessed: BatchQueryEntriesPreprocessed,
+    pub right_iris_rotated_requests_preprocessed: BatchQueryEntriesPreprocessed,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<u32, Modification>,
