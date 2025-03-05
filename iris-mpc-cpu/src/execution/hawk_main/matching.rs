@@ -43,7 +43,7 @@ impl BatchStep1 {
 
 struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
-    anti_join:  BothEyes<VecEdges<(VectorId, bool)>>,
+    anti_join: BothEyes<VecEdges<(VectorId, bool)>>,
 }
 
 impl Step1 {
@@ -75,7 +75,7 @@ impl Step1 {
     fn with_capacity(capacity: usize) -> Self {
         Step1 {
             inner_join: Vec::with_capacity(capacity),
-            anti_join:  [
+            anti_join: [
                 Vec::with_capacity(capacity / 2),
                 Vec::with_capacity(capacity / 2),
             ],
