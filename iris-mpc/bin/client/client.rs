@@ -1,5 +1,3 @@
-mod server;
-
 use clap::Parser;
 use iris_mpc::client::{run_client, Opt};
 
