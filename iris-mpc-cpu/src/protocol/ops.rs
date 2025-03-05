@@ -1,4 +1,6 @@
-use super::binary::{mul_lift_2k, single_extract_msb_u32};
+use super::binary::{
+    mul_lift_2k, open_bin_batch, single_extract_msb_u32, single_extract_msb_u32_batch,
+};
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
@@ -15,6 +17,7 @@ use crate::{
     },
 };
 use eyre::eyre;
+use itertools::izip;
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -128,31 +131,58 @@ pub async fn batch_signed_lift_vec(
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
-    d1: DistanceShare<u32>,
-    d2: DistanceShare<u32>,
+    distance1: DistanceShare<u32>,
+    distance2: DistanceShare<u32>,
 ) -> eyre::Result<Share<u32>> {
-    let res_a = session.prf_as_mut().gen_zero_share() + &d2.code_dist * &d1.mask_dist
-        - &d1.code_dist * &d2.mask_dist;
+    cross_mul_batch(session, &[(distance1, distance2)])
+        .await
+        .map(|x| x[0].clone())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub(crate) async fn cross_mul_batch(
+    session: &mut Session,
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> eyre::Result<Vec<Share<u32>>> {
+    let res_a: Vec<RingElement<u32>> = distances
+        .iter()
+        .map(|(d1, d2)| {
+            session.prf_as_mut().gen_zero_share() + &d2.code_dist * &d1.mask_dist
+                - &d1.code_dist * &d2.mask_dist
+        })
+        .collect();
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
     let prev_role = session.identity(&session.own_role()?.prev(3))?;
 
-    network
-        .send(
-            NetworkValue::RingElement32(res_a).to_network(),
-            next_role,
-            &session.session_id(),
-        )
-        .await?;
+    if res_a.len() == 1 {
+        network
+            .send(
+                NetworkValue::RingElement32(res_a[0]).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await?;
+    } else {
+        network
+            .send(
+                NetworkValue::VecRing32(res_a.clone()).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await?;
+    };
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::RingElement32(element)) => element,
+        Ok(NetworkValue::RingElement32(element)) => vec![element],
+        Ok(NetworkValue::VecRing32(elements)) => elements,
         _ => return Err(eyre!("Could not deserialize RingElement32")),
     };
-
-    Ok(Share::new(res_a, res_b))
+    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+        .map(|(a, b)| Share::new(a, b))
+        .collect())
 }
 
 /// Computes (d2*t1 - d1*t2) > 0.
@@ -176,6 +206,18 @@ pub async fn cross_compare(
     // Open bit
     let opened_b = open_bin(session, bit).await?;
     Ok(opened_b.convert())
+}
+
+pub async fn cross_compare_batch(
+    session: &mut Session,
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> eyre::Result<Vec<bool>> {
+    let diff = cross_mul_batch(session, distances).await?;
+    // Compute bit <- MSB(D2 * T1 - D1 * T2)
+    let bit = single_extract_msb_u32_batch(session, &diff).await?;
+    // Open bit
+    let opened_b = open_bin_batch(session, &bit).await?;
+    opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
 /// Computes the dot product between the iris pairs; for both the code and the

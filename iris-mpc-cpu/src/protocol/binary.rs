@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Error};
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
@@ -629,6 +629,21 @@ pub async fn single_extract_msb_u32<const K: usize>(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn single_extract_msb_u32_batch(
+    session: &mut Session,
+    x: &[Share<u32>],
+) -> eyre::Result<Vec<Share<Bit>>> {
+    extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(x.to_vec()))
+        .await?
+        .iter()
+        .map(|x| {
+            let (a, b) = x.get_ab_ref();
+            Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
+        })
+        .collect::<eyre::Result<Vec<_>>>()
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, Error> {
     // send to next_party
     let next_party = session.next_identity()?;
@@ -658,4 +673,63 @@ pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, E
 
     // xor shares with the received share
     Ok((share.a ^ share.b ^ c).convert())
+}
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn open_bin_batch(
+    session: &mut Session,
+    shares: &[Share<Bit>],
+) -> eyre::Result<Vec<Bit>> {
+    // send to next_party
+    let next_party = session.next_identity()?;
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let message = if shares.len() == 1 {
+        NetworkValue::RingElementBit(shares[0].b).to_network()
+    } else {
+        // TODO: could be optimized by packing bits
+        let bits = shares
+            .iter()
+            .map(|x| NetworkValue::RingElementBit(x.b))
+            .collect::<Vec<_>>();
+        NetworkValue::vec_to_network(&bits)
+    };
+
+    network.send(message, &next_party, &sid).await?;
+
+    // receiving from previous party
+    let network = session.network().clone();
+    let sid = session.session_id();
+    let prev_party = session.prev_identity()?;
+    let c = {
+        let serialized_other_shares = network.receive(&prev_party, &sid).await;
+        if shares.len() == 1 {
+            match NetworkValue::from_network(serialized_other_shares) {
+                Ok(NetworkValue::RingElementBit(message)) => Ok(vec![message]),
+                Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
+                _ => Err(eyre!("Wrong value type is received in open_bin operation")),
+            }
+        } else {
+            match NetworkValue::vec_from_network(serialized_other_shares) {
+                Ok(v) => {
+                    if matches!(v[0], NetworkValue::RingElementBit(_)) {
+                        Ok(v.into_iter()
+                            .map(|x| match x {
+                                NetworkValue::RingElementBit(message) => message,
+                                _ => unreachable!(),
+                            })
+                            .collect())
+                    } else {
+                        Err(eyre!("Wrong value type is received in open_bin operation"))
+                    }
+                }
+                Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
+            }
+        }
+    }?;
+
+    // XOR shares with the received shares
+    izip!(shares.iter(), c.iter())
+        .map(|(s, c)| Ok((s.a ^ s.b ^ c).convert()))
+        .collect::<eyre::Result<Vec<_>>>()
 }

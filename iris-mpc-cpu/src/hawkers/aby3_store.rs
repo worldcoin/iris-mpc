@@ -12,7 +12,7 @@ use crate::{
     },
     network::NetworkType,
     protocol::ops::{
-        batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
+        batch_signed_lift_vec, compare_threshold_and_open, cross_compare, cross_compare_batch,
         galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
@@ -346,11 +346,9 @@ impl VectorStore for Aby3Store {
         &mut self,
         distances: &[(Self::DistanceRef, Self::DistanceRef)],
     ) -> Vec<bool> {
-        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
-        for (d1, d2) in distances {
-            results.push(self.less_than(d1, d2).await);
-        }
-        results
+        cross_compare_batch(&mut self.session, distances)
+            .await
+            .unwrap()
     }
 }
 
