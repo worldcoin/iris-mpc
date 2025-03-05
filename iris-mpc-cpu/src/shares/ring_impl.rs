@@ -22,8 +22,8 @@ use std::{
 pub struct RingElement<T: IntRing2k + std::fmt::Display>(pub T);
 
 pub struct BitIter<'a, T: IntRing2k> {
-    bits:    &'a RingElement<T>,
-    index:   usize,
+    bits: &'a RingElement<T>,
+    index: usize,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -79,8 +79,8 @@ impl<T: IntRing2k> RingElement<T> {
 
     pub(crate) fn bit_iter(&self) -> BitIter<'_, T> {
         BitIter {
-            bits:    self,
-            index:   0,
+            bits: self,
+            index: 0,
             _marker: PhantomData,
         }
     }

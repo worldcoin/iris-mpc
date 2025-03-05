@@ -53,13 +53,13 @@ jobs:
           # Split the test and bench caches, the have different debug settings
           key: "test"
 
-      - name: Install Rust nightly
+      - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup toolchain install nightly-2024-07-10
+        run: rustup toolchain install 1.81.0
 
-      - name: Set Rust nightly as default
+      - name: Set Rust  as default
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: rustup default nightly-2024-07-10
+        run: rustup default 1.81.0
 
       - name: Run Tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

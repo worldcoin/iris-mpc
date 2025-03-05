@@ -34,11 +34,11 @@ mod tests {
 
     fn mock_iris_code_shares_json() -> IrisCodeSharesJSON {
         IrisCodeSharesJSON {
-            iris_version:           "1.0".to_string(),
-            iris_shares_version:    "1.3".to_string(),
-            left_iris_code_shares:  STANDARD.encode("left_iris_code_mock"),
+            iris_version: "1.0".to_string(),
+            iris_shares_version: "1.3".to_string(),
+            left_iris_code_shares: STANDARD.encode("left_iris_code_mock"),
             right_iris_code_shares: STANDARD.encode("right_iris_code_mock"),
-            left_mask_code_shares:  STANDARD.encode("left_iris_mask_mock"),
+            left_mask_code_shares: STANDARD.encode("left_iris_mask_mock"),
             right_mask_code_shares: STANDARD.encode("right_iris_mask_mock"),
         }
     }
@@ -86,11 +86,11 @@ mod tests {
         let s3_client = Arc::new(S3Client::from_conf(s3_config));
 
         let smpc_request = UniquenessRequest {
-            batch_size:         None,
-            signup_id:          "test_signup_id".to_string(),
-            s3_key:             key.to_string(),
+            batch_size: None,
+            signup_id: "test_signup_id".to_string(),
+            s3_key: key.to_string(),
             or_rule_serial_ids: None,
-            skip_persistence:   None,
+            skip_persistence: None,
         };
 
         let result = get_iris_data_by_party_id(
@@ -111,11 +111,11 @@ mod tests {
     async fn test_decrypt_iris_share_success() {
         // Mocked base64 encoded JSON string
         let iris_codes_json = IrisCodeSharesJSON {
-            iris_version:           "1.0".to_string(),
-            iris_shares_version:    "1.3".to_string(),
-            left_iris_code_shares:  "left_code".to_string(),
+            iris_version: "1.0".to_string(),
+            iris_shares_version: "1.3".to_string(),
+            left_iris_code_shares: "left_code".to_string(),
             right_iris_code_shares: "right_code".to_string(),
-            left_mask_code_shares:  "left_mask".to_string(),
+            left_mask_code_shares: "left_mask".to_string(),
             right_mask_code_shares: "right_mask".to_string(),
         };
 

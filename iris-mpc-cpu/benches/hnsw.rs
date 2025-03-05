@@ -105,12 +105,10 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                 let t2i = t2[index].clone();
                 let mut player_session = runtime.sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
-                    let ds_and_ts = batch_signed_lift_vec(&mut player_session, vec![
-                        d1i.clone(),
-                        d2i.clone(),
-                        t1i.clone(),
-                        t2i.clone(),
-                    ])
+                    let ds_and_ts = batch_signed_lift_vec(
+                        &mut player_session,
+                        vec![d1i.clone(), d2i.clone(), t1i.clone(), t2i.clone()],
+                    )
                     .await
                     .unwrap();
                     cross_compare(

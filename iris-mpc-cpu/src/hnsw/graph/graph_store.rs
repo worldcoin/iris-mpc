@@ -22,22 +22,22 @@ use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    links:      Json<SortedNeighborhoodV<V>>,
-    layer:      i32,
+    links: Json<SortedNeighborhoodV<V>>,
+    layer: i32,
 }
 
 pub struct GraphPg<V: VectorStore> {
-    pool:        sqlx::PgPool,
+    pool: sqlx::PgPool,
     schema_name: String,
-    phantom:     PhantomData<V>,
+    phantom: PhantomData<V>,
 }
 
 impl<V: VectorStore> GraphPg<V> {
     pub fn from_iris_store(store: &Store) -> Self {
         Self {
-            pool:        store.pool.clone(),
+            pool: store.pool.clone(),
             schema_name: store.schema_name.clone(),
-            phantom:     PhantomData,
+            phantom: PhantomData,
         }
     }
 
@@ -55,9 +55,9 @@ impl<V: VectorStore> GraphPg<V> {
 }
 
 pub struct GraphTx<'a, V> {
-    pub tx:      Transaction<'a, Postgres>,
+    pub tx: Transaction<'a, Postgres>,
     schema_name: String,
-    phantom:     PhantomData<V>,
+    phantom: PhantomData<V>,
 }
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
@@ -71,8 +71,8 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
 }
 
 pub struct GraphOps<'a, 'b, V> {
-    tx:             &'a mut GraphTx<'b, V>,
-    graph_id:       StoreId,
+    tx: &'a mut GraphTx<'b, V>,
+    graph_id: StoreId,
     borrowable_sql: String,
 }
 
@@ -247,7 +247,7 @@ pub mod test_utils {
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
-        store:     Store,
+        store: Store,
         pub graph: GraphPg<V>,
     }
 
@@ -265,9 +265,9 @@ pub mod test_utils {
 
         pub fn owned(&self) -> GraphPg<V> {
             GraphPg {
-                pool:        self.graph.pool.clone(),
+                pool: self.graph.pool.clone(),
                 schema_name: self.graph.schema_name.clone(),
-                phantom:     PhantomData,
+                phantom: PhantomData,
             }
         }
     }
