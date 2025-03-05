@@ -40,6 +40,7 @@ jobs:
       - name: Update gcc to version 11
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
+          sudo apt-get install --reinstall ca-certificates
           sudo apt-get update
           sudo apt-get install -y build-essential manpages-dev software-properties-common
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
