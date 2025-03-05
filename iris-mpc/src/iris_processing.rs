@@ -28,9 +28,9 @@ pub type GaloisShares = (
 pub type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
 pub struct IrisShareProcessor {
-    party_id:    usize,
-    key_pairs:   SharesEncryptionKeyPairs,
-    s3_client:   S3Client,
+    party_id: usize,
+    key_pairs: SharesEncryptionKeyPairs,
+    s3_client: S3Client,
     bucket_name: String,
 }
 
@@ -116,9 +116,9 @@ impl IrisShareProcessor {
 impl Clone for IrisShareProcessor {
     fn clone(&self) -> Self {
         Self {
-            party_id:    self.party_id,
-            key_pairs:   self.key_pairs.clone(),
-            s3_client:   self.s3_client.clone(),
+            party_id: self.party_id,
+            key_pairs: self.key_pairs.clone(),
+            s3_client: self.s3_client.clone(),
             bucket_name: self.bucket_name.clone(),
         }
     }

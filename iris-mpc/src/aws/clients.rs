@@ -9,10 +9,10 @@ use iris_mpc_common::config::Config;
 const DEFAULT_REGION: &str = "eu-north-1";
 
 pub struct AwsClients {
-    pub sqs_client:             SQSClient,
-    pub sns_client:             SNSClient,
-    pub s3_client:              S3Client,
-    pub db_chunks_s3_client:    S3Client,
+    pub sqs_client: SQSClient,
+    pub sns_client: SNSClient,
+    pub s3_client: S3Client,
+    pub db_chunks_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }
 

@@ -5,9 +5,9 @@ use std::time::Duration;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct MessageReceiver<'a> {
-    client:        &'a Client,
-    queue_url:     String,
-    max_messages:  i32,
+    client: &'a Client,
+    queue_url: String,
+    max_messages: i32,
     pub wait_time: Duration,
 }
 
