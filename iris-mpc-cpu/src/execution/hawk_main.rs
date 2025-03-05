@@ -1,7 +1,6 @@
 use super::player::Identity;
 pub use crate::hawkers::aby3_store::VectorId;
 use crate::{
-    database_generators::GaloisRingSharedIris,
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
@@ -15,7 +14,7 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::ops::setup_replicated_prf,
+    protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
 };
 use aes_prng::AesRng;
 use clap::Parser;
@@ -777,8 +776,7 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares,
-        execution::local::get_free_local_addresses,
+        execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
@@ -825,7 +823,7 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| generate_galois_iris_shares(iris_rng, iris))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
             .collect_vec();
         // Unzip: party -> iris_id -> share
         let irises = (0..n_parties)
