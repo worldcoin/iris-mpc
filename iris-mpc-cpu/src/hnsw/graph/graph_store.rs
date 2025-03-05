@@ -292,7 +292,7 @@ mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
-        hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
+        hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;

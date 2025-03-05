@@ -1,9 +1,11 @@
 use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
 use crate::{
-    database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
-    protocol::prf::{Prf, PrfSeed},
+    protocol::{
+        prf::{Prf, PrfSeed},
+        shared_iris::GaloisRingSharedIris,
+    },
     shares::{
         bit::Bit,
         ring_impl::RingElement,
@@ -196,7 +198,7 @@ pub async fn cross_compare(
 /// vector to be able to reshare it later.
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<Vec<RingElement<u16>>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
@@ -264,7 +266,7 @@ pub async fn galois_ring_to_rep3(
 ///   `lift_and_compare_threshold` function.
 pub async fn galois_ring_is_match(
     session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<bool> {
     assert_eq!(pairs.len(), 1);
     let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
@@ -289,17 +291,17 @@ pub async fn compare_threshold_and_open(
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares,
         execution::{
             local::{generate_local_identities, LocalRuntime},
             player::Identity,
         },
         hawkers::plaintext_store::PlaintextIris,
-        protocol::ops::NetworkValue::RingElement32,
+        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
+    use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rstest::rstest;
     use std::collections::HashMap;
@@ -575,8 +577,10 @@ mod tests {
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
 
-        let first_entry = generate_galois_iris_shares(&mut rng, iris_db[0].clone());
-        let second_entry = generate_galois_iris_shares(&mut rng, iris_db[1].clone());
+        let first_entry =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+        let second_entry =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
         for (index, player) in runtime.get_identities().iter().cloned().enumerate() {
@@ -587,6 +591,7 @@ mod tests {
                 y.mask.preprocess_mask_code_query_share();
             });
             jobs.spawn(async move {
+                let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
                     .unwrap();
