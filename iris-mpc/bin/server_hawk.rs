@@ -9,6 +9,7 @@ use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::aws::clients::AwsClients;
 use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
+use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -59,7 +60,6 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
 
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
