@@ -26,6 +26,7 @@ jobs:
             - Cargo.toml
             - deny.toml
             - iris-*/**
+            - .github/workflows/test-gpu.yaml
       
 
       # The following steps will only run if any of the src files have changed
