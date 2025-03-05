@@ -73,6 +73,17 @@ pub trait VectorStore: Clone + Debug {
         results
     }
 
+    /// Check whether a batch of distances are matches.
+    /// The default implementation is a loop over `is_match`.
+    /// Override for more efficient batch match checks.
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Vec<bool> {
+        let mut results = Vec::with_capacity(distances.len());
+        for distance in distances {
+            results.push(self.is_match(distance).await);
+        }
+        results
+    }
+
     /// Compare a distance with a batch of distances.
     /// The default implementation is a loop over `less_than`.
     /// Override for more efficient batch comparisons.

@@ -94,7 +94,7 @@ pub struct Query {
     pub processed_query: GaloisRingSharedIris,
 }
 
-type QueryRef = Arc<Query>;
+pub type QueryRef = Arc<Query>;
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
