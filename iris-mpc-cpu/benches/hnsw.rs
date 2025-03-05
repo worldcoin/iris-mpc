@@ -153,10 +153,10 @@ fn bench_gr_primitives(c: &mut Criterion) {
 
                 let mut player_session = runtime.sessions.get(player).unwrap().clone();
                 jobs.spawn(async move {
-                    y1.code.preprocess_iris_code_query_share();
-                    y1.mask.preprocess_mask_code_query_share();
-                    y2.code.preprocess_iris_code_query_share();
-                    y2.mask.preprocess_mask_code_query_share();
+                    y1.code.preprocess_iris_code_query_share(index);
+                    y1.mask.preprocess_mask_code_query_share(index);
+                    y2.code.preprocess_iris_code_query_share(index);
+                    y2.mask.preprocess_mask_code_query_share(index);
                     let pairs = [(&x1, &y1), (&x2, &y2)];
                     let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
                         .await

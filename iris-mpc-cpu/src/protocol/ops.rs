@@ -566,8 +566,8 @@ mod tests {
             let mut player_session = runtime.sessions.get(&player).unwrap().clone();
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {
-                y.code.preprocess_iris_code_query_share();
-                y.mask.preprocess_mask_code_query_share();
+                y.code.preprocess_iris_code_query_share(index);
+                y.mask.preprocess_mask_code_query_share(index);
             });
             jobs.spawn(async move {
                 let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();

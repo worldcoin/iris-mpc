@@ -204,7 +204,7 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
+        let iris_store = [(); 2].map(|_| SharedIrisesRef::new(vec![], my_index));
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
 
         Ok(HawkActor {
