@@ -184,7 +184,7 @@ pub async fn cross_compare(
 /// vector to be able to reshare it later.
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<Vec<RingElement<u16>>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
@@ -252,7 +252,7 @@ pub async fn galois_ring_to_rep3(
 ///   `lift_and_compare_threshold` function.
 pub async fn galois_ring_is_match(
     session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<bool> {
     assert_eq!(pairs.len(), 1);
     let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
@@ -288,6 +288,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
+    use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rstest::rstest;
     use std::collections::HashMap;
@@ -568,6 +569,7 @@ mod tests {
                 y.mask.preprocess_mask_code_query_share();
             });
             jobs.spawn(async move {
+                let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
                     .unwrap();
