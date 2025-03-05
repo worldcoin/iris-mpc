@@ -346,6 +346,9 @@ impl VectorStore for Aby3Store {
         &mut self,
         distances: &[(Self::DistanceRef, Self::DistanceRef)],
     ) -> Vec<bool> {
+        if distances.is_empty() {
+            return vec![];
+        }
         cross_compare(&mut self.session, distances).await.unwrap()
     }
 }
