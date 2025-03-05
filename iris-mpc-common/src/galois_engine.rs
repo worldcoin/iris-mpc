@@ -81,7 +81,7 @@ pub mod degree4 {
     impl GaloisRingTrimmedMaskCodeShare {
         /// Wrap a mask share. party_id is 0-based.
         #[inline(always)]
-        pub fn new(party_id: usize, coefs: [u16; MASK_CODE_LENGTH]) -> Self {
+        pub fn new(coefs: [u16; MASK_CODE_LENGTH], party_id: usize) -> Self {
             Self {
                 id: party_id + 1,
                 coefs,
@@ -160,7 +160,7 @@ pub mod degree4 {
 
         /// Wrap a code share. party_id is 0-based.
         #[inline(always)]
-        pub fn new(party_id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
+        pub fn new(coefs: [u16; IRIS_CODE_LENGTH], party_id: usize) -> Self {
             Self {
                 id: party_id + 1,
                 coefs,

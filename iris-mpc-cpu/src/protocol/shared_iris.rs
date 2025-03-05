@@ -16,6 +16,7 @@ pub struct GaloisRingSharedIris {
 }
 
 impl GaloisRingSharedIris {
+    /// Empty code and mask share. party_id is 0-based.
     pub fn default_for_party(party_id: usize) -> Self {
         GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::default_for_party(party_id),
@@ -38,8 +39,8 @@ impl GaloisRingSharedIris {
 
     pub fn try_from_buffers(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Arc<Self>> {
         Ok(Arc::new(GaloisRingSharedIris {
-            code: GaloisRingIrisCodeShare::new(party_id, code.try_into()?),
-            mask: GaloisRingTrimmedMaskCodeShare::new(party_id, mask.try_into()?),
+            code: GaloisRingIrisCodeShare::new(code.try_into()?, party_id),
+            mask: GaloisRingTrimmedMaskCodeShare::new(mask.try_into()?, party_id),
         }))
     }
 
