@@ -106,6 +106,7 @@ pub struct SharedIrises {
 #[derive(Clone)]
 pub struct SharedIrisesRef {
     body: Arc<RwLock<SharedIrises>>,
+    party_id: usize,
 }
 
 pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
@@ -116,20 +117,12 @@ impl std::fmt::Debug for SharedIrisesRef {
     }
 }
 
-impl Default for SharedIrisesRef {
-    fn default() -> Self {
-        let body = SharedIrises { points: vec![] };
-        SharedIrisesRef {
-            body: Arc::new(RwLock::new(body)),
-        }
-    }
-}
-
 impl SharedIrisesRef {
-    pub fn new(data: Vec<IrisRef>) -> Self {
+    pub fn new(data: Vec<IrisRef>, party_id: usize) -> Self {
         let body = SharedIrises { points: data };
         SharedIrisesRef {
             body: Arc::new(RwLock::new(body)),
+            party_id,
         }
     }
 }
@@ -143,8 +136,12 @@ impl SharedIrisesRef {
     // TODO: take query by ref.
     fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
         let mut preprocessed_query = raw_query.clone();
-        preprocessed_query.code.preprocess_iris_code_query_share();
-        preprocessed_query.mask.preprocess_mask_code_query_share();
+        preprocessed_query
+            .code
+            .preprocess_iris_code_query_share(self.party_id);
+        preprocessed_query
+            .mask
+            .preprocess_mask_code_query_share(self.party_id);
 
         Arc::new(Query {
             query: raw_query,
@@ -174,8 +171,11 @@ impl SharedIrisesRef {
     }
 }
 
-pub fn setup_local_player_preloaded_db(database: Vec<IrisRef>) -> eyre::Result<SharedIrisesRef> {
-    let aby3_store = SharedIrisesRef::new(database);
+pub fn setup_local_player_preloaded_db(
+    database: Vec<IrisRef>,
+    party_id: usize,
+) -> eyre::Result<SharedIrisesRef> {
+    let aby3_store = SharedIrisesRef::new(database, party_id);
     Ok(aby3_store)
 }
 
@@ -197,7 +197,10 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let storages: Vec<SharedIrisesRef> = shared_irises
         .into_iter()
-        .map(|player_irises| setup_local_player_preloaded_db(player_irises).unwrap())
+        .enumerate()
+        .map(|(party_id, player_irises)| {
+            setup_local_player_preloaded_db(player_irises, party_id).unwrap()
+        })
         .collect();
     let runtime = LocalRuntime::mock_setup(network_t).await?;
 
@@ -237,11 +240,12 @@ pub async fn setup_local_store_aby3_players(
     let runtime = LocalRuntime::mock_setup(network_t).await?;
     generate_local_identities()
         .into_iter()
-        .map(|identity| {
+        .enumerate()
+        .map(|(party_id, identity)| {
             let session = runtime.get_session(&identity)?;
             Ok(Aby3Store {
                 session,
-                storage: SharedIrisesRef::default(),
+                storage: SharedIrisesRef::new(vec![], party_id),
                 owner: identity,
             })
         })
@@ -381,8 +385,12 @@ impl Aby3Store {
     ) -> <Aby3Store as VectorStore>::DistanceRef {
         let point1 = self.storage.get_vector(vector1).await;
         let mut point2 = (*self.storage.get_vector(vector2).await).clone();
-        point2.code.preprocess_iris_code_query_share();
-        point2.mask.preprocess_mask_code_query_share();
+        point2
+            .code
+            .preprocess_iris_code_query_share(self.storage.party_id);
+        point2
+            .mask
+            .preprocess_mask_code_query_share(self.storage.party_id);
         let pairs = vec![(&*point1, &point2)];
         let dist = self.eval_pairwise_distances(pairs).await;
         self.lift_distances(dist).await.unwrap()[0].clone()

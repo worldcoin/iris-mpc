@@ -38,14 +38,8 @@ impl GaloisRingSharedIris {
 
     pub fn try_from_buffers(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Arc<Self>> {
         Ok(Arc::new(GaloisRingSharedIris {
-            code: GaloisRingIrisCodeShare {
-                id: party_id,
-                coefs: code.try_into()?,
-            },
-            mask: GaloisRingTrimmedMaskCodeShare {
-                id: party_id,
-                coefs: mask.try_into()?,
-            },
+            code: GaloisRingIrisCodeShare::new(party_id, code.try_into()?),
+            mask: GaloisRingTrimmedMaskCodeShare::new(party_id, mask.try_into()?),
         }))
     }
 
@@ -70,5 +64,37 @@ impl GaloisRingSharedIris {
                 mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
             },
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eyre::Result;
+    use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+    use rand::thread_rng;
+
+    #[test]
+    fn test_generate_shares_locally() -> Result<()> {
+        let iris = IrisCode::random_rng(&mut thread_rng());
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut thread_rng(), iris);
+        for (party_id, share) in shares.iter().enumerate() {
+            share.code.validate_party_id(party_id)?;
+            share.mask.validate_party_id(party_id)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_try_from_buffers() -> Result<()> {
+        let party_id = 2;
+        let code = vec![123; IRIS_CODE_LENGTH];
+        let mask = vec![456; MASK_CODE_LENGTH];
+        let share = GaloisRingSharedIris::try_from_buffers(party_id, &code, &mask)?;
+        share.code.validate_party_id(party_id)?;
+        share.mask.validate_party_id(party_id)?;
+        assert_eq!(share.code.coefs[0], 123);
+        assert_eq!(share.mask.coefs[0], 456);
+        Ok(())
     }
 }

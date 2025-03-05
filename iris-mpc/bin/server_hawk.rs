@@ -104,7 +104,11 @@ fn decode_iris_message_shares(
 fn preprocess_iris_message_shares(
     code_share: GaloisRingIrisCodeShare,
     mask_share: GaloisRingTrimmedMaskCodeShare,
+    party_id: usize,
 ) -> eyre::Result<GaloisShares> {
+    code_share.validate_party_id(party_id)?;
+    mask_share.validate_party_id(party_id)?;
+
     let mut code_share = code_share;
     let mut mask_share = mask_share;
 
@@ -117,8 +121,8 @@ fn preprocess_iris_message_shares(
     let db_mask_shares = mask_share.all_rotations();
 
     // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
-    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share, party_id);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share, party_id);
 
     Ok((
         store_iris_shares,
@@ -662,12 +666,14 @@ fn get_iris_shares_parse_task(
             )?;
 
             // Preprocess shares for left eye.
-            let left_future =
-                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
+            let left_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(left_code, left_mask, party_id)
+            });
 
             // Preprocess shares for right eye.
-            let right_future =
-                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
+            let right_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(right_code, right_mask, party_id)
+            });
 
             let (left_result, right_result) = tokio::join!(left_future, right_future);
 

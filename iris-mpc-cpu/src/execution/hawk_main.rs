@@ -204,7 +204,7 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
+        let iris_store = [(); 2].map(|_| SharedIrisesRef::new(vec![], my_index));
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
 
         Ok(HawkActor {
@@ -778,6 +778,7 @@ mod tests {
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
+    use futures::future::JoinAll;
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
     };
@@ -799,7 +800,7 @@ mod tests {
                 // Make the test async.
                 sleep(Duration::from_millis(100 * index as u64)).await;
 
-                hawk_main(args).await
+                hawk_main(args).await.unwrap()
             }
         };
 
@@ -808,11 +809,11 @@ mod tests {
 
         let handles = (0..n_parties)
             .map(|i| go(addresses.clone(), i))
-            .collect::<JoinSet<_>>()
-            .join_all()
+            .map(tokio::spawn)
+            .collect::<JoinAll<_>>()
             .await
             .into_iter()
-            .collect::<Result<Vec<HawkHandle>>>()?;
+            .collect::<Result<Vec<HawkHandle>, _>>()?;
 
         // ---- Send requests ----
 

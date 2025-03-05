@@ -7,13 +7,14 @@ pub mod degree4 {
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
+    use eyre::Result;
     use rand::{CryptoRng, Rng};
     use serde::{Deserialize, Serialize};
     use serde_big_array::BigArray;
 
     const CODE_COLS: usize = 200;
 
-    fn preprocess_coefs(id: usize, coefs: &mut [u16]) {
+    fn preprocess_coefs(party_id: usize, coefs: &mut [u16]) {
         let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
         for i in (0..coefs.len()).step_by(4) {
             let element = GaloisRingElement::<basis::Monomial>::from_coefs([
@@ -23,7 +24,7 @@ pub mod degree4 {
                 coefs[i + 3],
             ]);
             // include lagrange coeffs
-            let element: GaloisRingElement<basis::Monomial> = element * lagrange_coeffs[id - 1];
+            let element: GaloisRingElement<basis::Monomial> = element * lagrange_coeffs[party_id];
             let element = element.to_basis_B();
             coefs[i] = element.coefs[0];
             coefs[i + 1] = element.coefs[1];
@@ -46,6 +47,8 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingTrimmedMaskCodeShare {
+        /// The 1-based ID of the Lagrange evaluation point. This id = party_id + 1.
+        /// This field appears in serializations but it is not actually used.
         pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; MASK_CODE_LENGTH],
@@ -76,15 +79,38 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
+        /// Wrap a mask share. party_id is 0-based.
+        #[inline(always)]
+        pub fn new(party_id: usize, coefs: [u16; MASK_CODE_LENGTH]) -> Self {
+            Self {
+                id: party_id + 1,
+                coefs,
+            }
+        }
+
+        /// Empty mask share. party_id is 0-based.
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingTrimmedMaskCodeShare {
-                id: party_id,
+                id: party_id + 1,
                 coefs: [0u16; MASK_CODE_LENGTH],
             }
         }
 
-        pub fn preprocess_mask_code_query_share(&mut self) {
-            preprocess_coefs(self.id, &mut self.coefs);
+        pub fn validate_party_id(&self, party_id: usize) -> Result<()> {
+            if self.id == party_id + 1 {
+                Ok(())
+            } else {
+                Err(eyre::eyre!(
+                    "Party ID mismatch: configured = 0-based {}; got serialized = 1-based {}",
+                    party_id,
+                    self.id
+                ))
+            }
+        }
+
+        pub fn preprocess_mask_code_query_share(&mut self, party_id: usize) {
+            debug_assert_eq!(self.id, party_id + 1);
+            preprocess_coefs(party_id, &mut self.coefs);
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
@@ -108,6 +134,8 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
+        /// The 1-based ID of the Lagrange evaluation point. This id = party_id + 1.
+        /// This field appears in serializations but it is not actually used.
         pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
@@ -130,14 +158,32 @@ pub mod degree4 {
             800 * r + c * 4 + w * 2 + b
         }
 
-        pub fn new(id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
-            Self { id, coefs }
+        /// Wrap a code share. party_id is 0-based.
+        #[inline(always)]
+        pub fn new(party_id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
+            Self {
+                id: party_id + 1,
+                coefs,
+            }
         }
 
+        /// Empty code share. party_id is 0-based.
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingIrisCodeShare {
-                id: party_id,
+                id: party_id + 1,
                 coefs: [0u16; IRIS_CODE_LENGTH],
+            }
+        }
+
+        pub fn validate_party_id(&self, party_id: usize) -> Result<()> {
+            if self.id == party_id + 1 {
+                Ok(())
+            } else {
+                Err(eyre::eyre!(
+                    "Party ID mismatch: configured = 0-based {}; got serialized = 1-based {}",
+                    party_id,
+                    self.id
+                ))
             }
         }
 
@@ -260,11 +306,14 @@ pub mod degree4 {
             shares
         }
 
-        pub fn preprocess_iris_code_query_share(&mut self) {
-            preprocess_coefs(self.id, &mut self.coefs);
+        pub fn preprocess_iris_code_query_share(&mut self, party_id: usize) {
+            debug_assert_eq!(self.id, party_id + 1);
+            preprocess_coefs(party_id, &mut self.coefs);
         }
 
-        pub fn full_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
+        #[cfg(test)]
+        fn full_dot(&self, other: &GaloisRingIrisCodeShare, party_id: usize) -> u16 {
+            assert_eq!(self.id, party_id + 1);
             let mut sum = 0u16;
             let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
             for i in (0..IRIS_CODE_LENGTH).step_by(4) {
@@ -281,7 +330,7 @@ pub mod degree4 {
                     other.coefs[i + 3],
                 ]);
                 let z = x * y;
-                let z = z * lagrange_coeffs[self.id - 1];
+                let z = z * lagrange_coeffs[party_id];
                 let z = z.to_basis_B();
                 sum = sum.wrapping_add(z.coefs[0]);
             }
@@ -367,7 +416,8 @@ pub mod degree4 {
                 let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
                 query_shares
                     .iter_mut()
-                    .for_each(|share| share.preprocess_iris_code_query_share());
+                    .enumerate()
+                    .for_each(|(i, share)| share.preprocess_iris_code_query_share(i));
                 let mut dot = [0; 3];
                 for i in 0..3 {
                     dot[i] = shares[i].trick_dot(&query_shares[i]);
@@ -387,7 +437,7 @@ pub mod degree4 {
                 let query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
                 let mut dot = [0; 3];
                 for i in 0..3 {
-                    dot[i] = shares[i].full_dot(&query_shares[i]);
+                    dot[i] = shares[i].full_dot(&query_shares[i], i);
                 }
                 let dot = dot.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
                 let expected = (iris_db & iris_query).count_ones();
@@ -439,11 +489,13 @@ pub mod degree4 {
             for rot_idx in 0..31 {
                 t2_code_shares_rotated
                     .iter_mut()
-                    .for_each(|share| share[rot_idx].preprocess_iris_code_query_share());
+                    .enumerate()
+                    .for_each(|(i, share)| share[rot_idx].preprocess_iris_code_query_share(i));
 
                 t2_mask_shares_rotated
                     .iter_mut()
-                    .for_each(|share| share[rot_idx].preprocess_mask_code_query_share());
+                    .enumerate()
+                    .for_each(|(i, share)| share[rot_idx].preprocess_mask_code_query_share(i));
 
                 // dot product for codes
                 let mut dot_codes = [0; 3];

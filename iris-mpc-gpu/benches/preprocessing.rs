@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
     let mut group = c.benchmark_group("Preprocessing");
+    let party_id = 0;
     for batch_size in [1, 4, 16, 64] {
         let mut batch_query = BatchQuery::default();
         for _ in 0..batch_size {
@@ -23,9 +24,13 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
             let mask_shares_request = shares.mask;
             let mut code_shares_query = code_shares_request.clone();
             let mut mask_shares_query = mask_shares_request.clone();
-            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_shares_query);
+            GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+                &mut code_shares_query,
+                party_id,
+            );
             GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
                 &mut mask_shares_query,
+                party_id,
             );
             let code_shares_query = code_shares_query.all_rotations();
             let mask_shares_query = mask_shares_query.all_rotations();
