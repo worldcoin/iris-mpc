@@ -906,7 +906,7 @@ mod tests {
         let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
         let shared_irises: Vec<_> = cleartext_database
             .iter()
-            .map(|iris| generate_galois_iris_shares(&mut rng, iris.clone()))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
             .await

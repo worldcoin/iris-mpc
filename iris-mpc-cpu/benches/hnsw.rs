@@ -12,7 +12,7 @@ use iris_mpc_cpu::{
         },
         shared_iris::GaloisRingSharedIris,
     },
-    shares::{IntRing2k, RingElement, Share},
+    shares::{share::DistanceShare, IntRing2k, RingElement, Share},
 };
 use rand::{Rng, RngCore, SeedableRng};
 use rand_distr::{Distribution, Standard};
