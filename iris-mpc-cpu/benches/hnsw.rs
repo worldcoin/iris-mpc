@@ -91,8 +91,10 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                     .unwrap();
                     cross_compare(
                         &mut player_session,
-                        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
-                        DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap()
@@ -145,8 +147,10 @@ fn bench_gr_primitives(c: &mut Criterion) {
                         .unwrap();
                     cross_compare(
                         &mut player_session,
-                        DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
-                        DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap();

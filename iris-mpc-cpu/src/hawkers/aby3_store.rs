@@ -12,7 +12,7 @@ use crate::{
     },
     network::NetworkType,
     protocol::ops::{
-        batch_signed_lift_vec, compare_threshold_and_open, cross_compare, cross_compare_batch,
+        batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
         galois_ring_pairwise_distance, galois_ring_to_rep3,
     },
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
@@ -336,9 +336,9 @@ impl VectorStore for Aby3Store {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        cross_compare(&mut self.session, distance1.clone(), distance2.clone())
+        cross_compare(&mut self.session, &[(distance1.clone(), distance2.clone())])
             .await
-            .unwrap()
+            .unwrap()[0]
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
@@ -346,9 +346,7 @@ impl VectorStore for Aby3Store {
         &mut self,
         distances: &[(Self::DistanceRef, Self::DistanceRef)],
     ) -> Vec<bool> {
-        cross_compare_batch(&mut self.session, distances)
-            .await
-            .unwrap()
+        cross_compare(&mut self.session, distances).await.unwrap()
     }
 }
 

@@ -1,12 +1,9 @@
-use super::binary::{extract_msb_u32_batch, mul_lift_2k, open_bin_batch, single_extract_msb_u32};
+use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
 use crate::{
     database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
-    protocol::{
-        binary::{lift, open_bin},
-        prf::{Prf, PrfSeed},
-    },
+    protocol::prf::{Prf, PrfSeed},
     shares::{
         bit::Bit,
         ring_impl::RingElement,
@@ -129,17 +126,6 @@ pub async fn batch_signed_lift_vec(
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
-    distance1: DistanceShare<u32>,
-    distance2: DistanceShare<u32>,
-) -> eyre::Result<Share<u32>> {
-    cross_mul_batch(session, &[(distance1, distance2)])
-        .await
-        .map(|x| x[0].clone())
-}
-
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn cross_mul_batch(
-    session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> eyre::Result<Vec<Share<u32>>> {
     let res_a: Vec<RingElement<u32>> = distances
@@ -195,26 +181,13 @@ pub(crate) async fn cross_mul_batch(
 /// 32-bit.
 pub async fn cross_compare(
     session: &mut Session,
-    d1: DistanceShare<u32>,
-    d2: DistanceShare<u32>,
-) -> eyre::Result<bool> {
-    let diff = cross_mul(session, d1, d2).await?;
-    // Compute bit <- MSB(D2 * T1 - D1 * T2)
-    let bit = single_extract_msb_u32::<32>(session, diff).await?;
-    // Open bit
-    let opened_b = open_bin(session, bit).await?;
-    Ok(opened_b.convert())
-}
-
-pub async fn cross_compare_batch(
-    session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> eyre::Result<Vec<bool>> {
-    let diff = cross_mul_batch(session, distances).await?;
+    let diff = cross_mul(session, distances).await?;
     // Compute bit <- MSB(D2 * T1 - D1 * T2)
     let bits = extract_msb_u32_batch(session, &diff).await?;
     // Open bit
-    let opened_b = open_bin_batch(session, &bits).await?;
+    let opened_b = open_bin(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
@@ -298,7 +271,7 @@ pub async fn galois_ring_is_match(
     let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
     // compute dots[0] - dots[1]
     let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
-    let opened = open_bin(session, bit).await?;
+    let opened = open_bin(session, &[bit]).await?[0];
     Ok(opened.convert())
 }
 
@@ -308,7 +281,7 @@ pub async fn compare_threshold_and_open(
     distance: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
     let bit = compare_threshold(session, distance.code_dist, distance.mask_dist).await?;
-    let opened = open_bin(session, bit).await?;
+    let opened = open_bin(session, &[bit]).await?[0];
     Ok(opened.convert())
 }
 
@@ -528,17 +501,20 @@ mod tests {
                     .unwrap();
                 let out_shared = cross_mul(
                     &mut player_session,
-                    DistanceShare {
-                        code_dist: four_shares[0].clone(),
-                        mask_dist: four_shares[1].clone(),
-                    },
-                    DistanceShare {
-                        code_dist: four_shares[2].clone(),
-                        mask_dist: four_shares[3].clone(),
-                    },
+                    &[(
+                        DistanceShare {
+                            code_dist: four_shares[0].clone(),
+                            mask_dist: four_shares[1].clone(),
+                        },
+                        DistanceShare {
+                            code_dist: four_shares[2].clone(),
+                            mask_dist: four_shares[3].clone(),
+                        },
+                    )],
                 )
                 .await
-                .unwrap();
+                .unwrap()[0]
+                    .clone();
 
                 open_single(&player_session, out_shared).await.unwrap()
             });

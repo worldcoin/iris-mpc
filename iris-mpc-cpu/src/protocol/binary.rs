@@ -640,11 +640,11 @@ pub async fn extract_msb_u32_batch(
         extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(x.to_vec())).await?;
     let mut packed_bits_iter = packed_bits.into_iter();
 
-    'outer: loop {
+    while res.len() < res_len {
         let (a, b) = packed_bits_iter.next().unwrap().get_ab_ref();
         for i in 0..64 {
             if res.len() == res_len {
-                break 'outer;
+                break;
             }
             res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
         }
@@ -654,42 +654,7 @@ pub async fn extract_msb_u32_batch(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_bin(session: &mut Session, share: Share<Bit>) -> Result<Bit, Error> {
-    // send to next_party
-    let next_party = session.next_identity()?;
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let message = share.b;
-    network
-        .send(
-            NetworkValue::RingElementBit(message).to_network(),
-            &next_party,
-            &sid,
-        )
-        .await?;
-
-    // receiving from previous party
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
-    let c = {
-        let serialized_other_share = network.receive(&prev_party, &sid).await;
-        match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::RingElementBit(message)) => Ok(message),
-            Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
-            _ => Err(eyre!("Wrong value type is received in open_bin operation")),
-        }
-    }?;
-
-    // xor shares with the received share
-    Ok((share.a ^ share.b ^ c).convert())
-}
-
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_bin_batch(
-    session: &mut Session,
-    shares: &[Share<Bit>],
-) -> eyre::Result<Vec<Bit>> {
+pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Result<Vec<Bit>> {
     // send to next_party
     let next_party = session.next_identity()?;
     let network = session.network().clone();
