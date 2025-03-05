@@ -26,5 +26,4 @@ echo "All endpoints are healthy. Running now the client..."
    --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo \
    --endpoint-url $AWS_ENDPOINT_URL \
    --region $AWS_REGION \
-   --n-repeat 1 \
    --random true
