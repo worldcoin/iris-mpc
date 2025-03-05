@@ -38,8 +38,8 @@ RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-gpu /bin/iris-mpc-gpu
+COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-hawk /bin/iris-mpc-hawk
 
 USER 65534
 
-ENTRYPOINT ["/bin/iris-mpc-gpu"]
+ENTRYPOINT ["/bin/iris-mpc-hawk"]
