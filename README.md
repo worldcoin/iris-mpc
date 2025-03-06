@@ -182,8 +182,7 @@ cargo run --release --bin client -- \
     --response-queue-region eu-north-1 \
     --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
     --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
-    --requests-bucket-region eu-north-1 \
-    --random true
+    --requests-bucket-region eu-north-1
 ```
 
 ## License

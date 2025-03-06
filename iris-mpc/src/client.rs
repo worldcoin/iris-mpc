@@ -65,9 +65,6 @@ pub struct Opt {
     pub rng_seed: Option<u64>,
 
     #[arg(long, env)]
-    pub random: Option<bool>,
-
-    #[arg(long, env)]
     pub endpoint_url: Option<String>,
 
     #[arg(long, env, default_value_t = DEFAULT_N_BATCHES)]
@@ -80,7 +77,7 @@ pub struct Opt {
     pub max_concurrent_requests: usize,
 
     #[arg(long, env)]
-    pub use_data_from_file: bool,
+    pub use_data_from_file: Option<String>,
 
     #[arg(long, env)]
     pub populate_only_from_file: bool,
@@ -102,16 +99,14 @@ pub async fn run_client(opts: Opt) -> eyre::Result<()> {
 
 #[derive(Debug, Clone)]
 pub struct E2EClient {
-    // Configuration
+    // Configuration for client
     request_topic_arn: String,
     requests_bucket_name: String,
-    // region: String,
     response_queue_url: String,
     rng_seed: Option<u64>,
-    random: Option<bool>,
     n_batches: usize,
     batch_size: usize,
-    use_data_from_file: bool,
+    use_data_from_file: Option<String>,
     populate_only_file_data: bool,
 
     // AWS clients
@@ -119,9 +114,12 @@ pub struct E2EClient {
     sns_client: Arc<SnsClient>,
     sqs_client: SqsClient,
 
-    // Shared state
+    // Shared state for ensuring results are correct
+    // The expected results contain what the request id and then serial id to match
     expected_results: Arc<Mutex<HashMap<String, Option<u32>>>>,
+    // the requests contain the request id and the iris code shares
     requests: Arc<Mutex<HashMap<String, IrisCodePartyShares>>>,
+    // the responses contain the serial id and the iris code shares
     responses: Arc<Mutex<HashMap<u32, IrisCodePartyShares>>>,
     encryption_public_keys: Vec<PublicKey>,
     semaphore: Arc<Semaphore>,
@@ -155,7 +153,6 @@ impl E2EClient {
             requests_bucket_name: opts.requests_bucket_name,
             response_queue_url: opts.response_queue_url,
             rng_seed: opts.rng_seed,
-            random: opts.random,
 
             n_batches: opts.n_batches,
             batch_size: opts.batch_size,
@@ -196,10 +193,8 @@ impl E2EClient {
             .await?;
 
         // Load data from S3 if needed
-        if self.use_data_from_file {
-            let data = self
-                .read_file_iris_data_batch("signup_sequence_optin_both_sides.json")
-                .await?;
+        if let Some(file_path) = &self.use_data_from_file {
+            let data = read_file_iris_data_batch(file_path).await?;
             self.s3_data = Arc::new(data);
         }
 
@@ -209,10 +204,10 @@ impl E2EClient {
     pub async fn run(&self) -> eyre::Result<()> {
         let n_queries: usize = self.batch_size * self.n_batches;
 
-        // Start receiver thread
+        // Start receiver thread which waits for results after all data is sent
         let recv_thread = self.spawn_receiver_thread(n_queries, self.sqs_client.clone());
 
-        if self.use_data_from_file && self.populate_only_file_data {
+        if self.use_data_from_file.is_some() && self.populate_only_file_data {
             self.populate_only_file_data().await?;
         } else {
             self.run_e2e_test().await?;
@@ -235,22 +230,20 @@ impl E2EClient {
                 let requests = self.requests.clone();
                 let party_shares = self.s3_data[party_shares_index].clone();
                 let expected_results = self.expected_results.clone();
-                party_shares_index = party_shares_index + 1;
+                party_shares_index += 1;
                 let handle = tokio::spawn(async move {
                     let _permit = semaphore.acquire().await;
-                    let request_id = Uuid::new_v4();
+                    let request_id = party_shares.signup_id.clone();
                     println!("Sending iris code from file {}", request_id);
                     requests
                         .lock()
                         .await
-                        .insert(request_id.to_string(), party_shares.clone());
+                        .insert(request_id.clone(), party_shares.clone());
                     expected_results
                         .lock()
                         .await
-                        .insert(request_id.to_string(), None);
-                    client
-                        .send_enrollment_request(request_id.to_string(), party_shares.clone())
-                        .await?;
+                        .insert(request_id.clone(), None);
+                    client.send_enrollment_request(party_shares.clone()).await?;
                     Ok::<(), eyre::Report>(())
                 });
                 handles.push(handle);
@@ -275,8 +268,7 @@ impl E2EClient {
                 let semaphore = self.semaphore.clone();
                 let s3_data = self.s3_data.clone();
                 let rng_seed = self.rng_seed;
-                let random = self.random;
-                let use_data_from_file = self.use_data_from_file;
+                let has_file_data_loaded = self.use_data_from_file.is_some();
                 let client = self.clone();
                 let handle = tokio::spawn(async move {
                     let _permit = semaphore.acquire().await;
@@ -286,10 +278,9 @@ impl E2EClient {
                     } else {
                         StdRng::from_entropy()
                     };
+                    let mut request_id = Uuid::new_v4().to_string();
 
-                    let request_id = Uuid::new_v4();
-
-                    let party_shares: IrisCodePartyShares = if random.unwrap_or(false) {
+                    let party_shares: IrisCodePartyShares = {
                         // Automatic random tests
                         let responses_len = {
                             let tmp = responses.lock().await;
@@ -300,17 +291,19 @@ impl E2EClient {
 
                         match rng.gen_range(0..options) {
                             0 => {
-                                println!("Sending new iris code for request id {}", request_id);
-                                {
-                                    let mut tmp = expected_results.lock().await;
-                                    tmp.insert(request_id.to_string(), None);
-                                }
-                                if use_data_from_file {
+                                let party_share_data = if has_file_data_loaded {
                                     // TODO in future find a way to ensure no re-use of data
                                     s3_data[rng.gen_range(0..s3_data.len())].clone()
                                 } else {
                                     generate_party_shares(rng)
+                                };
+                                request_id = party_share_data.signup_id.clone();
+                                println!("Sending new iris code for request id {}", request_id);
+                                {
+                                    let mut tmp = expected_results.lock().await;
+                                    tmp.insert(request_id.clone(), None);
                                 }
+                                party_share_data
                             }
                             // TODO add ability to send from DB directly from the postgres DB
                             // 1 => {
@@ -332,10 +325,6 @@ impl E2EClient {
                             //     // }
                             // }
                             1 => {
-                                println!(
-                                    "Sending freshly inserted iris code for request id {}",
-                                    request_id
-                                );
                                 let keys_vec = {
                                     let tmp = responses.lock().await;
                                     tmp.keys().cloned().collect::<Vec<_>>()
@@ -349,22 +338,21 @@ impl E2EClient {
                                     let mut tmp = expected_results.lock().await;
                                     tmp.insert(request_id.to_string(), Some(keys_vec[keys_idx]));
                                 }
-                                party_shares
+                                println!(
+                                    "Sending freshly inserted iris code for request id {}",
+                                    request_id
+                                );
+                                party_shares.create_duplicate_party_shares(request_id.clone())
                             }
                             _ => unreachable!(),
                         }
-                    } else {
-                        let rng = StdRng::seed_from_u64(1337);
-                        generate_party_shares(rng)
                     };
 
                     {
                         let mut tmp = requests.lock().await;
                         tmp.insert(request_id.to_string(), party_shares.clone());
                     }
-                    client
-                        .send_enrollment_request(request_id.to_string(), party_shares)
-                        .await?;
+                    client.send_enrollment_request(party_shares).await?;
                     Ok::<(), eyre::Report>(())
                 });
                 handles.push(handle);
@@ -457,11 +445,7 @@ impl E2EClient {
         })
     }
 
-    async fn send_enrollment_request(
-        &self,
-        request_id: String,
-        party_shares: IrisCodePartyShares,
-    ) -> eyre::Result<()> {
+    async fn send_enrollment_request(&self, party_shares: IrisCodePartyShares) -> eyre::Result<()> {
         let mut iris_shares_file_hashes: [String; 3] = Default::default();
         let mut iris_codes_shares_base64: [String; 3] = Default::default();
 
@@ -494,7 +478,7 @@ impl E2EClient {
         let contents = serde_json::to_vec(&shares_s3_object)?;
         let bucket_key = match upload_file_to_s3(
             &self.requests_bucket_name,
-            &request_id,
+            &party_shares.signup_id,
             self.s3_client.clone(),
             &contents,
         )
@@ -510,7 +494,7 @@ impl E2EClient {
 
         let request_message = UniquenessRequest {
             batch_size: None,
-            signup_id: request_id.to_string(),
+            signup_id: party_shares.signup_id.clone(),
             s3_key: bucket_key,
             or_rule_serial_ids: None,
             skip_persistence: None,
@@ -551,45 +535,84 @@ impl E2EClient {
 
         Ok(())
     }
+}
 
-    async fn read_file_iris_data_batch(
-        &self,
-        file_name: &str,
-    ) -> eyre::Result<Vec<IrisCodePartyShares>> {
-        // Download the encrypted shares from S3
-        let mut file =
-            File::open(file_name).context(format!("Failed to open file: {}", file_name))?;
+// TODO: in future move the following functions to a separate file
+#[derive(Debug, Deserialize)]
+pub struct EnrollmentIrisData {
+    #[serde(rename = "signup_id")]
+    pub signup_id: String,
+    #[serde(rename = "iris_code_shares_left")]
+    pub iris_codes_shares_left: Vec<String>,
+    #[serde(rename = "iris_code_shares_right")]
+    pub iris_codes_shares_right: Vec<String>,
+    #[serde(rename = "mask_code_shares_left")]
+    pub iris_mask_shares_left: Vec<String>,
+    #[serde(rename = "mask_code_shares_right")]
+    pub iris_mask_shares_right: Vec<String>,
+}
 
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)
-            .context(format!("Failed to read file: {}", file_name))?;
+#[derive(Debug, Clone)]
+pub struct IrisCodePartyShares {
+    pub signup_id: String,
+    pub parties: Vec<IrisCodeSharesJSON>,
+}
 
-        // Parse the array of enrollment data
-        let enrollment_data: Vec<EnrollmentIrisData> =
-            serde_json::from_slice(&bytes).context("Failed to parse enrollment iris data array")?;
-
-        let batch_size = enrollment_data.len();
-        let mut result = Vec::with_capacity(batch_size);
-
-        // Process each entry in the batch
-        for entry_index in 0..batch_size {
-            let shares_entry = &enrollment_data[entry_index];
-            let mut shares = Vec::new();
-            for i in 0..3 {
-                shares.push(IrisCodeSharesJSON {
-                    iris_version: "1.0".to_string(),
-                    iris_shares_version: "1.3".to_string(),
-                    right_iris_code_shares: shares_entry.iris_codes_shares_right[i].clone(),
-                    right_mask_code_shares: shares_entry.iris_mask_shares_right[i].clone(),
-                    left_iris_code_shares: shares_entry.iris_codes_shares_left[i].clone(),
-                    left_mask_code_shares: shares_entry.iris_mask_shares_left[i].clone(),
-                });
-            }
-            result.push(IrisCodePartyShares::new(shares));
-        }
-
-        Ok(result)
+impl IrisCodePartyShares {
+    pub fn new(signup_id: String, parties: Vec<IrisCodeSharesJSON>) -> Self {
+        assert_eq!(
+            parties.len(),
+            3,
+            "IrisCodePartyShares must have exactly 3 parties"
+        );
+        Self { signup_id, parties }
     }
+
+    pub fn party(&self, index: usize) -> &IrisCodeSharesJSON {
+        &self.parties[index]
+    }
+
+    pub fn create_duplicate_party_shares(&self, signup_id: String) -> IrisCodePartyShares {
+        IrisCodePartyShares::new(signup_id, self.parties.clone())
+    }
+}
+
+async fn read_file_iris_data_batch(file_name: &str) -> eyre::Result<Vec<IrisCodePartyShares>> {
+    // Download the encrypted shares from S3
+    let mut file = File::open(file_name).context(format!("Failed to open file: {}", file_name))?;
+
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .context(format!("Failed to read file: {}", file_name))?;
+
+    // Parse the array of enrollment data
+    let enrollment_data: Vec<EnrollmentIrisData> =
+        serde_json::from_slice(&bytes).context("Failed to parse enrollment iris data array")?;
+
+    let batch_size = enrollment_data.len();
+    let mut result = Vec::with_capacity(batch_size);
+
+    // Process each entry in the batch
+    for entry_index in 0..batch_size {
+        let shares_entry = &enrollment_data[entry_index];
+        let mut shares = Vec::new();
+        for i in 0..3 {
+            shares.push(IrisCodeSharesJSON {
+                iris_version: "1.0".to_string(),
+                iris_shares_version: "1.3".to_string(),
+                right_iris_code_shares: shares_entry.iris_codes_shares_right[i].clone(),
+                right_mask_code_shares: shares_entry.iris_mask_shares_right[i].clone(),
+                left_iris_code_shares: shares_entry.iris_codes_shares_left[i].clone(),
+                left_mask_code_shares: shares_entry.iris_mask_shares_left[i].clone(),
+            });
+        }
+        result.push(IrisCodePartyShares::new(
+            shares_entry.signup_id.clone(),
+            shares,
+        ));
+    }
+
+    Ok(result)
 }
 
 pub fn generate_party_shares(mut rng: StdRng) -> IrisCodePartyShares {
@@ -622,37 +645,6 @@ pub fn generate_party_shares(mut rng: StdRng) -> IrisCodePartyShares {
             left_mask_code_shares: left_shared_mask[i].to_base64(),
         });
     }
-    return IrisCodePartyShares::new(shares);
-}
-
-#[derive(Debug, Deserialize)]
-pub struct EnrollmentIrisData {
-    #[serde(rename = "iris_code_shares_left")]
-    pub iris_codes_shares_left: Vec<String>,
-    #[serde(rename = "iris_code_shares_right")]
-    pub iris_codes_shares_right: Vec<String>,
-    #[serde(rename = "mask_code_shares_left")]
-    pub iris_mask_shares_left: Vec<String>,
-    #[serde(rename = "mask_code_shares_right")]
-    pub iris_mask_shares_right: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct IrisCodePartyShares {
-    pub parties: Vec<IrisCodeSharesJSON>,
-}
-
-impl IrisCodePartyShares {
-    pub fn new(parties: Vec<IrisCodeSharesJSON>) -> Self {
-        assert_eq!(
-            parties.len(),
-            3,
-            "IrisCodePartyShares must have exactly 3 parties"
-        );
-        Self { parties }
-    }
-
-    pub fn party(&self, index: usize) -> &IrisCodeSharesJSON {
-        &self.parties[index]
-    }
+    let request_id = Uuid::new_v4().to_string();
+    IrisCodePartyShares::new(request_id, shares)
 }
