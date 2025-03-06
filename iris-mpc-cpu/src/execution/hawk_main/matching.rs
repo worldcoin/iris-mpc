@@ -111,14 +111,23 @@ impl Step1 {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
     pub fn is_matches(&self) -> VecRequests<bool> {
         self.0.iter().map(Step2::is_match).collect_vec()
     }
+
+    pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
+    where
+        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
+    {
+        self.0.iter().map(|step| step.filter_map(&f)).collect_vec()
+    }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
 }
@@ -128,5 +137,12 @@ impl Step2 {
     /// TODO: Account for rotated and mirrored versions.
     fn is_match(&self) -> bool {
         self.full_join.iter().any(|(_, [l, r])| *l && *r)
+    }
+
+    fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>
+    where
+        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
+    {
+        self.full_join.iter().filter_map(f).collect_vec()
     }
 }

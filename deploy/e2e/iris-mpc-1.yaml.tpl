@@ -200,7 +200,7 @@ iris-mpc-1:
       value: "64"
 
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-      value: "16"
+      value: "64"
 
     - name: SMPC__N_BUCKETS
       value: "5"
@@ -212,7 +212,7 @@ iris-mpc-1:
       value: "true"
 
     - name: SMPC__LUC_LOOKBACK_RECORDS
-      value: "1"
+      value: "0"
 
     - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
       value: "true"

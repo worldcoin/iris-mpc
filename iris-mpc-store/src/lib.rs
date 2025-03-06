@@ -412,10 +412,10 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     }
 
     pub async fn get_max_serial_id(&self) -> Result<usize> {
-        let id: (i64,) = sqlx::query_as("SELECT MAX(id) FROM irises")
+        let id: (Option<i64>,) = sqlx::query_as("SELECT MAX(id) FROM irises")
             .fetch_one(&self.pool)
             .await?;
-        Ok(id.0 as usize)
+        Ok(id.0.unwrap_or(0) as usize)
     }
 
     pub async fn insert_results(
