@@ -29,4 +29,4 @@ fi
 # Set the stack size to 100MB to receive large messages.
 export RUST_MIN_STACK=104857600
 
-cargo run --bin server-hawk
+cargo run --bin iris-mpc-hawk
