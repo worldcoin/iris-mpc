@@ -11,7 +11,7 @@ use iris_mpc::aws::clients::AwsClients;
 use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
 use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc_common::{
-    config::{Config, ModeOfCompute, Opt},
+    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
@@ -723,8 +723,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
-    let graph_store = GraphStore::from_iris_store(&store);
+    let iris_pgres_store = Store::new_from_config(&config).await?;
+    let graph_store = GraphStore::from_iris_store(&iris_pgres_store);
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -755,7 +755,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
     tracing::info!("Replaying results");
     send_results_to_sns(
-        store.last_results(max_sync_lookback).await?,
+        iris_pgres_store.last_results(max_sync_lookback).await?,
         &Vec::new(),
         &aws_clients.sns_client,
         &config,
@@ -764,7 +764,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     )
     .await?;
 
-    let store_len = store.count_irises().await?;
+    let store_len = iris_pgres_store.count_irises().await?;
 
     tracing::info!("Size of the database before init: {}", store_len);
 
@@ -776,7 +776,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.init_db_size
         );
         tracing::info!("Resetting the db: {}", config.clear_db_before_init);
-        store
+        iris_pgres_store
             .init_db_with_random_shares(
                 RNG_SEED_INIT_DB,
                 party_id,
@@ -787,12 +787,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     // Fetch again in case we've just initialized the DB
-    let store_len = store.count_irises().await?;
+    let store_len = iris_pgres_store.count_irises().await?;
 
     tracing::info!("Size of the database after init: {}", store_len);
 
     // Check if the sequence id is consistent with the number of irises
-    let max_serial_id = store.get_max_serial_id().await?;
+    let max_serial_id = iris_pgres_store.get_max_serial_id().await?;
     if max_serial_id != store_len {
         tracing::error!(
             "Detected inconsistency between max serial id {} and db size {}.",
@@ -1143,7 +1143,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             store_len,
             db_len
         );
-        store.rollback(db_len).await?;
+        iris_pgres_store.rollback(db_len).await?;
         metrics::counter!("db.sync.rollback").increment(1);
     }
 
@@ -1153,7 +1153,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     // refetch store_len in case we rolled back
-    let store_len = store.count_irises().await?;
+    let store_len = iris_pgres_store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
     let node_addresses: Vec<String> = config
@@ -1199,7 +1199,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             load_db(
                 &mut iris_loader,
-                &store,
+                &iris_pgres_store,
                 store_len,
                 parallelism,
                 &config,
@@ -1229,7 +1229,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
-    let store_bg = store.clone();
+    let iris_pgres_store_bg = iris_pgres_store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
@@ -1361,63 +1361,64 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<eyre::Result<Vec<_>>>()?;
 
-            let mut tx = store_bg.tx().await?;
+            // Initialise dB transaction.
+            let mut tx = iris_pgres_store_bg.tx().await?;
 
-            store_bg
-                .insert_results(&mut tx, &uniqueness_results)
-                .await?;
+            // Persist Iris postgres store state changes.
+            if config_bg.mode_of_deployment == ModeOfDeployment::STANDARD {
+                // Insert set of unique irises.
+                iris_pgres_store_bg
+                    .insert_results(&mut tx, &uniqueness_results)
+                    .await?;
 
-            // TODO: update modifications table to store reauth and deletion results
-
-            if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
-                let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
-
-                // Check if the serial_ids match between memory and db.
-                if memory_serial_ids != db_serial_ids {
-                    tracing::error!(
-                        "Serial IDs do not match between memory and db: {:?} != {:?}",
-                        memory_serial_ids,
-                        db_serial_ids
-                    );
-                    return Err(eyre!(
-                        "Serial IDs do not match between memory and db: {:?} != {:?}",
-                        memory_serial_ids,
-                        db_serial_ids
-                    ));
-                }
-
-                for (i, success) in successful_reauths.iter().enumerate() {
-                    if !success {
-                        continue;
+                    // Check if the serial_ids match between memory and db.
+                    if memory_serial_ids != db_serial_ids {
+                        tracing::error!(
+                            "Serial IDs do not match between memory and db: {:?} != {:?}",
+                            memory_serial_ids,
+                            db_serial_ids
+                        );
+                        return Err(eyre!(
+                            "Serial IDs do not match between memory and db: {:?} != {:?}",
+                            memory_serial_ids,
+                            db_serial_ids
+                        ));
                     }
-                    let reauth_id = request_ids[i].clone();
-                    // convert from memory index (0-based) to db index (1-based)
-                    let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
-                    tracing::info!(
-                        "Persisting successful reauth update {} into postgres on serial id {} ",
-                        reauth_id,
-                        serial_id
-                    );
-                    store_bg
-                        .update_iris(
-                            Some(&mut tx),
-                            serial_id as i64,
-                            &left_iris_requests.code[i],
-                            &left_iris_requests.mask[i],
-                            &right_iris_requests.code[i],
-                            &right_iris_requests.mask[i],
-                        )
-                        .await?;
+
+                    for (i, success) in successful_reauths.iter().enumerate() {
+                        if !success {
+                            continue;
+                        }
+                        let reauth_id = request_ids[i].clone();
+                        // convert from memory index (0-based) to db index (1-based)
+                        let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
+                        tracing::info!(
+                            "Persisting successful reauth update {} into postgres on serial id {} ",
+                            reauth_id,
+                            serial_id
+                        );
+                        iris_pgres_store_bg
+                            .update_iris(
+                                Some(&mut tx),
+                                serial_id as i64,
+                                &store_left.code[i],
+                                &store_left.mask[i],
+                                &store_right.code[i],
+                                &store_right.mask[i],
+                            )
+                            .await?;
+                    }
                 }
             }
 
-            // Graph mutation.
+            // Persist Graph postgres store state changes.
             let mut graph_tx = graph_store.tx_wrap(tx);
             if !config_bg.disable_persistence {
                 hawk_mutation.persist(&mut graph_tx).await?;
             }
             let tx = graph_tx.tx;
 
+            // Commit postgres transaction -> i.e. flush store state changes.
             tx.commit().await?;
 
             for memory_serial_id in memory_serial_ids {
@@ -1598,7 +1599,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &aws_clients.sns_client,
             &aws_clients.s3_client,
             &config,
-            &store,
+            &iris_pgres_store,
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
             &shutdown_handler,
@@ -1625,7 +1626,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             process_identity_deletions(
                 &batch,
-                &store,
+                &iris_pgres_store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
             )
@@ -1653,7 +1654,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &aws_clients.sns_client,
                 &aws_clients.s3_client,
                 &config,
-                &store,
+                &iris_pgres_store,
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
                 &shutdown_handler,
