@@ -24,7 +24,6 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
-use matching::BatchStep1;
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
@@ -85,8 +84,8 @@ pub struct HawkActor {
 
 #[derive(Clone, Copy, Debug)]
 pub enum StoreId {
-    Left,
-    Right,
+    Left = 0,
+    Right = 1,
 }
 const LEFT: usize = 0;
 const RIGHT: usize = 1;
@@ -541,13 +540,28 @@ impl HawkRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
+    match_results: matching::BatchStep2,
     connect_plans: HawkMutation,
-    is_matches: Vec<bool>,
+    is_matches: VecRequests<bool>,
 }
 
 impl HawkResult {
-    fn matches(&self) -> Vec<bool> {
-        self.is_matches.clone()
+    fn new(match_results: matching::BatchStep2) -> Self {
+        let is_matches = match_results.is_matches();
+        let n_requests = is_matches.len();
+        HawkResult {
+            match_results,
+            connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
+            is_matches,
+        }
+    }
+
+    fn set_connect_plan(&mut self, request_i: usize, side: StoreId, plan: ConnectPlan) {
+        self.connect_plans.0[side as usize][request_i] = Some(plan);
+    }
+
+    fn is_matches(&self) -> &[bool] {
+        &self.is_matches
     }
 
     fn merged_results(&self) -> Vec<u32> {
@@ -558,6 +572,47 @@ impl HawkResult {
                     .map_or(0, |plan| plan.inserted_vector.to_serial_id())
             })
             .collect()
+    }
+
+    fn job_result(self, batch: BatchQuery) -> ServerJobResult {
+        let n_requests = self.is_matches.len();
+
+        let match_ids = self
+            .match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+        let partial_match_ids_left = self
+            .match_results
+            .filter_map(|(id, [l, _r])| l.then_some(id.to_serial_id()));
+        let partial_match_ids_right = self
+            .match_results
+            .filter_map(|(id, [_l, r])| r.then_some(id.to_serial_id()));
+        let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
+        let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
+
+        ServerJobResult {
+            merged_results: self.merged_results(),
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
+            matches: self.is_matches().to_vec(),
+            matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
+            match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
+            deleted_ids: vec![],                                    // TODO.
+            matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
+            anonymized_bucket_statistics_left: Default::default(),  // TODO.
+            anonymized_bucket_statistics_right: Default::default(), // TODO.
+            successful_reauths: vec![false; n_requests],            // TODO.
+            reauth_target_indices: Default::default(),              // TODO.
+            reauth_or_rule_used: Default::default(),                // TODO.
+            modifications: batch.modifications,
+            actor_data: self.connect_plans,
+        }
     }
 }
 
@@ -592,34 +647,8 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
-        let n_requests = result.is_matches.len();
 
-        async move {
-            ServerJobResult {
-                merged_results: result.merged_results(),
-                request_ids: batch.request_ids,
-                request_types: batch.request_types,
-                metadata: batch.metadata,
-                matches: result.matches(),
-                matches_with_skip_persistence: result.matches(), // TODO
-                match_ids: vec![vec![0]; n_requests],            // TODO.
-                partial_match_ids_left: vec![vec![0]; n_requests], // TODO.
-                partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
-                partial_match_counters_left: vec![0; n_requests], // TODO.
-                partial_match_counters_right: vec![0; n_requests], // TODO.
-                left_iris_requests: batch.left_iris_requests,
-                right_iris_requests: batch.right_iris_requests,
-                deleted_ids: vec![],                                    // TODO.
-                matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
-                anonymized_bucket_statistics_left: Default::default(),  // TODO.
-                anonymized_bucket_statistics_right: Default::default(), // TODO.
-                successful_reauths: vec![false; n_requests],            // TODO.
-                reauth_target_indices: Default::default(),              // TODO.
-                reauth_or_rule_used: Default::default(),                // TODO.
-                modifications: batch.modifications,
-                actor_data: result.connect_plans,
-            }
-        }
+        async move { result.job_result(batch) }
     }
 }
 
@@ -654,7 +683,7 @@ impl HawkHandle {
                 }
 
                 let match_result = {
-                    let step1 = BatchStep1::new(&both_insert_plans);
+                    let step1 = matching::BatchStep1::new(&both_insert_plans);
                     // Go fetch the missing vector IDs and calculate their is_match.
                     let missing_is_match = calculate_is_match(
                         &both_insert_plans,
@@ -665,29 +694,24 @@ impl HawkHandle {
                     step1.step2(&missing_is_match)
                 };
 
-                let is_matches = match_result.is_matches();
+                let mut results = HawkResult::new(match_result);
+
                 let (insert_indices, both_insert_plans) = job
                     .request
-                    .filter_for_insertion(both_insert_plans, &is_matches);
+                    .filter_for_insertion(both_insert_plans, results.is_matches());
 
                 // Insert into the database.
-                let n_requests = is_matches.len();
-                let mut results = HawkResult {
-                    connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
-                    is_matches,
-                };
-
                 if !hawk_actor.args.disable_persistence {
                     // For both eyes.
-                    for (sessions, insert_plans, connect_plans) in
-                        izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
+                    for (side, sessions, insert_plans) in
+                        izip!(&STORE_IDS, &sessions, both_insert_plans)
                     {
                         // Insert in memory, and return the plans to update the persistent database.
                         let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
 
                         // Convert to Vec<Option> matching the request order.
                         for (i, plan) in izip!(&insert_indices, plans) {
-                            connect_plans[*i] = Some(plan);
+                            results.set_connect_plan(*i, *side, plan);
                         }
                     }
                 }
@@ -877,14 +901,11 @@ mod tests {
         assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
         assert_eq!(batch_size, result.match_ids.len());
-        assert!(no_empty(&without_matches(
-            &result.matches,
-            &result.match_ids
-        )));
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
         assert_eq!(batch_size, result.partial_match_counters_right.len());
+        assert_match_ids(&result);
         assert_eq!(batch_size, result.left_iris_requests.code.len());
         assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
@@ -914,14 +935,35 @@ mod tests {
         all_results[0].clone()
     }
 
-    fn without_matches<T: Clone>(matches: &[bool], things: &[T]) -> Vec<T> {
-        izip!(matches, things)
-            .filter_map(|(&match_, item)| match_.not().then_some(item.clone()))
-            .collect_vec()
-    }
-
-    fn no_empty<T>(items: &[Vec<T>]) -> bool {
-        items.iter().all(|item| !item.is_empty())
+    fn assert_match_ids(results: &ServerJobResult) {
+        for (is_match, matches_both, matches_left, matches_right, count_left, count_right) in izip!(
+            &results.matches,
+            &results.match_ids,
+            &results.partial_match_ids_left,
+            &results.partial_match_ids_right,
+            &results.partial_match_counters_left,
+            &results.partial_match_counters_right,
+        ) {
+            assert_eq!(
+                *is_match,
+                matches_both.is_empty().not(),
+                "Matches must have some matched IDs"
+            );
+            assert!(
+                matches_both
+                    .iter()
+                    .all(|id| matches_left.contains(id) && matches_right.contains(id)),
+                "Matched IDs must be repeated in left and rights lists"
+            );
+            assert!(
+                matches_left.len() <= *count_left,
+                "Partial counts must be consistent"
+            );
+            assert!(
+                matches_right.len() <= *count_right,
+                "Partial counts must be consistent"
+            );
+        }
     }
 }
 
