@@ -23,8 +23,10 @@ use std::{
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::instrument;
 
+/// Reference to an iris in the Shamir secret shared form over a Galois ring.
 pub type IrisRef = Arc<GaloisRingSharedIris>;
 
+/// Unique identifier for an iris inserted into the store.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
     pub(crate) id: PointId,
@@ -65,20 +67,25 @@ impl From<usize> for VectorId {
 }
 
 impl VectorId {
+    /// Returns the ID of a vector as a number.
     pub fn to_serial_id(&self) -> u32 {
         self.id.0
     }
 }
 
+/// Iris to be searcher or inserted into the store.
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
 pub struct Query {
+    /// Iris in the Shamir secret shared form over a Galois ring.
     pub query: GaloisRingSharedIris,
+    /// Preprocessed iris for faster evaluation of distances, see [Aby3Store::eval_distance].
     pub processed_query: GaloisRingSharedIris,
 }
 
+/// Reference to a query.
 pub type QueryRef = Arc<Query>;
 
-/// Creates a new query from a shared iris.
+/// Creates a new query from a secret shared iris.
 /// The input iris is preprocessed for faster evaluation of distances, see [Aby3Store::eval_distance].
 pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
     let mut preprocessed_query = raw_query.clone();
@@ -91,16 +98,19 @@ pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
     })
 }
 
+/// Storage of inserted irises.
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
     pub points: Vec<IrisRef>,
 }
 
+/// Reference to inserted irises.
 #[derive(Clone)]
 pub struct SharedIrisesRef {
     body: Arc<RwLock<SharedIrises>>,
 }
 
+/// Mutable reference to inserted irises.
 pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
 
 impl std::fmt::Debug for SharedIrisesRef {
@@ -118,6 +128,7 @@ impl Default for SharedIrisesRef {
     }
 }
 
+// Constructor.
 impl SharedIrisesRef {
     pub fn new(data: Vec<IrisRef>) -> Self {
         let body = SharedIrises { points: data };
@@ -127,6 +138,7 @@ impl SharedIrisesRef {
     }
 }
 
+// Getters, iterators and mutators of the iris storage.
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
         self.body.write().await
@@ -209,9 +221,12 @@ impl Aby3Store {
 }
 
 impl VectorStore for Aby3Store {
-    type QueryRef = QueryRef; // Arc ref to a query.
-    type VectorRef = VectorId; // Point ID of an inserted iris.
-    type DistanceRef = DistanceShare<u32>; // Distance represented as shares.
+    /// Arc ref to a query.
+    type QueryRef = QueryRef;
+    /// Point ID of an inserted iris.
+    type VectorRef = VectorId;
+    /// Distance represented as a pair of u32 shares.
+    type DistanceRef = DistanceShare<u32>;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
@@ -273,7 +288,6 @@ impl VectorStore for Aby3Store {
 }
 
 impl VectorStoreMut for Aby3Store {
-    /// Inserts a query into the store and returns a reference to the inserted vector.
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.insert(query).await
     }
