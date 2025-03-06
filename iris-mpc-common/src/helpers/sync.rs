@@ -4,14 +4,14 @@ use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    pub db_len:              u64,
+    pub db_len: u64,
     pub deleted_request_ids: Vec<String>,
-    pub modifications:       Vec<Modification>,
+    pub modifications: Vec<Modification>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResult {
-    my_state:   SyncState,
+    my_state: SyncState,
     all_states: Vec<SyncState>,
 }
 
@@ -43,12 +43,12 @@ impl FromStr for ModificationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
-    pub id:           i64,
-    pub serial_id:    i64,
+    pub id: i64,
+    pub serial_id: i64,
     pub request_type: String,
-    pub s3_url:       Option<String>,
-    pub status:       String,
-    pub persisted:    bool,
+    pub s3_url: Option<String>,
+    pub status: String,
+    pub persisted: bool,
 }
 
 impl Modification {
@@ -99,6 +99,8 @@ impl SyncResult {
         for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
             grouped.entry(m.id).or_default().push(m);
         }
+
+        tracing::info!("Grouped modifications: {:?}", grouped);
 
         // Store the results here
         let mut to_update = Vec::new();
@@ -191,7 +193,7 @@ mod tests {
     #[test]
     fn test_compare_states_sync() {
         let sync_res = SyncResult {
-            my_state:   some_state(),
+            my_state: some_state(),
             all_states: vec![some_state(), some_state(), some_state()],
         };
         assert_eq!(sync_res.must_rollback_storage(), None);
@@ -201,19 +203,19 @@ mod tests {
     fn test_compare_states_out_of_sync() {
         let states = vec![
             SyncState {
-                db_len:              123,
+                db_len: 123,
                 deleted_request_ids: vec!["most late".to_string()],
-                modifications:       vec![],
+                modifications: vec![],
             },
             SyncState {
-                db_len:              456,
+                db_len: 456,
                 deleted_request_ids: vec!["x".to_string(), "y".to_string()],
-                modifications:       vec![],
+                modifications: vec![],
             },
             SyncState {
-                db_len:              789,
+                db_len: 789,
                 deleted_request_ids: vec!["most ahead".to_string()],
-                modifications:       vec![],
+                modifications: vec![],
             },
         ];
         let deleted_request_ids = vec![
@@ -224,7 +226,7 @@ mod tests {
         ];
 
         let sync_res = SyncResult {
-            my_state:   states[0].clone(),
+            my_state: states[0].clone(),
             all_states: states.clone(),
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
@@ -521,9 +523,9 @@ mod tests {
 
     fn some_state() -> SyncState {
         SyncState {
-            db_len:              123,
+            db_len: 123,
             deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
-            modifications:       vec![],
+            modifications: vec![],
         }
     }
 }
