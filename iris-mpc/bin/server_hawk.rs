@@ -309,9 +309,10 @@ async fn receive_batch(
                                         .or_rule_indices
                                         .push(serial_ids.iter().map(|x| x - 1).collect());
                                 } else {
-                                    tracing::error!(
-                                        "Received a uniqueness request without serial_ids"
+                                    tracing::warn!(
+                                        "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
+                                    batch_query.or_rule_indices.push(vec![]);
                                 }
                             }
                         }
