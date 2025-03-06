@@ -1,12 +1,13 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3_store::VectorId;
 use crate::{
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{prepare_query, Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{
+        prepare_query, Aby3Store, SharedIrisesMut, SharedIrisesRef, VectorId,
+    },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
