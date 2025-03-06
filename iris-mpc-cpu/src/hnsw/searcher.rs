@@ -13,7 +13,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tracing::{info, instrument, trace_span, Instrument};
+use tracing::{debug, info, instrument, trace_span, Instrument};
 
 // Specify construction and search parameters by layer up to this value minus 1
 // any higher layers will use the last set of parameters
@@ -312,6 +312,7 @@ impl HnswSearcher {
         }
     }
 
+    #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_std<V: VectorStore>(
         store: &mut V,
         graph: &GraphMem<V>,
@@ -320,8 +321,6 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
-        // println!("layer_search_std");
-
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -382,6 +381,7 @@ impl HnswSearcher {
     /// given layer using depth-first graph traversal,  Terminates when `W`
     /// contains vectors which are the nearest to `q` among all traversed
     /// vertices and their neighbors.
+    #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched<V: VectorStore>(
         store: &mut V,
         graph: &GraphMem<V>,
@@ -390,17 +390,6 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) {
-        // println!("\nlayer_search_batched");
-        // println!(
-        //     "layer_size: {:?}",
-        //     graph_store
-        //         .get_layers()
-        //         .get(lc)
-        //         .unwrap()
-        //         .get_links_map()
-        //         .len()
-        // );
-
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -423,15 +412,34 @@ impl HnswSearcher {
 
         let mut comparison_queue: Vec<(V::VectorRef, V::DistanceRef)> = Vec::new();
 
-        // batch_rate: Fibonacci sequence values (F_k, F_{k+1}) used to scale the number
-        // of neighbors filtered as a batch against the current element of W
-        // farthest away from the query, to reflect the fact that the rate of
-        // new insertions into W decreases as the layer search progresses.  The
-        // maximum number of neighbors compared as a batch is `F_
-        // {k+1} * batch_size`, and when a batch with `n` positive insertion results is
-        // returned, if `F_k * n < batch_size`, then batch_rate is incremented
-        // to the next Fibonacci values.
-        let mut batch_rate = (1usize, 2usize);
+        // Representation of estimated insertion rate
+        //
+        // Over the course of graph traversal, the proportion of newly inspected node which are
+        // actually inserted into W (i.e. which have distance to query smaller than the farthest
+        // node currently recorded) decreases as a function which roughly appears inversely
+        // proportional to the number of nodes inspected.
+        //
+        // Graph traversal maintains a queue of node distances to compare as a batch against the
+        // current farthest element from query in W.  To optimize for running batches so that the
+        // results produce the targeted number of elements needed for a batch insertion operation
+        // into W, an estimate of the current proportion of newly inspected elements which are
+        // expected to be inserted into W is maintained, to be used in determining the distance
+        // comparisons batch size.
+        //
+        // This proportion is represented as a ratio ins_rate_num / ins_rate_denom, where the
+        // numerator is a fixed constant, and the denominator is updated dynamically as the
+        // measured proportion of insertions decreases.  This fixed-precision representation is
+        // chosen to avoid issues with numerator and denominator values growing too large over time
+        // after repeated algebraic updates.
+        const INS_RATE_NUM: usize = 64;
+        let mut ins_rate_denom = INS_RATE_NUM;
+        const MAX_INS_RATE_DENOM: usize = INS_RATE_NUM * 1000;
+
+        // When the estimated insertion rate is determined to be too low, the value is updated by a
+        // fixed factor, rounding up to respect the fixed-precision representation.
+        // TODO optimize insertion rate estimate update size
+        const INS_RATE_UPDATE: (usize, usize) = (5, 6);
+        let mut next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
 
         // Main graph traversal loop: continue until all graph nodes in the exploration set W have
         // been opened and none of the neighbors are closer to the query than the nodes in W
@@ -456,7 +464,9 @@ impl HnswSearcher {
             // Compare neighbors to max distance elt of W in batches, then insert in batches.
             while !c_links.is_empty() {
                 // Add pending comparisons for initial filter pass to a queue
-                let target_batch_size = batch_rate.1 * insertion_batch_size;
+                // Comparison batch size target is:
+                // (insertion_batch_size / est_insertion_rate) * cmp_batch_size_factor
+                let target_batch_size = insertion_batch_size * next_ins_rate_denom / INS_RATE_NUM;
                 let n_inspect = c_links
                     .len()
                     .min(target_batch_size.saturating_sub(comparison_queue.len()));
@@ -464,22 +474,20 @@ impl HnswSearcher {
 
                 // Process pending comparisons queue if full
                 if comparison_queue.len() >= target_batch_size {
-                    // println!("queue is full: {} / {}", comparison_queue.len(), target_batch_size);
-                    // candidate elements compared against current farthest distance element of W
+                    // compare elements against current farthest element of W
                     let fq = W.get_furthest().unwrap().1.clone();
                     let batch: Vec<_> = comparison_queue
                         .iter()
                         .map(|(_c, cq)| (cq.clone(), fq.clone()))
                         .collect();
                     let batch_size = batch.len();
-                    // println!("batch comparisons against fq: {batch_size}");
 
                     let results = store
                         .less_than_batch(&batch)
                         .instrument(less_than_span.clone())
                         .await;
                     let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
-                    // println!("n_insertions: {n_insertions}");
+                    debug!(batch_size, n_insertions, "Batch distances comparison filter");
 
                     // enqueue strictly closer elements for insertion
                     let new_insertions = results
@@ -488,23 +496,22 @@ impl HnswSearcher {
                         .filter_map(|(res, link)| if res { Some(link) } else { None });
                     insertion_queue.extend(new_insertions);
 
-                    // let rate = (n_insertions as f64) / (cmp_batch_size as f64);
-                    // println!("insertions rate: {rate:.3}");
-
-                    // update size of comparison batches if insertion rate is too low
-                    if (batch_rate.0 + batch_rate.1) * n_insertions < 2 * batch_size
-                        && batch_rate.1 < 100
+                    // If measured insertion rate is too low, update the estimated insertion rate.
+                    // Update rule: if measured insertion rate is smaller than the harmonic mean of
+                    // the current estimated insertion rate and the next update to this rate, then
+                    // apply the update.
+                    if (ins_rate_denom + next_ins_rate_denom) * n_insertions < 2 * INS_RATE_NUM * batch_size
+                        && next_ins_rate_denom < MAX_INS_RATE_DENOM
                     {
-                        // update to next Fibonacci pair
-                        batch_rate = (batch_rate.1, batch_rate.1 + batch_rate.0);
-                        // println!("update batch_rate: {:?}", (batch_rate.0, batch_rate.1));
+                        debug!(prev = ins_rate_denom, new = next_ins_rate_denom, "Update insertion rate estimate denominator");
+                        ins_rate_denom = next_ins_rate_denom;
+                        next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
                     }
                 }
 
                 // process pending insertions queue if full
                 while insertion_queue.len() >= insertion_batch_size {
                     let batch: Vec<_> = insertion_queue.drain(0..insertion_batch_size).collect();
-                    // println!("insertion_batch.len(): {:?}", insertion_batch.len());
                     W.insert_batch(store, &batch)
                         .instrument(insert_span.clone())
                         .await;
@@ -512,7 +519,7 @@ impl HnswSearcher {
                 }
             }
 
-            // Select next nearest neighbor candidate to open
+            // Select next unopened nearest neighbor candidate to open
             let mut c_next = W
                 .iter()
                 .map(|(c, _)| c)
@@ -523,26 +530,29 @@ impl HnswSearcher {
             // elements in the comparison and insertion queues.  If new nodes are added to W that
             // need to be opened and processed, continue the graph traversal.  Otherwise, halt.
 
-            if c_next.is_none() && !insertion_queue.is_empty() {
-                // println!("wrap-up procedure");
+            if c_next.is_none() {
+                debug!("Begin wrap-up procedure for batched layer search");
 
                 // Step 1: compare neighbors in pending comparisons queue
                 if !comparison_queue.is_empty() {
                     // compare elements against current farthest element of W
                     let fq = W.get_furthest().unwrap().1.clone();
-                    let batch_cmps: Vec<_> = comparison_queue
+                    let batch: Vec<_> = comparison_queue
                         .iter()
                         .map(|(_c, cq)| (cq.clone(), fq.clone()))
                         .collect();
-                    let batch_cmp_results = store
-                        .less_than_batch(&batch_cmps)
+                    let batch_size = batch.len();
+
+                    let results = store
+                        .less_than_batch(&batch)
                         .instrument(less_than_span.clone())
                         .await;
+                    let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
 
-                    // println!("batch comparisons against fq: {}", batch_cmps.len());
+                    debug!(batch_size, n_insertions, "Batch distances comparison filter");
 
                     // enqueue strictly closer elements for insertion
-                    let new_insertions = batch_cmp_results
+                    let new_insertions = results
                         .into_iter()
                         .zip(comparison_queue.drain(..))
                         .filter_map(|(res, link)| if res { Some(link) } else { None });
@@ -577,12 +587,11 @@ impl HnswSearcher {
                 }
             }
         }
-        // println!("end batch_rate: {batch_rate:?}");
-        // println!("end layer_search_batched");
     }
 
     /// Variant of layer search using ef parameter of 1, which conducts a greedy
     /// search for the node with minimum distance from the query.
+    #[instrument(level = "debug", skip(store, graph, q, start))]
     async fn layer_search_greedy<V: VectorStore>(
         store: &mut V,
         graph: &GraphMem<V>,
@@ -648,8 +657,6 @@ impl HnswSearcher {
             .into_iter()
             .filter(|e| visited.insert(e.clone()))
             .collect();
-
-        // println!("neighbors: total({:?}), unvisited({:?})", neighbors.len(), unvisited_neighbors.len());
 
         let distances = store.eval_distance_batch(query, &unvisited_neighbors).await;
 

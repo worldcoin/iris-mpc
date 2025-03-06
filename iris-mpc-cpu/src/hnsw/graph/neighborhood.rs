@@ -9,7 +9,7 @@ use crate::hnsw::{
 };
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
-use tracing::instrument;
+use tracing::{debug, instrument};
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
@@ -75,6 +75,8 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
+        debug!(batch_size = vals.len(), "Insert batch into neighborhood");
+
         if vals.is_empty() {
             return;
         }
@@ -83,7 +85,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         if vals.len() > 5 {
             self.batcher_insert(store, vals).await;
         } else {
-            // println!("SHORT batch insertion");
             for (e, eq) in vals.iter() {
                 self.insert(store, e.clone(), eq.clone()).await;
             }
@@ -129,12 +130,8 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         let sorted_prefix_size = self.edges.len();
         let unsorted_size = vals.len();
 
-        // println!("insert {unsorted_size} into list of size {sorted_prefix_size}");
-
         self.edges.extend_from_slice(vals);
         let network = partial_batcher_network(sorted_prefix_size, unsorted_size);
-
-        // println!("network size: {}", sorting_network.num_comparisons());
 
         apply_swap_network(store, &mut self.edges, &network).await;
     }
@@ -145,9 +142,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        // if distances.len() > 0 {
-        //     println!("binary_search with size: {:?}", distances.len().ilog2());
-        // }
         let mut left = 0;
         let mut right = distances.len();
 
