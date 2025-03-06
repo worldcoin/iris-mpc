@@ -931,7 +931,7 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::{
-        hawkers::aby3_store::VectorId,
+        hawkers::aby3::aby3_store::VectorId,
         hnsw::{
             graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
             SortedNeighborhood,
