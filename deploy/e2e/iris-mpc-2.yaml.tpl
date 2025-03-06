@@ -212,7 +212,7 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__LUC_LOOKBACK_RECORDS
-      value: "1"
+      value: "0"
 
     - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
       value: "true"
