@@ -901,14 +901,11 @@ mod tests {
         assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
         assert_eq!(batch_size, result.match_ids.len());
-        assert!(no_empty(&without_matches(
-            &result.matches,
-            &result.match_ids
-        )));
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
         assert_eq!(batch_size, result.partial_match_counters_right.len());
+        assert_match_ids(&result);
         assert_eq!(batch_size, result.left_iris_requests.code.len());
         assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
@@ -938,14 +935,35 @@ mod tests {
         all_results[0].clone()
     }
 
-    fn without_matches<T: Clone>(matches: &[bool], things: &[T]) -> Vec<T> {
-        izip!(matches, things)
-            .filter_map(|(&match_, item)| match_.not().then_some(item.clone()))
-            .collect_vec()
-    }
-
-    fn no_empty<T>(items: &[Vec<T>]) -> bool {
-        items.iter().all(|item| !item.is_empty())
+    fn assert_match_ids(results: &ServerJobResult) {
+        for (is_match, matches_both, matches_left, matches_right, count_left, count_right) in izip!(
+            &results.matches,
+            &results.match_ids,
+            &results.partial_match_ids_left,
+            &results.partial_match_ids_right,
+            &results.partial_match_counters_left,
+            &results.partial_match_counters_right,
+        ) {
+            assert_eq!(
+                *is_match,
+                matches_both.is_empty().not(),
+                "Matches must have some matched IDs"
+            );
+            assert!(
+                matches_both
+                    .iter()
+                    .all(|id| matches_left.contains(id) && matches_right.contains(id)),
+                "Matched IDs must be repeated in left and rights lists"
+            );
+            assert!(
+                matches_left.len() <= *count_left,
+                "Partial counts must be consistent"
+            );
+            assert!(
+                matches_right.len() <= *count_right,
+                "Partial counts must be consistent"
+            );
+        }
     }
 }
 
