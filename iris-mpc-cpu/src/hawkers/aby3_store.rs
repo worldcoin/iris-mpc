@@ -85,6 +85,10 @@ impl From<usize> for VectorId {
 }
 
 impl VectorId {
+    pub fn from_serial_id(id: u32) -> Self {
+        VectorId { id: id.into() }
+    }
+
     pub fn to_serial_id(&self) -> u32 {
         self.id.0
     }
@@ -98,9 +102,34 @@ pub struct Query {
 
 pub type QueryRef = Arc<Query>;
 
-#[derive(Default, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
-    pub points: Vec<IrisRef>,
+    points: HashMap<VectorId, IrisRef>,
+    max_id: u32,
+    empty_iris: IrisRef,
+}
+
+impl SharedIrises {
+    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
+        self.points.insert(vector_id, iris);
+        self.max_id = self.max_id.max(vector_id.to_serial_id());
+    }
+
+    fn next_id(&mut self) -> VectorId {
+        self.max_id += 1;
+        VectorId {
+            id: PointId(self.max_id),
+        }
+    }
+
+    pub fn reserve(&mut self, additional: usize) {
+        self.points.reserve(additional);
+    }
+
+    fn get_vector(&self, vector: &VectorId) -> IrisRef {
+        // TODO: Handle missing vectors.
+        Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
+    }
 }
 
 #[derive(Clone)]
@@ -118,16 +147,18 @@ impl std::fmt::Debug for SharedIrisesRef {
 
 impl Default for SharedIrisesRef {
     fn default() -> Self {
-        let body = SharedIrises { points: vec![] };
-        SharedIrisesRef {
-            body: Arc::new(RwLock::new(body)),
-        }
+        SharedIrisesRef::new(HashMap::new())
     }
 }
 
 impl SharedIrisesRef {
-    pub fn new(data: Vec<IrisRef>) -> Self {
-        let body = SharedIrises { points: data };
+    fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+        let max_id = points.keys().map(|v| v.to_serial_id()).max().unwrap_or(0);
+        let body = SharedIrises {
+            points,
+            max_id,
+            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+        };
         SharedIrisesRef {
             body: Arc::new(RwLock::new(body)),
         }
@@ -153,45 +184,44 @@ impl SharedIrisesRef {
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
-        let body = self.body.read().await;
-        Arc::clone(&body.points[vector.id])
+        self.body.read().await.get_vector(vector)
     }
 
     pub async fn iter_vectors<'a>(&'a self, vector_ids: &'a [VectorId]) -> Vec<IrisRef> {
         let body = self.body.read().await;
-        vector_ids
-            .iter()
-            .map(move |v| Arc::clone(&body.points[v.id]))
-            .collect_vec()
+        vector_ids.iter().map(|v| body.get_vector(v)).collect_vec()
     }
 
     pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
+        let new_vector = Arc::new(query.query.clone());
         let mut body = self.body.write().await;
-        body.points.push(Arc::new(query.query.clone()));
-
-        let new_id = body.points.len() - 1;
-        VectorId { id: new_id.into() }
+        let new_id = body.next_id();
+        body.insert(new_id, new_vector);
+        new_id
     }
 }
 
-pub fn setup_local_player_preloaded_db(database: Vec<IrisRef>) -> eyre::Result<SharedIrisesRef> {
+fn setup_local_player_preloaded_db(
+    database: HashMap<VectorId, IrisRef>,
+) -> eyre::Result<SharedIrisesRef> {
     let aby3_store = SharedIrisesRef::new(database);
     Ok(aby3_store)
 }
 
-pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
+async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
     network_t: NetworkType,
 ) -> eyre::Result<Vec<Aby3Store>> {
     let identities = generate_local_identities();
 
-    let mut shared_irises = vec![vec![]; identities.len()];
+    let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for iris in plain_store.points.iter() {
+    for (vector_id, iris) in plain_store.points.iter().enumerate() {
+        let vector_id = VectorId::from_serial_id(vector_id as u32);
         let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
-        for (i, shares) in all_shares.iter().enumerate() {
-            shared_irises[i].push(Arc::new(shares.clone()));
+        for (party_id, share) in all_shares.into_iter().enumerate() {
+            shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
     }
 

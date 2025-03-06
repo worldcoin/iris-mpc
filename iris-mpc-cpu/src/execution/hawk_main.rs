@@ -410,7 +410,6 @@ impl HawkActor {
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
                 ],
-                empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
             },
             GraphLoader([
                 self.graph_store[0].write().await,
@@ -424,7 +423,6 @@ pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
     irises: BothEyes<SharedIrisesMut<'a>>,
-    empty_iris: Arc<GaloisRingSharedIris>,
 }
 
 impl<'a> InMemoryStore for IrisLoader<'a> {
@@ -436,6 +434,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
+        let vector_id = VectorId::from_serial_id(index as u32);
         for (side, code, mask) in izip!(
             &mut self.irises,
             [left_code, right_code],
@@ -443,12 +442,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-            if index >= side.points.len() {
-                side.points.resize_with(index, || self.empty_iris.clone());
-                side.points.push(iris);
-            } else {
-                side.points[index] = iris;
-            }
+            side.insert(vector_id, iris);
         }
     }
 
@@ -458,7 +452,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
     fn reserve(&mut self, additional: usize) {
         for side in &mut self.irises {
-            side.points.reserve(additional);
+            side.reserve(additional);
         }
     }
 
@@ -470,7 +464,9 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         *self.db_size = size;
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
         for side in &mut self.irises {
-            side.points.resize(size, iris.clone());
+            for i in 0..size {
+                side.insert(VectorId::from_serial_id(i as u32), iris.clone());
+            }
         }
     }
 }
