@@ -24,7 +24,7 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
-use matching::BatchStep1;
+use matching::{BatchStep1, BatchStep2};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
@@ -85,8 +85,8 @@ pub struct HawkActor {
 
 #[derive(Clone, Copy, Debug)]
 pub enum StoreId {
-    Left,
-    Right,
+    Left = 0,
+    Right = 1,
 }
 const LEFT: usize = 0;
 const RIGHT: usize = 1;
@@ -546,8 +546,21 @@ pub struct HawkResult {
 }
 
 impl HawkResult {
-    fn matches(&self) -> Vec<bool> {
-        self.is_matches.clone()
+    fn new(match_results: BatchStep2) -> Self {
+        let is_matches = match_results.is_matches();
+        let n_requests = is_matches.len();
+        HawkResult {
+            connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
+            is_matches,
+        }
+    }
+
+    fn set_connect_plan(&mut self, request_i: usize, side: StoreId, plan: ConnectPlan) {
+        self.connect_plans.0[side as usize][request_i] = Some(plan);
+    }
+
+    fn is_matches(&self) -> &[bool] {
+        &self.is_matches
     }
 
     fn merged_results(&self) -> Vec<u32> {
@@ -558,6 +571,34 @@ impl HawkResult {
                     .map_or(0, |plan| plan.inserted_vector.to_serial_id())
             })
             .collect()
+    }
+
+    fn job_result(self, batch: BatchQuery) -> ServerJobResult {
+        let n_requests = self.is_matches.len();
+        ServerJobResult {
+            merged_results: self.merged_results(),
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
+            matches: self.is_matches().to_vec(),
+            matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
+            match_ids: vec![vec![0]; n_requests],                      // TODO.
+            partial_match_ids_left: vec![vec![0]; n_requests],         // TODO.
+            partial_match_ids_right: vec![vec![0]; n_requests],        // TODO.
+            partial_match_counters_left: vec![0; n_requests],          // TODO.
+            partial_match_counters_right: vec![0; n_requests],         // TODO.
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
+            deleted_ids: vec![],                                    // TODO.
+            matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
+            anonymized_bucket_statistics_left: Default::default(),  // TODO.
+            anonymized_bucket_statistics_right: Default::default(), // TODO.
+            successful_reauths: vec![false; n_requests],            // TODO.
+            reauth_target_indices: Default::default(),              // TODO.
+            reauth_or_rule_used: Default::default(),                // TODO.
+            modifications: batch.modifications,
+            actor_data: self.connect_plans,
+        }
     }
 }
 
@@ -592,34 +633,8 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
-        let n_requests = result.is_matches.len();
 
-        async move {
-            ServerJobResult {
-                merged_results: result.merged_results(),
-                request_ids: batch.request_ids,
-                request_types: batch.request_types,
-                metadata: batch.metadata,
-                matches: result.matches(),
-                matches_with_skip_persistence: result.matches(), // TODO
-                match_ids: vec![vec![0]; n_requests],            // TODO.
-                partial_match_ids_left: vec![vec![0]; n_requests], // TODO.
-                partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
-                partial_match_counters_left: vec![0; n_requests], // TODO.
-                partial_match_counters_right: vec![0; n_requests], // TODO.
-                left_iris_requests: batch.left_iris_requests,
-                right_iris_requests: batch.right_iris_requests,
-                deleted_ids: vec![],                                    // TODO.
-                matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
-                anonymized_bucket_statistics_left: Default::default(),  // TODO.
-                anonymized_bucket_statistics_right: Default::default(), // TODO.
-                successful_reauths: vec![false; n_requests],            // TODO.
-                reauth_target_indices: Default::default(),              // TODO.
-                reauth_or_rule_used: Default::default(),                // TODO.
-                modifications: batch.modifications,
-                actor_data: result.connect_plans,
-            }
-        }
+        async move { result.job_result(batch) }
     }
 }
 
@@ -665,29 +680,24 @@ impl HawkHandle {
                     step1.step2(&missing_is_match)
                 };
 
-                let is_matches = match_result.is_matches();
+                let mut results = HawkResult::new(match_result);
+
                 let (insert_indices, both_insert_plans) = job
                     .request
-                    .filter_for_insertion(both_insert_plans, &is_matches);
+                    .filter_for_insertion(both_insert_plans, results.is_matches());
 
                 // Insert into the database.
-                let n_requests = is_matches.len();
-                let mut results = HawkResult {
-                    connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
-                    is_matches,
-                };
-
                 if !hawk_actor.args.disable_persistence {
                     // For both eyes.
-                    for (sessions, insert_plans, connect_plans) in
-                        izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
+                    for (side, sessions, insert_plans) in
+                        izip!(&STORE_IDS, &sessions, both_insert_plans)
                     {
                         // Insert in memory, and return the plans to update the persistent database.
                         let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
 
                         // Convert to Vec<Option> matching the request order.
                         for (i, plan) in izip!(&insert_indices, plans) {
-                            connect_plans[*i] = Some(plan);
+                            results.set_connect_plan(*i, *side, plan);
                         }
                     }
                 }
