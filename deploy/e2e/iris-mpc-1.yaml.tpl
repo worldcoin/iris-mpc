@@ -200,7 +200,7 @@ iris-mpc-1:
       value: "64"
 
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-      value: "16"
+      value: "64"
 
     - name: SMPC__N_BUCKETS
       value: "5"
