@@ -42,7 +42,7 @@ AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run 
 #### Running the client
 
 ```
-AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo --db-index 2 --n-repeat 32
+AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo
 ```
 
 ### Server configuration
@@ -182,8 +182,7 @@ cargo run --release --bin client -- \
     --response-queue-region eu-north-1 \
     --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
     --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
-    --requests-bucket-region eu-north-1 \
-    --random true
+    --requests-bucket-region eu-north-1
 ```
 
 ## License
