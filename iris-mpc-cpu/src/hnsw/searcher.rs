@@ -433,8 +433,8 @@ impl HnswSearcher {
         // to the next Fibonacci values.
         let mut batch_rate = (1usize, 2usize);
 
-        // Continue until all current entries in candidate nearest neighbors list have
-        // been opened
+        // Main graph traversal loop: continue until all graph nodes in the exploration set W have
+        // been opened and none of the neighbors are closer to the query than the nodes in W
         loop {
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
@@ -446,49 +446,43 @@ impl HnswSearcher {
 
             // If W is not filled to size ef, insert neighbors in batches until it is
             if W.len() < ef && !c_links.is_empty() {
-                // Number of elements from this list to insert to initially populate the list
                 let n_insert = c_links.len().min(ef - W.len());
                 let batch: Vec<_> = c_links.drain(0..n_insert).collect();
-
-                // println!("neighborhood not full; inserting {:?}", n_insert);
                 W.insert_batch(store, &batch)
                     .instrument(insert_span.clone())
                     .await;
             }
 
-            // Now W has size ef; compare neighbors to max distance elt of W in batches,
-            // then insert in batches.
+            // Compare neighbors to max distance elt of W in batches, then insert in batches.
             while !c_links.is_empty() {
-                // choose number of distances to batch filter
+                // Add pending comparisons for initial filter pass to a queue
                 let target_batch_size = batch_rate.1 * insertion_batch_size;
                 let n_inspect = c_links
                     .len()
                     .min(target_batch_size.saturating_sub(comparison_queue.len()));
-                // append to queue
                 comparison_queue.extend(c_links.drain(0..n_inspect));
 
-                // process queue if full
+                // Process pending comparisons queue if full
                 if comparison_queue.len() >= target_batch_size {
-                    // println!("queue is full: {} / {}", comparison_queue.len(),
-                    // target_batch_size); compare elements against current
-                    // farthest element of W
+                    // println!("queue is full: {} / {}", comparison_queue.len(), target_batch_size);
+                    // candidate elements compared against current farthest distance element of W
                     let fq = W.get_furthest().unwrap().1.clone();
-                    let batch_cmps: Vec<_> = comparison_queue
+                    let batch: Vec<_> = comparison_queue
                         .iter()
                         .map(|(_c, cq)| (cq.clone(), fq.clone()))
                         .collect();
-                    let batch_cmp_results = store
-                        .less_than_batch(&batch_cmps)
+                    let batch_size = batch.len();
+                    // println!("batch comparisons against fq: {batch_size}");
+
+                    let results = store
+                        .less_than_batch(&batch)
                         .instrument(less_than_span.clone())
                         .await;
-
-                    let cmp_batch_size = batch_cmps.len();
-                    // println!("batch comparisons against fq: {cmp_batch_size}");
-                    let n_insertions: usize = batch_cmp_results.iter().map(|r| *r as usize).sum();
+                    let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
                     // println!("n_insertions: {n_insertions}");
 
                     // enqueue strictly closer elements for insertion
-                    let new_insertions = batch_cmp_results
+                    let new_insertions = results
                         .into_iter()
                         .zip(comparison_queue.drain(..))
                         .filter_map(|(res, link)| if res { Some(link) } else { None });
@@ -498,21 +492,20 @@ impl HnswSearcher {
                     // println!("insertions rate: {rate:.3}");
 
                     // update size of comparison batches if insertion rate is too low
-                    if (batch_rate.0 + batch_rate.1) * n_insertions < 2 * cmp_batch_size
+                    if (batch_rate.0 + batch_rate.1) * n_insertions < 2 * batch_size
                         && batch_rate.1 < 100
                     {
                         // update to next Fibonacci pair
                         batch_rate = (batch_rate.1, batch_rate.1 + batch_rate.0);
-                        // println!("update batch_rate: {:?}", (batch_rate.0,
-                        // batch_rate.1));
+                        // println!("update batch_rate: {:?}", (batch_rate.0, batch_rate.1));
                     }
                 }
 
+                // process pending insertions queue if full
                 while insertion_queue.len() >= insertion_batch_size {
-                    let insertion_batch: Vec<_> =
-                        insertion_queue.drain(0..insertion_batch_size).collect();
+                    let batch: Vec<_> = insertion_queue.drain(0..insertion_batch_size).collect();
                     // println!("insertion_batch.len(): {:?}", insertion_batch.len());
-                    W.insert_batch(store, &insertion_batch)
+                    W.insert_batch(store, &batch)
                         .instrument(insert_span.clone())
                         .await;
                     W.trim_to_k_nearest(ef);
@@ -526,13 +519,14 @@ impl HnswSearcher {
                 .find(|&c| !opened.contains(c))
                 .cloned();
 
-            // If all current nearest neighbors have been opened, but there are
-            // items left in the insertion queue to insert, do so, and see if
-            // any of the inserted elements need to be opened
+            // Once we've opened all elements of candidate neighborhood W, process any remaining
+            // elements in the comparison and insertion queues.  If new nodes are added to W that
+            // need to be opened and processed, continue the graph traversal.  Otherwise, halt.
+
             if c_next.is_none() && !insertion_queue.is_empty() {
                 // println!("wrap-up procedure");
 
-                // Check 1: any potential neighbors need to be inspected?
+                // Step 1: compare neighbors in pending comparisons queue
                 if !comparison_queue.is_empty() {
                     // compare elements against current farthest element of W
                     let fq = W.get_furthest().unwrap().1.clone();
@@ -555,7 +549,7 @@ impl HnswSearcher {
                     insertion_queue.extend(new_insertions);
                 }
 
-                // Check 2: any closer elements need to be inserted?
+                // Step 2: insert new neighbors which have passed the filtering step
                 for chunk in insertion_queue.chunks(insertion_batch_size) {
                     W.insert_batch(store, chunk)
                         .instrument(insert_span.clone())
@@ -564,7 +558,7 @@ impl HnswSearcher {
                 }
                 insertion_queue.clear();
 
-                // Try again to select next unopened candidate, if any
+                // Step 3: try again to select an unopened candidate
                 c_next = W
                     .iter()
                     .map(|(c, _)| c)
@@ -655,8 +649,7 @@ impl HnswSearcher {
             .filter(|e| visited.insert(e.clone()))
             .collect();
 
-        // println!("neighbors: total({:?}), unvisited({:?})", neighbors.len(),
-        // unvisited_neighbors.len());
+        // println!("neighbors: total({:?}), unvisited({:?})", neighbors.len(), unvisited_neighbors.len());
 
         let distances = store.eval_distance_batch(query, &unvisited_neighbors).await;
 
