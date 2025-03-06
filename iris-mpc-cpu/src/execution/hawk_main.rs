@@ -24,7 +24,6 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
 };
 use itertools::{izip, Itertools};
-use matching::{BatchStep1, BatchStep2};
 use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
@@ -541,15 +540,17 @@ impl HawkRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
+    match_results: matching::BatchStep2,
     connect_plans: HawkMutation,
-    is_matches: Vec<bool>,
+    is_matches: VecRequests<bool>,
 }
 
 impl HawkResult {
-    fn new(match_results: BatchStep2) -> Self {
+    fn new(match_results: matching::BatchStep2) -> Self {
         let is_matches = match_results.is_matches();
         let n_requests = is_matches.len();
         HawkResult {
+            match_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
         }
@@ -575,6 +576,19 @@ impl HawkResult {
 
     fn job_result(self, batch: BatchQuery) -> ServerJobResult {
         let n_requests = self.is_matches.len();
+
+        let match_ids = self
+            .match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+        let partial_match_ids_left = self
+            .match_results
+            .filter_map(|(id, [l, _r])| l.then_some(id.to_serial_id()));
+        let partial_match_ids_right = self
+            .match_results
+            .filter_map(|(id, [_l, r])| r.then_some(id.to_serial_id()));
+        let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
+        let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
+
         ServerJobResult {
             merged_results: self.merged_results(),
             request_ids: batch.request_ids,
@@ -582,11 +596,11 @@ impl HawkResult {
             metadata: batch.metadata,
             matches: self.is_matches().to_vec(),
             matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
-            match_ids: vec![vec![0]; n_requests],                      // TODO.
-            partial_match_ids_left: vec![vec![0]; n_requests],         // TODO.
-            partial_match_ids_right: vec![vec![0]; n_requests],        // TODO.
-            partial_match_counters_left: vec![0; n_requests],          // TODO.
-            partial_match_counters_right: vec![0; n_requests],         // TODO.
+            match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![],                                    // TODO.
@@ -669,7 +683,7 @@ impl HawkHandle {
                 }
 
                 let match_result = {
-                    let step1 = BatchStep1::new(&both_insert_plans);
+                    let step1 = matching::BatchStep1::new(&both_insert_plans);
                     // Go fetch the missing vector IDs and calculate their is_match.
                     let missing_is_match = calculate_is_match(
                         &both_insert_plans,
