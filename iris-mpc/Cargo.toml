@@ -12,6 +12,7 @@ aws-config.workspace = true
 aws-sdk-sns.workspace = true
 aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
+aws-sdk-secretsmanager.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
