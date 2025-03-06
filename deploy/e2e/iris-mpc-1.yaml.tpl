@@ -209,7 +209,7 @@ iris-mpc-1:
       value: "true"
 
     - name: SMPC__LUC_ENABLED
-      value: "true"
+      value: "false"
 
     - name: SMPC__LUC_LOOKBACK_RECORDS
       value: "1"
