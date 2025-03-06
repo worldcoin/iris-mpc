@@ -4,7 +4,10 @@ use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     execution::local::LocalRuntime,
     hawkers::{
-        aby3::{aby3_store::prepare_query, test_utils::lazy_setup_from_files_with_grpc},
+        aby3::{
+            aby3_store::prepare_query,
+            test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
+        },
         plaintext_store::PlaintextStore,
     },
     hnsw::{GraphMem, HnswSearcher},
@@ -239,7 +242,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let mut vector_store = vector_store;
                             let mut graph_store = graph_store;
 
-                            let player_index = vector_store.get_owner_index();
+                            let player_index = get_owner_index(&vector_store).unwrap();
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
@@ -274,7 +277,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let mut vector_store = vector_store;
                             let mut graph_store = graph_store;
-                            let player_index = vector_store.get_owner_index();
+                            let player_index = get_owner_index(&vector_store).unwrap();
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             jobs.spawn(async move {
