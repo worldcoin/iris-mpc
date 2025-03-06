@@ -1,5 +1,6 @@
 use crate::hnsw::{
     metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
+    vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
@@ -132,12 +133,6 @@ impl VectorStore for PlaintextStore {
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (u16, u16);
 
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        // The query is now accepted in the store. It keeps the same ID.
-        self.points[*query].is_persistent = true;
-        *query
-    }
-
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
@@ -232,6 +227,14 @@ impl PlaintextStore {
         }
 
         Ok(plaintext_graph_store)
+    }
+}
+
+impl VectorStoreMut for PlaintextStore {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        // The query is now accepted in the store. It keeps the same ID.
+        self.points[*query].is_persistent = true;
+        *query
     }
 }
 

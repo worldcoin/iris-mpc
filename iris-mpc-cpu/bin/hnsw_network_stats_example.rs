@@ -2,9 +2,9 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
-    database_generators::generate_galois_iris_shares,
     hawkers::aby3::{aby3_store::prepare_query, test_utils::lazy_setup_from_files_with_grpc},
     hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
+    protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::SeedableRng;
 use std::error::Error;
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let searcher = HnswSearcher::default();
     let mut rng = AesRng::seed_from_u64(0_u64);
     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-    let raw_query = generate_galois_iris_shares(&mut rng, on_the_fly_query);
+    let raw_query = GaloisRingSharedIris::generate_shares_locally(&mut rng, on_the_fly_query);
 
     let mut jobs = JoinSet::new();
 

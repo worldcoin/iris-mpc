@@ -647,7 +647,8 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = prepare_query(store.storage.get_vector(&i.into()).await);
+                let q = store.storage.get_vector(&i.into()).await;
+                let q = prepare_query((*q).clone());
                 jobs.spawn(async move {
                     let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
                     searcher.is_match(&mut store, &[secret_neighbors]).await
