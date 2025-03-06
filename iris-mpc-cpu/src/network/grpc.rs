@@ -9,7 +9,6 @@ use crate::{
     },
 };
 use backoff::{future::retry, ExponentialBackoff};
-use dashmap::DashMap;
 use eyre::eyre;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
@@ -129,7 +128,7 @@ pub struct GrpcConfig {
 pub struct GrpcNetworking {
     party_id: Identity,
     // other party id -> client to call that party
-    clients: Arc<DashMap<Identity, PartyNodeClient<Channel>>>,
+    clients: Arc<RwMap<Identity, PartyNodeClient<Channel>>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: Arc<OutgoingStreams>,
     // session id -> incoming message streams
@@ -142,7 +141,7 @@ impl GrpcNetworking {
     pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
             party_id,
-            clients: Arc::new(DashMap::new()),
+            clients: Arc::new(RwLock::new(HashMap::new())),
             outgoing_streams: Arc::new(OutgoingStreams::default()),
             message_queues: Arc::new(RwLock::new(HashMap::new())),
             config,
@@ -164,7 +163,14 @@ impl GrpcNetworking {
             Ok(PartyNodeClient::connect(address.to_string()).await?)
         })
         .await?;
-        self.clients.insert(party_id.clone(), client);
+        tracing::trace!(
+            "Player {:?} connected to player {:?} at address {:?}",
+            self.party_id,
+            party_id,
+            address
+        );
+        let mut clients = self.clients.write().await;
+        clients.insert(party_id.clone(), client);
         Ok(())
     }
 
@@ -176,10 +182,17 @@ impl GrpcNetworking {
             ));
         }
 
-        for mut client in self.clients.iter_mut() {
+        let mut clients = self.clients.write().await;
+        for (client_key, client) in clients.iter_mut() {
             let (tx, rx) = mpsc::unbounded_channel();
+            tracing::trace!(
+                "Player {:?} is adding outgoing stream of session {:?} for player {:?}",
+                self.party_id,
+                session_id,
+                client_key
+            );
             self.outgoing_streams
-                .add_session_stream(session_id, client.key().clone(), tx)
+                .add_session_stream(session_id, client_key.clone(), tx)
                 .await;
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
             let mut request = Request::new(receiving_stream);
@@ -191,7 +204,13 @@ impl GrpcNetworking {
                 "session_id",
                 AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
             );
-            let _response = client.value_mut().start_message_stream(request).await?;
+            tracing::trace!(
+                "Player {:?} is sending incoming stream of session {:?} for player {:?}",
+                self.party_id,
+                session_id,
+                client_key
+            );
+            let _response = client.start_message_stream(request).await?;
         }
         Ok(())
     }
@@ -202,11 +221,12 @@ impl GrpcNetworking {
             Some(q) => q.count_senders().await,
         };
 
-        if n_senders != self.clients.len() {
+        let clients = self.clients.read().await;
+        if n_senders != clients.len() {
             return false;
         }
 
-        self.outgoing_streams.count_receivers(session_id).await == self.clients.len()
+        self.outgoing_streams.count_receivers(session_id).await == clients.len()
     }
 
     pub async fn wait_for_session(&self, session_id: SessionId) {
@@ -246,6 +266,13 @@ impl PartyNode for GrpcNetworking {
             .parse()
             .map_err(|_| Status::invalid_argument("Session ID is not a u64 number"))?;
         let session_id = SessionId::from(session_id);
+
+        tracing::trace!(
+            "Player {:?} received incoming stream from {:?} in session {:?}",
+            self.party_id,
+            sender_id,
+            session_id
+        );
 
         let incoming_stream = request.into_inner();
 
@@ -405,6 +432,11 @@ mod tests {
         for player in players.iter() {
             let player = player.clone();
             jobs.spawn(async move {
+                tracing::trace!(
+                    "Player {:?} is creating session {:?}",
+                    player.party_id,
+                    session_id
+                );
                 player.create_session(session_id).await.unwrap();
             });
         }
