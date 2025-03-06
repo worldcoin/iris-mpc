@@ -4,6 +4,6 @@ use kameo::Actor;
 // Declaration + state.
 // ------------------------------------------------------------------------
 
-// Actor: Issues query/insert operations over in-memory HNSW graph.
+// Actor: Writes HNSW graph data to store.
 #[derive(Actor, Default)]
-pub struct GraphIndexer {}
+pub struct GraphDataWriter {}

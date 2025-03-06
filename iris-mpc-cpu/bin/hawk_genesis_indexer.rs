@@ -20,8 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let on_indexation_start = kameo::spawn(PubSub::<indexer::messages::OnIndexationStart>::new());
     let on_iris_id_pulled_from_store =
         kameo::spawn(PubSub::<indexer::messages::OnIrisIdPulledFromStore>::new());
+    let on_iris_data_pulled_from_store =
+        kameo::spawn(PubSub::<indexer::messages::OnIrisDataPulledFromStore>::new());
 
-    // Set actors.
+    // Set actor references.
     let ref_iris_id_stream_reader = kameo::spawn(
         indexer::actors::IrisIdStreamReader::new(
             config.clone(),
@@ -29,7 +31,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .await,
     );
-    let ref_iris_data_loader = kameo::spawn(indexer::actors::IrisDataLoader::default());
+
+    let ref_iris_data_loader = kameo::spawn(
+        indexer::actors::IrisDataLoader::new(
+            config.clone(),
+            on_iris_data_pulled_from_store.clone(),
+        )
+        .await,
+    );
 
     // Set event subscribers.
     on_indexation_start

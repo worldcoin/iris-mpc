@@ -12,6 +12,10 @@ use kameo::{
 use std::ops::Range;
 use tracing::info;
 
+// ------------------------------------------------------------------------
+// Declaration + state.
+// ------------------------------------------------------------------------
+
 // Actor: Reads Iris identifiers streamed from remote store.
 #[derive(Actor)]
 pub struct IrisIdStreamReader {
@@ -19,13 +23,17 @@ pub struct IrisIdStreamReader {
     store: Option<IrisPgresStore>,
 }
 
+// ------------------------------------------------------------------------
+// Constructors.
+// ------------------------------------------------------------------------
+
 impl IrisIdStreamReader {
     pub async fn new(
-        _: Config,
+        config: Config,
         broker: ActorRef<PubSub<messages::OnIrisIdPulledFromStore>>,
     ) -> Self {
         // Instantiate a store pointer -> connects to dB.
-        // let _ = IrisPgresStore::new_from_config(&config).await.unwrap();
+        let _ = IrisPgresStore::new_from_config(&config).await.unwrap();
 
         Self {
             broker,
@@ -34,7 +42,12 @@ impl IrisIdStreamReader {
     }
 }
 
+// ------------------------------------------------------------------------
+// Methods.
+// ------------------------------------------------------------------------
+
 impl IrisIdStreamReader {
+    // Qeuries remote store for range of iris identifiers to be processed.
     fn fetch_iris_id_range(&self) -> Range<i64> {
         // JIT set store pointer.
         match self.store {
@@ -50,10 +63,16 @@ impl IrisIdStreamReader {
     }
 }
 
-// Message handler.
+// ------------------------------------------------------------------------
+// Message Handlers.
+// ------------------------------------------------------------------------
+
+// Message: OnIndexationStart.
 impl Message<messages::OnIndexationStart> for IrisIdStreamReader {
+    // Reply type.
     type Reply = ();
 
+    // Handler.
     async fn handle(
         &mut self,
         _: messages::OnIndexationStart,

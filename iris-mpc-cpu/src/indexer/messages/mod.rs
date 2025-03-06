@@ -19,7 +19,7 @@ pub struct OnIrisIdPulledFromStore {
 }
 
 // Event: Raised when raw Iris data is ready for processing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct OnIrisDataPulledFromStore {
     pub(crate) id_of_iris: i64,
     pub(crate) code_left: Vec<u16>,
