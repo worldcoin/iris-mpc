@@ -10,7 +10,9 @@ use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
-use iris_mpc::services::processors::results::{send_error_results_to_sns, send_results_to_sns};
+use iris_mpc::services::processors::result_message::{
+    send_error_results_to_sns, send_results_to_sns,
+};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},

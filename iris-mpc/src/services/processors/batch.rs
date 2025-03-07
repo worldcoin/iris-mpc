@@ -8,7 +8,7 @@ use tokio::sync::Semaphore;
 
 use crate::server::{CURRENT_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, SQS_POLLING_INTERVAL};
 use crate::services::processors::get_iris_shares_parse_task;
-use crate::services::processors::results::send_error_results_to_sns;
+use crate::services::processors::result_message::send_error_results_to_sns;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
