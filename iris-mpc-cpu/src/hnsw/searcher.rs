@@ -6,8 +6,8 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    vector_store::VectorStoreMut,
     sorting::{swap_network::apply_swap_network, tree_min::tree_min},
+    vector_store::VectorStoreMut,
 };
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
