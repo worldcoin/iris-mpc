@@ -312,6 +312,17 @@ impl HnswSearcher {
         }
     }
 
+    /// The standard layer search algorithm for HNSW search, which inspects
+    /// neighborhoods of graph nodes one element at a time, comparing each
+    /// in sequence against the current farthest element of the candidate
+    /// neighborhood W and inserting into W if closer.
+    ///
+    /// This implementation varies slightly from the original specification of
+    /// Malkov and Yashunin in that the candidates queue C is removed, and
+    /// instead new candidates are identified from W directly by a linear
+    /// scan, keeping track of which nodes have been "opened" and had their
+    /// neighbors inspected, which is recorded in an additional `HashSet` of
+    /// vector ids.
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_std<V: VectorStore>(
         store: &mut V,
@@ -377,10 +388,82 @@ impl HnswSearcher {
         }
     }
 
-    /// Mutate `W` into the `ef` nearest neighbors of query vector `q` in the
-    /// given layer using depth-first graph traversal,  Terminates when `W`
-    /// contains vectors which are the nearest to `q` among all traversed
-    /// vertices and their neighbors.
+    /// Run an HNSW layer search with batched operation.  The algorithm mutates
+    /// the input sorted neighborhood `W` into the `ef` (approximate)
+    /// nearest vectors to the query `q` in layer `lc` of the layered graph
+    /// `graph`.
+    ///
+    /// As in the standard HNSW layer search, this algorithm proceeds by
+    /// sequentially inspecting the neighbors of previously un-opened
+    /// entries of `W` closest to `q`, inserting inspected nodes into `W` if
+    /// they are nearer to `q` than the current farthest entry of `W`
+    /// (or unconditionally if `W` needs to be filled to size `ef`).  The
+    /// entries of `W` are stored in sorted order of their distance to `q`,
+    /// so new nodes are inserted into `W` using a search/sort procedure.
+    ///
+    /// Distinct from the standard HNSW algorithm, this batched implementation
+    /// maintains queues for both distance comparison operations and sorted
+    /// list insertion operations so they can be processed in batches rather
+    /// than individually.  This has to be handled with some care, as
+    /// the efficient traversal of the graph layer depends on aspects of the
+    /// ongoing sequential search pattern. It is accomplished in the
+    /// following way.
+    ///
+    /// First, as `W` is first filled up to size `ef`, the entire neighborhoods
+    /// of nodes are inserted into `W` via a batched insertion operation
+    /// such as a low-depth sorting network. (This functionality is provided
+    /// by `SortedNeighborhood::insert_batch`.)  This continues
+    /// until `W` has reached size `ef`, so that additional insertions will
+    /// result in truncation of farthest elements.
+    ///
+    /// Once `W` has size `ef`, the second phase of graph traversal starts.  In
+    /// this phase, when an entry of `W` is processed, its neighbors are put
+    /// into a queue for later comparison against the entry of `W` farthest
+    /// from `q`.  The size of this queue is calibrated such that the number
+    /// of entries which eventually are inserted into `W` from this comparison
+    /// is around a specific targeted batch insertion size.
+    ///
+    /// However, during graph traversal, the proportion of inspected nodes which
+    /// ultimately are inserted into `W` decreases as the neighborhood `W`
+    /// better approximates the actual nearest neighbors of `q`.  As such,
+    /// the number of elements that should be inspected to identify a
+    /// particular number of insertion elements increases.  To estimate an
+    /// appropriate number of elements to compare as a batch against the
+    /// farthest element of `W`, the algorithm requires an ongoing estimate
+    /// of the rate of insertions relative to the number of inspected nodes.
+    ///
+    /// This rate estimate is maintained throughout the traversal as the ratio
+    /// of a fixed numerator and a dynamic denominator, which is
+    /// periodically multiplied by a scaling factor when the estimated rate
+    /// is lower than the measured insertion rate over a batch.  This
+    /// representation is chosen so that the reciprocal of the rate, which
+    /// is the factor the target batch insertion size is multiplied by to
+    /// estimate the required queue size, is a fixed-precision value which
+    /// avoids the issue of numerator and denominator values growing too large
+    /// after repeated algebraic manipulations.
+    ///
+    /// Items meant for insertion are added to a second queue, the insertion
+    /// queue.  Whenever this queue reaches a fixed target batch insertion
+    /// size, elements from the queue are inserted into `W` with a low-depth
+    /// batch insertion operation.
+    ///
+    /// This process of collecting and enqueuing new nodes to inspect, running
+    /// comparisons of these nodes against the worst item in `W` in batches,
+    /// updating the rate estimate if needed, and inserting full batches of
+    /// filtered graph nodes into `W` at once, continues until all items
+    /// currently in `W` at the end of a traversal loop have been opened, and
+    /// all neighbors inspected.
+    ///
+    /// At this point, a clean-up step takes place: since the two queues for
+    /// batch comparison and batch insertion are only processed when a full
+    /// batch is ready, some items may be left over. To ensure that all
+    /// enqueued items are handled, first the batch comparison queue and then
+    /// the batch insertion queue is processed, which may result in one or more
+    /// new elements being inserted into `W`.  If new elements are inserted,
+    /// then the graph traversal loop continues as before, opening the newly
+    /// inserted items in `W`.  If no new entries are inserted in this
+    /// clean-up step, then the graph traversal is complete, and the function
+    /// returns.
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched<V: VectorStore>(
         store: &mut V,
@@ -412,37 +495,24 @@ impl HnswSearcher {
 
         let mut comparison_queue: Vec<(V::VectorRef, V::DistanceRef)> = Vec::new();
 
-        // Representation of estimated insertion rate
-        //
-        // Over the course of graph traversal, the proportion of newly inspected node which are
-        // actually inserted into W (i.e. which have distance to query smaller than the farthest
-        // node currently recorded) decreases as a function which roughly appears inversely
-        // proportional to the number of nodes inspected.
-        //
-        // Graph traversal maintains a queue of node distances to compare as a batch against the
-        // current farthest element from query in W.  To optimize for running batches so that the
-        // results produce the targeted number of elements needed for a batch insertion operation
-        // into W, an estimate of the current proportion of newly inspected elements which are
-        // expected to be inserted into W is maintained, to be used in determining the distance
-        // comparisons batch size.
-        //
-        // This proportion is represented as a ratio ins_rate_num / ins_rate_denom, where the
-        // numerator is a fixed constant, and the denominator is updated dynamically as the
-        // measured proportion of insertions decreases.  This fixed-precision representation is
-        // chosen to avoid issues with numerator and denominator values growing too large over time
-        // after repeated algebraic updates.
+        // Numerator and denominator of estimated current insertion rate
         const INS_RATE_NUM: usize = 64;
         let mut ins_rate_denom = INS_RATE_NUM;
         const MAX_INS_RATE_DENOM: usize = INS_RATE_NUM * 1000;
 
-        // When the estimated insertion rate is determined to be too low, the value is updated by a
-        // fixed factor, rounding up to respect the fixed-precision representation.
+        // When the estimated insertion rate is determined to be too low, the value is
+        // updated by a fixed factor, rounding up to respect the fixed-precision
+        // representation.
+        //
         // TODO optimize insertion rate estimate update size
         const INS_RATE_UPDATE: (usize, usize) = (5, 6);
+
+        // The insertion rate after the next update
         let mut next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
 
-        // Main graph traversal loop: continue until all graph nodes in the exploration set W have
-        // been opened and none of the neighbors are closer to the query than the nodes in W
+        // Main graph traversal loop: continue until all graph nodes in the exploration
+        // set W have been opened and none of the neighbors are closer to the
+        // query than the nodes in W
         loop {
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
@@ -461,20 +531,21 @@ impl HnswSearcher {
                     .await;
             }
 
-            // Compare neighbors to max distance elt of W in batches, then insert in batches.
+            // Once W is filled, main processing logic for opening nodes happens here
             while !c_links.is_empty() {
-                // Add pending comparisons for initial filter pass to a queue
-                // Comparison batch size target is:
-                // (insertion_batch_size / est_insertion_rate) * cmp_batch_size_factor
+                // Add pending comparisons for initial filter pass to a queue.  Note that it's
+                // the _next_ insertion rate estimate that is used to compute this target batch
+                // size so that with reasonably high probability enough insertions are
+                // identified to trigger a batch insertion operation.
                 let target_batch_size = insertion_batch_size * next_ins_rate_denom / INS_RATE_NUM;
                 let n_inspect = c_links
                     .len()
                     .min(target_batch_size.saturating_sub(comparison_queue.len()));
                 comparison_queue.extend(c_links.drain(0..n_inspect));
 
-                // Process pending comparisons queue if full
+                // Process pending comparisons queue if there are enough elements
                 if comparison_queue.len() >= target_batch_size {
-                    // compare elements against current farthest element of W
+                    // Compare elements against current farthest element of W
                     let fq = W.get_furthest().unwrap().1.clone();
                     let batch: Vec<_> = comparison_queue
                         .iter()
@@ -487,9 +558,12 @@ impl HnswSearcher {
                         .instrument(less_than_span.clone())
                         .await;
                     let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
-                    debug!(batch_size, n_insertions, "Batch distances comparison filter");
+                    debug!(
+                        batch_size,
+                        n_insertions, "Batch distances comparison filter"
+                    );
 
-                    // enqueue strictly closer elements for insertion
+                    // Enqueue strictly closer elements for insertion
                     let new_insertions = results
                         .into_iter()
                         .zip(comparison_queue.drain(..))
@@ -497,19 +571,26 @@ impl HnswSearcher {
                     insertion_queue.extend(new_insertions);
 
                     // If measured insertion rate is too low, update the estimated insertion rate.
+                    //
                     // Update rule: if measured insertion rate is smaller than the harmonic mean of
                     // the current estimated insertion rate and the next update to this rate, then
                     // apply the update.
-                    if (ins_rate_denom + next_ins_rate_denom) * n_insertions < 2 * INS_RATE_NUM * batch_size
+                    if (ins_rate_denom + next_ins_rate_denom) * n_insertions
+                        < 2 * INS_RATE_NUM * batch_size
                         && next_ins_rate_denom < MAX_INS_RATE_DENOM
                     {
-                        debug!(prev = ins_rate_denom, new = next_ins_rate_denom, "Update insertion rate estimate denominator");
+                        debug!(
+                            prev = ins_rate_denom,
+                            new = next_ins_rate_denom,
+                            "Update insertion rate estimate denominator"
+                        );
                         ins_rate_denom = next_ins_rate_denom;
-                        next_ins_rate_denom = (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
+                        next_ins_rate_denom =
+                            (ins_rate_denom * INS_RATE_UPDATE.1) / INS_RATE_UPDATE.0;
                     }
                 }
 
-                // process pending insertions queue if full
+                // Process pending insertions queue if there are enough elements
                 while insertion_queue.len() >= insertion_batch_size {
                     let batch: Vec<_> = insertion_queue.drain(0..insertion_batch_size).collect();
                     W.insert_batch(store, &batch)
@@ -526,16 +607,17 @@ impl HnswSearcher {
                 .find(|&c| !opened.contains(c))
                 .cloned();
 
-            // Once we've opened all elements of candidate neighborhood W, process any remaining
-            // elements in the comparison and insertion queues.  If new nodes are added to W that
-            // need to be opened and processed, continue the graph traversal.  Otherwise, halt.
+            // Once we've opened all elements of candidate neighborhood W, process any
+            // remaining elements in the comparison and insertion queues.  If
+            // new nodes are added to W that need to be opened and processed,
+            // continue the graph traversal.  Otherwise, halt.
 
             if c_next.is_none() {
-                debug!("Begin wrap-up procedure for batched layer search");
+                debug!("Batched layer search clean-up");
 
                 // Step 1: compare neighbors in pending comparisons queue
                 if !comparison_queue.is_empty() {
-                    // compare elements against current farthest element of W
+                    // Compare elements against current farthest element of W
                     let fq = W.get_furthest().unwrap().1.clone();
                     let batch: Vec<_> = comparison_queue
                         .iter()
@@ -549,9 +631,12 @@ impl HnswSearcher {
                         .await;
                     let n_insertions: usize = results.iter().map(|r| *r as usize).sum();
 
-                    debug!(batch_size, n_insertions, "Batch distances comparison filter");
+                    debug!(
+                        batch_size,
+                        n_insertions, "Batch distances comparison filter"
+                    );
 
-                    // enqueue strictly closer elements for insertion
+                    // Enqueue strictly closer elements for insertion
                     let new_insertions = results
                         .into_iter()
                         .zip(comparison_queue.drain(..))
@@ -580,9 +665,9 @@ impl HnswSearcher {
                 Some(val) => {
                     c = val;
                 }
-                // All candidates in W have been opened, and all elements pending
-                // insertion have been inserted, so layer search is complete.
                 None => {
+                    // All candidates in W have been opened, and all elements pending
+                    // insertion have been inserted, so layer search is complete.
                     break;
                 }
             }
