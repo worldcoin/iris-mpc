@@ -45,7 +45,7 @@ pub async fn send_error_results_to_sns(
         message_attributes,
         message_type.to_owned() + "_error",
     )
-    .await?;
+        .await?;
     Ok(())
 }
 
@@ -72,7 +72,7 @@ pub async fn send_results_to_sns(
             message_attributes,
             message_type.to_owned(),
         )
-        .await?;
+            .await?;
     }
     Ok(())
 }

@@ -7,7 +7,6 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 use crate::server::{CURRENT_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, SQS_POLLING_INTERVAL};
-use crate::services::aws::sns::send_error_results_to_sns;
 use crate::services::processors::get_iris_shares_parse_task;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
@@ -29,6 +28,7 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::job::{BatchMetadata, BatchQuery};
 use iris_mpc_store::Store;
+use crate::services::processors::message::send_error_results_to_sns;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn receive_batch(
@@ -189,7 +189,7 @@ pub async fn receive_batch(
                                 sns_client,
                                 config,
                                 uniqueness_error_result_attributes,
-                                iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
+                                UNIQUENESS_MESSAGE_TYPE,
                             )
                             .await?;
                             continue;
