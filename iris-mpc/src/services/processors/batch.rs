@@ -463,7 +463,7 @@ pub async fn receive_batch(
             .code
             .extend(db_iris_shares_left);
         batch_query
-            .right_iris_rotated_requests
+            .left_iris_rotated_requests
             .mask
             .extend(db_mask_shares_left);
         batch_query
