@@ -66,7 +66,7 @@ macro_rules! record_stream_time {
 
 #[derive(Debug)]
 struct ServerJob {
-    pub batch:          BatchQuery,
+    pub batch: BatchQuery,
     pub return_channel: oneshot::Sender<ServerJobResult>,
 }
 
@@ -729,11 +729,11 @@ impl ServerActor {
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = CompactQuery {
-            code_query:        batch
+            code_query: batch
                 .left_iris_interpolated_requests_preprocessed
                 .code
                 .clone(),
-            mask_query:        batch
+            mask_query: batch
                 .left_iris_interpolated_requests_preprocessed
                 .mask
                 .clone(),
@@ -782,11 +782,11 @@ impl ServerActor {
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = CompactQuery {
-            code_query:        batch
+            code_query: batch
                 .right_iris_interpolated_requests_preprocessed
                 .code
                 .clone(),
-            mask_query:        batch
+            mask_query: batch
                 .right_iris_interpolated_requests_preprocessed
                 .mask
                 .clone(),
@@ -1914,8 +1914,8 @@ impl ServerActor {
                     .collect::<Vec<_>>(),
             );
             CompactQuery {
-                code_query:        code.clone(),
-                mask_query:        mask.clone(),
+                code_query: code.clone(),
+                mask_query: mask.clone(),
                 code_query_insert: code,
                 mask_query_insert: mask,
             }

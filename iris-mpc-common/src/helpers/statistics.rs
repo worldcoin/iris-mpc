@@ -8,7 +8,7 @@ use std::fmt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {
-    pub count:                   usize,
+    pub count: usize,
     pub hamming_distance_bucket: [f64; 2],
 }
 
@@ -119,7 +119,7 @@ impl BucketStatistics {
 
             self.buckets.push(BucketResult {
                 hamming_distance_bucket: [previous_threshold, threshold],
-                count:                   count as usize,
+                count: count as usize,
             });
         }
 

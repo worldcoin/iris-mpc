@@ -34,8 +34,8 @@ pub fn launch_config_from_elements_and_threads(
     // Check if kernel can be launched
     check_max_grid_size(device, num_blocks as usize);
     LaunchConfig {
-        grid_dim:         (num_blocks, 1, 1),
-        block_dim:        (threads, 1, 1),
+        grid_dim: (num_blocks, 1, 1),
+        block_dim: (threads, 1, 1),
         shared_mem_bytes: 0,
     }
 }

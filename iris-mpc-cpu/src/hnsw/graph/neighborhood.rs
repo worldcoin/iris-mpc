@@ -155,6 +155,28 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         }
         left
     }
+
+    /// Count the neighbors that match according to `store.is_match`.
+    /// The nearest `count` elements are matches and the rest are non-matches.
+    pub async fn match_count<V>(&self, store: &mut V) -> usize
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        let mut left = 0;
+        let mut right = self.edges.len();
+
+        while left < right {
+            let mid = left + (right - left) / 2;
+            let (_, distance) = &self.edges[mid];
+
+            match store.is_match(distance).await {
+                true => left = mid + 1,
+                false => right = mid,
+            }
+        }
+
+        left
+    }
 }
 
 impl<Vector, Distance> Deref for SortedNeighborhood<Vector, Distance> {
@@ -182,7 +204,7 @@ impl<Vector, Distance> From<SortedNeighborhood<Vector, Distance>> for Vec<(Vecto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hawkers::plaintext_store::PlaintextStore;
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
     use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]

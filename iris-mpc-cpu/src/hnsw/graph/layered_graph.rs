@@ -21,14 +21,14 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     entry_point: Option<EntryPoint<V::VectorRef>>,
-    layers:      Vec<Layer<V>>,
+    layers: Vec<Layer<V>>,
 }
 
 impl<V: VectorStore> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
             entry_point: None,
-            layers:      vec![],
+            layers: vec![],
         }
     }
 
@@ -197,13 +197,16 @@ where
                 .links
                 .into_iter()
                 .map(|(v, nbhd)| {
-                    (vector_map(v), SortedNeighborhoodV::<V> {
-                        edges: nbhd
-                            .edges
-                            .into_iter()
-                            .map(|(w, d)| (vector_map(w), distance_map(d)))
-                            .collect(),
-                    })
+                    (
+                        vector_map(v),
+                        SortedNeighborhoodV::<V> {
+                            edges: nbhd
+                                .edges
+                                .into_iter()
+                                .map(|(w, d)| (vector_map(w), distance_map(d)))
+                                .collect(),
+                        },
+                    )
                 })
                 .collect();
             Layer::<V> { links }
@@ -212,7 +215,7 @@ where
 
     GraphMem::<V> {
         entry_point: new_entry_point,
-        layers:      new_layers,
+        layers: new_layers,
     }
 }
 
@@ -221,7 +224,7 @@ mod tests {
     use super::*;
     use crate::{
         hawkers::plaintext_store::{PlaintextStore, PointId},
-        hnsw::HnswSearcher,
+        hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -235,7 +238,7 @@ mod tests {
     #[derive(Clone, Debug, PartialEq, Eq)]
     struct Point {
         /// Whatever encoding of a vector.
-        data:          u64,
+        data: u64,
         /// Distinguish between queries that are pending, and those that were
         /// ultimately accepted into the vector store.
         is_persistent: bool,
@@ -249,15 +252,6 @@ mod tests {
         type QueryRef = PointId; // Vector ID, pending insertion.
         type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
-
-        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-            // The query is now accepted in the store. It keeps the same ID.
-            self.points
-                .get_mut(&(query.0 as usize))
-                .unwrap()
-                .is_persistent = true;
-            *query
-        }
 
         async fn eval_distance(
             &mut self,
@@ -280,6 +274,17 @@ mod tests {
             distance2: &Self::DistanceRef,
         ) -> bool {
             *distance1 < *distance2
+        }
+    }
+
+    impl VectorStoreMut for TestStore {
+        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+            // The query is now accepted in the store. It keeps the same ID.
+            self.points
+                .get_mut(&(query.0 as usize))
+                .unwrap()
+                .is_persistent = true;
+            *query
         }
     }
 

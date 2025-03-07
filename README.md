@@ -30,19 +30,19 @@ cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s
 #### Running the server without config override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin server
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu
 ```
 
 #### Running the server with override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin server -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
 ```
 
 #### Running the client
 
 ```
-AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo --db-index 2 --n-repeat 32
+AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo
 ```
 
 ### Server configuration
@@ -182,8 +182,7 @@ cargo run --release --bin client -- \
     --response-queue-region eu-north-1 \
     --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
     --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
-    --requests-bucket-region eu-north-1 \
-    --random true
+    --requests-bucket-region eu-north-1
 ```
 
 ## License

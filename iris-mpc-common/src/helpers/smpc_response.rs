@@ -73,9 +73,9 @@ impl UniquenessResult {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IdentityDeletionResult {
-    pub node_id:   usize,
+    pub node_id: usize,
     pub serial_id: u32,
-    pub success:   bool,
+    pub success: bool,
 }
 
 impl IdentityDeletionResult {

@@ -228,7 +228,7 @@ pub trait KeyVisitor: Visit + Default {
 /// separately in a `missing_keys` counter.
 #[derive(Default)]
 pub struct ParameterizedCounter<K: KeyVisitor> {
-    counter_map:  ParamCounterRef<K::Key>,
+    counter_map: ParamCounterRef<K::Key>,
     missing_keys: StaticCounter,
 }
 
