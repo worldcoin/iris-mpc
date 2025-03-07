@@ -1,6 +1,6 @@
 pub mod batch;
 pub mod job;
-pub mod message;
+pub mod results;
 
 use aws_sdk_s3::Client as S3Client;
 use eyre::{Context, Report};
