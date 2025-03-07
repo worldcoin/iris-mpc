@@ -57,20 +57,20 @@ enum NetworkTree {
 /// Note that these nodes are not formatted when printing the tree.
 struct NetworkEvent {
     pub message: Option<String>,
-    pub fields:  Vec<Field>,
-    pub bytes:   usize, // bytes sent
-    pub rounds:  usize, // communication rounds
-    pub calls:   usize, // number of calls of this event in a parent span
+    pub fields: Vec<Field>,
+    pub bytes: usize,  // bytes sent
+    pub rounds: usize, // communication rounds
+    pub calls: usize,  // number of calls of this event in a parent span
 }
 
 /// Internal node of the network tree
 struct NetworkSpan {
-    pub name:   String,
+    pub name: String,
     pub fields: Vec<Field>,
-    pub nodes:  Vec<NetworkTree>, // unique children (span, events)
-    pub bytes:  usize,            // total bytes sent by all children
-    pub rounds: usize,            // total communication rounds of all children
-    pub calls:  usize,            // number of calls of this span in a parent span
+    pub nodes: Vec<NetworkTree>, // unique children (span, events)
+    pub bytes: usize,            // total bytes sent by all children
+    pub rounds: usize,           // total communication rounds of all children
+    pub calls: usize,            // number of calls of this span in a parent span
 }
 
 impl NetworkTree {
@@ -123,11 +123,11 @@ impl NetworkTree {
 /// these nodes. See `NetworkTree` for the context.
 #[derive(Eq, PartialEq, Hash, Clone)]
 struct NodeTag {
-    name:   Option<String>, // `message` for events, `name` for spans
+    name: Option<String>, // `message` for events, `name` for spans
     fields: Vec<Field>,
-    bytes:  usize,
+    bytes: usize,
     rounds: usize,
-    calls:  usize,
+    calls: usize,
 }
 
 impl NodeTag {

@@ -4,7 +4,7 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::graph::neighborhood::SortedNeighborhoodV;
+use super::{graph::neighborhood::SortedNeighborhoodV, vector_store::VectorStoreMut};
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -19,13 +19,13 @@ pub const N_PARAM_LAYERS: usize = 5;
 #[allow(non_snake_case)]
 #[derive(PartialEq, Clone, Serialize, Deserialize)]
 pub struct HnswParams {
-    pub M:                 [usize; N_PARAM_LAYERS], // number of neighbors for insertion
-    pub M_max:             [usize; N_PARAM_LAYERS], // maximum number of neighbors
-    pub ef_constr_search:  [usize; N_PARAM_LAYERS], // ef_constr for search layers
-    pub ef_constr_insert:  [usize; N_PARAM_LAYERS], // ef_constr for insertion layers
-    pub ef_search:         [usize; N_PARAM_LAYERS], // ef for search
-    pub layer_probability: f64,                     /* p for geometric distribution of layer
-                                                     * densities */
+    pub M: [usize; N_PARAM_LAYERS], // number of neighbors for insertion
+    pub M_max: [usize; N_PARAM_LAYERS], // maximum number of neighbors
+    pub ef_constr_search: [usize; N_PARAM_LAYERS], // ef_constr for search layers
+    pub ef_constr_insert: [usize; N_PARAM_LAYERS], // ef_constr for insertion layers
+    pub ef_search: [usize; N_PARAM_LAYERS], // ef for search
+    pub layer_probability: f64,     /* p for geometric distribution of layer
+                                     * densities */
 }
 
 #[allow(non_snake_case, clippy::too_many_arguments)]
@@ -175,8 +175,8 @@ pub type ConnectPlanLayerV<V> =
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectPlan<Vector, Distance> {
     pub inserted_vector: Vector,
-    pub layers:          Vec<ConnectPlanLayer<Vector, Distance>>,
-    pub set_ep:          bool,
+    pub layers: Vec<ConnectPlanLayer<Vector, Distance>>,
+    pub set_ep: bool,
 }
 
 // impl <V: VectorStore> PartialEq for ConnectPlan<V> {
@@ -190,7 +190,7 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     /// The neighbors of the inserted vector, and their distances.
     pub neighbors: SortedNeighborhood<Vector, Distance>,
     /// n_links[i] is the neighborhood of each neighbors[i] after the insertion.
-    pub n_links:   Vec<SortedNeighborhood<Vector, Distance>>,
+    pub n_links: Vec<SortedNeighborhood<Vector, Distance>>,
 }
 
 // impl <V: VectorStore> PartialEq for ConnectPlanLayer<V> {
@@ -389,7 +389,7 @@ impl HnswSearcher {
     /// `graph_store`.  Return a `V::VectorRef` representing the inserted
     /// vector.
     #[instrument(level = "trace", skip_all, target = "searcher::cpu_time")]
-    pub async fn insert<V: VectorStore>(
+    pub async fn insert<V: VectorStoreMut>(
         &self,
         vector_store: &mut V,
         graph_store: &mut GraphMem<V>,
@@ -533,6 +533,17 @@ impl HnswSearcher {
         {
             None => false, // Empty database.
             Some((_, smallest_distance)) => vector_store.is_match(smallest_distance).await,
+        }
+    }
+
+    pub async fn match_count<V: VectorStore>(
+        &self,
+        vector_store: &mut V,
+        neighbors: &[SortedNeighborhoodV<V>],
+    ) -> usize {
+        match neighbors.first() {
+            None => 0, // Empty database.
+            Some(bottom_layer) => bottom_layer.match_count(vector_store).await,
         }
     }
 }

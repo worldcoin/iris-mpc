@@ -1,7 +1,13 @@
-name: Build and push image from a branch
+name: "[nocuda] Build and push image from a branch"
 
 on:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'tag to apply to the image'
+        type: string
+        required: false
+        default: 'no-cuda-key-manager'
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -40,6 +46,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.tag }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

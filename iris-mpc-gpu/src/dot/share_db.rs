@@ -111,7 +111,7 @@ pub fn gemm(
 }
 
 pub struct SlicedProcessedDatabase {
-    pub code_gr:      CudaVec2DSlicerRawPointer,
+    pub code_gr: CudaVec2DSlicerRawPointer,
     pub code_sums_gr: CudaVec2DSlicerU32,
 }
 
@@ -122,19 +122,19 @@ pub struct DBChunkBuffers {
 }
 
 pub struct ShareDB {
-    peer_id:               usize,
-    is_remote:             bool,
-    query_length:          usize,
-    device_manager:        Arc<DeviceManager>,
-    kernels:               Vec<CudaFunction>,
+    peer_id: usize,
+    is_remote: bool,
+    query_length: usize,
+    device_manager: Arc<DeviceManager>,
+    kernels: Vec<CudaFunction>,
     xor_assign_u8_kernels: Vec<CudaFunction>,
-    rngs:                  Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
-    comms:                 Vec<Arc<NcclComm>>,
-    ones:                  Vec<CudaSlice<u8>>,
-    intermediate_results:  Vec<CudaSlice<i32>>,
-    pub results:           Vec<CudaSlice<u8>>,
-    pub results_peer:      Vec<CudaSlice<u8>>,
-    code_length:           usize,
+    rngs: Vec<(ChaChaCudaRng, ChaChaCudaRng)>,
+    comms: Vec<Arc<NcclComm>>,
+    ones: Vec<CudaSlice<u8>>,
+    intermediate_results: Vec<CudaSlice<i32>>,
+    pub results: Vec<CudaSlice<u8>>,
+    pub results_peer: Vec<CudaSlice<u8>>,
+    code_length: usize,
 }
 
 impl ShareDB {
@@ -276,7 +276,7 @@ impl ShareDB {
         }
 
         SlicedProcessedDatabase {
-            code_gr:      CudaVec2DSlicerRawPointer {
+            code_gr: CudaVec2DSlicerRawPointer {
                 limb_0: db0,
                 limb_1: db1,
             },

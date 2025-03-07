@@ -16,6 +16,12 @@ iris-mpc-2:
       name: health
       protocol: TCP
 
+  service:
+    additionalPorts:
+      - name: health
+        port: 3000
+        targetPort: 3000
+
   livenessProbe:
     httpGet:
       path: /health
@@ -24,7 +30,7 @@ iris-mpc-2:
   readinessProbe:
     periodSeconds: 30
     httpGet:
-      path: /ready
+      path: /health
       port: health
 
   startupProbe:
@@ -32,11 +38,10 @@ iris-mpc-2:
     failureThreshold: 40
     periodSeconds: 30
     httpGet:
-      path: /ready
+      path: /health
       port: health
 
   podSecurityContext:
-    runAsNonRoot: false
     seccompProfile:
       type: RuntimeDefault
 
@@ -57,7 +62,18 @@ iris-mpc-2:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-  hostNetwork: false
+  hostNetwork: true
+
+  dnsPolicy: None
+  dnsConfig:
+    nameservers:
+      - "172.20.0.10"
+    searches:
+      - "localstack"
+      - "mongodb.e2e.svc.cluster.local"
+      - "e2e.svc.cluster.local"
+      - "svc.cluster.local"
+      - "cluster.local"
 
   tolerations:
     - key: "gpuGroup"
@@ -87,11 +103,29 @@ iris-mpc-2:
   terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
 
   env:
+    - name: NCCL_SOCKET_IFNAME
+      value: "eth0"
+
+    - name: NCCL_IB_DISABLE
+      value: "1"
+
+    - name: NCCL_IBEXT_DISABLE
+      value: "1"
+
+    - name: NCCL_NET
+      value: "Socket"
+
     - name: RUST_LOG
       value: "info"
 
     - name: AWS_REGION
       value: "$AWS_REGION"
+
+    - name: AWS_ACCESS_KEY_ID
+      value: "access_key"
+
+    - name: AWS_SECRET_ACCESS_KEY
+      value: "secret_key"
 
     - name: AWS_ENDPOINT_URL
       value: "http://localstack:4566"
@@ -99,11 +133,8 @@ iris-mpc-2:
     - name: RUST_BACKTRACE
       value: "full"
 
-    - name: NCCL_SOCKET_IFNAME
-      value: "eth0"
-
     - name: NCCL_COMM_ID
-      value: "iris-mpc-2.svc.cluster.local:4000"
+      value: "iris-mpc-0.orb.e2e.test:4000"
 
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
@@ -130,13 +161,13 @@ iris-mpc-2:
       value: "8"
 
     - name: SMPC__REQUESTS_QUEUE_URL
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-input"
+      value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/smpcv2-2-e2e.fifo"
 
     - name: SMPC__RESULTS_TOPIC_ARN
-      value: "arn:aws:sns:eu-central-1:000000000000:iris-mpc-results"
+      value: "arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-results.fifo"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
-      value: "60"
+      value: "600"
 
     - name: SMPC__PATH
       value: "/data/"
@@ -160,13 +191,31 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__INIT_DB_SIZE
-      value: "80000"
+      value: "5000"
 
     - name: SMPC__MAX_DB_SIZE
-      value: "110000"
+      value: "10000"
 
     - name: SMPC__MAX_BATCH_SIZE
       value: "64"
+
+    - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
+      value: "64"
+
+    - name: SMPC__N_BUCKETS
+      value: "5"
+
+    - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+      value: "true"
+
+    - name: SMPC__LUC_ENABLED
+      value: "true"
+
+    - name: SMPC__LUC_LOOKBACK_RECORDS
+      value: "0"
+
+    - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+      value: "true"
 
     - name: SMPC__SERVICE__METRICS__HOST
       valueFrom:
@@ -192,14 +241,17 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["iris-mpc-0.svc.cluster.local","iris-mpc-1.svc.cluster.local","iris-mpc-2.svc.cluster.local"]'
+      value: '["iris-mpc-0.$ENV.svc.cluster.local","iris-mpc-1.$ENV.svc.cluster.local","iris-mpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__IMAGE_NAME
       value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_IMAGE_TAG"
 
+    - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+      value: "1000"
+
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:2694d8cbb37c278ed84951ef9aac3af47b21f146" # no-cuda image
+    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "iris-mpc-2-copy-cuda-libs"
     env:
       - name: AWS_REGION
@@ -221,4 +273,5 @@ iris-mpc-2:
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
         aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
 
+        key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
         key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
