@@ -6,7 +6,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -275,46 +275,32 @@ impl HawkActor {
         })
     }
 
-    pub async fn search(
-        &self,
-        sessions: &[HawkSessionRef],
-        iris_shares: Vec<GaloisRingSharedIris>,
-    ) -> Result<Vec<SearchResult>> {
-        Ok(self
-            .search_to_insert(sessions, iris_shares)
-            .await?
-            .iter()
-            .map(|plan| {
-                plan.links
-                    .first()
-                    .and_then(|layer| layer.get_nearest())
-                    .cloned()
-            })
-            .collect::<Option<Vec<SearchResult>>>()
-            .unwrap_or_default())
-    }
-
     pub async fn search_to_insert(
         &self,
         sessions: &[HawkSessionRef],
-        iris_shares: Vec<GaloisRingSharedIris>,
+        queries: Vec<QueryRef>,
     ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
 
         // Distribute the requests over the given sessions in parallel.
-        for chunk in iris_shares.chunks(sessions.len()) {
+        for chunk in queries.chunks(sessions.len()) {
             let tasks = izip!(chunk, sessions)
-                .map(|(iris, session)| {
+                .map(|(query, session)| {
                     let search_params = Arc::clone(&self.search_params);
                     let session = Arc::clone(session);
-                    let iris = iris.clone();
+                    let query = query.clone();
 
                     tokio::spawn(async move {
                         let mut session = session.write().await;
                         let graph_store = Arc::clone(&session.graph_store);
                         let graph_store = graph_store.read().await;
-                        Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
-                            .await
+                        Self::search_to_insert_one(
+                            &search_params,
+                            &graph_store,
+                            &mut session,
+                            query,
+                        )
+                        .await
                     })
                 })
                 .collect_vec();
@@ -332,10 +318,9 @@ impl HawkActor {
         search_params: &HnswSearcher,
         graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
-        iris: GaloisRingSharedIris,
+        query: QueryRef,
     ) -> InsertPlan {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng);
-        let query = session.aby3_store.prepare_query(iris);
 
         let (links, set_ep) = search_params
             .search_to_insert(
@@ -491,7 +476,7 @@ struct HawkJob {
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    pub shares: BothEyes<Vec<GaloisRingSharedIris>>,
+    shares: BothEyes<Vec<GaloisRingSharedIris>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -508,9 +493,15 @@ impl From<&BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    fn shares_to_search(&self) -> &BothEyes<Vec<GaloisRingSharedIris>> {
-        // TODO: obtain rotated and mirrored versions.
-        &self.shares
+    fn search_queries(&self) -> BothEyes<Vec<QueryRef>> {
+        // TODO: Take preprocessed versions from BatchQuery.
+        // TODO: Rotations.
+        [LEFT, RIGHT].map(|side| {
+            self.shares[side]
+                .iter()
+                .map(|share| Query::from_raw(share.clone()))
+                .collect_vec()
+        })
     }
 
     fn filter_for_insertion(
@@ -664,14 +655,14 @@ impl HawkHandle {
                 let mut both_insert_plans = [vec![], vec![]];
 
                 // For both eyes.
-                for (sessions, iris_shares, insert_plans) in izip!(
+                for (sessions, queries, insert_plans) in izip!(
                     &sessions,
-                    job.request.shares_to_search(),
+                    job.request.search_queries(),
                     &mut both_insert_plans
                 ) {
                     // Search for nearest neighbors.
                     *insert_plans = hawk_actor
-                        .search_to_insert(sessions, iris_shares.clone())
+                        .search_to_insert(sessions, queries)
                         .await
                         .unwrap();
 
