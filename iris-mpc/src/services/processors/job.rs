@@ -1,14 +1,19 @@
+use crate::services::processors::message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{eyre, WrapErr};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
-use iris_mpc_common::helpers::smpc_request::{ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE};
-use iris_mpc_common::helpers::smpc_response::{IdentityDeletionResult, ReAuthResult, UniquenessResult};
+use iris_mpc_common::helpers::smpc_request::{
+    ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
+};
+use iris_mpc_common::helpers::smpc_response::{
+    IdentityDeletionResult, ReAuthResult, UniquenessResult,
+};
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use std::collections::HashMap;
-use crate::services::processors::message::send_results_to_sns;
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
@@ -150,16 +155,13 @@ pub async fn process_job_result(
                 *reauth_or_rule_used.get(&reauth_id).unwrap(),
                 or_rule_matched,
             );
-            serde_json::to_string(&result_event)
-                .wrap_err("failed to serialize reauth result")
+            serde_json::to_string(&result_event).wrap_err("failed to serialize reauth result")
         })
         .collect::<eyre::Result<Vec<_>>>()?;
 
     let mut tx = store.tx().await?;
 
-    store
-        .insert_results(&mut tx, &uniqueness_results)
-        .await?;
+    store.insert_results(&mut tx, &uniqueness_results).await?;
 
     // TODO: update modifications table to store reauth and deletion results
 
@@ -295,6 +297,6 @@ pub async fn process_job_result(
     }
 
     shutdown_handler.decrement_batches_pending_completion();
-    
+
     Ok(())
 }

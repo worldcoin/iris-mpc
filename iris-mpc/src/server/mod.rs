@@ -2,12 +2,12 @@ mod utils;
 
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::message::send_results_to_sns;
 use crate::services::init::initialize_chacha_seeds;
 use crate::services::processors::batch::receive_batch;
+use crate::services::processors::job::process_job_result;
+use crate::services::processors::message::send_results_to_sns;
 use crate::services::processors::process_identity_deletions;
 use crate::services::store::load_db;
-use crate::services::processors::job::process_job_result;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -590,7 +590,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
                 &identity_deletion_result_attributes,
                 &anonymized_statistics_attributes,
                 &shutdown_handler_bg,
-            ).await {
+            )
+            .await
+            {
                 tracing::error!("Error processing job result: {:?}", e);
             }
         }
