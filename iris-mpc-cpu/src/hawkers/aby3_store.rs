@@ -105,21 +105,22 @@ pub type QueryRef = Arc<Query>;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
     points: HashMap<VectorId, IrisRef>,
-    max_id: u32,
+    next_id: u32,
     empty_iris: IrisRef,
 }
 
 impl SharedIrises {
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
         self.points.insert(vector_id, iris);
-        self.max_id = self.max_id.max(vector_id.to_serial_id());
+        self.next_id = self.next_id.max(vector_id.to_serial_id() + 1);
     }
 
     fn next_id(&mut self) -> VectorId {
-        self.max_id += 1;
-        VectorId {
-            id: PointId(self.max_id),
-        }
+        let new_id = VectorId {
+            id: PointId(self.next_id),
+        };
+        self.next_id += 1;
+        new_id
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -153,10 +154,14 @@ impl Default for SharedIrisesRef {
 
 impl SharedIrisesRef {
     fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let max_id = points.keys().map(|v| v.to_serial_id()).max().unwrap_or(0);
+        let next_id = points
+            .keys()
+            .map(|v| v.to_serial_id() + 1)
+            .max()
+            .unwrap_or(0);
         let body = SharedIrises {
             points,
-            max_id,
+            next_id,
             empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
         };
         SharedIrisesRef {
