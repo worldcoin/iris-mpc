@@ -8,9 +8,9 @@ use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
-use iris_mpc::aws::clients::AwsClients;
-use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
-use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::aws::clients::AwsClients;
+use iris_mpc::services::aws::sns::{send_error_results_to_sns, send_results_to_sns};
+use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -42,6 +42,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
