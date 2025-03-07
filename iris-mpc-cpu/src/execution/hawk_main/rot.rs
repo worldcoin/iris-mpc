@@ -1,0 +1,49 @@
+use iris_mpc_common::ROTATIONS;
+use itertools::Itertools;
+
+/// Attach a T to one R per rotation.
+pub struct WithRot<R> {
+    rotations: Vec<R>,
+}
+
+impl<R> WithRot<R> {
+    pub fn new(rotations: Vec<R>) -> Self {
+        assert_eq!(rotations.len(), ROTATIONS);
+        Self { rotations }
+    }
+
+    /// Get the item attached to the center rotation.
+    pub fn center(&self) -> &R {
+        &self.rotations[self.rotations.len() / 2]
+    }
+
+    /// Get the item attached to the center rotation.
+    pub fn into_center(self) -> R {
+        let middle = self.rotations.len() / 2;
+        self.rotations.into_iter().nth(middle).unwrap()
+    }
+
+    pub fn flatten(batch: &[WithRot<R>]) -> Vec<R>
+    where
+        R: Clone,
+    {
+        batch
+            .iter()
+            .flat_map(|x| &x.rotations)
+            .cloned()
+            .collect_vec()
+    }
+
+    pub fn nest(batch: Vec<R>) -> Vec<WithRot<R>> {
+        let mut rots = Vec::with_capacity(batch.len() / ROTATIONS);
+        let mut it = batch.into_iter();
+        loop {
+            let rot = it.by_ref().take(ROTATIONS).collect_vec();
+            if rot.is_empty() {
+                break;
+            }
+            rots.push(WithRot::new(rot));
+        }
+        rots
+    }
+}

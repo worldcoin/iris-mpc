@@ -1,4 +1,6 @@
-use super::{BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
+use super::{
+    rot::WithRot, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, iter::repeat};
 
@@ -15,7 +17,7 @@ use std::{collections::HashMap, iter::repeat};
 pub struct BatchStep1(VecRequests<Step1>);
 
 impl BatchStep1 {
-    pub fn new(plans: &BothEyes<VecRequests<InsertPlan>>) -> Self {
+    pub fn new(plans: &BothEyes<VecRequests<WithRot<InsertPlan>>>) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
             izip!(&plans[LEFT], &plans[RIGHT])
@@ -47,10 +49,13 @@ struct Step1 {
 }
 
 impl Step1 {
-    fn new(plans: BothEyes<&InsertPlan>) -> Step1 {
+    fn new(plans: BothEyes<&WithRot<InsertPlan>>) -> Step1 {
         let mut full_join: MapEdges<BothEyes<Option<bool>>> = HashMap::new();
 
         for (side, plan) in izip!([LEFT, RIGHT], plans) {
+            // TODO: Merge results of all rotations.
+            let plan = plan.center();
+
             let is_match = repeat(true).take(plan.match_count()).chain(repeat(false));
 
             for (vector_id, is_match) in izip!(plan.nearest_neighbors(), is_match) {
