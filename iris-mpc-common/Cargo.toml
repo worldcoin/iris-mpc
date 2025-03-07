@@ -28,6 +28,7 @@ config = "0.14.0"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
 
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, features = ["blocking", "json"] }
