@@ -173,11 +173,12 @@ mod e2e_test {
         );
 
         test_case_generator
-            .run_n_batches(NUM_BATCHES, MAX_BATCH_SIZE, MAX_DELETIONS_PER_BATCH, [
-                &mut handle0,
-                &mut handle1,
-                &mut handle2,
-            ])
+            .run_n_batches(
+                NUM_BATCHES,
+                MAX_BATCH_SIZE,
+                MAX_DELETIONS_PER_BATCH,
+                [&mut handle0, &mut handle1, &mut handle2],
+            )
             .await?;
 
         drop(handle0);
