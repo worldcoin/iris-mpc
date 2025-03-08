@@ -277,6 +277,18 @@ impl HawkActor {
         })
     }
 
+    pub async fn search_both_eyes(
+        &self,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
+        let (left, right) = futures::join!(
+            self.search_rotations(&sessions[LEFT], &queries[LEFT]),
+            self.search_rotations(&sessions[RIGHT], &queries[RIGHT]),
+        );
+        Ok([left?, right?])
+    }
+
     pub async fn search_rotations(
         &self,
         sessions: &[HawkSessionRef],
@@ -285,12 +297,12 @@ impl HawkActor {
         // Flatten the rotations from all requests.
         let flat_queries = VecRots::flatten(queries);
         // Do it all in parallel.
-        let flat_results = self.search_to_insert(sessions, flat_queries).await?;
+        let flat_results = self.search_parallel(sessions, flat_queries).await?;
         // Nest the results per request again.
         Ok(VecRots::nest(flat_results))
     }
 
-    pub async fn search_to_insert(
+    pub async fn search_parallel(
         &self,
         sessions: &[HawkSessionRef],
         queries: Vec<QueryRef>,
@@ -677,16 +689,10 @@ impl HawkHandle {
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
-                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = [
-                    hawk_actor
-                        .search_rotations(&sessions[LEFT], &search_queries[LEFT])
-                        .await
-                        .unwrap(),
-                    hawk_actor
-                        .search_rotations(&sessions[RIGHT], &search_queries[RIGHT])
-                        .await
-                        .unwrap(),
-                ];
+                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = hawk_actor
+                    .search_both_eyes(&sessions, &search_queries)
+                    .await
+                    .unwrap();
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
