@@ -11,7 +11,6 @@ ignore = [
     { id = "RUSTSEC-2024-0402", reason = "waiting for `index-map` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0421", reason = "waiting for `mongodb` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0436", reason = "deep subdependency from several aws and sqlx crates" },
-    { id = "RUSTSEC-2025-0012", reason = "temporary override until PR 1119 is merged"},
 ]
 
 [sources]

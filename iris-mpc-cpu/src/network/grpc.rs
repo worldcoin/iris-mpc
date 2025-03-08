@@ -8,7 +8,8 @@ use crate::{
         SendRequest, SendResponse,
     },
 };
-use backoff::{future::retry, ExponentialBackoff};
+
+use backon::{ExponentialBuilder, Retryable};
 use eyre::eyre;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
@@ -149,20 +150,19 @@ impl GrpcNetworking {
     }
 
     // TODO: from config?
-    fn backoff(&self) -> ExponentialBackoff {
-        ExponentialBackoff {
-            max_elapsed_time: Some(std::time::Duration::from_secs(60)),
-            max_interval: std::time::Duration::from_secs(5),
-            multiplier: 1.1,
-            ..Default::default()
-        }
+    fn backoff(&self) -> ExponentialBuilder {
+        ExponentialBuilder::new()
+            .with_min_delay(std::time::Duration::from_millis(500))
+            .with_factor(1.1)
+            .with_max_delay(std::time::Duration::from_secs(5))
+            .with_max_times(27) // about 60 seconds overall delay
     }
 
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
-        let client = retry(self.backoff(), || async {
-            Ok(PartyNodeClient::connect(address.to_string()).await?)
-        })
-        .await?;
+        let client = (|| async { PartyNodeClient::connect(address.to_string()).await })
+            .retry(self.backoff())
+            .sleep(tokio::time::sleep)
+            .await?;
         tracing::trace!(
             "Player {:?} connected to player {:?} at address {:?}",
             self.party_id,
@@ -314,7 +314,7 @@ impl Networking for GrpcNetworking {
 
         // Send message via the outgoing stream
         let request = SendRequest { data: value };
-        retry(self.backoff(), || async {
+        (|| async {
             tracing::trace!(
                 "INIT: Sending message {:?} from {:?} to {:?} in session {:?}",
                 request.data,
@@ -334,6 +334,8 @@ impl Networking for GrpcNetworking {
             );
             Ok(())
         })
+        .retry(self.backoff())
+        .sleep(tokio::time::sleep)
         .await
     }
 
