@@ -1,2 +1,3 @@
 pub mod batcher;
-pub mod sorting_network;
+pub mod swap_network;
+pub mod tree_min;
