@@ -22,6 +22,7 @@ use eyre::Result;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
+    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
@@ -298,7 +299,7 @@ impl HawkActor {
         // Do it all in parallel.
         let flat_results = self.search_parallel(sessions, flat_queries).await?;
         // Nest the results per request again.
-        Ok(VecRots::nest(flat_results))
+        Ok(VecRots::unflatten(flat_results))
     }
 
     pub async fn search_parallel(
@@ -527,7 +528,7 @@ impl HawkRequest {
                 .iter()
                 .map(|share| {
                     let q = Query::from_raw(share.clone());
-                    let rots = vec![q; 31];
+                    let rots = vec![q; ROTATIONS];
                     VecRots::new(rots)
                 })
                 .collect_vec()

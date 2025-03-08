@@ -5,7 +5,7 @@ use itertools::Itertools;
 
 /// VecRots are lists of things for each rotation.
 pub struct VecRots<R> {
-    rotations: Vec<R>,
+    pub rotations: Vec<R>,
 }
 
 impl<R> Deref for VecRots<R> {
@@ -33,6 +33,7 @@ impl<R> VecRots<R> {
         self.rotations.into_iter().nth(middle).unwrap()
     }
 
+    /// Flatten a batch of something with rotations into a concatenated Vec.
     pub fn flatten(batch: &[VecRots<R>]) -> Vec<R>
     where
         R: Clone,
@@ -44,7 +45,24 @@ impl<R> VecRots<R> {
             .collect_vec()
     }
 
-    pub fn nest(batch: Vec<R>) -> Vec<VecRots<R>> {
+    /// Flatten a batch of something with rotations into a concatenated Vec.
+    /// Attach a copy of the corresponding `B` to each rotation.
+    pub fn flatten_broadcast<'a, B>(
+        batch: impl IntoIterator<Item = (&'a VecRots<R>, B)>,
+    ) -> Vec<(R, B)>
+    where
+        B: Clone + 'a,
+        R: Clone + 'a,
+    {
+        batch
+            .into_iter()
+            .flat_map(|(rots, b)| rots.rotations.iter().map(move |r| (r.clone(), b.clone())))
+            .collect_vec()
+    }
+
+    /// The opposite of flatten.
+    /// Split a concatenated Vec into a batch of something with rotations.
+    pub fn unflatten(batch: Vec<R>) -> Vec<VecRots<R>> {
         let mut rots = Vec::with_capacity(batch.len() / ROTATIONS);
         let mut it = batch.into_iter();
         loop {

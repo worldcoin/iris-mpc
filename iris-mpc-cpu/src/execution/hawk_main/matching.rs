@@ -2,7 +2,7 @@ use super::{
     rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, iter::repeat};
+use std::collections::HashMap;
 
 /// The matching algorithm follows these steps:
 ///
