@@ -1,9 +1,19 @@
+use std::ops::Deref;
+
 use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
 
 /// VecRots are lists of things for each rotation.
 pub struct VecRots<R> {
     rotations: Vec<R>,
+}
+
+impl<R> Deref for VecRots<R> {
+    type Target = Vec<R>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rotations
+    }
 }
 
 impl<R> VecRots<R> {

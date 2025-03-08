@@ -137,15 +137,14 @@ pub struct InsertPlanV<V: VectorStore> {
 }
 
 impl<V: VectorStore> InsertPlanV<V> {
-    pub fn match_count(&self) -> usize {
-        self.match_count
-    }
-
-    pub fn nearest_neighbors(&self) -> Vec<V::VectorRef> {
+    pub fn match_ids(&self) -> Vec<V::VectorRef> {
         self.links
-            .first()
-            .map(|layer| layer.iter().map(|(id, _)| id.clone()).collect())
-            .unwrap_or_default()
+            .iter()
+            .take(1)
+            .flat_map(|bottom_layer| bottom_layer.iter())
+            .take(self.match_count)
+            .map(|(id, _)| id.clone())
+            .collect_vec()
     }
 }
 

@@ -45,21 +45,19 @@ impl BatchStep1 {
 
 struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
-    anti_join: BothEyes<VecEdges<(VectorId, bool)>>,
+    anti_join: BothEyes<VecEdges<VectorId>>,
 }
 
 impl Step1 {
-    fn new(plans: BothEyes<&VecRots<InsertPlan>>) -> Step1 {
-        let mut full_join: MapEdges<BothEyes<Option<bool>>> = HashMap::new();
+    fn new(results: BothEyes<&VecRots<InsertPlan>>) -> Step1 {
+        let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
-        for (side, plan) in izip!([LEFT, RIGHT], plans) {
-            // TODO: Merge results of all rotations.
-            let plan = plan.center();
-
-            let is_match = repeat(true).take(plan.match_count()).chain(repeat(false));
-
-            for (vector_id, is_match) in izip!(plan.nearest_neighbors(), is_match) {
-                full_join.entry(vector_id).or_default()[side] = Some(is_match);
+        for (side, rotations) in izip!([LEFT, RIGHT], results) {
+            // Merge matches from all rotations.
+            for rotation in rotations.iter() {
+                for vector_id in rotation.match_ids() {
+                    full_join.entry(vector_id).or_default()[side] = true;
+                }
             }
         }
 
@@ -67,10 +65,10 @@ impl Step1 {
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
-                [Some(l), Some(r)] if l || r => step1.inner_join.push((vector_id, [l, r])),
-                [Some(l), None] if l => step1.anti_join[LEFT].push((vector_id, l)),
-                [None, Some(r)] if r => step1.anti_join[RIGHT].push((vector_id, r)),
-                _ => {}
+                [true, true] => step1.inner_join.push((vector_id, [true, true])),
+                [true, false] => step1.anti_join[LEFT].push(vector_id),
+                [false, true] => step1.anti_join[RIGHT].push(vector_id),
+                [false, false] => {}
             }
         }
 
@@ -89,10 +87,7 @@ impl Step1 {
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
-        self.anti_join[other_side]
-            .iter()
-            .map(|(id, _)| *id)
-            .collect_vec()
+        self.anti_join[other_side].clone()
     }
 
     fn step2(self, missing_is_match: &BothEyes<MapEdges<bool>>) -> Step2 {
@@ -100,15 +95,15 @@ impl Step1 {
             full_join: self.inner_join,
         };
 
-        for (id, left) in &self.anti_join[LEFT] {
+        for id in &self.anti_join[LEFT] {
             if let Some(right) = missing_is_match[RIGHT].get(id) {
-                step2.full_join.push((*id, [*left, *right]));
+                step2.full_join.push((*id, [true, *right]));
             }
         }
 
-        for (id, right) in &self.anti_join[RIGHT] {
+        for id in &self.anti_join[RIGHT] {
             if let Some(left) = missing_is_match[LEFT].get(id) {
-                step2.full_join.push((*id, [*left, *right]));
+                step2.full_join.push((*id, [*left, true]));
             }
         }
 
