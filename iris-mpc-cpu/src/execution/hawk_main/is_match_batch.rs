@@ -9,31 +9,41 @@ use std::iter;
 
 pub async fn calculate_is_match(
     queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
+    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let n_requests = vector_ids.len();
-    let n_sessions = sessions[LEFT].len();
-    let n_per_session = n_requests.div_ceil(n_sessions);
-    assert_eq!(queries[LEFT].len(), n_requests);
-    assert_eq!(queries[RIGHT].len(), n_requests);
+) -> BothEyes<VecRequests<MapEdges<bool>>> {
+    let [vectors_left, vectors_right] = vector_ids;
 
-    // Organize as: request -> eye -> (query and its related vectors).
-    let requests =
-        izip!(&queries[LEFT], &queries[RIGHT], vector_ids).map(|(ql, qr, vector_ids)| {
-            let [vectors_l, vectors_r] = vector_ids;
-            // TODO: Examine all query rotations.
-            [
-                (ql.center().clone(), vectors_l),
-                (qr.center().clone(), vectors_r),
-            ]
-        });
+    // Parallelize left and right sessions (IO only).
+    let (out_l, out_r) = futures::join!(
+        per_side(&queries[LEFT], vectors_left, &sessions[LEFT]),
+        per_side(&queries[RIGHT], vectors_right, &sessions[RIGHT]),
+    );
+    [out_l, out_r]
+}
+
+async fn per_side(
+    queries: &VecRequests<VecRots<QueryRef>>,
+    vector_ids: VecRequests<VecEdges<VectorId>>,
+    sessions: &Vec<HawkSessionRef>,
+) -> VecRequests<MapEdges<bool>> {
+    let n_requests = vector_ids.len();
+    let n_sessions = sessions.len();
+    let n_per_session = n_requests.div_ceil(n_sessions);
+    assert_eq!(queries.len(), n_requests);
+
+    // Organize as: request -> (query and its related vectors).
+    let requests = izip!(queries, vector_ids).map(|(q, vector_ids)| {
+        // TODO: All rotations.
+        (q.center().clone(), vector_ids)
+    });
+
     // Prepare the requests into one chunk per session.
-    let per_session = chunk_vecs(requests, n_per_session);
+    let chunks = chunk_vecs(requests, n_per_session);
 
     // Process the chunks in parallel (CPU and IO).
-    let results = izip!(per_session, &sessions[LEFT], &sessions[RIGHT])
-        .map(|(chunk, sl, sr)| calculate_is_match_session(chunk, [sl.clone(), sr.clone()]))
+    let results = izip!(chunks, sessions)
+        .map(|(chunk, session)| per_session(chunk, session.clone()))
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
         .await;
@@ -44,43 +54,38 @@ pub async fn calculate_is_match(
     r
 }
 
-async fn calculate_is_match_session(
-    requests: VecRequests<BothEyes<(QueryRef, VecEdges<VectorId>)>>,
-    session: BothEyes<HawkSessionRef>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let mut session_l = session[LEFT].write().await;
-    let mut session_r = session[RIGHT].write().await;
+async fn per_session(
+    requests: VecRequests<(QueryRef, VecEdges<VectorId>)>,
+    session: HawkSessionRef,
+) -> VecRequests<MapEdges<bool>> {
+    let mut session = session.write().await;
 
     let mut out = Vec::with_capacity(requests.len());
-    for request in requests {
-        let [(query_l, vectors_l), (query_r, vectors_r)] = &request;
-        // Parallelize left and right sessions (IO only).
-        let (out_l, out_r) = futures::join!(
-            calculate_is_match_one(query_l, vectors_l, &mut session_l),
-            calculate_is_match_one(query_r, vectors_r, &mut session_r),
-        );
-        out.push([out_l, out_r]);
+    for (query, vectors) in requests {
+        let matches = per_query(query, vectors, &mut session).await;
+        out.push(matches);
     }
     out
 }
 
-async fn calculate_is_match_one(
-    query: &QueryRef,
-    vector_ids: &[VectorId],
+async fn per_query(
+    query: QueryRef,
+    vector_ids: Vec<VectorId>,
     session: &mut HawkSession,
 ) -> MapEdges<bool> {
     let distances = session
         .aby3_store
-        .eval_distance_batch(query, vector_ids)
+        .eval_distance_batch(&query, &*vector_ids)
         .await;
 
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
 
-    izip!(vector_ids, is_matches)
-        .map(|(v, m)| (*v, m))
-        .collect()
+    izip!(vector_ids, is_matches).collect()
 }
 
+/// Chunk an iterator into vectors of `chunk_size` each.
+/// The last chunk may be smaller.
+/// Unlike `Itertools::chunks()` which borrows, this moves the items.
 fn chunk_vecs<T>(
     v_iter: impl IntoIterator<Item = T>,
     chunk_size: usize,

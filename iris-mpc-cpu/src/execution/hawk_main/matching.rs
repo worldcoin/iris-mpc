@@ -26,18 +26,23 @@ impl BatchStep1 {
         )
     }
 
-    pub fn missing_vector_ids(&self) -> VecRequests<BothEyes<VecEdges<VectorId>>> {
-        self.0
-            .iter()
-            .map(|step| [LEFT, RIGHT].map(|side| step.missing_vector_ids(side)))
-            .collect_vec()
+    pub fn missing_vector_ids(&self) -> BothEyes<VecRequests<VecEdges<VectorId>>> {
+        [LEFT, RIGHT].map(|side| {
+            self.0
+                .iter()
+                .map(|step| step.missing_vector_ids(side))
+                .collect_vec()
+        })
     }
 
-    pub fn step2(self, missing_is_match: &VecRequests<BothEyes<MapEdges<bool>>>) -> BatchStep2 {
-        assert_eq!(self.0.len(), missing_is_match.len());
+    pub fn step2(self, missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>) -> BatchStep2 {
+        assert_eq!(self.0.len(), missing_is_match[LEFT].len());
+        assert_eq!(self.0.len(), missing_is_match[RIGHT].len());
         BatchStep2(
-            izip!(self.0, missing_is_match)
-                .map(|(step, missing_is_match)| step.step2(missing_is_match))
+            izip!(self.0, &missing_is_match[LEFT], &missing_is_match[RIGHT])
+                .map(|(step, missing_left, missing_right)| {
+                    step.step2([missing_left, missing_right])
+                })
                 .collect_vec(),
         )
     }
@@ -90,7 +95,7 @@ impl Step1 {
         self.anti_join[other_side].clone()
     }
 
-    fn step2(self, missing_is_match: &BothEyes<MapEdges<bool>>) -> Step2 {
+    fn step2(self, missing_is_match: BothEyes<&MapEdges<bool>>) -> Step2 {
         let mut step2 = Step2 {
             full_join: self.inner_join,
         };
