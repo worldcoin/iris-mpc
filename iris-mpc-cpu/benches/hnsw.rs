@@ -12,7 +12,7 @@ use iris_mpc_cpu::{
         },
         shared_iris::GaloisRingSharedIris,
     },
-    shares::{IntRing2k, RingElement, Share},
+    shares::{share::DistanceShare, IntRing2k, RingElement, Share},
 };
 use rand::{Rng, RngCore, SeedableRng};
 use rand_distr::{Distribution, Standard};
@@ -113,10 +113,10 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                     .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap()
@@ -169,10 +169,10 @@ fn bench_gr_primitives(c: &mut Criterion) {
                         .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap();
