@@ -45,7 +45,7 @@ mod is_match_batch;
 mod matching;
 mod rot;
 use is_match_batch::calculate_is_match;
-use rot::WithRot;
+use rot::VecRots;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
@@ -280,14 +280,14 @@ impl HawkActor {
     pub async fn search_rotations(
         &self,
         sessions: &[HawkSessionRef],
-        queries: &VecRequests<WithRot<QueryRef>>,
-    ) -> Result<VecRequests<WithRot<InsertPlan>>> {
+        queries: &VecRequests<VecRots<QueryRef>>,
+    ) -> Result<VecRequests<VecRots<InsertPlan>>> {
         // Flatten the rotations from all requests.
-        let flat_queries = WithRot::flatten(queries);
+        let flat_queries = VecRots::flatten(queries);
         // Do it all in parallel.
         let flat_results = self.search_to_insert(sessions, flat_queries).await?;
         // Nest the results per request again.
-        Ok(WithRot::nest(flat_results))
+        Ok(VecRots::nest(flat_results))
     }
 
     pub async fn search_to_insert(
@@ -508,7 +508,7 @@ impl From<&BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    fn search_queries(&self) -> BothEyes<VecRequests<WithRot<QueryRef>>> {
+    fn search_queries(&self) -> BothEyes<VecRequests<VecRots<QueryRef>>> {
         // TODO: Take preprocessed versions from BatchQuery.
         // TODO: Rotations.
         [LEFT, RIGHT].map(|side| {
@@ -517,7 +517,7 @@ impl HawkRequest {
                 .map(|share| {
                     let q = Query::from_raw(share.clone());
                     let rots = vec![q; 31];
-                    WithRot::new(rots)
+                    VecRots::new(rots)
                 })
                 .collect_vec()
         })
@@ -672,12 +672,12 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 tracing::debug!("Processing an Hawk job…");
 
-                let search_queries: BothEyes<VecRequests<WithRot<QueryRef>>> =
+                let search_queries: BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
-                let search_results: BothEyes<VecRequests<WithRot<InsertPlan>>> = [
+                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = [
                     hawk_actor
                         .search_rotations(&sessions[LEFT], &search_queries[LEFT])
                         .await
@@ -712,7 +712,7 @@ impl HawkHandle {
                         // Focus on the main results (forget rotations).
                         let insert_plans = search_results
                             .into_iter()
-                            .map(WithRot::into_center)
+                            .map(VecRots::into_center)
                             .collect();
 
                         // Insert in memory, and return the plans to update the persistent database.

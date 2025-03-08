@@ -1,12 +1,12 @@
 use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
 
-/// Attach a T to one R per rotation.
-pub struct WithRot<R> {
+/// VecRots are lists of things for each rotation.
+pub struct VecRots<R> {
     rotations: Vec<R>,
 }
 
-impl<R> WithRot<R> {
+impl<R> VecRots<R> {
     pub fn new(rotations: Vec<R>) -> Self {
         assert_eq!(rotations.len(), ROTATIONS);
         Self { rotations }
@@ -23,7 +23,7 @@ impl<R> WithRot<R> {
         self.rotations.into_iter().nth(middle).unwrap()
     }
 
-    pub fn flatten(batch: &[WithRot<R>]) -> Vec<R>
+    pub fn flatten(batch: &[VecRots<R>]) -> Vec<R>
     where
         R: Clone,
     {
@@ -34,7 +34,7 @@ impl<R> WithRot<R> {
             .collect_vec()
     }
 
-    pub fn nest(batch: Vec<R>) -> Vec<WithRot<R>> {
+    pub fn nest(batch: Vec<R>) -> Vec<VecRots<R>> {
         let mut rots = Vec::with_capacity(batch.len() / ROTATIONS);
         let mut it = batch.into_iter();
         loop {
@@ -42,7 +42,7 @@ impl<R> WithRot<R> {
             if rot.is_empty() {
                 break;
             }
-            rots.push(WithRot::new(rot));
+            rots.push(VecRots::new(rot));
         }
         rots
     }

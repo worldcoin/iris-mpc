@@ -1,5 +1,5 @@
 use super::{
-    rot::WithRot, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
+    rot::VecRots, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
     LEFT, RIGHT,
 };
 use crate::{hawkers::aby3_store::QueryRef, hnsw::VectorStore};
@@ -8,7 +8,7 @@ use itertools::{izip, Itertools};
 use std::iter;
 
 pub async fn calculate_is_match(
-    queries: &BothEyes<VecRequests<WithRot<QueryRef>>>,
+    queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
     vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> VecRequests<BothEyes<MapEdges<bool>>> {
