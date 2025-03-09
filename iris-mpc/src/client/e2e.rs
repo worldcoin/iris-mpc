@@ -37,7 +37,7 @@ use uuid::Uuid;
 
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 64;
-const DEFAULT_N_BATCHES: usize = 1;
+const DEFAULT_N_BATCHES: usize = 4;
 
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
@@ -323,7 +323,7 @@ impl E2EClient {
                                 }
                                 party_share_data
                             }
-                            // TODO add ability to send from DB directly from the postgres DB
+                            // TODO add ability to send from DB directly from the postgres DB once initting the DB includes adding to the graph
                             // 1 => {
                             //
                             //     println!("Sending new iris code for request id {}", request_id);
@@ -396,6 +396,8 @@ impl E2EClient {
     ) -> tokio::task::JoinHandle<eyre::Result<()>> {
         let response_queue_url = self.response_queue_url.clone();
         let expected_results = self.expected_results.clone();
+        let requests = self.requests.clone();
+        let responses = self.responses.clone();
 
         spawn(async move {
             let mut counter = 0;
@@ -429,28 +431,27 @@ impl E2EClient {
                         tmp.get(&result.signup_id).cloned()
                     };
                     assert!(expected_result_option.is_some());
-                    // TODO: add validation of the results
-                    // let expected_result = expected_result_option.unwrap();
+                    let expected_result = expected_result_option.unwrap();
 
-                    // if expected_result.is_none() {
-                    //     // New insertion
-                    //     assert!(!result.is_match);
-                    //     let request = {
-                    //         let tmp = thread_requests.lock().await;
-                    //         tmp.get(&result.signup_id).unwrap().clone()
-                    //     };
-                    //     {
-                    //         let mut tmp = thread_responses.lock().await;
-                    //         tmp.insert(result.serial_id.unwrap(), request);
-                    //     }
-                    // } else {
-                    //     // Existing entry
-                    //     assert!(result.is_match);
-                    //     assert!(result.matched_serial_ids.is_some());
-                    //     let matched_ids = result.matched_serial_ids.unwrap();
-                    //     assert!(matched_ids.len() == 1);
-                    //     assert_eq!(expected_result.unwrap(), matched_ids[0]);
-                    // }
+                    if expected_result.is_none() {
+                        // New insertion
+                        assert!(!result.is_match);
+                        let request = {
+                            let tmp = requests.lock().await;
+                            tmp.get(&result.signup_id).unwrap().clone()
+                        };
+                        {
+                            let mut tmp = responses.lock().await;
+                            tmp.insert(result.serial_id.unwrap(), request);
+                        }
+                    } else {
+                        // Existing entry
+                        assert!(result.is_match);
+                        assert!(result.matched_serial_ids.is_some());
+                        let matched_ids = result.matched_serial_ids.unwrap();
+                        assert!(matched_ids.len() == 1);
+                        assert_eq!(expected_result.unwrap(), matched_ids[0]);
+                    }
 
                     sqs_client
                         .delete_message()
