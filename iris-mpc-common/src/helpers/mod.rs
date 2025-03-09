@@ -16,6 +16,7 @@ pub mod shutdown_handler;
 pub mod smpc_request;
 #[cfg(feature = "helpers")]
 pub mod smpc_response;
+pub mod sqs;
 #[cfg(feature = "helpers")]
 pub mod sqs_s3_helper;
 pub mod statistics;
