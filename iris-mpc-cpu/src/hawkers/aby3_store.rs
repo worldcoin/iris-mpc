@@ -102,6 +102,25 @@ pub struct Query {
 
 pub type QueryRef = Arc<Query>;
 
+impl Query {
+    pub fn from_raw(raw_query: GaloisRingSharedIris) -> QueryRef {
+        let mut preprocessed_query = raw_query.clone();
+        preprocessed_query.code.preprocess_iris_code_query_share();
+        preprocessed_query.mask.preprocess_mask_code_query_share();
+        Self::from_processed(raw_query, preprocessed_query)
+    }
+
+    pub fn from_processed(
+        query: GaloisRingSharedIris,
+        processed_query: GaloisRingSharedIris,
+    ) -> QueryRef {
+        Arc::new(Query {
+            query,
+            processed_query,
+        })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
     points: HashMap<VectorId, IrisRef>,
@@ -173,19 +192,6 @@ impl SharedIrisesRef {
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
         self.body.write().await
-    }
-
-    // TODO migrate this to a function of the `Query` type
-    // TODO: take query by ref.
-    fn prepare_query(&mut self, raw_query: GaloisRingSharedIris) -> QueryRef {
-        let mut preprocessed_query = raw_query.clone();
-        preprocessed_query.code.preprocess_iris_code_query_share();
-        preprocessed_query.mask.preprocess_mask_code_query_share();
-
-        Arc::new(Query {
-            query: raw_query,
-            processed_query: preprocessed_query,
-        })
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
@@ -284,9 +290,8 @@ pub async fn setup_local_store_aby3_players(
 }
 
 impl Aby3Store {
-    // TODO: By ref. Or remove.
     pub fn prepare_query(&mut self, code: GaloisRingSharedIris) -> QueryRef {
-        self.storage.prepare_query(code)
+        Query::from_raw(code)
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
