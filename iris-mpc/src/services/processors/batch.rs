@@ -192,6 +192,9 @@ pub async fn receive_batch(
                                 UNIQUENESS_MESSAGE_TYPE,
                             )
                             .await?;
+                            if config.enable_sync_queues_on_sns_sequence_number {
+                                tracing::error!("Skip requests were used while SQS sync is enabled. This should not happen.");
+                            }
                             continue;
                         }
 
