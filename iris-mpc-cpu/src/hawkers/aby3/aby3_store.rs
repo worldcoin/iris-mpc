@@ -659,7 +659,9 @@ mod tests {
         let database_size = 2;
         let searcher = HnswSearcher::default();
         let mut vectors_and_graphs =
-            shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel).await.unwrap();
+            shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
+                .await
+                .unwrap();
 
         for i in 0..database_size {
             let mut jobs = JoinSet::new();
