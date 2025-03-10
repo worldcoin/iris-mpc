@@ -110,17 +110,23 @@ struct StartMessageStreamTask {
     stream:     UnboundedReceiver<SendRequest>,
 }
 
+struct ConnectToPartyTask {
+    party_id: Identity,
+    address:  String,
+}
+
 enum GrpcTask {
+    ConnectToParty(ConnectToPartyTask),
+    CreateSession(SessionId),
+    StartMessageStream(StartMessageStreamTask),
+    IsSessionReady(SessionId),
     Send(SendTask),
     Receive(ReceiveTask),
-    CreateSession(SessionId),
-    WaitForSession(SessionId),
-    ConnectToParty(Identity, String),
-    StartMessageStream(StartMessageStreamTask),
 }
 
 enum MessageResult {
     Empty,
+    IsSessionReady(bool),
     ReceivedBytes(Vec<u8>),
 }
 
@@ -162,12 +168,13 @@ impl GrpcHandle {
                         grpc.create_session(session_id).await.unwrap();
                         Ok(MessageResult::Empty)
                     }
-                    GrpcTask::WaitForSession(_session_id) => {
-                        // grpc.wait_for_session(session_id).await.unwrap();
-                        Ok(MessageResult::Empty)
-                    }
-                    GrpcTask::ConnectToParty(party_id, address) => {
-                        grpc.connect_to_party(party_id, &address).await.unwrap();
+                    GrpcTask::IsSessionReady(session_id) => Ok(MessageResult::IsSessionReady(
+                        grpc.is_session_ready(session_id),
+                    )),
+                    GrpcTask::ConnectToParty(task) => {
+                        grpc.connect_to_party(task.party_id, &task.address)
+                            .await
+                            .unwrap();
                         Ok(MessageResult::Empty)
                     }
                     GrpcTask::StartMessageStream(task) => {
@@ -222,8 +229,8 @@ impl Networking for GrpcHandle {
         });
         let res = self.submit(task).await?;
         match res {
-            MessageResult::Empty => Err(eyre!("No message received")),
             MessageResult::ReceivedBytes(bytes) => Ok(bytes),
+            _ => Err(eyre!("No message received")),
         }
     }
 }
@@ -299,7 +306,11 @@ impl PartyNode for GrpcHandle {
 // Session management
 impl GrpcHandle {
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
-        let task = GrpcTask::ConnectToParty(party_id, address.to_string());
+        let task = ConnectToPartyTask {
+            party_id,
+            address: address.to_string(),
+        };
+        let task = GrpcTask::ConnectToParty(task);
         let _ = self.submit(task).await?;
         Ok(())
     }
@@ -311,8 +322,17 @@ impl GrpcHandle {
     }
 
     pub async fn wait_for_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        let task = GrpcTask::WaitForSession(session_id);
-        let _ = self.submit(task).await?;
+        while matches!(
+            self.submit(GrpcTask::IsSessionReady(session_id)).await?,
+            MessageResult::IsSessionReady(false)
+        ) {
+            tracing::debug!(
+                "Player {:?} is waiting for session {:?} to be ready",
+                self.party_id,
+                session_id
+            );
+            sleep(Duration::from_millis(100)).await;
+        }
         Ok(())
     }
 }
@@ -461,10 +481,7 @@ impl GrpcNetworking {
             session_id
         );
 
-        let message_queue = self
-            .message_queues
-            .entry(session_id)
-            .or_insert(MessageQueueStore::default());
+        let message_queue = self.message_queues.entry(session_id).or_default();
 
         message_queue
             .insert(sender_id.clone(), stream)
@@ -644,34 +661,34 @@ mod tests {
         let mut jobs = JoinSet::new();
 
         // Simple session with one message sent from one party to another
-        // {
-        // let players = players.clone();
-        //
-        // let session_id = SessionId::from(0);
-        //
-        // jobs.spawn(async move {
-        // create_session_helper(session_id, &players).await.unwrap();
-        //
-        // let alice = players[0].clone();
-        // let bob = players[1].clone();
-        //
-        // Send a message from the first party to the second party
-        // let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
-        // let message_copy = message.clone();
-        //
-        // let task1 = tokio::spawn(async move {
-        // alice
-        // .send(message.clone(), &"bob".into(), &session_id)
-        // .await
-        // .unwrap();
-        // });
-        // let task2 = tokio::spawn(async move {
-        // let received_message = bob.receive(&"alice".into(),
-        // &session_id).await.unwrap(); assert_eq!(message_copy,
-        // received_message); });
-        // let _ = tokio::try_join!(task1, task2).unwrap();
-        // });
-        // }
+        {
+            let players = players.clone();
+
+            let session_id = SessionId::from(0);
+
+            jobs.spawn(async move {
+                create_session_helper(session_id, &players).await.unwrap();
+
+                let alice = players[0].clone();
+                let bob = players[1].clone();
+
+                // Send a message from the first party to the second party
+                let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
+                let message_copy = message.clone();
+
+                let task1 = tokio::spawn(async move {
+                    alice
+                        .send(message.clone(), &"bob".into(), &session_id)
+                        .await
+                        .unwrap();
+                });
+                let task2 = tokio::spawn(async move {
+                    let received_message = bob.receive(&"alice".into(), &session_id).await.unwrap();
+                    assert_eq!(message_copy, received_message);
+                });
+                let _ = tokio::try_join!(task1, task2).unwrap();
+            });
+        }
 
         // Each party sending and receiving messages to each other
         {
