@@ -148,6 +148,9 @@ env:
   - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
     value: "true"
 
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

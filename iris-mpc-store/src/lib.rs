@@ -108,7 +108,7 @@ struct StoredState {
 
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredModification {
-    pub id: i64,
+    pub id: String,
     pub serial_id: i64,
     pub request_type: String,
     pub s3_url: Option<String>,
@@ -478,6 +478,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
     pub async fn insert_modification(
         &self,
+        sns_request_id: &str,
         serial_id: i64,
         request_type: &str,
         s3_url: Option<&str>,
@@ -485,8 +486,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let persisted = false;
         let inserted: StoredModification = sqlx::query_as::<_, StoredModification>(
             r#"
-            INSERT INTO modifications (serial_id, request_type, s3_url, status, persisted)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING
                 id,
                 serial_id,
@@ -496,6 +497,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 persisted
             "#,
         )
+        .bind(sns_request_id)
         .bind(serial_id)
         .bind(request_type)
         .bind(s3_url)
@@ -516,9 +518,10 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                created_at
             FROM modifications
-            ORDER BY id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $1
             "#,
         )
@@ -541,7 +544,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             return Ok(());
         }
 
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        let ids: Vec<String> = modifications.iter().map(|m| m.id.clone()).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
 
@@ -552,7 +555,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 persisted = data.persisted
             FROM (
                 SELECT
-                    unnest($1::bigint[])  as id,
+                    unnest($1::text[])    as id,
                     unnest($2::text[])    as status,
                     unnest($3::bool[])    as persisted
             ) as data
@@ -579,7 +582,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         }
 
         // Extract the IDs from the modifications.
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        let ids: Vec<String> = modifications.iter().map(|m| m.id.clone()).collect();
         tracing::info!(
             "Deleting modifications {:?} with IDs: {:?}",
             modifications,
@@ -590,56 +593,13 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         sqlx::query(
             r#"
             DELETE FROM modifications
-            WHERE id = ANY($1::bigint[])
+            WHERE id = ANY($1::text[])
             "#,
         )
         .bind(&ids)
         .execute(tx.deref_mut())
         .await?;
 
-        Ok(())
-    }
-
-    pub async fn reset_modifications_sequence(&self) -> Result<()> {
-        // Query the current maximum id from modifications
-        let max_id: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM modifications")
-            .fetch_one(&self.pool)
-            .await?;
-
-        match max_id {
-            Some(max) => {
-                tracing::info!("Resetting modifications sequence to {}", max);
-                // Table is not empty: set sequence to max with is_called=true so that nextval()
-                // returns max+1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        $1,
-                        true
-                    )
-                    "#,
-                )
-                .bind(max)
-                .execute(&self.pool)
-                .await?;
-            }
-            None => {
-                // Table is empty: set sequence to 1 with is_called=false so that nextval()
-                // returns 1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        1,
-                        false
-                    )
-                    "#,
-                )
-                .execute(&self.pool)
-                .await?;
-            }
-        }
         Ok(())
     }
 
@@ -1118,13 +1078,13 @@ pub mod tests {
 
         // 1. Insert a new modification
         let inserted = store
-            .insert_modification(42, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification("1", 42, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // 2. Check that we got a valid result
         assert_modification(
             &inserted,
-            1,
+            "1",
             42,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1134,13 +1094,13 @@ pub mod tests {
 
         // 3. Insert another modification
         let inserted = store
-            .insert_modification(43, REAUTH_MESSAGE_TYPE, Some("https://example.com"))
+            .insert_modification("2", 43, REAUTH_MESSAGE_TYPE, Some("https://example.com"))
             .await?;
 
         // 4. Check that we got a valid result
         assert_modification(
             &inserted,
-            2,
+            "2",
             43,
             REAUTH_MESSAGE_TYPE,
             Some("https://example.com".to_string()),
@@ -1161,7 +1121,12 @@ pub mod tests {
         // Insert a few modifications
         for serial_id in 11..=15 {
             store
-                .insert_modification(serial_id, IDENTITY_DELETION_MESSAGE_TYPE, None)
+                .insert_modification(
+                    &serial_id.to_string(),
+                    serial_id,
+                    IDENTITY_DELETION_MESSAGE_TYPE,
+                    None,
+                )
                 .await?;
         }
 
@@ -1174,7 +1139,7 @@ pub mod tests {
         // Assert results
         assert_modification(
             last,
-            5,
+            "15",
             15,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1183,7 +1148,7 @@ pub mod tests {
         );
         assert_modification(
             second_last,
-            4,
+            "14",
             14,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1197,7 +1162,7 @@ pub mod tests {
 
     fn assert_modification(
         actual: &Modification,
-        expected_id: i64,
+        expected_id: &str,
         expected_serial_id: i64,
         expected_request_type: &str,
         expected_s3_url: Option<String>,
@@ -1219,13 +1184,18 @@ pub mod tests {
 
         // Insert three modifications
         let mut m1 = store
-            .insert_modification(100, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification("1", 100, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
         let mut m2 = store
-            .insert_modification(50, REAUTH_MESSAGE_TYPE, Some("http://example.com/50"))
+            .insert_modification("2", 50, REAUTH_MESSAGE_TYPE, Some("http://example.com/50"))
             .await?;
         let _m3 = store
-            .insert_modification(150, REAUTH_MESSAGE_TYPE, Some("http://example.com/150"))
+            .insert_modification(
+                "3",
+                150,
+                REAUTH_MESSAGE_TYPE,
+                Some("http://example.com/150"),
+            )
             .await?;
 
         // Update the status & persisted fields for first two in a single transaction
@@ -1245,7 +1215,7 @@ pub mod tests {
         assert_eq!(last_three.len(), 3);
         assert_modification(
             &last_three[0],
-            3,
+            "3",
             150,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/150".to_string()),
@@ -1254,7 +1224,7 @@ pub mod tests {
         );
         assert_modification(
             &last_three[1],
-            2,
+            "2",
             50,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/50".to_string()),
@@ -1263,7 +1233,7 @@ pub mod tests {
         );
         assert_modification(
             &last_three[2],
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1283,13 +1253,13 @@ pub mod tests {
 
         // Insert three modifications.
         let mut m1 = store
-            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification("11", 11, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
         let m2 = store
-            .insert_modification(12, REAUTH_MESSAGE_TYPE, Some("http://example.com/12"))
+            .insert_modification("12", 12, REAUTH_MESSAGE_TYPE, Some("http://example.com/12"))
             .await?;
         let m3 = store
-            .insert_modification(13, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification("13", 13, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // mark m1 as completed
@@ -1315,34 +1285,7 @@ pub mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, m1.id);
 
-        // Reset the modifications sequence after deletion and insert a new one.
-        store.reset_modifications_sequence().await?;
-        let m4 = store
-            .insert_modification(15, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        // The new modification should have id 2 after sequence reset.
-        assert_eq!(m4.id, 2);
-
         // Clean up the temporary schema.
-        cleanup(&store, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reset_modifications_sequence() -> Result<()> {
-        let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
-
-        // Reset the sequence when the table is empty.
-        store.reset_modifications_sequence().await?;
-
-        // Expect the sequence to start at 1.
-        let m1 = store
-            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        assert_eq!(m1.id, 1);
-
-        // Clean up
         cleanup(&store, &schema_name).await?;
         Ok(())
     }
