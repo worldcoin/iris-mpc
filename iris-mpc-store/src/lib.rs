@@ -107,12 +107,13 @@ struct StoredState {
 
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredModification {
-    pub id: i64,
+    pub id: String,
     pub serial_id: i64,
     pub request_type: String,
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub created_at: i64,
 }
 
 impl From<StoredModification> for Modification {
@@ -124,6 +125,7 @@ impl From<StoredModification> for Modification {
             s3_url: stored.s3_url,
             status: stored.status,
             persisted: stored.persisted,
+            created_at: stored.created_at,
         }
     }
 }
@@ -506,9 +508,10 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                created_at
             FROM modifications
-            ORDER BY id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $1
             "#,
         )
@@ -531,7 +534,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             return Ok(());
         }
 
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        let ids: Vec<String> = modifications.iter().map(|m| m.id.clone()).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
 
@@ -569,7 +572,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         }
 
         // Extract the IDs from the modifications.
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
+        let ids: Vec<String> = modifications.iter().map(|m| m.id.clone()).collect();
         tracing::info!(
             "Deleting modifications {:?} with IDs: {:?}",
             modifications,
@@ -1114,7 +1117,7 @@ pub mod tests {
         // 2. Check that we got a valid result
         assert_modification(
             &inserted,
-            1,
+            "1",
             42,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1130,7 +1133,7 @@ pub mod tests {
         // 4. Check that we got a valid result
         assert_modification(
             &inserted,
-            2,
+            "2",
             43,
             REAUTH_MESSAGE_TYPE,
             Some("https://example.com".to_string()),
@@ -1164,7 +1167,7 @@ pub mod tests {
         // Assert results
         assert_modification(
             last,
-            5,
+            "5",
             15,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1173,7 +1176,7 @@ pub mod tests {
         );
         assert_modification(
             second_last,
-            4,
+            "4",
             14,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1187,7 +1190,7 @@ pub mod tests {
 
     fn assert_modification(
         actual: &Modification,
-        expected_id: i64,
+        expected_id: &str,
         expected_serial_id: i64,
         expected_request_type: &str,
         expected_s3_url: Option<String>,
@@ -1235,7 +1238,7 @@ pub mod tests {
         assert_eq!(last_three.len(), 3);
         assert_modification(
             &last_three[0],
-            3,
+            "3",
             150,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/150".to_string()),
@@ -1244,7 +1247,7 @@ pub mod tests {
         );
         assert_modification(
             &last_three[1],
-            2,
+            "2",
             50,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/50".to_string()),
@@ -1253,7 +1256,7 @@ pub mod tests {
         );
         assert_modification(
             &last_three[2],
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -1311,7 +1314,7 @@ pub mod tests {
             .insert_modification(15, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
         // The new modification should have id 2 after sequence reset.
-        assert_eq!(m4.id, 2);
+        assert_eq!(m4.id, "2");
 
         // Clean up the temporary schema.
         cleanup(&store, &schema_name).await?;
@@ -1330,7 +1333,7 @@ pub mod tests {
         let m1 = store
             .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
-        assert_eq!(m1.id, 1);
+        assert_eq!(m1.id, "1");
 
         // Clean up
         cleanup(&store, &schema_name).await?;

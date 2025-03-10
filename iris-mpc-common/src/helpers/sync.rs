@@ -43,12 +43,13 @@ impl FromStr for ModificationStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
-    pub id: i64,
+    pub id: String,
     pub serial_id: i64,
     pub request_type: String,
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub created_at: i64,
 }
 
 impl Modification {
@@ -86,7 +87,7 @@ impl SyncResult {
             .collect()
     }
 
-    /// Compare local `modifications` (my_state) to all other parties’
+    /// Compare local `modifications` (my_state) to all other parties'
     /// modifications (all_states), grouping by `id`. Returns: (to_update,
     /// to_delete)
     /// - `to_update`: modifications the local node should add (e.g., mark
@@ -95,9 +96,9 @@ impl SyncResult {
     ///   (in-progress, never completed).
     pub fn compare_modifications(&self) -> (Vec<Modification>, Vec<Modification>) {
         // 1. Group all modifications by id => Vec<Modification> (from different nodes)
-        let mut grouped: HashMap<i64, Vec<Modification>> = HashMap::new();
+        let mut grouped: HashMap<String, Vec<Modification>> = HashMap::new();
         for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
-            grouped.entry(m.id).or_default().push(m);
+            grouped.entry(m.id.clone()).or_default().push(m);
         }
 
         tracing::info!("Grouped modifications: {:?}", grouped);
@@ -107,11 +108,11 @@ impl SyncResult {
         let mut to_delete = Vec::new();
 
         // 2. Analyze each modification group
-        for (&id, group_mods) in &grouped {
+        for (id, group_mods) in &grouped {
             assert_modifications_consistency(group_mods);
 
             // Find local node's copy, if any
-            let local_copy = self.my_state.modifications.iter().find(|m| m.id == id);
+            let local_copy = self.my_state.modifications.iter().find(|m| &m.id == id);
 
             // Evaluate the global state across all nodes:
             let any_completed = group_mods
@@ -235,7 +236,7 @@ mod tests {
 
     // Helper function to create a Modification.
     fn create_modification(
-        id: i64,
+        id: &str,
         serial_id: i64,
         request_type: &str,
         s3_url: Option<&str>,
@@ -243,12 +244,13 @@ mod tests {
         persisted: bool,
     ) -> Modification {
         Modification {
-            id,
+            id: id.to_string(),
             serial_id,
             request_type: request_type.to_string(),
             s3_url: s3_url.map(|s| s.to_string()),
             status: status.to_string(),
             persisted,
+            created_at: time::OffsetDateTime::now_utc().unix_timestamp(),
         }
     }
 
@@ -264,7 +266,7 @@ mod tests {
     #[test]
     fn test_compare_modifications_local_party_outdated() {
         let mod1_local = create_modification(
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -272,7 +274,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            2,
+            "2",
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -280,7 +282,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            3,
+            "3",
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -288,7 +290,7 @@ mod tests {
             false,
         );
         let mod4_local = create_modification(
-            4,
+            "4",
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -303,7 +305,7 @@ mod tests {
         ]);
 
         let mod1_other = create_modification(
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -311,7 +313,7 @@ mod tests {
             true,
         );
         let mod2_other = create_modification(
-            2,
+            "2",
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -319,7 +321,7 @@ mod tests {
             false,
         );
         let mod3_other = create_modification(
-            3,
+            "3",
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -327,7 +329,7 @@ mod tests {
             true,
         );
         let mod4_other = create_modification(
-            4,
+            "4",
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -359,10 +361,10 @@ mod tests {
         assert_eq!(to_update.len(), 2, "Expected two modifications to update");
         assert_eq!(to_delete.len(), 0, "Expected zero modification to delete");
 
-        let update_mod3 = to_update.iter().find(|m| m.id == 3).unwrap();
+        let update_mod3 = to_update.iter().find(|m| m.id == "3").unwrap();
         assert_eq!(update_mod3.clone(), mod3_other);
 
-        let update_mod4 = to_update.iter().find(|m| m.id == 4).unwrap();
+        let update_mod4 = to_update.iter().find(|m| m.id == "4").unwrap();
         assert_eq!(update_mod4.clone(), mod4_other);
     }
 
@@ -370,7 +372,7 @@ mod tests {
     fn test_compare_modifications_local_party_up_to_date() {
         // Create local modifications that are already up-to-date.
         let mod1_local = create_modification(
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -378,7 +380,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            2,
+            "2",
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -386,7 +388,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            3,
+            "3",
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -394,7 +396,7 @@ mod tests {
             true,
         );
         let mod4_local = create_modification(
-            4,
+            "4",
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -410,7 +412,7 @@ mod tests {
 
         // Create other states with in-progress modifications.
         let mod1_other = create_modification(
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -418,7 +420,7 @@ mod tests {
             true,
         );
         let mod2_other = create_modification(
-            2,
+            "2",
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -426,7 +428,7 @@ mod tests {
             false,
         );
         let mod3_other = create_modification(
-            3,
+            "3",
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -434,7 +436,7 @@ mod tests {
             false,
         );
         let mod4_other = create_modification(
-            4,
+            "4",
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -462,7 +464,7 @@ mod tests {
     fn test_compare_modifications_remove_in_progress() {
         // Create local modifications with some in-progress.
         let mod1_local = create_modification(
-            1,
+            "1",
             100,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -470,7 +472,7 @@ mod tests {
             true,
         );
         let mod2_local = create_modification(
-            2,
+            "2",
             200,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
@@ -478,7 +480,7 @@ mod tests {
             false,
         );
         let mod3_local = create_modification(
-            3,
+            "3",
             300,
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
@@ -486,7 +488,7 @@ mod tests {
             false,
         );
         let mod4_local = create_modification(
-            4,
+            "4",
             400,
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
@@ -514,10 +516,10 @@ mod tests {
         assert!(to_update.is_empty(), "Expected no modifications to update");
         assert_eq!(to_delete.len(), 2, "Expected no modifications to delete");
 
-        let delete_mod3 = to_delete.iter().find(|m| m.id == 3).unwrap();
+        let delete_mod3 = to_delete.iter().find(|m| m.id == "3").unwrap();
         assert_eq!(delete_mod3.clone(), mod3_local);
 
-        let delete_mod4 = to_delete.iter().find(|m| m.id == 4).unwrap();
+        let delete_mod4 = to_delete.iter().find(|m| m.id == "4").unwrap();
         assert_eq!(delete_mod4.clone(), mod4_local);
     }
 

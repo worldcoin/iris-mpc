@@ -162,7 +162,7 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-                let sns_message_id = message.message_id;
+                let sns_message_id = message.message_id.clone();
 
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
@@ -238,6 +238,7 @@ async fn receive_batch(
                             );
                             continue;
                         }
+                        let ms = message.message_id;
                         let modification = store
                             .insert_modification(
                                 identity_deletion_request.serial_id as i64,
