@@ -171,7 +171,7 @@ pub(crate) async fn cross_mul(
         .collect())
 }
 
-/// For every pair of distances shares (d1, d2), this computes the logical bit d2 < d1 and opens it.
+/// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
 ///
 /// The less-than operator is implemented in 2 steps:
 ///
