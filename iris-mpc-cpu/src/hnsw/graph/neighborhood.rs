@@ -30,6 +30,8 @@ pub type SortedNeighborhoodV<V> =
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SortedNeighborhood<Vector, Distance> {
+    /// List of distance-weighted directed edges, specified as tuples
+    /// `(target, weight)`.  Edges are sorted in increasing order of distance.
     pub edges: Vec<(Vector, Distance)>,
 }
 
@@ -47,7 +49,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// Insert the element `to` with distance `dist` into the list, maintaining
     /// the ascending order.
     ///
-    /// Call the VectorStore to come up with the insertion index.
+    /// Calls the `VectorStore` to find the insertion index.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance)
     where
@@ -65,7 +67,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         self.edges.insert(index_asc, (to, dist));
     }
 
-    /// Insert a collection of (Vector, Distance) pairs into the list,
+    /// Insert a collection of `(Vector, Distance)` pairs into the list,
     /// maintaining the ascending order, using an efficient sorting network on
     /// input values.
     ///
@@ -91,11 +93,11 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         }
     }
 
-    pub fn clone_vectors(&self) -> Vec<Vector> {
+    pub fn vectors_cloned(&self) -> Vec<Vector> {
         self.edges.iter().map(|(v, _)| v.clone()).collect()
     }
 
-    pub fn clone_distances(&self) -> Vec<Distance> {
+    pub fn distances_cloned(&self) -> Vec<Distance> {
         self.edges.iter().map(|(_, d)| d.clone()).collect()
     }
 
@@ -123,6 +125,9 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         &self.edges
     }
 
+    /// Insert the given unsorted list `vals` of new weighted edges into this
+    /// sorted neighborhood using the Batcher odd-even merge sort sorting
+    /// network.
     async fn batcher_insert<V>(&mut self, store: &mut V, vals: &[(Vector, Distance)])
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
@@ -192,12 +197,6 @@ impl<Vector: Clone, Distance: Clone> Clone for SortedNeighborhood<Vector, Distan
         SortedNeighborhood {
             edges: self.edges.clone(),
         }
-    }
-}
-
-impl<Vector, Distance> From<SortedNeighborhood<Vector, Distance>> for Vec<(Vector, Distance)> {
-    fn from(nbhd: SortedNeighborhood<Vector, Distance>) -> Self {
-        nbhd.edges
     }
 }
 
