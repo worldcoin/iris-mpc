@@ -5,19 +5,19 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TwoToThreeIrisCodeMessage {
-    pub id:       u64,
+    pub id: u64,
     pub party_id: u8,
-    pub from:     u8,
+    pub from: u8,
     #[serde(with = "BigArray")]
-    pub data:     [u16; IRIS_CODE_LENGTH],
+    pub data: [u16; IRIS_CODE_LENGTH],
 }
 impl Default for TwoToThreeIrisCodeMessage {
     fn default() -> Self {
         Self {
-            id:       0,
+            id: 0,
             party_id: 0,
-            from:     0,
-            data:     [0; IRIS_CODE_LENGTH],
+            from: 0,
+            data: [0; IRIS_CODE_LENGTH],
         }
     }
 }
@@ -43,19 +43,19 @@ impl TwoToThreeIrisCodeMessage {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaskShareMessage {
-    pub id:       u64,
+    pub id: u64,
     pub party_id: u8,
-    pub from:     u8,
+    pub from: u8,
     #[serde(with = "BigArray")]
-    pub data:     [u16; MASK_CODE_LENGTH],
+    pub data: [u16; MASK_CODE_LENGTH],
 }
 impl Default for MaskShareMessage {
     fn default() -> Self {
         Self {
-            id:       0,
+            id: 0,
             party_id: 0,
-            from:     0,
-            data:     [0; MASK_CODE_LENGTH],
+            from: 0,
+            data: [0; MASK_CODE_LENGTH],
         }
     }
 }

@@ -6,14 +6,14 @@ pub type PrfSeed = <AesRng as SeedableRng>::Seed;
 
 #[derive(Clone, Debug)]
 pub struct Prf {
-    pub my_prf:   AesRng,
+    pub my_prf: AesRng,
     pub prev_prf: AesRng,
 }
 
 impl Default for Prf {
     fn default() -> Self {
         Self {
-            my_prf:   AesRng::from_entropy(),
+            my_prf: AesRng::from_entropy(),
             prev_prf: AesRng::from_entropy(),
         }
     }
@@ -22,7 +22,7 @@ impl Default for Prf {
 impl Prf {
     pub fn new(my_key: PrfSeed, next_key: PrfSeed) -> Self {
         Self {
-            my_prf:   AesRng::from_seed(my_key),
+            my_prf: AesRng::from_seed(my_key),
             prev_prf: AesRng::from_seed(next_key),
         }
     }

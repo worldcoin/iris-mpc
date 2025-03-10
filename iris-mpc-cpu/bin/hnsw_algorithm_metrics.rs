@@ -20,13 +20,13 @@ use tracing_subscriber::{filter::Targets, prelude::*, EnvFilter};
 #[allow(non_snake_case)]
 struct Args {
     #[clap(short, default_value = "384")]
-    M:                 usize,
+    M: usize,
     #[clap(long("efc"), default_value = "512")]
-    ef_constr:         usize,
+    ef_constr: usize,
     #[clap(long("efs"), default_value = "512")]
-    ef_search:         usize,
+    ef_search: usize,
     #[clap(short, default_value = "10000")]
-    database_size:     usize,
+    database_size: usize,
     #[clap(short('p'))]
     layer_probability: Option<f64>,
 }
@@ -88,11 +88,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = AesRng::seed_from_u64(42_u64);
     let mut vector = PlaintextStore::default();
     let mut graph = GraphMem::new();
-    let params = if let Some(p) = layer_probability {
-        HnswParams::new_with_layer_probability(ef_constr, ef_search, M, p)
-    } else {
-        HnswParams::new(ef_constr, ef_search, M)
-    };
+    let mut params = HnswParams::new(ef_constr, ef_search, M);
+    if let Some(q) = layer_probability {
+        params.layer_probability = q
+    }
     let searcher = HnswSearcher { params };
 
     for idx in 0..database_size {

@@ -21,15 +21,15 @@ pub type NetworkingImpl = Arc<dyn Networking + Send + Sync>;
 #[derive(Debug, Clone)]
 pub struct Session {
     pub boot_session: BootSession,
-    pub setup:        Prf,
+    pub setup: Prf,
 }
 
 #[derive(Clone)]
 pub struct BootSession {
-    pub session_id:       SessionId,
+    pub session_id: SessionId,
     pub role_assignments: Arc<HashMap<Role, Identity>>,
-    pub networking:       NetworkingImpl,
-    pub own_identity:     Identity,
+    pub networking: NetworkingImpl,
+    pub own_identity: Identity,
 }
 
 impl Debug for BootSession {

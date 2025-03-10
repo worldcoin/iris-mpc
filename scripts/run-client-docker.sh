@@ -7,6 +7,7 @@ export AWS_ENDPOINT_URL="http://localstack:4566"
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_REGION=us-east-1
+export AWS_DEFAULT_REGION=us-east-1
 
 
 for i in 0 1 2
@@ -15,17 +16,11 @@ do
   curl -f hawk_participant_${i}:300${i}/health
 done
 
-echo "All endpoints are healthy."
+echo "All endpoints are healthy. Running now the client..."
 
 
-#/bin/client \
-#    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
-#    --requests-bucket-name wf-smpcv2-dev-sns-requests \
-#    --public-key-base-url "http://wf-dev-public-keys.s3.$AWS_REGION.localhost.localstack.cloud:4566" \
-#    --region $AWS_REGION \
-#    --n-repeat 1 \
-#    --random true
-
-# TODO: re-add these once ready to consume results
-# --response-queue-region $AWS_REGION \
-# --response-queue-url https://sqs.eu-north-1.amazonaws.com/654654380399/temporal-results.fifo \
+/bin/client \
+   --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
+   --requests-bucket-name wf-smpcv2-dev-sns-requests \
+   --public-key-base-url "http://localstack:4566/wf-dev-public-keys" \
+   --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo

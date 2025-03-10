@@ -8,7 +8,8 @@ use crate::{
         SendRequest, SendResponse,
     },
 };
-use backoff::{future::retry, ExponentialBackoff};
+
+use backon::{ExponentialBuilder, Retryable};
 use eyre::eyre;
 use std::{collections::HashMap, str::FromStr, time::Duration};
 use tokio::{
@@ -94,25 +95,25 @@ impl OutgoingStreams {
 }
 
 struct SendTask {
-    value:      Vec<u8>,
-    receiver:   Identity,
+    value: Vec<u8>,
+    receiver: Identity,
     session_id: SessionId,
 }
 
 struct ReceiveTask {
-    sender:     Identity,
+    sender: Identity,
     session_id: SessionId,
 }
 
 struct StartMessageStreamTask {
-    sender:     Identity,
+    sender: Identity,
     session_id: SessionId,
-    stream:     UnboundedReceiver<SendRequest>,
+    stream: UnboundedReceiver<SendRequest>,
 }
 
 struct ConnectToPartyTask {
     party_id: Identity,
-    address:  String,
+    address: String,
 }
 
 enum GrpcTask {
@@ -131,7 +132,7 @@ enum MessageResult {
 }
 
 struct MessageJob {
-    task:           GrpcTask,
+    task: GrpcTask,
     return_channel: oneshot::Sender<eyre::Result<MessageResult>>,
 }
 
@@ -139,7 +140,7 @@ struct MessageJob {
 #[derive(Clone)]
 pub struct GrpcHandle {
     job_queue: mpsc::Sender<MessageJob>,
-    party_id:  Identity,
+    party_id: Identity,
 }
 
 impl GrpcHandle {
@@ -216,7 +217,7 @@ impl Networking for GrpcHandle {
 
     async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>> {
         let task = GrpcTask::Receive(ReceiveTask {
-            sender:     sender.clone(),
+            sender: sender.clone(),
             session_id: *session_id,
         });
         let res = self.submit(task).await?;
@@ -338,13 +339,13 @@ pub struct GrpcConfig {
 // within one session are sent in order and consecutively. Don't send messages
 // to the same player in parallel within the same session. Use batching instead.
 pub struct GrpcNetworking {
-    party_id:         Identity,
+    party_id: Identity,
     // other party id -> client to call that party
-    clients:          HashMap<Identity, PartyNodeClient<Channel>>,
+    clients: HashMap<Identity, PartyNodeClient<Channel>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: OutgoingStreams,
     // session id -> incoming message streams
-    message_queues:   HashMap<SessionId, MessageQueueStore>,
+    message_queues: HashMap<SessionId, MessageQueueStore>,
 
     pub config: GrpcConfig,
 }
@@ -361,13 +362,12 @@ impl GrpcNetworking {
     }
 
     // TODO: from config?
-    fn backoff(&self) -> ExponentialBackoff {
-        ExponentialBackoff {
-            max_elapsed_time: Some(std::time::Duration::from_secs(60)),
-            max_interval: std::time::Duration::from_secs(5),
-            multiplier: 1.1,
-            ..Default::default()
-        }
+    fn backoff(&self) -> ExponentialBuilder {
+        ExponentialBuilder::new()
+            .with_min_delay(std::time::Duration::from_millis(500))
+            .with_factor(1.1)
+            .with_max_delay(std::time::Duration::from_secs(5))
+            .with_max_times(27) // about 60 seconds overall delay
     }
 
     pub async fn connect_to_party(
@@ -375,10 +375,16 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
-        let client = retry(self.backoff(), || async {
-            Ok(PartyNodeClient::connect(address.to_string()).await?)
-        })
-        .await?;
+        let client = (|| async { PartyNodeClient::connect(address.to_string()).await })
+            .retry(self.backoff())
+            .sleep(tokio::time::sleep)
+            .await?;
+        tracing::trace!(
+            "Player {:?} connected to player {:?} at address {:?}",
+            self.party_id,
+            party_id,
+            address
+        );
         self.clients.insert(party_id.clone(), client);
         Ok(())
     }
@@ -392,13 +398,13 @@ impl GrpcNetworking {
         }
 
         for (client_id, client) in self.clients.iter() {
-            tracing::debug!(
-                "Player {:?} is creating session {:?} with player {:?}",
+            let (tx, rx) = mpsc::unbounded_channel();
+            tracing::trace!(
+                "Player {:?} is adding outgoing stream of session {:?} for player {:?}",
                 self.party_id,
                 session_id,
                 client_id
             );
-            let (tx, rx) = mpsc::unbounded_channel();
             self.outgoing_streams
                 .add_session_stream(session_id, client_id.clone(), tx);
             let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
@@ -436,18 +442,6 @@ impl GrpcNetworking {
         }
 
         self.outgoing_streams.count_receivers(session_id) == self.clients.len()
-    }
-
-    pub async fn wait_for_session(&self, session_id: SessionId) -> eyre::Result<()> {
-        while !self.is_session_ready(session_id) {
-            tracing::debug!(
-                "Player {:?} is waiting for session {:?} to be ready",
-                self.party_id,
-                session_id
-            );
-            sleep(Duration::from_millis(100)).await;
-        }
-        Ok(())
     }
 }
 
@@ -505,7 +499,6 @@ impl GrpcNetworking {
 
         // Send message via the outgoing stream
         let request = SendRequest { data: value };
-
         tracing::trace!(
             "INIT: Sending message {:?} from {:?} to {:?} in session {:?}",
             request.data,
@@ -523,7 +516,6 @@ impl GrpcNetworking {
             receiver,
             session_id
         );
-
         Ok(())
     }
 
@@ -636,6 +628,11 @@ mod tests {
         for player in players.iter() {
             let player = player.clone();
             jobs.spawn(async move {
+                tracing::trace!(
+                    "Player {:?} is creating session {:?}",
+                    player.party_id,
+                    session_id
+                );
                 player.create_session(session_id).await.unwrap();
                 player.wait_for_session(session_id).await.unwrap();
             });
@@ -899,7 +896,8 @@ mod tests {
                 let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.prepare_query(store.storage.get_vector(&i.into()).await);
+                let q = store.storage.get_vector(&i.into()).await;
+                let q = store.prepare_query((*q).clone());
                 jobs.spawn(async move {
                     let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
                     searcher.is_match(&mut store, &[secret_neighbors]).await

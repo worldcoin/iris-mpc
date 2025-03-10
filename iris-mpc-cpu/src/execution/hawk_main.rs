@@ -1,6 +1,6 @@
 use super::player::Identity;
+pub use crate::hawkers::aby3_store::VectorId;
 use crate::{
-    database_generators::GaloisRingSharedIris,
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
@@ -14,7 +14,7 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::ops::setup_replicated_prf,
+    protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
 };
 use aes_prng::AesRng;
 use clap::Parser;
@@ -28,7 +28,7 @@ use rand::{thread_rng, Rng, SeedableRng};
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::Deref,
+    ops::{Deref, Not},
     sync::Arc,
     time::Duration,
     vec,
@@ -40,6 +40,10 @@ use tokio::{
 use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
+
+mod is_match_batch;
+mod matching;
+use is_match_batch::calculate_is_match;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
@@ -62,40 +66,48 @@ pub struct HawkActor {
     args: HawkArgs,
 
     // ---- Shared setup ----
-    search_params:    Arc<HnswSearcher>,
+    search_params: Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
-    consensus:        Consensus,
+    consensus: Consensus,
 
     // ---- My state ----
     // TODO: Persistence.
-    db_size:     usize,
-    iris_store:  BothEyes<SharedIrisesRef>,
+    db_size: usize,
+    iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
 
     // ---- My network setup ----
-    networking:   GrpcHandle,
+    networking: GrpcHandle,
     own_identity: Identity,
-    party_id:     usize,
+    party_id: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
 pub enum StoreId {
-    Left,
-    Right,
+    Left = 0,
+    Right = 1,
 }
-
+const LEFT: usize = 0;
+const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+/// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
+/// VecRequests are lists of things for each request of a batch.
+type VecRequests<T> = Vec<T>;
+/// VecEdges are lists of things for each neighbor of a vector (graph edges).
+type VecEdges<T> = Vec<T>;
+/// MapEdges are maps from neighbor IDs to something.
+type MapEdges<T> = HashMap<VectorId, T>;
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 pub struct HawkSession {
-    aby3_store:  Aby3Store,
+    aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng:  AesRng,
+    shared_rng: AesRng,
 }
 
 type HawkSessionRef = Arc<RwLock<HawkSession>>;
@@ -116,10 +128,23 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
-    query:    V::QueryRef,
-    links:    Vec<SortedNeighborhoodV<V>>,
-    set_ep:   bool,
-    is_match: bool,
+    query: V::QueryRef,
+    links: Vec<SortedNeighborhoodV<V>>,
+    match_count: usize,
+    set_ep: bool,
+}
+
+impl<V: VectorStore> InsertPlanV<V> {
+    pub fn match_count(&self) -> usize {
+        self.match_count
+    }
+
+    pub fn nearest_neighbors(&self) -> Vec<V::VectorRef> {
+        self.links
+            .first()
+            .map(|layer| layer.iter().map(|(id, _)| id.clone()).collect())
+            .unwrap_or_default()
+    }
 }
 
 impl HawkActor {
@@ -322,15 +347,15 @@ impl HawkActor {
             )
             .await;
 
-        let is_match = search_params
-            .is_match(&mut session.aby3_store, &links)
+        let match_count = search_params
+            .match_count(&mut session.aby3_store, &links)
             .await;
 
         InsertPlan {
             query,
             links,
+            match_count,
             set_ep,
-            is_match,
         }
     }
 
@@ -357,7 +382,7 @@ impl HawkActor {
         session: &mut HawkSession,
         insert_plan: InsertPlan,
     ) -> Result<ConnectPlan> {
-        let inserted = session.aby3_store.insert(&insert_plan.query).await;
+        let inserted = session.aby3_store.storage.insert(&insert_plan.query).await;
         let mut graph_store = session.graph_store.write().await;
 
         let connect_plan = self
@@ -381,8 +406,8 @@ impl HawkActor {
         (
             IrisLoader {
                 party_id: self.party_id,
-                db_size:  &mut self.db_size,
-                irises:   [
+                db_size: &mut self.db_size,
+                irises: [
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
                 ],
@@ -397,8 +422,8 @@ impl HawkActor {
 
 pub struct IrisLoader<'a> {
     party_id: usize,
-    db_size:  &'a mut usize,
-    irises:   BothEyes<SharedIrisesMut<'a>>,
+    db_size: &'a mut usize,
+    irises: BothEyes<SharedIrisesMut<'a>>,
 }
 
 impl<'a> InMemoryStore for IrisLoader<'a> {
@@ -410,17 +435,15 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (side, code, mask) in izip!(&mut self.irises, [left_code, right_code], [
-            left_mask, right_mask
-        ]) {
-            if index >= side.points.len() {
-                side.points.resize(
-                    index + 1,
-                    GaloisRingSharedIris::default_for_party(self.party_id),
-                );
-            }
-            side.points[index].code.coefs = code.try_into().unwrap();
-            side.points[index].mask.coefs = mask.try_into().unwrap();
+        let vector_id = VectorId::from_serial_id(index as u32);
+        for (side, code, mask) in izip!(
+            &mut self.irises,
+            [left_code, right_code],
+            [left_mask, right_mask]
+        ) {
+            let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
+                .expect("Wrong code or mask size");
+            side.insert(vector_id, iris);
         }
     }
 
@@ -430,7 +453,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
     fn reserve(&mut self, additional: usize) {
         for side in &mut self.irises {
-            side.points.reserve(additional);
+            side.reserve(additional);
         }
     }
 
@@ -440,9 +463,11 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
     fn fake_db(&mut self, size: usize) {
         *self.db_size = size;
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
         for side in &mut self.irises {
-            side.points
-                .resize(size, GaloisRingSharedIris::default_for_party(self.party_id));
+            for i in 0..size {
+                side.insert(VectorId::from_serial_id(i as u32), iris.clone());
+            }
         }
     }
 }
@@ -460,7 +485,7 @@ impl<'a> GraphLoader<'a> {
 }
 
 struct HawkJob {
-    request:        HawkRequest,
+    request: HawkRequest,
     return_channel: oneshot::Sender<Result<HawkResult>>,
 }
 
@@ -489,31 +514,21 @@ impl HawkRequest {
         &self.shares
     }
 
-    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-    // TODO: Account for rotated and mirrored versions.
-    fn is_insertion(both_insert_plans: &BothEyes<Vec<InsertPlan>>) -> Vec<bool> {
-        izip!(&both_insert_plans[0], &both_insert_plans[1])
-            .map(|(left, right)| !(left.is_match && right.is_match))
-            .collect_vec()
-    }
-
     fn filter_for_insertion(
         &self,
         both_insert_plans: BothEyes<Vec<InsertPlan>>,
-        is_insertion: &[bool],
+        is_matches: &[bool],
     ) -> (Vec<usize>, BothEyes<Vec<InsertPlan>>) {
-        // TODO: Report the insertions versus rejections.
-
         let filtered = both_insert_plans.map(|plans| {
-            izip!(plans, is_insertion)
-                .filter_map(|(plan, &is_insertion)| is_insertion.then_some(plan))
+            izip!(plans, is_matches)
+                .filter_map(|(plan, &is_match)| is_match.not().then_some(plan))
                 .collect_vec()
         });
 
-        let indices = is_insertion
+        let indices = is_matches
             .iter()
             .enumerate()
-            .filter_map(|(index, &insert)| insert.then_some(index))
+            .filter_map(|(index, &is_match)| is_match.not().then_some(index))
             .collect();
 
         (indices, filtered)
@@ -522,13 +537,28 @@ impl HawkRequest {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
+    match_results: matching::BatchStep2,
     connect_plans: HawkMutation,
-    is_insertion:  Vec<bool>,
+    is_matches: VecRequests<bool>,
 }
 
 impl HawkResult {
-    fn matches(&self) -> Vec<bool> {
-        self.is_insertion.iter().map(|&insert| !insert).collect()
+    fn new(match_results: matching::BatchStep2) -> Self {
+        let is_matches = match_results.is_matches();
+        let n_requests = is_matches.len();
+        HawkResult {
+            match_results,
+            connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
+            is_matches,
+        }
+    }
+
+    fn set_connect_plan(&mut self, request_i: usize, side: StoreId, plan: ConnectPlan) {
+        self.connect_plans.0[side as usize][request_i] = Some(plan);
+    }
+
+    fn is_matches(&self) -> &[bool] {
+        &self.is_matches
     }
 
     fn merged_results(&self) -> Vec<u32> {
@@ -539,6 +569,47 @@ impl HawkResult {
                     .map_or(0, |plan| plan.inserted_vector.to_serial_id())
             })
             .collect()
+    }
+
+    fn job_result(self, batch: BatchQuery) -> ServerJobResult {
+        let n_requests = self.is_matches.len();
+
+        let match_ids = self
+            .match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+        let partial_match_ids_left = self
+            .match_results
+            .filter_map(|(id, [l, _r])| l.then_some(id.to_serial_id()));
+        let partial_match_ids_right = self
+            .match_results
+            .filter_map(|(id, [_l, r])| r.then_some(id.to_serial_id()));
+        let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
+        let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
+
+        ServerJobResult {
+            merged_results: self.merged_results(),
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
+            matches: self.is_matches().to_vec(),
+            matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
+            match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
+            deleted_ids: vec![],                                    // TODO.
+            matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
+            anonymized_bucket_statistics_left: Default::default(),  // TODO.
+            anonymized_bucket_statistics_right: Default::default(), // TODO.
+            successful_reauths: vec![false; n_requests],            // TODO.
+            reauth_target_indices: Default::default(),              // TODO.
+            reauth_or_rule_used: Default::default(),                // TODO.
+            modifications: batch.modifications,
+            actor_data: self.connect_plans,
+        }
     }
 }
 
@@ -573,34 +644,8 @@ impl JobSubmissionHandle for HawkHandle {
     ) -> impl std::future::Future<Output = ServerJobResult> {
         let request = HawkRequest::from(&batch);
         let result = self.submit(request).await.unwrap();
-        let n_requests = result.is_insertion.len();
 
-        async move {
-            ServerJobResult {
-                merged_results: result.merged_results(),
-                request_ids: batch.request_ids,
-                request_types: batch.request_types,
-                metadata: batch.metadata,
-                matches: result.matches(),
-                matches_with_skip_persistence: result.matches(), // TODO
-                match_ids: vec![vec![0]; n_requests],            // TODO.
-                partial_match_ids_left: vec![vec![0]; n_requests], // TODO.
-                partial_match_ids_right: vec![vec![0]; n_requests], // TODO.
-                partial_match_counters_left: vec![0; n_requests], // TODO.
-                partial_match_counters_right: vec![0; n_requests], // TODO.
-                left_iris_requests: batch.left_iris_requests,
-                right_iris_requests: batch.right_iris_requests,
-                deleted_ids: vec![],                                    // TODO.
-                matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
-                anonymized_bucket_statistics_left: Default::default(),  // TODO.
-                anonymized_bucket_statistics_right: Default::default(), // TODO.
-                successful_reauths: vec![false; n_requests],            // TODO.
-                reauth_target_indices: Default::default(),              // TODO.
-                reauth_or_rule_used: Default::default(),                // TODO.
-                modifications: batch.modifications,
-                actor_data: result.connect_plans,
-            }
-        }
+        async move { result.job_result(batch) }
     }
 }
 
@@ -634,29 +679,36 @@ impl HawkHandle {
                     // TODO: Optimize for pure searches (rotations).
                 }
 
-                let is_insertion = HawkRequest::is_insertion(&both_insert_plans);
-                let (insert_indices, both_insert_plans) = job
-                    .request
-                    .filter_for_insertion(both_insert_plans, &is_insertion);
-
-                // Insert into the database.
-                let n_requests = is_insertion.len();
-                let mut results = HawkResult {
-                    connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
-                    is_insertion,
+                let match_result = {
+                    let step1 = matching::BatchStep1::new(&both_insert_plans);
+                    // Go fetch the missing vector IDs and calculate their is_match.
+                    let missing_is_match = calculate_is_match(
+                        &both_insert_plans,
+                        step1.missing_vector_ids(),
+                        &sessions,
+                    )
+                    .await;
+                    step1.step2(&missing_is_match)
                 };
 
+                let mut results = HawkResult::new(match_result);
+
+                let (insert_indices, both_insert_plans) = job
+                    .request
+                    .filter_for_insertion(both_insert_plans, results.is_matches());
+
+                // Insert into the database.
                 if !hawk_actor.args.disable_persistence {
                     // For both eyes.
-                    for (sessions, insert_plans, connect_plans) in
-                        izip!(&sessions, both_insert_plans, &mut results.connect_plans.0)
+                    for (side, sessions, insert_plans) in
+                        izip!(&STORE_IDS, &sessions, both_insert_plans)
                     {
                         // Insert in memory, and return the plans to update the persistent database.
                         let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
 
                         // Convert to Vec<Option> matching the request order.
                         for (i, plan) in izip!(&insert_indices, plans) {
-                            connect_plans[*i] = Some(plan);
+                            results.set_connect_plan(*i, *side, plan);
                         }
                     }
                 }
@@ -745,9 +797,9 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares,
-        execution::local::get_free_local_addresses,
+        execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
+    use futures::future::JoinAll;
     use iris_mpc_common::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
     };
@@ -769,7 +821,7 @@ mod tests {
                 // Make the test async.
                 sleep(Duration::from_millis(100 * index as u64)).await;
 
-                hawk_main(args).await
+                hawk_main(args).await.unwrap()
             }
         };
 
@@ -778,11 +830,11 @@ mod tests {
 
         let handles = (0..n_parties)
             .map(|i| go(addresses.clone(), i))
-            .collect::<JoinSet<_>>()
-            .join_all()
+            .map(tokio::spawn)
+            .collect::<JoinAll<_>>()
             .await
             .into_iter()
-            .collect::<Result<Vec<HawkHandle>>>()?;
+            .collect::<Result<Vec<HawkHandle>, _>>()?;
 
         // ---- Send requests ----
 
@@ -793,7 +845,7 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| generate_galois_iris_shares(iris_rng, iris))
+            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
             .collect_vec();
         // Unzip: party -> iris_id -> share
         let irises = (0..n_parties)
@@ -819,9 +871,9 @@ mod tests {
                     request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
                     metadata: vec![
                         BatchMetadata {
-                            node_id:  "X".to_string(),
+                            node_id: "X".to_string(),
                             trace_id: "X".to_string(),
-                            span_id:  "X".to_string(),
+                            span_id: "X".to_string(),
                         };
                         batch_size
                     ],
@@ -846,14 +898,11 @@ mod tests {
         assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
         assert_eq!(batch_size, result.match_ids.len());
-        assert!(no_empty(&without_matches(
-            &result.matches,
-            &result.match_ids
-        )));
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
         assert_eq!(batch_size, result.partial_match_counters_right.len());
+        assert_match_ids(&result);
         assert_eq!(batch_size, result.left_iris_requests.code.len());
         assert_eq!(batch_size, result.right_iris_requests.code.len());
         assert!(result.deleted_ids.is_empty());
@@ -883,14 +932,35 @@ mod tests {
         all_results[0].clone()
     }
 
-    fn without_matches<T: Clone>(matches: &[bool], things: &[T]) -> Vec<T> {
-        izip!(matches, things)
-            .filter_map(|(&match_, item)| match_.not().then_some(item.clone()))
-            .collect_vec()
-    }
-
-    fn no_empty<T>(items: &[Vec<T>]) -> bool {
-        items.iter().all(|item| !item.is_empty())
+    fn assert_match_ids(results: &ServerJobResult) {
+        for (is_match, matches_both, matches_left, matches_right, count_left, count_right) in izip!(
+            &results.matches,
+            &results.match_ids,
+            &results.partial_match_ids_left,
+            &results.partial_match_ids_right,
+            &results.partial_match_counters_left,
+            &results.partial_match_counters_right,
+        ) {
+            assert_eq!(
+                *is_match,
+                matches_both.is_empty().not(),
+                "Matches must have some matched IDs"
+            );
+            assert!(
+                matches_both
+                    .iter()
+                    .all(|id| matches_left.contains(id) && matches_right.contains(id)),
+                "Matched IDs must be repeated in left and rights lists"
+            );
+            assert!(
+                matches_left.len() <= *count_left,
+                "Partial counts must be consistent"
+            );
+            assert!(
+                matches_right.len() <= *count_right,
+                "Partial counts must be consistent"
+            );
+        }
     }
 }
 
@@ -922,17 +992,17 @@ mod tests_db {
                 .enumerate()
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
-                    layers:          vec![ConnectPlanLayer {
+                    layers: vec![ConnectPlanLayer {
                         neighbors: SortedNeighborhood::from_ascending_vec(vec![(
                             vectors[side],
                             distance.clone(),
                         )]),
-                        n_links:   vec![SortedNeighborhood::from_ascending_vec(vec![(
+                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
                             *vector,
                             distance.clone(),
                         )])],
                     }],
-                    set_ep:          i == side,
+                    set_ep: i == side,
                 })
                 .map(Some)
                 .collect_vec()
@@ -949,8 +1019,8 @@ mod tests_db {
 
         // Start an actor and load the graph from SQL to memory.
         let args = HawkArgs {
-            party_index:         0,
-            addresses:           vec!["0.0.0.0:1234".to_string()],
+            party_index: 0,
+            addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 2,
             disable_persistence: false,
         };

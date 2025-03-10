@@ -92,9 +92,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })
@@ -110,9 +110,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })
@@ -127,9 +127,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })

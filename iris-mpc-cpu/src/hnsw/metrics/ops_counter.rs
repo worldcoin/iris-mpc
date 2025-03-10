@@ -218,7 +218,7 @@ pub trait KeyVisitor: Visit + Default {
 ///
 /// The generic type `K` implementing the `KeyVisitor` trait provides the logic
 /// for recording the fields of an Event and producing a `KeyVisitor::Key`
-/// value used as the key for a `HashMap` of `AtomicUsize` counters.  When a
+/// value used as the key for a `HashMap` of `AtomicUsize` counters. When a
 /// matching event is encountered, a key is derived from its associated fields,
 /// and the counter for that key is incremented by the value of the
 /// `increment_amount` field if present, or by 1 otherwise.
@@ -228,7 +228,7 @@ pub trait KeyVisitor: Visit + Default {
 /// separately in a `missing_keys` counter.
 #[derive(Default)]
 pub struct ParameterizedCounter<K: KeyVisitor> {
-    counter_map:  ParamCounterRef<K::Key>,
+    counter_map: ParamCounterRef<K::Key>,
     missing_keys: StaticCounter,
 }
 
