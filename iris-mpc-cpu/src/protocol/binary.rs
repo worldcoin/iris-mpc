@@ -657,6 +657,7 @@ pub async fn extract_msb_u32_batch(
 pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Result<Vec<Bit>> {
     // send to next_party
     let next_party = session.next_identity()?;
+    let prev_party = session.prev_identity()?;
     let network = session.network().clone();
     let sid = session.session_id();
     let message = if shares.len() == 1 {
@@ -673,9 +674,6 @@ pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Res
     network.send(message, &next_party, &sid).await?;
 
     // receiving from previous party
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
     let c = {
         let serialized_other_shares = network.receive(&prev_party, &sid).await;
         if shares.len() == 1 {

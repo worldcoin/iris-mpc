@@ -320,22 +320,24 @@ impl<T: IntRing2k> Shl<u32> for Share<T> {
     }
 }
 
-/// Additive share of a Hamming distance value represented as code_dist / mask_dist.
+/// Additive share of a relative Hamming distance.
+/// The distance is represented as a pair of shares `(code_dot, mask_dot)`, where
+/// - `code_dot` is the number of matching unmasked iris bits minus the number of non-matching unmasked iris bits,
+/// - `mask_dot` is the number of common unmasked bits.
+///
+/// The greater the ratio `code_dot / mask_dot`, the more similar the irises are.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(bound = "")]
 pub struct DistanceShare<T: IntRing2k> {
-    pub code_dist: Share<T>,
-    pub mask_dist: Share<T>,
+    pub code_dot: Share<T>,
+    pub mask_dot: Share<T>,
 }
 
 impl<T> DistanceShare<T>
 where
     T: IntRing2k,
 {
-    pub fn new(code_dist: Share<T>, mask_dist: Share<T>) -> Self {
-        DistanceShare {
-            code_dist,
-            mask_dist,
-        }
+    pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
+        DistanceShare { code_dot, mask_dot }
     }
 }

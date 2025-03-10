@@ -133,8 +133,8 @@ pub(crate) async fn cross_mul(
     let res_a: Vec<RingElement<u32>> = distances
         .iter()
         .map(|(d1, d2)| {
-            session.prf_as_mut().gen_zero_share() + &d2.code_dist * &d1.mask_dist
-                - &d1.code_dist * &d2.mask_dist
+            session.prf_as_mut().gen_zero_share() + &d2.code_dot * &d1.mask_dot
+                - &d1.code_dot * &d2.mask_dot
         })
         .collect();
 
@@ -171,13 +171,12 @@ pub(crate) async fn cross_mul(
         .collect())
 }
 
-/// Computes (d2*t1 - d1*t2) > 0.
-/// Does the multiplication in Z_{2^32} and computes the MSB, to check the
-/// comparison result.
-/// d1, t1 are replicated shares that come from an iris code/mask dot product,
-/// ie: d1 = dot(c_x, c_y); t1 = dot(m_x, m_y). d2, t2 are replicated shares
-/// that come from an iris code and mask dot product, ie:
-/// d2 = dot(c_u, c_w), t2 = dot(m_u, m_w)
+/// For every pair of distances shares (d1, d2), this computes the logical bit d2 < d1 and opens it.
+///
+/// The less-than operator is implemented in 2 steps:
+///
+/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
+/// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to
 /// 32-bit.
@@ -185,10 +184,11 @@ pub async fn cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> eyre::Result<Vec<bool>> {
+    // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
-    // Compute bit <- MSB(D2 * T1 - D1 * T2)
+    // Compute the MSB of the above
     let bits = extract_msb_u32_batch(session, &diff).await?;
-    // Open bit
+    // Open the MSB
     let opened_b = open_bin(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
@@ -282,7 +282,7 @@ pub async fn compare_threshold_and_open(
     session: &mut Session,
     distance: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, distance.code_dist, distance.mask_dist).await?;
+    let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
     let opened = open_bin(session, &[bit]).await?[0];
     Ok(opened.convert())
 }
@@ -505,12 +505,12 @@ mod tests {
                     &mut player_session,
                     &[(
                         DistanceShare {
-                            code_dist: four_shares[0].clone(),
-                            mask_dist: four_shares[1].clone(),
+                            code_dot: four_shares[0].clone(),
+                            mask_dot: four_shares[1].clone(),
                         },
                         DistanceShare {
-                            code_dist: four_shares[2].clone(),
-                            mask_dist: four_shares[3].clone(),
+                            code_dot: four_shares[2].clone(),
+                            mask_dot: four_shares[3].clone(),
                         },
                     )],
                 )
