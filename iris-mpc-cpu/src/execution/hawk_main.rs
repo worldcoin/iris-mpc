@@ -143,6 +143,7 @@ impl HawkActor {
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
+        let networking = GrpcHandle::new(networking).await?;
 
         // Start server.
         {
@@ -157,9 +158,6 @@ impl HawkActor {
                     .unwrap();
             });
         }
-
-        // Wrap into networking handle
-        let networking = GrpcHandle::new(networking).await?;
 
         // Connect to other players.
         izip!(&identities, &args.addresses)
