@@ -23,6 +23,4 @@ echo "All endpoints are healthy. Running now the client..."
    --request-topic-arn arn:aws:sns:$AWS_REGION:000000000000:iris-mpc-input.fifo \
    --requests-bucket-name wf-smpcv2-dev-sns-requests \
    --public-key-base-url "http://localstack:4566/wf-dev-public-keys" \
-   --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo \
-   --endpoint-url $AWS_ENDPOINT_URL \
-   --region $AWS_REGION
+   --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo

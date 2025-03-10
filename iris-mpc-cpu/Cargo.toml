@@ -13,7 +13,6 @@ ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "~0.1"
-backoff = { version = "0.4.0", features = ["tokio"] }
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -42,6 +41,7 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
+backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

@@ -113,7 +113,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(n.clone(), links, lc).await;
         }
 

@@ -42,7 +42,7 @@ impl PlaintextIris {
 
         // `code_distance` gives the number of common unmasked bits which are
         // different between two iris codes, and `combined_mask_len` gives the
-        // total number of common unmasked bits.  The dot product of masked-bit
+        // total number of common unmasked bits. The dot product of masked-bit
         // vectors adds 1 for each unmasked bit which is equal, and subtracts 1
         // for each unmasked bit which is unequal; so this can be computed by
         // starting with 1 for every unmasked bit, and subtracting 2 for every

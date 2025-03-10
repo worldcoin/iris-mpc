@@ -158,6 +158,24 @@ simplify its invocation:
 This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
 Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
 
+### Running Requests with file data
+
+
+```bash
+cargo run --bin client -- \
+    --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
+    --requests-bucket-name wf-smpcv2-dev-sns-requests \
+    --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
+    --region us-east-1 \
+    --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo \
+    --data-from-file signup_sequence_shares_optin_both_sides.json \
+    --populate-file-data-limit 0
+```
+* 0 is to use all data in file otherwise one can specify a limit
+
+This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
+Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
+
 #### Testing
 
 ```
