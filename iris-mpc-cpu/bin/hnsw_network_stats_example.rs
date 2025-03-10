@@ -2,7 +2,10 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
-    hawkers::aby3::test_utils::lazy_setup_from_files_with_grpc,
+    hawkers::aby3::{
+        aby3_store::prepare_query,
+        test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
+    },
     hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
@@ -58,8 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut vector_store = vector_store;
         let mut graph_store = graph_store;
 
-        let player_index = vector_store.get_owner_index();
-        let query = vector_store.prepare_query(raw_query[player_index].clone());
+        let player_index = get_owner_index(&vector_store)?;
+        let query = prepare_query(raw_query[player_index].clone());
         let searcher = searcher.clone();
         let mut rng = rng.clone();
 

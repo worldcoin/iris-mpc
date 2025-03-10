@@ -418,7 +418,7 @@ mod tests {
     use super::*;
     use crate::{
         execution::{local::generate_local_identities, player::Role},
-        hawkers::aby3::test_utils::shared_random_setup,
+        hawkers::aby3::{aby3_store::prepare_query, test_utils::shared_random_setup},
         hnsw::HnswSearcher,
     };
     use aes_prng::AesRng;
@@ -682,7 +682,7 @@ mod tests {
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
                 let q = store.storage.get_vector(&i.into()).await;
-                let q = store.prepare_query((*q).clone());
+                let q = prepare_query((*q).clone());
                 jobs.spawn(async move {
                     let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
                     searcher.is_match(&mut store, &[secret_neighbors]).await

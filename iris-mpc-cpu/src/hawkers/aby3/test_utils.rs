@@ -6,16 +6,19 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::task::JoinSet;
 
 use crate::{
-    execution::local::{generate_local_identities, LocalRuntime},
+    execution::{
+        local::{generate_local_identities, LocalRuntime},
+        session::SessionHandles,
+    },
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood},
+    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
-    shares::share::DistanceShare,
+    shares::{share::DistanceShare, RingElement, Share},
 };
 
-use super::aby3_store::{Aby3Store, IrisRef, SharedIrisesRef, VectorId};
+use super::aby3_store::{prepare_query, Aby3Store, IrisRef, SharedIrisesRef, VectorId};
 
 pub fn setup_local_player_preloaded_db(
     database: HashMap<VectorId, IrisRef>,
@@ -78,6 +81,45 @@ pub async fn setup_local_store_aby3_players(
         .collect()
 }
 
+/// Returns the index of the party in the session, which is used to propagate messages to the correct party.
+/// The index must be in the range [0, 2] and unique per party.
+pub fn get_owner_index(store: &Aby3Store) -> eyre::Result<usize> {
+    store
+        .session
+        .boot_session
+        .own_role()
+        .map(|role| role.index())
+}
+
+/// Returns a trivial share of a distance.
+/// That is the additive sharing (distance, 0, 0)
+pub fn get_trivial_share(distance: u16, player_index: usize) -> Share<u32> {
+    let distance_elem = RingElement(distance as u32);
+    let zero_elem = RingElement(0_u32);
+
+    match player_index {
+        0 => Share::new(distance_elem, zero_elem),
+        1 => Share::new(zero_elem, distance_elem),
+        2 => Share::new(zero_elem, zero_elem),
+        _ => panic!("Invalid player index"),
+    }
+}
+
+/// Returns the distance between two vectors inserted into Aby3Store.
+pub(crate) async fn eval_vector_distance(
+    store: &mut Aby3Store,
+    vector1: &<Aby3Store as VectorStore>::VectorRef,
+    vector2: &<Aby3Store as VectorStore>::VectorRef,
+) -> <Aby3Store as VectorStore>::DistanceRef {
+    let point1 = store.storage.get_vector(vector1).await;
+    let mut point2 = (*store.storage.get_vector(vector2).await).clone();
+    point2.code.preprocess_iris_code_query_share();
+    point2.mask.preprocess_mask_code_query_share();
+    let pairs = vec![(&*point1, &point2)];
+    let dist = store.eval_pairwise_distances(pairs).await;
+    store.lift_distances(dist).await.unwrap()[0].clone()
+}
+
 /// Converts a plaintext graph store to a secret-shared graph store.
 ///
 /// If recompute_distance is true, distances are recomputed from scratch via
@@ -105,14 +147,13 @@ async fn graph_from_plain(
                 let target_v = target_v.into();
                 let distance = if recompute_distances {
                     // recompute distances of graph edges from scratch
-                    vector_store
-                        .eval_distance_vectors(&source_v, &target_v)
-                        .await
+                    eval_vector_distance(vector_store, &source_v, &target_v).await
                 } else {
                     // convert plaintext distances to trivial shares, i.e., d -> (d, 0, 0)
+                    let owner_index = get_owner_index(vector_store).unwrap();
                     DistanceShare::new(
-                        vector_store.get_trivial_share(dist.0),
-                        vector_store.get_trivial_share(dist.1),
+                        get_trivial_share(dist.0, owner_index),
+                        get_trivial_share(dist.1, owner_index),
                     )
                 };
                 shared_queue.push((target_v, distance.clone()));
@@ -169,7 +210,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         });
     }
     let mut secret_shared_stores = jobs.join_all().await;
-    secret_shared_stores.sort_by_key(|(store, _)| store.get_owner_index());
+    secret_shared_stores.sort_by_key(|(store, _)| get_owner_index(store).unwrap());
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     Ok((plaintext, secret_shared_stores))
 }
@@ -232,7 +273,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
         });
     }
     let mut secret_shared_stores = jobs.join_all().await;
-    secret_shared_stores.sort_by_key(|(store, _)| store.get_owner_index());
+    secret_shared_stores.sort_by_key(|(store, _)| get_owner_index(store).unwrap());
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     Ok((plaintext, secret_shared_stores))
 }
@@ -297,10 +338,10 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     let mut jobs = JoinSet::new();
     for store in local_stores.iter_mut() {
         let mut store = store.clone();
-        let role = store.get_owner_index();
+        let role = get_owner_index(&store)?;
         let mut rng_searcher = rng_searcher.clone();
         let queries = (0..database_size)
-            .map(|id| store.prepare_query(shared_irises[id][role].clone()))
+            .map(|id| prepare_query(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         jobs.spawn(async move {
             let mut graph_store = GraphMem::new();
@@ -317,7 +358,9 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     let mut result = jobs.join_all().await;
     // preserve order of players
     result.sort_by(|(store1, _), (store2, _)| {
-        store1.get_owner_index().cmp(&store2.get_owner_index())
+        get_owner_index(store1)
+            .unwrap()
+            .cmp(&get_owner_index(store2).unwrap())
     });
     Ok(result)
 }
