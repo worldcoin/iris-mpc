@@ -46,6 +46,8 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingTrimmedMaskCodeShare {
+        /// The 1-based ID of the Lagrange evaluation point. This id = party_id + 1.
+        /// This field appears in serializations.
         pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; MASK_CODE_LENGTH],
@@ -76,9 +78,19 @@ pub mod degree4 {
     }
 
     impl GaloisRingTrimmedMaskCodeShare {
+        /// Wrap a mask share. party_id is 0-based.
+        #[inline(always)]
+        pub fn new(coefs: [u16; MASK_CODE_LENGTH], party_id: usize) -> Self {
+            Self {
+                id: party_id + 1,
+                coefs,
+            }
+        }
+
+        /// Empty mask share. party_id is 0-based.
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingTrimmedMaskCodeShare {
-                id: party_id,
+                id: party_id + 1,
                 coefs: [0u16; MASK_CODE_LENGTH],
             }
         }
@@ -108,6 +120,8 @@ pub mod degree4 {
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct GaloisRingIrisCodeShare {
+        /// The 1-based ID of the Lagrange evaluation point. This id = party_id + 1.
+        /// This field appears in serializations.
         pub id: usize,
         #[serde(with = "BigArray")]
         pub coefs: [u16; IRIS_CODE_LENGTH],
@@ -130,13 +144,19 @@ pub mod degree4 {
             800 * r + c * 4 + w * 2 + b
         }
 
-        pub fn new(id: usize, coefs: [u16; IRIS_CODE_LENGTH]) -> Self {
-            Self { id, coefs }
+        /// Wrap a code share. party_id is 0-based.
+        #[inline(always)]
+        pub fn new(coefs: [u16; IRIS_CODE_LENGTH], party_id: usize) -> Self {
+            Self {
+                id: party_id + 1,
+                coefs,
+            }
         }
 
+        /// Empty code share. party_id is 0-based.
         pub fn default_for_party(party_id: usize) -> Self {
             GaloisRingIrisCodeShare {
-                id: party_id,
+                id: party_id + 1,
                 coefs: [0u16; IRIS_CODE_LENGTH],
             }
         }

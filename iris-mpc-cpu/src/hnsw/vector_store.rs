@@ -19,7 +19,7 @@ impl<T> Ref for T where
 {
 }
 
-// The operations exposed by a vector store, sufficient for a search algorithm.
+/// The operations exposed by a vector store, sufficient for a search algorithm.
 #[allow(async_fn_in_trait)]
 pub trait VectorStore: Clone + Debug {
     /// Opaque reference to a query.
@@ -37,10 +37,6 @@ pub trait VectorStore: Clone + Debug {
     ///
     /// Example: an encrypted distance.
     type DistanceRef: Ref;
-
-    /// Persist a query as a new vector in the store, and return a reference to
-    /// it.
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
 
     /// Evaluate the distance between a query and a vector.
     async fn eval_distance(
@@ -60,18 +56,7 @@ pub trait VectorStore: Clone + Debug {
         distance2: &Self::DistanceRef,
     ) -> bool;
 
-    // Batch variants.
-
-    /// Persist a batch of queries as new vectors in the store, and return
-    /// references to them. The default implementation is a loop over
-    /// `insert`. Override for more efficient batch insertions.
-    async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
-        let mut results = Vec::with_capacity(queries.len());
-        for query in queries {
-            results.push(self.insert(query).await);
-        }
-        results
-    }
+    // Batch variants
 
     /// Evaluate the distances between a query and a batch of vectors.
     /// The default implementation is a loop over `eval_distance`.
@@ -88,6 +73,17 @@ pub trait VectorStore: Clone + Debug {
         results
     }
 
+    /// Check whether a batch of distances are matches.
+    /// The default implementation is a loop over `is_match`.
+    /// Override for more efficient batch match checks.
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Vec<bool> {
+        let mut results = Vec::with_capacity(distances.len());
+        for distance in distances {
+            results.push(self.is_match(distance).await);
+        }
+        results
+    }
+
     /// Compare a distance with a batch of distances.
     /// The default implementation is a loop over `less_than`.
     /// Override for more efficient batch comparisons.
@@ -98,6 +94,25 @@ pub trait VectorStore: Clone + Debug {
         let mut results: Vec<bool> = Vec::with_capacity(distances.len());
         for (d1, d2) in distances {
             results.push(self.less_than(d1, d2).await);
+        }
+        results
+    }
+}
+
+/// The operations exposed by a vector store, including mutations.
+#[allow(async_fn_in_trait)]
+pub trait VectorStoreMut: VectorStore {
+    /// Persist a query as a new vector in the store, and return a reference to
+    /// it.
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
+
+    /// Persist a batch of queries as new vectors in the store, and return
+    /// references to them. The default implementation is a loop over
+    /// `insert`. Override for more efficient batch insertions.
+    async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            results.push(self.insert(query).await);
         }
         results
     }

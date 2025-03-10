@@ -1,11 +1,10 @@
-use super::binary::{mul_lift_2k, single_extract_msb_u32};
+use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
 use crate::{
-    database_generators::GaloisRingSharedIris,
     execution::session::{BootSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
     protocol::{
-        binary::{lift, open_bin},
         prf::{Prf, PrfSeed},
+        shared_iris::GaloisRingSharedIris,
     },
     shares::{
         bit::Bit,
@@ -15,6 +14,7 @@ use crate::{
     },
 };
 use eyre::eyre;
+use itertools::izip;
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -55,19 +55,19 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
 
 /// Compares the distance between two iris pairs to a threshold.
 ///
-/// - Takes as input two code and mask dot products between two Irises: i, j.
-///   i.e. code_dot = <i.code, j.code> and mask_dot = <i.mask, j.mask>.
+/// - Takes as input two code and mask dot products between two irises,
+///   i.e., code_dist = <iris1.code, iris2.code> and mask_dist = <iris1.mask, iris2.mask>.
 /// - Lifts the two dot products to the ring Z_{2^32}.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
-/// - Compares mask_dot * A < code_dot * B.
+/// - Compares mask_dist * A < code_dist * B.
 pub async fn compare_threshold(
     session: &mut Session,
-    code_dot: Share<u32>,
-    mask_dot: Share<u32>,
+    code_dist: Share<u32>,
+    mask_dist: Share<u32>,
 ) -> eyre::Result<Share<Bit>> {
-    let mut x = mask_dot * A as u32;
-    let y = code_dot * B as u32;
+    let mut x = mask_dist * A as u32;
+    let y = code_dist * B as u32;
     x -= y;
 
     single_extract_msb_u32::<32>(session, x).await
@@ -79,11 +79,11 @@ pub async fn compare_threshold(
 /// See compare_threshold for more details.
 pub async fn lift_and_compare_threshold(
     session: &mut Session,
-    code_dot: Share<u16>,
-    mask_dot: Share<u16>,
+    code_dist: Share<u16>,
+    mask_dist: Share<u16>,
 ) -> eyre::Result<Share<Bit>> {
-    let y = mul_lift_2k::<B_BITS>(&code_dot);
-    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dot])).await?;
+    let y = mul_lift_2k::<B_BITS>(&code_dist);
+    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x.pop().expect("Expected a single element in the VecShare");
     x *= A as u32;
     x -= y;
@@ -121,62 +121,76 @@ pub async fn batch_signed_lift_vec(
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
 
-/// Computes D2 * T1 - T2 * D1
+/// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
+/// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
+///
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub(crate) async fn cross_mul(
     session: &mut Session,
-    d1: Share<u32>,
-    t1: Share<u32>,
-    d2: Share<u32>,
-    t2: Share<u32>,
-) -> eyre::Result<Share<u32>> {
-    let res_a = session.prf_as_mut().gen_zero_share() + &d2 * &t1 - &t2 * &d1;
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> eyre::Result<Vec<Share<u32>>> {
+    let res_a: Vec<RingElement<u32>> = distances
+        .iter()
+        .map(|(d1, d2)| {
+            session.prf_as_mut().gen_zero_share() + &d2.code_dot * &d1.mask_dot
+                - &d1.code_dot * &d2.mask_dot
+        })
+        .collect();
 
     let network = session.network();
     let next_role = session.identity(&session.own_role()?.next(3))?;
     let prev_role = session.identity(&session.own_role()?.prev(3))?;
 
-    network
-        .send(
-            NetworkValue::RingElement32(res_a).to_network(),
-            next_role,
-            &session.session_id(),
-        )
-        .await?;
+    if res_a.len() == 1 {
+        network
+            .send(
+                NetworkValue::RingElement32(res_a[0]).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await?;
+    } else {
+        network
+            .send(
+                NetworkValue::VecRing32(res_a.clone()).to_network(),
+                next_role,
+                &session.session_id(),
+            )
+            .await?;
+    };
 
     let serialized_reply = network.receive(prev_role, &session.session_id()).await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::RingElement32(element)) => element,
+        Ok(NetworkValue::RingElement32(element)) => vec![element],
+        Ok(NetworkValue::VecRing32(elements)) => elements,
         _ => return Err(eyre!("Could not deserialize RingElement32")),
     };
-
-    Ok(Share::new(res_a, res_b))
+    Ok(izip!(res_a.into_iter(), res_b.into_iter())
+        .map(|(a, b)| Share::new(a, b))
+        .collect())
 }
 
-/// Computes (d2*t1 - d1*t2) > 0.
-/// Does the multiplication in Z_{2^32} and computes the MSB, to check the
-/// comparison result.
-/// d1, t1 are replicated shares that come from an iris code/mask dot product,
-/// ie: d1 = dot(c_x, c_y); t1 = dot(m_x, m_y). d2, t2 are replicated shares
-/// that come from an iris code and mask dot product, ie:
-/// d2 = dot(c_u, c_w), t2 = dot(m_u, m_w)
+/// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 and opens it.
+///
+/// The less-than operator is implemented in 2 steps:
+///
+/// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
+/// 2. The most significant bit of the result is extracted.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to
 /// 32-bit.
 pub async fn cross_compare(
     session: &mut Session,
-    d1: Share<u32>,
-    t1: Share<u32>,
-    d2: Share<u32>,
-    t2: Share<u32>,
-) -> eyre::Result<bool> {
-    let diff = cross_mul(session, d1, t1, d2, t2).await?;
-    // Compute bit <- MSB(D2 * T1 - D1 * T2)
-    let bit = single_extract_msb_u32::<32>(session, diff).await?;
-    // Open bit
-    let opened_b = open_bin(session, bit).await?;
-    Ok(opened_b.convert())
+    distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
+) -> eyre::Result<Vec<bool>> {
+    // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
+    let diff = cross_mul(session, distances).await?;
+    // Compute the MSB of the above
+    let bits = extract_msb_u32_batch(session, &diff).await?;
+    // Open the MSB
+    let opened_b = open_bin(session, &bits).await?;
+    opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
 /// Computes the dot product between the iris pairs; for both the code and the
@@ -184,18 +198,18 @@ pub async fn cross_compare(
 /// vector to be able to reshare it later.
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<Vec<RingElement<u16>>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (x, y) = pair;
-        let code_dot = x.code.trick_dot(&y.code);
-        let mask_dot = x.mask.trick_dot(&y.mask);
-        additive_shares.push(RingElement(code_dot));
+        let code_dist = x.code.trick_dot(&y.code);
+        let mask_dist = x.mask.trick_dot(&y.mask);
+        additive_shares.push(RingElement(code_dist));
         // When applying the trick dot on trimmed masks, we have to multiply with 2 the
         // result The intuition being that a GaloisRingTrimmedMask contains half
         // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dot));
+        additive_shares.push(RingElement(2) * RingElement(mask_dist));
     }
     Ok(additive_shares)
 }
@@ -252,14 +266,14 @@ pub async fn galois_ring_to_rep3(
 ///   `lift_and_compare_threshold` function.
 pub async fn galois_ring_is_match(
     session: &mut Session,
-    pairs: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
 ) -> eyre::Result<bool> {
     assert_eq!(pairs.len(), 1);
     let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
     let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
     // compute dots[0] - dots[1]
     let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
-    let opened = open_bin(session, bit).await?;
+    let opened = open_bin(session, &[bit]).await?[0];
     Ok(opened.convert())
 }
 
@@ -269,7 +283,7 @@ pub async fn compare_threshold_and_open(
     distance: DistanceShare<u32>,
 ) -> eyre::Result<bool> {
     let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
-    let opened = open_bin(session, bit).await?;
+    let opened = open_bin(session, &[bit]).await?[0];
     Ok(opened.convert())
 }
 
@@ -277,17 +291,17 @@ pub async fn compare_threshold_and_open(
 mod tests {
     use super::*;
     use crate::{
-        database_generators::generate_galois_iris_shares,
         execution::{
             local::{generate_local_identities, LocalRuntime},
             player::Identity,
         },
         hawkers::plaintext_store::PlaintextIris,
-        protocol::ops::NetworkValue::RingElement32,
+        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
+    use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rstest::rstest;
     use std::collections::HashMap;
@@ -489,13 +503,20 @@ mod tests {
                     .unwrap();
                 let out_shared = cross_mul(
                     &mut player_session,
-                    four_shares[0].clone(),
-                    four_shares[1].clone(),
-                    four_shares[2].clone(),
-                    four_shares[3].clone(),
+                    &[(
+                        DistanceShare {
+                            code_dot: four_shares[0].clone(),
+                            mask_dot: four_shares[1].clone(),
+                        },
+                        DistanceShare {
+                            code_dot: four_shares[2].clone(),
+                            mask_dot: four_shares[3].clone(),
+                        },
+                    )],
                 )
                 .await
-                .unwrap();
+                .unwrap()[0]
+                    .clone();
 
                 open_single(&player_session, out_shared).await.unwrap()
             });
@@ -556,8 +577,10 @@ mod tests {
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
 
-        let first_entry = generate_galois_iris_shares(&mut rng, iris_db[0].clone());
-        let second_entry = generate_galois_iris_shares(&mut rng, iris_db[1].clone());
+        let first_entry =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+        let second_entry =
+            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
         for (index, player) in runtime.get_identities().iter().cloned().enumerate() {
@@ -568,6 +591,7 @@ mod tests {
                 y.mask.preprocess_mask_code_query_share();
             });
             jobs.spawn(async move {
+                let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
                     .unwrap();

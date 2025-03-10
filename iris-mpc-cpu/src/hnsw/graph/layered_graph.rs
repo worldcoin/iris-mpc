@@ -12,15 +12,27 @@ use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Representation of the entry point of HNSW search in a layered graph.
+/// This is a vector reference along with the layer of the graph at which
+/// search begins.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPoint<VectorRef> {
+    /// The vector reference of the entry point
     pub point: VectorRef,
+
+    /// The layer at which HNSW search begins
     pub layer: usize,
 }
 
+/// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
+    /// Starting vector and layer for HNSW search
     entry_point: Option<EntryPoint<V::VectorRef>>,
+
+    /// The layers of the hierarchical graph. The nodes of each layer are a
+    /// subset of the nodes of the previous layer, and graph neighborhoods in
+    /// each layer represent approximate nearest neighbors within that layer.
     layers: Vec<Layer<V>>,
 }
 
@@ -69,7 +81,7 @@ impl<V: VectorStore> GraphMem<V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.n_links) {
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(n.clone(), links, lc).await;
         }
 
@@ -134,8 +146,8 @@ impl<V: VectorStore> GraphMem<V> {
 
 #[derive(PartialEq, Eq, Default, Clone, Debug, Serialize, Deserialize)]
 pub struct Layer<V: VectorStore> {
-    /// Map a base vector to its neighbors, including the distance
-    /// base-neighbor.
+    /// Map a base vector to its neighbors, including the distance between
+    /// base and neighbor.
     links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
 }
 
@@ -224,7 +236,7 @@ mod tests {
     use super::*;
     use crate::{
         hawkers::plaintext_store::{PlaintextStore, PointId},
-        hnsw::HnswSearcher,
+        hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -253,15 +265,6 @@ mod tests {
         type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
-        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-            // The query is now accepted in the store. It keeps the same ID.
-            self.points
-                .get_mut(&(query.0 as usize))
-                .unwrap()
-                .is_persistent = true;
-            *query
-        }
-
         async fn eval_distance(
             &mut self,
             query: &Self::QueryRef,
@@ -283,6 +286,17 @@ mod tests {
             distance2: &Self::DistanceRef,
         ) -> bool {
             *distance1 < *distance2
+        }
+    }
+
+    impl VectorStoreMut for TestStore {
+        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+            // The query is now accepted in the store. It keeps the same ID.
+            self.points
+                .get_mut(&(query.0 as usize))
+                .unwrap()
+                .is_persistent = true;
+            *query
         }
     }
 

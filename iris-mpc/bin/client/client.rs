@@ -1,7 +1,5 @@
-mod server;
-
 use clap::Parser;
-use iris_mpc::client::{run_client, Opt};
+use iris_mpc::client::e2e::{run_client, Opt};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

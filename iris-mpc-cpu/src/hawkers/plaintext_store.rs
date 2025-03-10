@@ -1,5 +1,6 @@
 use crate::hnsw::{
     metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
+    vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
@@ -41,7 +42,7 @@ impl PlaintextIris {
 
         // `code_distance` gives the number of common unmasked bits which are
         // different between two iris codes, and `combined_mask_len` gives the
-        // total number of common unmasked bits.  The dot product of masked-bit
+        // total number of common unmasked bits. The dot product of masked-bit
         // vectors adds 1 for each unmasked bit which is equal, and subtracts 1
         // for each unmasked bit which is unequal; so this can be computed by
         // starting with 1 for every unmasked bit, and subtracting 2 for every
@@ -131,12 +132,6 @@ impl VectorStore for PlaintextStore {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (u16, u16);
-
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        // The query is now accepted in the store. It keeps the same ID.
-        self.points[*query].is_persistent = true;
-        *query
-    }
 
     async fn eval_distance(
         &mut self,
@@ -232,6 +227,14 @@ impl PlaintextStore {
         }
 
         Ok(plaintext_graph_store)
+    }
+}
+
+impl VectorStoreMut for PlaintextStore {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        // The query is now accepted in the store. It keeps the same ID.
+        self.points[*query].is_persistent = true;
+        *query
     }
 }
 

@@ -100,6 +100,8 @@ impl SyncResult {
             grouped.entry(m.id).or_default().push(m);
         }
 
+        tracing::info!("Grouped modifications: {:?}", grouped);
+
         // Store the results here
         let mut to_update = Vec::new();
         let mut to_delete = Vec::new();
