@@ -230,15 +230,18 @@ impl HnswSearcher {
         neighbors.trim_to_k_nearest(M);
 
         // Connect all n -> q
-        let mut n_links = vec![];
+        let mut nb_links = vec![];
         for (n, nq) in neighbors.iter() {
             let mut links = graph.get_links(n, lc).await;
             links.insert(store, q.clone(), nq.clone()).await;
             links.trim_to_k_nearest(max_links);
-            n_links.push(links);
+            nb_links.push(links);
         }
 
-        ConnectPlanLayer { neighbors, nb_links: n_links }
+        ConnectPlanLayer {
+            neighbors,
+            nb_links,
+        }
     }
 
     /// Choose a random insertion layer from a geometric distribution, producing
@@ -300,8 +303,7 @@ impl HnswSearcher {
             }
             1 => {
                 let start = W.get_nearest().expect("W cannot be empty");
-                let nearest =
-                    Self::layer_search_greedy(store, graph, q, start, lc).await;
+                let nearest = Self::layer_search_greedy(store, graph, q, start, lc).await;
 
                 W.edges.clear();
                 W.edges.push(nearest);

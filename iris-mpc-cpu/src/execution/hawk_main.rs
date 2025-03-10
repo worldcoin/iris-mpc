@@ -996,7 +996,7 @@ mod tests_db {
                             vectors[side],
                             distance.clone(),
                         )]),
-                        n_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
+                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
                             *vector,
                             distance.clone(),
                         )])],
