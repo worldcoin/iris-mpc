@@ -1,12 +1,12 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3_store::VectorId;
+pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{prepare_query, Aby3Store, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -335,7 +335,7 @@ impl HawkActor {
         iris: GaloisRingSharedIris,
     ) -> InsertPlan {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng);
-        let query = session.aby3_store.prepare_query(iris);
+        let query = prepare_query(iris);
 
         let (links, set_ep) = search_params
             .search_to_insert(
@@ -968,7 +968,7 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::{
-        hawkers::aby3_store::VectorId,
+        hawkers::aby3::aby3_store::VectorId,
         hnsw::{
             graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
             SortedNeighborhood,
