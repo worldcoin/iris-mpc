@@ -135,8 +135,8 @@ struct MessageJob {
     return_channel: oneshot::Sender<eyre::Result<MessageResult>>,
 }
 
+// Concurrency handler for networking operations
 #[derive(Clone)]
-// concurrency handler of send/receive commands
 pub struct GrpcHandle {
     job_queue: mpsc::Sender<MessageJob>,
     party_id:  Identity,
@@ -147,42 +147,32 @@ impl GrpcHandle {
         let party_id = grpc.party_id.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<MessageJob>(1);
 
+        // Loop to handle incoming tasks from job queue
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 let job_result = match job.task {
-                    GrpcTask::Send(task) => {
-                        grpc.send(task.value, &task.receiver, &task.session_id)
-                            .unwrap();
-
-                        Ok(MessageResult::Empty)
-                    }
-                    GrpcTask::Receive(task) => {
-                        let maybe_bytes = grpc.receive(&task.sender, &task.session_id).await;
-
-                        match maybe_bytes {
-                            Ok(bytes) => Ok(MessageResult::ReceivedBytes(bytes)),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    GrpcTask::CreateSession(session_id) => {
-                        grpc.create_session(session_id).await.unwrap();
-                        Ok(MessageResult::Empty)
-                    }
+                    GrpcTask::Send(task) => grpc
+                        .send(task.value, &task.receiver, &task.session_id)
+                        .map(|_| MessageResult::Empty),
+                    GrpcTask::Receive(task) => grpc
+                        .receive(&task.sender, &task.session_id)
+                        .await
+                        .map(MessageResult::ReceivedBytes),
+                    GrpcTask::CreateSession(session_id) => grpc
+                        .create_session(session_id)
+                        .await
+                        .map(|_| MessageResult::Empty),
                     GrpcTask::IsSessionReady(session_id) => Ok(MessageResult::IsSessionReady(
                         grpc.is_session_ready(session_id),
                     )),
-                    GrpcTask::ConnectToParty(task) => {
-                        grpc.connect_to_party(task.party_id, &task.address)
-                            .await
-                            .unwrap();
-                        Ok(MessageResult::Empty)
-                    }
-                    GrpcTask::StartMessageStream(task) => {
-                        grpc.start_message_stream(task.sender, task.session_id, task.stream)
-                            .await
-                            .unwrap();
-                        Ok(MessageResult::Empty)
-                    }
+                    GrpcTask::ConnectToParty(task) => grpc
+                        .connect_to_party(task.party_id, &task.address)
+                        .await
+                        .map(|_| MessageResult::Empty),
+                    GrpcTask::StartMessageStream(task) => grpc
+                        .start_message_stream(task.sender, task.session_id, task.stream)
+                        .await
+                        .map(|_| MessageResult::Empty),
                 };
                 let _ = job.return_channel.send(job_result);
             }
@@ -194,6 +184,7 @@ impl GrpcHandle {
         })
     }
 
+    // Send a task to the job queue and wait for the result
     async fn submit(&self, task: GrpcTask) -> eyre::Result<MessageResult> {
         let (tx, rx) = oneshot::channel();
         let job = MessageJob {
@@ -205,6 +196,7 @@ impl GrpcHandle {
     }
 }
 
+// Networking I/O operations
 #[async_trait]
 impl Networking for GrpcHandle {
     async fn send(
@@ -303,7 +295,7 @@ impl PartyNode for GrpcHandle {
     }
 }
 
-// Session management
+// Connection and session management
 impl GrpcHandle {
     pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
         let task = ConnectToPartyTask {
@@ -783,7 +775,10 @@ mod tests {
                 let res = alice
                     .send(message.clone(), &Identity::from("eve"), &session_id)
                     .await;
-                assert!(res.is_err());
+                assert_eq!(
+                    "Streams for session SessionId(0) and receiver Identity(\"eve\") not found",
+                    res.unwrap_err().to_string()
+                );
             });
         }
 
@@ -797,7 +792,10 @@ mod tests {
                 let alice = players[0].clone();
 
                 let res = alice.receive(&Identity::from("eve"), &session_id).await;
-                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "RECEIVE: Sender Identity(\"eve\") hasn't been found in the message queues"
+                );
             });
         }
 
@@ -814,7 +812,10 @@ mod tests {
                 let res = alice
                     .send(message.clone(), &Identity::from("alice"), &session_id)
                     .await;
-                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "Streams for session SessionId(2) and receiver Identity(\"alice\") not found"
+                );
             });
         }
 
@@ -827,11 +828,12 @@ mod tests {
 
                 let alice = players[0].clone();
 
-                tracing::trace!("Players created a session. Adding the same session again");
-
                 let res = alice.create_session(session_id).await;
 
-                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "Player Identity(\"alice\") has already created session SessionId(3)"
+                );
             });
         }
 
@@ -847,12 +849,15 @@ mod tests {
                     .await;
                 assert!(res.is_err());
                 let res = alice.receive(&Identity::from("bob"), &session_id).await;
-                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "Session SessionId(50) hasn't been added to message queues"
+                );
             });
         }
 
         {
-            // Receive from a party that didn't send a message
+            // Receive from a party that didn't send a message (timeout error)
 
             let alice = players[0].clone();
             let players = players.clone();
@@ -861,9 +866,14 @@ mod tests {
                 create_session_helper(session_id, &players).await.unwrap();
 
                 let res = alice.receive(&Identity::from("bob"), &session_id).await;
-                assert!(res.is_err());
+                assert_eq!(
+                    res.unwrap_err().to_string(),
+                    "Party Identity(\"alice\"): Timeout while waiting for message from \
+                     Identity(\"bob\") in session SessionId(4)"
+                );
             });
         }
+
         jobs.join_all().await;
 
         Ok(())
