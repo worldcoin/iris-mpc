@@ -30,7 +30,7 @@ pub struct GraphMem<V: VectorStore> {
     /// Starting vector and layer for HNSW search
     entry_point: Option<EntryPoint<V::VectorRef>>,
 
-    /// The layers of the hierarchical graph.  The nodes of each layer are a
+    /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
     layers: Vec<Layer<V>>,

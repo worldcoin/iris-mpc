@@ -24,7 +24,7 @@ pub const N_PARAM_LAYERS: usize = 5;
 ///
 /// Most algorithm and graph properties are specified per-layer by a
 /// fixed-length array of size `N_PARAM_LAYERS`, for layers up to
-/// `N_PARAM_LAYERS - 1`.  Layers larger than this use the last set of
+/// `N_PARAM_LAYERS - 1`. Layers larger than this use the last set of
 /// parameters.
 #[allow(non_snake_case)]
 #[derive(PartialEq, Clone, Serialize, Deserialize)]
@@ -35,16 +35,16 @@ pub struct HnswParams {
     /// Maximum number of neighbors allowed per graph node
     pub M_max: [usize; N_PARAM_LAYERS],
 
-    /// Exploration factor ef for search layers during construction
+    /// Exploration factor `ef` for search layers during construction
     pub ef_constr_search: [usize; N_PARAM_LAYERS],
 
-    /// Exploration factor ef for insertion layers during construction
+    /// Exploration factor `ef` for insertion layers during construction
     pub ef_constr_insert: [usize; N_PARAM_LAYERS],
 
-    /// Exploration factor ef during search
+    /// Exploration factor `ef` during search
     pub ef_search: [usize; N_PARAM_LAYERS],
 
-    /// Probability p for geometric distribution of layer densities
+    /// Probability `q = 1-p` for geometric distribution of layer densities
     pub layer_probability: f64,
 }
 
@@ -164,7 +164,7 @@ impl HnswParams {
 /// Graph search in this implementation is optimized to reduce the number of sequential distance
 /// evaluation and distance comparison operations, because we use SMPC protocols to implement these
 /// basic ops and so the sequential latency introduced by back-and-forth network communication
-/// between protocol parties can become significant without batching of operations.  See in
+/// between protocol parties can become significant without batching of operations. See in
 /// particular the documentation for the `layer_search_batched` and `layer_search_greedy` functions
 /// for details on these search optimizations.
 #[derive(Clone, Serialize, Deserialize)]
@@ -185,7 +185,7 @@ pub struct ConnectPlan<Vector, Distance> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
-    /// The HNSW graph updates required by insertion.  The insertion layer of the new vector
+    /// The HNSW graph updates required by insertion. The insertion layer of the new vector
     /// is `layers.len() - 1`.
     pub layers: Vec<ConnectPlanLayer<Vector, Distance>>,
 
@@ -280,8 +280,8 @@ impl HnswSearcher {
     }
 
     /// Mutate `W` into the `ef` nearest neighbors of query vector `q` in layer `lc` using a
-    /// depth-first graph traversal.  One of several concrete implementations is selected depending
-    /// on `ef`.  Terminates when `W` contains vectors which are the nearest to `q` among all
+    /// depth-first graph traversal. One of several concrete implementations is selected depending
+    /// on `ef`. Terminates when `W` contains vectors which are the nearest to `q` among all
     /// traversed vertices and their neighbors.
     #[instrument(
         level = "trace",
@@ -760,7 +760,7 @@ impl HnswSearcher {
     /// Returns a distance-sorted list (nearest first) of the neighbors.
     ///
     /// Layer search operations use the `ef_search` values of the `HnswParams` struct recorded in
-    /// the `params` field of `self`.  In the original specification of HNSW this uses a specified
+    /// the `params` field of `self`. In the original specification of HNSW this uses a specified
     /// value for `ef` at layer 0 only, and `ef = 1` (greedy search) for all higher layers.
     #[allow(non_snake_case)]
     pub async fn search<V: VectorStore>(
