@@ -1,5 +1,5 @@
 //! Implementation of HNSW algorithm for k-nearest-neighbor search over iris
-//! biometric templates with high-latency MPC comparison operations.  Based on
+//! biometric templates with high-latency MPC comparison operations. Based on
 //! the `HawkSearcher` class of the `hawk-pack` crate:
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
@@ -393,7 +393,7 @@ impl HnswSearcher {
         }
     }
 
-    /// Run an HNSW layer search with batched operation.  The algorithm mutates
+    /// Run an HNSW layer search with batched operation. The algorithm mutates
     /// the input sorted neighborhood `W` into the `ef` (approximate)
     /// nearest vectors to the query `q` in layer `lc` of the layered graph
     /// `graph`.
@@ -402,14 +402,14 @@ impl HnswSearcher {
     /// sequentially inspecting the neighbors of previously un-opened
     /// entries of `W` closest to `q`, inserting inspected nodes into `W` if
     /// they are nearer to `q` than the current farthest entry of `W`
-    /// (or unconditionally if `W` needs to be filled to size `ef`).  The
+    /// (or unconditionally if `W` needs to be filled to size `ef`). The
     /// entries of `W` are stored in sorted order of their distance to `q`,
     /// so new nodes are inserted into `W` using a search/sort procedure.
     ///
     /// Distinct from the standard HNSW algorithm, this batched implementation
     /// maintains queues for both distance comparison operations and sorted
     /// list insertion operations so they can be processed in batches rather
-    /// than individually.  This has to be handled with some care, as
+    /// than individually. This has to be handled with some care, as
     /// the efficient traversal of the graph layer depends on aspects of the
     /// ongoing sequential search pattern. It is accomplished in the
     /// following way.
@@ -417,22 +417,22 @@ impl HnswSearcher {
     /// First, as `W` is initially filled up to size `ef`, the entire neighborhoods
     /// of nodes are inserted into `W` via a batched insertion operation
     /// such as a low-depth sorting network. (This functionality is provided
-    /// by `SortedNeighborhood::insert_batch`.)  This continues
+    /// by `SortedNeighborhood::insert_batch`.) This continues
     /// until `W` has reached size `ef`, so that additional insertions will
     /// result in truncation of farthest elements.
     ///
-    /// Once `W` has size `ef`, the second phase of graph traversal starts.  In
+    /// Once `W` has size `ef`, the second phase of graph traversal starts. In
     /// this phase, when an entry of `W` is processed, its neighbors are put
     /// into a queue for later comparison against the entry of `W` farthest
-    /// from `q`.  The size of this queue is calibrated such that the number
+    /// from `q`. The size of this queue is calibrated such that the number
     /// of entries which eventually are inserted into `W` from this comparison
     /// is around a specific targeted batch insertion size.
     ///
     /// However, during graph traversal, the proportion of inspected nodes which
     /// ultimately are inserted into `W` decreases as the neighborhood `W`
-    /// better approximates the actual nearest neighbors of `q`.  As such,
+    /// better approximates the actual nearest neighbors of `q`. As such,
     /// the number of elements that should be inspected to identify a
-    /// particular number of insertion elements increases.  To estimate an
+    /// particular number of insertion elements increases. To estimate an
     /// appropriate number of elements to compare as a batch against the
     /// farthest element of `W`, the algorithm requires an ongoing estimate
     /// of the rate of insertions relative to the number of inspected nodes.
@@ -440,7 +440,7 @@ impl HnswSearcher {
     /// This rate estimate is maintained throughout the traversal as the ratio
     /// of a fixed numerator and a dynamic denominator, which is
     /// periodically multiplied by a scaling factor when the estimated rate
-    /// is lower than the measured insertion rate over a batch.  This
+    /// is lower than the measured insertion rate over a batch. This
     /// representation is chosen so that the reciprocal of the rate, which
     /// is the factor the target batch insertion size is multiplied by to
     /// estimate the required queue size, is a fixed-precision value which
@@ -448,7 +448,7 @@ impl HnswSearcher {
     /// after repeated algebraic manipulations.
     ///
     /// Items meant for insertion are added to a second queue, the insertion
-    /// queue.  Whenever this queue reaches a fixed target batch insertion
+    /// queue. Whenever this queue reaches a fixed target batch insertion
     /// size, elements from the queue are inserted into `W` with a low-depth
     /// batch insertion operation.
     ///
@@ -464,9 +464,9 @@ impl HnswSearcher {
     /// batch is ready, some items may be left over. To ensure that all
     /// enqueued items are handled, first the batch comparison queue and then
     /// the batch insertion queue is processed, which may result in one or more
-    /// new elements being inserted into `W`.  If new elements are inserted,
+    /// new elements being inserted into `W`. If new elements are inserted,
     /// then the graph traversal loop continues as before, opening the newly
-    /// inserted items in `W`.  If no new entries are inserted in this
+    /// inserted items in `W`. If no new entries are inserted in this
     /// clean-up step, then the graph traversal is complete, and the function
     /// returns.
     #[instrument(level = "debug", skip(store, graph, q, W))]
@@ -538,7 +538,7 @@ impl HnswSearcher {
 
             // Once W is filled, main processing logic for opening nodes happens here
             while !c_links.is_empty() {
-                // Add pending comparisons for initial filter pass to a queue.  Note that it's
+                // Add pending comparisons for initial filter pass to a queue. Note that it's
                 // the _next_ insertion rate estimate that is used to compute this target batch
                 // size so that with reasonably high probability enough insertions are
                 // identified to trigger a batch insertion operation.
@@ -613,9 +613,9 @@ impl HnswSearcher {
                 .cloned();
 
             // Once we've opened all elements of candidate neighborhood W, process any
-            // remaining elements in the comparison and insertion queues.  If
+            // remaining elements in the comparison and insertion queues. If
             // new nodes are added to W that need to be opened and processed,
-            // continue the graph traversal.  Otherwise, halt.
+            // continue the graph traversal. Otherwise, halt.
 
             if c_next.is_none() {
                 debug!("Batched layer search clean-up");
@@ -803,7 +803,7 @@ impl HnswSearcher {
     }
 
     /// Conduct the search phase of HNSW insertion of `query` into the graph at
-    /// a specified insertion layer.  Layer search uses the "search" type
+    /// a specified insertion layer. Layer search uses the "search" type
     /// `ef_constr` parameter(s) for layers above the insertion layer (1 in
     /// standard HNSW), and the "insertion" type `ef_constr` parameter(s) for
     /// layers at and below the insertion layer (a single fixed `ef_constr` parameter

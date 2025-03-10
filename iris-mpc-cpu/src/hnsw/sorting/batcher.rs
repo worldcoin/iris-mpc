@@ -1,7 +1,7 @@
 //! Implementation of Batcher Odd-even Sorting Networks, including a custom
 //! extension supporting generation of optimized networks for non-2-power lists
 //! with a partially sorted prefix of elements, as required for batch insertion
-//! of new elements into a sorted list.  For more details on the standard
+//! of new elements into a sorted list. For more details on the standard
 //! Batcher sorting network, see references:
 //!
 //! - (<https://en.wikipedia.org/wiki/Batcher_odd%E2%80%93even_mergesort>)
@@ -32,7 +32,7 @@ fn batcher_merge_step(deg: usize, stage: usize) -> SwapNetworkLayer {
 }
 
 /// Generate the merging network for Batcher Odd-even Merge Sort of degree
-/// `deg`.  The merge network of degree `deg` consists of `deg` simple layers,
+/// `deg`. The merge network of degree `deg` consists of `deg` simple layers,
 /// and produces a sorted list of length `2^k` when applied to a list of this
 /// length whose first and second halves are already individually sorted.
 fn batcher_merger_network(deg: usize) -> SwapNetwork {
@@ -43,7 +43,7 @@ fn batcher_merger_network(deg: usize) -> SwapNetwork {
 }
 
 /// Generate the pruned Batcher odd-even merge sort sorting network for an input
-/// list of a specified size.  A "pruned" network is the network obtained by
+/// list of a specified size. A "pruned" network is the network obtained by
 ///
 /// - starting with a full 2-power size batcher network of minimal size needed
 ///   to sort the targeted potentially non-2-power size
@@ -74,15 +74,15 @@ pub fn batcher_network(size: usize) -> SwapNetwork {
 ///
 /// For the latter rule, a somewhat nuanced observation is used to identify
 /// extra indices that are "stabilized early" coming from the assumption that
-/// some portion of the prefix is already sorted.  Recall that the batcher
+/// some portion of the prefix is already sorted. Recall that the batcher
 /// sorting network begins by sorting two halves of its input, then combining
-/// the results with an efficient "merger" network.  Using such an approach, if
+/// the results with an efficient "merger" network. Using such an approach, if
 /// the first half is already sorted, and the second half begins with some
 /// additional number of sorted elements that are the "top part" of the sorted
 /// region of the input, then after sorting the second half, this number of
 /// previously sorted elements is known already to be larger than all elements
 /// of the first half, and so are sorted into their final positions prior to
-/// applying the merger network.  As a result, merger wires doing additional
+/// applying the merger network. As a result, merger wires doing additional
 /// comparisons with these indices can be omitted from the final network.
 ///
 /// Indices which fall into this category are identified during the recursive
@@ -135,7 +135,7 @@ pub fn batcher_recursive(
     let end_idx = (offset + 1) * window_size; // exclusive
 
     if end_idx <= unsorted_idx || start_idx >= stable_idx || deg == 0 {
-        // Cases where no sorting occurs.  Note that this frequently handles
+        // Cases where no sorting occurs. Note that this frequently handles
         // larger values of deg without requiring additional levels of recursion.
         Default::default()
     } else {

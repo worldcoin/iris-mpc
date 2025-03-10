@@ -16,22 +16,22 @@ pub type SortedNeighborhoodV<V> =
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge
-/// weights.  Each edge is stored as a vector id representing the target of the
+/// weights. Each edge is stored as a vector id representing the target of the
 /// directed edge, along with a cached representation of the distance between
-/// the source vector and the target vector.  Note that the source vector id is
+/// the source vector and the target vector. Note that the source vector id is
 /// not stored, as this would increase the memory required to store an edge, and
 /// is implicit from the context in which the neighborhood is being accessed.
 ///
 /// The aim of ordering operations for this implementation is to prioritize a
 /// combination of low total overall comparison operations and low sequential
-/// complexity.  This reflects the fact that in our usage, these operations
+/// complexity. This reflects the fact that in our usage, these operations
 /// will make use of expensive SMPC protocols, so overall comparison counts
 /// determine overall network bandwidth usage, and sequential complexity
 /// determines serial latency of operations.
 #[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SortedNeighborhood<Vector, Distance> {
     /// List of distance-weighted directed edges, specified as tuples
-    /// `(target, weight)`.  Edges are sorted in increasing order of distance.
+    /// `(target, weight)`. Edges are sorted in increasing order of distance.
     pub edges: Vec<(Vector, Distance)>,
 }
 

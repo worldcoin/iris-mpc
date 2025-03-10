@@ -8,7 +8,7 @@ pub type SwapNetworkLayer = Vec<(usize, usize)>;
 /// Struct representing a non-adaptive comparator network, here called a "swap"
 /// network.
 ///
-/// Networks are represented as a list of lists of usize tuples.  The exterior
+/// Networks are represented as a list of lists of usize tuples. The exterior
 /// list represents sequential steps of parallel comparisons in the network,
 /// while the interior lists represent the wires of the network in the
 /// associated step.
@@ -46,7 +46,7 @@ impl SwapNetwork {
         self
     }
 
-    /// Uniformly shift indices of an input swap network.  Panics if integer
+    /// Uniformly shift indices of an input swap network. Panics if integer
     /// overflow occurs during a shift operation.
     pub fn shift(&mut self, shift_amount: isize) -> &mut Self {
         self.map_indices(|x| x.checked_add_signed(shift_amount).unwrap())
