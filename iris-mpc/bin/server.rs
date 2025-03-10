@@ -1,27 +1,25 @@
 #![allow(clippy::needless_range_loop, unused)]
 
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
-    Client as S3Client,
-};
+use aws_sdk_s3::Client as S3Client;
+use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
-use aws_sdk_sqs::{config::Region, Client};
+use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
+use iris_mpc::services::aws::clients::AwsClients;
+use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::processors::result_message::{
+    send_error_results_to_sns, send_results_to_sns,
+};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        aws::{
-            construct_message_attributes, SPAN_ID_MESSAGE_ATTRIBUTE_NAME,
-            TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
-        },
+        aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        kms_dh::derive_shared_secret,
         shutdown_handler::ShutdownHandler,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
@@ -50,7 +48,6 @@ use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
-    backtrace::Backtrace,
     collections::{HashMap, HashSet},
     fmt::Debug,
     mem, panic,
@@ -60,15 +57,12 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const REGION: &str = "eu-north-1";
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CONCURRENT_REQUESTS: usize = 32;
@@ -345,9 +339,10 @@ async fn receive_batch(
                                         .or_rule_indices
                                         .push(serial_ids.iter().map(|x| x - 1).collect());
                                 } else {
-                                    tracing::error!(
-                                        "Received a uniqueness request without serial_ids"
+                                    tracing::warn!(
+                                        "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
+                                    batch_query.or_rule_indices.push(vec![]);
                                 }
                             }
                         }
@@ -721,160 +716,6 @@ fn get_iris_shares_parse_task(
     Ok(handle)
 }
 
-fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
-    if let Some(service) = &config.service {
-        let tracing_shutdown_handle = DatadogBattery::init(
-            service.traces_endpoint.as_deref(),
-            &service.service_name,
-            None,
-            true,
-        );
-
-        if let Some(metrics_config) = &service.metrics {
-            let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
-                .with_queue_size(metrics_config.queue_size)
-                .with_buffer_size(metrics_config.buffer_size)
-                .histogram_is_distribution()
-                .build(Some(&metrics_config.prefix))?;
-            metrics::set_global_recorder(recorder)?;
-        }
-
-        // Set a custom panic hook to print backtraces on one line
-        panic::set_hook(Box::new(|panic_info| {
-            let message = match panic_info.payload().downcast_ref::<&str>() {
-                Some(s) => *s,
-                None => match panic_info.payload().downcast_ref::<String>() {
-                    Some(s) => s.as_str(),
-                    None => "Unknown panic message",
-                },
-            };
-            let location = if let Some(location) = panic_info.location() {
-                format!(
-                    "{}:{}:{}",
-                    location.file(),
-                    location.line(),
-                    location.column()
-                )
-            } else {
-                "Unknown location".to_string()
-            };
-
-            let backtrace = Backtrace::capture();
-            let backtrace_string = format!("{:?}", backtrace);
-
-            let backtrace_single_line = backtrace_string.replace('\n', " | ");
-
-            tracing::error!(
-                { backtrace = %backtrace_single_line, location = %location},
-                "Panic occurred with message: {}",
-                message
-            );
-        }));
-        Ok(tracing_shutdown_handle)
-    } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().pretty().compact())
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info".into()),
-            )
-            .init();
-
-        Ok(TracingShutdownHandle {})
-    }
-}
-
-async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32; 8])> {
-    // Init RNGs
-    let own_key_arn = config
-        .kms_key_arns
-        .0
-        .get(config.party_id)
-        .expect("Expected value not found in kms_key_arns");
-    let dh_pairs = match config.party_id {
-        0 => (1usize, 2usize),
-        1 => (2usize, 0usize),
-        2 => (0usize, 1usize),
-        _ => unimplemented!(),
-    };
-
-    let dh_pair_0: &str = config
-        .kms_key_arns
-        .0
-        .get(dh_pairs.0)
-        .expect("Expected value not found in kms_key_arns");
-    let dh_pair_1: &str = config
-        .kms_key_arns
-        .0
-        .get(dh_pairs.1)
-        .expect("Expected value not found in kms_key_arns");
-
-    // To be used only for e2e testing where we use localstack. There's a bug in
-    // localstack's implementation of `derive_shared_secret`. See: https://github.com/localstack/localstack/pull/12071
-    let chacha_seeds: ([u32; 8], [u32; 8]) = if config.fixed_shared_secrets {
-        ([0u32; 8], [0u32; 8])
-    } else {
-        (
-            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_0).await?),
-            bytemuck::cast(derive_shared_secret(own_key_arn, dh_pair_1).await?),
-        )
-    };
-
-    Ok(chacha_seeds)
-}
-
-async fn send_error_results_to_sns(
-    serialised_json_message: String,
-    metadata: &BatchMetadata,
-    sns_client: &SNSClient,
-    config: &Config,
-    base_message_attributes: &HashMap<String, MessageAttributeValue>,
-    message_type: &str,
-) -> eyre::Result<()> {
-    let mut message_attributes = base_message_attributes.clone();
-    let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
-    message_attributes.extend(trace_attributes);
-    sns_client
-        .publish()
-        .topic_arn(&config.results_topic_arn)
-        .message(serialised_json_message)
-        .message_group_id(format!("party-id-{}", config.party_id))
-        .set_message_attributes(Some(message_attributes))
-        .send()
-        .await?;
-    metrics::counter!("result.sent", "type" => message_type.to_owned()+"_error").increment(1);
-
-    Ok(())
-}
-
-async fn send_results_to_sns(
-    result_events: Vec<String>,
-    metadata: &[BatchMetadata],
-    sns_client: &SNSClient,
-    config: &Config,
-    base_message_attributes: &HashMap<String, MessageAttributeValue>,
-    message_type: &str,
-) -> eyre::Result<()> {
-    for (i, result_event) in result_events.iter().enumerate() {
-        let mut message_attributes = base_message_attributes.clone();
-        if metadata.len() > i {
-            let trace_attributes =
-                construct_message_attributes(&metadata[i].trace_id, &metadata[i].span_id)?;
-            message_attributes.extend(trace_attributes);
-        }
-        sns_client
-            .publish()
-            .topic_arn(&config.results_topic_arn)
-            .message(result_event)
-            .message_group_id(format!("party-id-{}", config.party_id))
-            .set_message_attributes(Some(message_attributes))
-            .send()
-            .await?;
-        metrics::counter!("result.sent", "type" => message_type.to_owned()).increment(1);
-    }
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
     dotenvy::dotenv().ok();
@@ -934,49 +775,21 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let store = Store::new_from_config(&config).await?;
 
     tracing::info!("Initialising AWS services");
+    let aws_clients = AwsClients::new(&config.clone()).await?;
 
-    // TODO: probably move into separate function
-    let region = config
-        .clone()
-        .aws
-        .and_then(|aws| aws.region)
-        .unwrap_or_else(|| REGION.to_owned());
-    let region_provider = Region::new(region);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let sqs_client = Client::new(&shared_config);
-    let sns_client = SNSClient::new(&shared_config);
-
-    // Increase S3 retries to 5
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-
-    // Increase S3 connect timeouts to 10s
-    let timeout_config = TimeoutConfig::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .build();
-
-    let force_path_style = config.environment != "prod" && config.environment != "stage";
-    let s3_config = S3ConfigBuilder::from(&shared_config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config.clone())
-        .build();
-
-    let db_chunks_s3_config = S3ConfigBuilder::from(&shared_config)
-        // disable stalled stream protection to avoid panics during s3 import
-        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-        .retry_config(retry_config)
-        .timeout_config(timeout_config)
-        .build();
-
-    let s3_client = S3Client::from_conf(s3_config);
-    let db_chunks_s3_client = S3Client::from_conf(db_chunks_s3_config);
-    let shares_encryption_key_pair =
-        match SharesEncryptionKeyPairs::from_storage(config.clone()).await {
-            Ok(key_pair) => key_pair,
-            Err(e) => {
-                tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
-                return Ok(());
-            }
-        };
+    let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
+        aws_clients.secrets_manager_client,
+        &config.environment,
+        &config.party_id,
+    )
+    .await
+    {
+        Ok(key_pair) => key_pair,
+        Err(e) => {
+            tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
+            return Ok(());
+        }
+    };
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
@@ -992,7 +805,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
         &Vec::new(),
-        &sns_client,
+        &aws_clients.sns_client,
         &config,
         &uniqueness_result_attributes,
         UNIQUENESS_MESSAGE_TYPE,
@@ -1402,7 +1215,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         party_id,
                         shares_encryption_key_pair.clone(),
                         Arc::clone(&semaphore),
-                        s3_client.clone(),
+                        aws_clients.s3_client.clone(),
                         config.shares_bucket_name.clone(),
                         modification.clone().s3_url.unwrap(),
                     )?
@@ -1466,8 +1279,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         parallelism
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    let db_chunks_s3_store =
-                        S3Store::new(db_chunks_s3_client.clone(), s3_chunks_bucket_name.clone());
+                    let db_chunks_s3_store = S3Store::new(
+                        aws_clients.db_chunks_s3_client.clone(),
+                        s3_chunks_bucket_name.clone(),
+                    );
 
                     tokio::runtime::Handle::current().block_on(async {
                         load_db(
@@ -1477,7 +1292,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             parallelism,
                             &config,
                             db_chunks_s3_store,
-                            db_chunks_s3_client,
+                            aws_clients.db_chunks_s3_client,
                             s3_chunks_folder_name,
                             s3_chunks_bucket_name,
                             s3_load_parallelism,
@@ -1517,7 +1332,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
-    let sns_client_bg = sns_client.clone();
+    let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
@@ -1883,9 +1698,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // It also includes a vector of request ids, mapping to the sets above
         let mut next_batch = receive_batch(
             party_id,
-            &sqs_client,
-            &sns_client,
-            &s3_client,
+            &aws_clients.sqs_client,
+            &aws_clients.sns_client,
+            &aws_clients.s3_client,
             &config,
             &store,
             &skip_request_ids,
@@ -1936,9 +1751,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             next_batch = receive_batch(
                 party_id,
-                &sqs_client,
-                &sns_client,
-                &s3_client,
+                &aws_clients.sqs_client,
+                &aws_clients.sns_client,
+                &aws_clients.s3_client,
                 &config,
                 &store,
                 &skip_request_ids,
