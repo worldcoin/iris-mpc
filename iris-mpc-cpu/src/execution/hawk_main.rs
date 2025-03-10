@@ -503,7 +503,7 @@ struct HawkJob {
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    shares: BothEyes<VecRequests<GaloisRingSharedIris>>,
+    queries: BothEyes<VecRequests<VecRots<QueryRef>>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -511,28 +511,55 @@ pub struct HawkRequest {
 impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
-            shares: [
-                GaloisRingSharedIris::from_batch(batch.left_iris_requests.clone()),
-                GaloisRingSharedIris::from_batch(batch.right_iris_requests.clone()),
-            ],
+            queries: [
+                // For left and right eyes.
+                (
+                    &batch.left_iris_rotated_requests.code,
+                    &batch.left_iris_rotated_requests.mask,
+                    &batch.left_iris_interpolated_requests.code,
+                    &batch.left_iris_interpolated_requests.mask,
+                ),
+                (
+                    &batch.right_iris_rotated_requests.code,
+                    &batch.right_iris_rotated_requests.mask,
+                    &batch.right_iris_interpolated_requests.code,
+                    &batch.right_iris_interpolated_requests.mask,
+                ),
+            ]
+            .map(|(codes, masks, codes_proc, masks_proc)| {
+                // Associate the raw and processed versions of codes and masks.
+                izip!(codes, masks, codes_proc, masks_proc)
+                    // The batch is a concatenation of rotations.
+                    .chunks(ROTATIONS)
+                    .into_iter()
+                    .map(|chunk| {
+                        // Collect the rotations for one request.
+                        chunk
+                            .map(|(code, mask, code_proc, mask_proc)| {
+                                // Convert to the type of Aby3Store and into Arc.
+                                Query::from_processed(
+                                    GaloisRingSharedIris {
+                                        code: code.clone(),
+                                        mask: mask.clone(),
+                                    },
+                                    GaloisRingSharedIris {
+                                        code: code_proc.clone(),
+                                        mask: mask_proc.clone(),
+                                    },
+                                )
+                            })
+                            .collect_vec()
+                            .into()
+                    })
+                    .collect_vec()
+            }),
         }
     }
 }
 
 impl HawkRequest {
-    fn search_queries(&self) -> BothEyes<VecRequests<VecRots<QueryRef>>> {
-        // TODO: Take preprocessed versions from BatchQuery.
-        // TODO: Rotations.
-        [LEFT, RIGHT].map(|side| {
-            self.shares[side]
-                .iter()
-                .map(|share| {
-                    let q = Query::from_raw(share.clone());
-                    let rots = vec![q; ROTATIONS];
-                    VecRots::new(rots)
-                })
-                .collect_vec()
-        })
+    fn search_queries(&self) -> &BothEyes<VecRequests<VecRots<QueryRef>>> {
+        &self.queries
     }
 
     fn filter_for_insertion<T>(
@@ -684,13 +711,13 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 tracing::debug!("Processing an Hawk job…");
 
-                let search_queries: BothEyes<VecRequests<VecRots<QueryRef>>> =
+                let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
                 let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = hawk_actor
-                    .search_both_eyes(&sessions, &search_queries)
+                    .search_both_eyes(&sessions, search_queries)
                     .await
                     .unwrap();
 
@@ -698,7 +725,7 @@ impl HawkHandle {
                     let step1 = matching::BatchStep1::new(&search_results);
                     // Go fetch the missing vector IDs and calculate their is_match.
                     let missing_is_match =
-                        calculate_is_match(&search_queries, step1.missing_vector_ids(), &sessions)
+                        calculate_is_match(search_queries, step1.missing_vector_ids(), &sessions)
                             .await;
                     step1.step2(&missing_is_match)
                 };

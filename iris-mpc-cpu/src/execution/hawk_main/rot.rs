@@ -4,6 +4,7 @@ use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
 
 /// VecRots are lists of things for each rotation.
+#[derive(Clone, Debug)]
 pub struct VecRots<R> {
     pub rotations: Vec<R>,
 }
@@ -16,12 +17,14 @@ impl<R> Deref for VecRots<R> {
     }
 }
 
-impl<R> VecRots<R> {
-    pub fn new(rotations: Vec<R>) -> Self {
+impl<R> From<Vec<R>> for VecRots<R> {
+    fn from(rotations: Vec<R>) -> Self {
         assert_eq!(rotations.len(), ROTATIONS);
         Self { rotations }
     }
+}
 
+impl<R> VecRots<R> {
     /// Get the item attached to the center rotation.
     pub fn center(&self) -> &R {
         &self.rotations[self.rotations.len() / 2]
@@ -70,7 +73,7 @@ impl<R> VecRots<R> {
             if rot.is_empty() {
                 break;
             }
-            rots.push(VecRots::new(rot));
+            rots.push(VecRots::from(rot));
         }
         rots
     }
