@@ -2,7 +2,7 @@ use super::{
     BothEyes, HawkSession, HawkSessionRef, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId,
     LEFT, RIGHT,
 };
-use crate::{hawkers::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use futures::future::JoinAll;
 use itertools::{izip, Itertools};
 use std::iter;

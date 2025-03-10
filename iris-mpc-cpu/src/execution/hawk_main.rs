@@ -1,5 +1,5 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3_store::VectorId;
+pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
         local::generate_local_identities,

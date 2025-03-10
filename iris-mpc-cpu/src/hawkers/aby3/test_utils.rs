@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
 use iris_mpc_common::iris_db::db::IrisDB;
@@ -6,19 +6,19 @@ use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::task::JoinSet;
 
 use crate::{
-    database_generators::{generate_galois_iris_shares, GaloisRingSharedIris},
     execution::local::{generate_local_identities, LocalRuntime},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood},
     network::NetworkType,
+    protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
     shares::share::DistanceShare,
 };
 
-use super::aby3_store::{Aby3Store, SharedIrisesRef, VectorId};
+use super::aby3_store::{Aby3Store, IrisRef, SharedIrisesRef, VectorId};
 
 pub fn setup_local_player_preloaded_db(
-    database: Vec<GaloisRingSharedIris>,
+    database: HashMap<VectorId, IrisRef>,
 ) -> eyre::Result<SharedIrisesRef> {
     let aby3_store = SharedIrisesRef::new(database);
     Ok(aby3_store)
@@ -31,12 +31,13 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 ) -> eyre::Result<Vec<Aby3Store>> {
     let identities = generate_local_identities();
 
-    let mut shared_irises = vec![vec![]; identities.len()];
+    let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for iris in plain_store.points.iter() {
-        let all_shares = generate_galois_iris_shares(rng, iris.data.0.clone());
-        for (i, shares) in all_shares.iter().enumerate() {
-            shared_irises[i].push(shares.clone());
+    for (vector_id, iris) in plain_store.points.iter().enumerate() {
+        let vector_id = VectorId::from_serial_id(vector_id as u32);
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
+        for (party_id, share) in all_shares.into_iter().enumerate() {
+            shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
     }
 
@@ -286,7 +287,9 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     let rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
-        .map(|id| generate_galois_iris_shares(rng, cleartext_database[id].clone()))
+        .map(|id| {
+            GaloisRingSharedIris::generate_shares_locally(rng, cleartext_database[id].clone())
+        })
         .collect();
 
     let mut local_stores = setup_local_store_aby3_players(network_t).await?;
