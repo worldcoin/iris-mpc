@@ -2,7 +2,7 @@ use super::iris::IrisCode;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use rayon::prelude::*;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct IrisDB {
     pub db: Vec<IrisCode>,
 }

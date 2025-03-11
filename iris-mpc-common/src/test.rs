@@ -220,19 +220,17 @@ pub struct TestCaseGenerator {
 }
 
 impl TestCaseGenerator {
-    pub fn new_seeded(db_size: usize, db_rng_seed: u64, internal_rng_seed: u64) -> Self {
-        // create a copy of the plain database for the test case generator, this needs
-        // to be in sync with `generate_db`
-        let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
+    pub fn new_with_db(db: &mut IrisDB, internal_rng_seed: u64) -> Self {
         // Set the masks to all 1s for the first 10%
-        for i in 0..db_size / 10 {
+        let db_len = db.db.len();
+        for i in 0..db_len / 10 {
             db.db[i].mask = IrisCodeArray::ONES;
         }
         let rng = StdRng::seed_from_u64(internal_rng_seed);
         Self {
             enabled_test_cases: TestCase::default_test_set(),
-            initial_db_state: db,
-            full_mask_range: 0..db_size / 10,
+            initial_db_state: db.clone(),
+            full_mask_range: 0..db_len / 10,
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
             inserted_responses: HashMap::new(),
@@ -247,6 +245,13 @@ impl TestCaseGenerator {
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
         }
+    }
+
+    pub fn new_seeded(db_size: usize, db_rng_seed: u64, internal_rng_seed: u64) -> Self {
+        // create a copy of the plain database for the test case generator, this needs
+        // to be in sync with `generate_db`
+        let mut db = IrisDB::new_random_rng(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
+        Self::new_with_db(&mut db, internal_rng_seed)
     }
     pub fn enable_test_case(&mut self, test_case: TestCase) {
         if self.enabled_test_cases.contains(&test_case) {

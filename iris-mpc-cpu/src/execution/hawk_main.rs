@@ -149,6 +149,19 @@ impl<V: VectorStore> InsertPlanV<V> {
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+        Self::from_cli_with_graph_and_store(
+            args,
+            GraphMem::<Aby3Store>::new(),
+            [(); 2].map(|_| SharedIrisesRef::default()),
+        )
+        .await
+    }
+
+    pub async fn from_cli_with_graph_and_store(
+        args: &HawkArgs,
+        graph: GraphMem<Aby3Store>,
+        iris_store: BothEyes<SharedIrisesRef>,
+    ) -> Result<Self> {
         let search_params = Arc::new(HnswSearcher::default());
 
         let identities = generate_local_identities();
@@ -203,8 +216,7 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
-        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
+        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
 
         Ok(HawkActor {
             args: args.clone(),
@@ -220,7 +232,11 @@ impl HawkActor {
         })
     }
 
-    fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn own_identity(&self) -> Identity {
+        self.own_identity.clone()
+    }
+
+    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 

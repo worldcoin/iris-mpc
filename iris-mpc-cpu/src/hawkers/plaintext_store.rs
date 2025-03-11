@@ -205,6 +205,19 @@ impl PlaintextStore {
         Ok(plaintext_vector_store)
     }
 
+    pub async fn create_random_store_with_db(
+        cleartext_database: Vec<IrisCode>,
+    ) -> eyre::Result<Self> {
+        let mut plaintext_vector_store = PlaintextStore::default();
+
+        for raw_query in cleartext_database.iter() {
+            let query = plaintext_vector_store.prepare_query(raw_query.clone());
+            let _ = plaintext_vector_store.insert(&query).await;
+        }
+
+        Ok(plaintext_vector_store)
+    }
+
     pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
         &mut self,
         rng: &mut R,
