@@ -20,6 +20,7 @@ use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
 use std::ops::DerefMut;
+use tracing;
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
@@ -198,8 +199,14 @@ impl Store {
         &self,
         id_of_iris: i64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
+        tracing::info!(
+            "Iris PostgreSQL store: Fetching Iris by ID ({})",
+            id_of_iris
+        );
+
+        let id_of_iris = id_of_iris as i32;
         Ok(
-            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id == $1")
+            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
                 .bind(id_of_iris)
                 .fetch_one(&self.pool)
                 .await

@@ -99,7 +99,7 @@ impl IrisBatchGenerator {
     // Fetches height of indexed from a store.
     async fn fetch_height_of_indexed(&self) -> Result<i64, IndexationError> {
         // TODO: pull latest height from store.
-        Ok(0)
+        Ok(1)
     }
 
     // Returns next range of Iris id's for processing.
