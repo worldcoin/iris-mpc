@@ -4,6 +4,12 @@ use super::{
 use itertools::{izip, Itertools};
 use std::collections::HashMap;
 
+/// Since the two separate HSNW for left and right return separate vectors of matching ids, we
+/// cannot do the trivial AND/OR matching procedure from v2, since the other side might not have
+/// considered that id at all. This however does not mean it would not match, so for all ids that
+/// are given back for one side we do a manual comparison in the other side to get a full
+/// left-right match pair. Only then do we continue to the final matching logic.
+///
 /// The matching algorithm follows these steps:
 ///
 /// 1. Organize the results of the nearest neighbor search with
