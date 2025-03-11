@@ -846,7 +846,10 @@ mod tests {
     };
     use futures::future::JoinAll;
     use iris_mpc_common::{
-        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
+        galois_engine::degree4::preprocess_iris_message_shares,
+        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
+        iris_db::db::IrisDB,
+        job::{BatchMetadata, IrisQueryBatchEntries},
     };
     use std::ops::Not;
     use tokio::time::sleep;
@@ -903,13 +906,22 @@ mod tests {
             .collect_vec();
 
         let all_results = izip!(irises, handles.clone())
-            .map(|(share, mut handle)| async move {
+        .map(|(shares, mut handle)| async move {
+                // TODO: different test irises for each eye.
+                let shares_right = shares.clone();
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests] = receive_batch_shares(shares);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests] = receive_batch_shares(shares_right);
+
                 let batch = BatchQuery {
-                    left_iris_requests: GaloisRingSharedIris::to_batch(&share),
-                    right_iris_requests: GaloisRingSharedIris::to_batch(&share),
-                    // TODO: different test irises for each eye.
-                    // TODO: Rotations in db_left / db_right.
-                    // TODO: Lagrange interpolation in query_left / query_right.
+                    // Iris shares.
+                    left_iris_requests,
+                    right_iris_requests,
+                    // All rotations.
+                    left_iris_rotated_requests,
+                    right_iris_rotated_requests,
+                    // All rotations, preprocessed.
+                    left_iris_interpolated_requests,
+                    right_iris_interpolated_requests,
 
                     // Batch details to be just copied to the result.
                     request_ids: vec!["X".to_string(); batch_size],
@@ -962,6 +974,21 @@ mod tests {
         assert_eq!(batch_size, result.actor_data.0[1].len());
 
         Ok(())
+    }
+
+    /// Prepare shares in the same format as `receive_batch()`.
+    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 3] {
+        let mut out = [(); 3].map(|_| IrisQueryBatchEntries::default());
+        for share in shares {
+            let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
+            out[0].code.push(one.0);
+            out[0].mask.push(one.1);
+            out[1].code.extend(one.2);
+            out[1].mask.extend(one.3);
+            out[2].code.extend(one.4);
+            out[2].mask.extend(one.5);
+        }
+        out
     }
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
