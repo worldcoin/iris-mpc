@@ -927,6 +927,7 @@ impl TestCaseGenerator {
 
                 tracing::info!("🔍 req: {:?}", thread_request_ids);
                 tracing::info!("🔍 matches: {:?}", matches);
+                tracing::info!("🔍 match ids: {:?}", match_ids);
 
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     check_bucket_statistics(
@@ -965,6 +966,8 @@ impl TestCaseGenerator {
                     matched_batch_request_ids
                 ) {
                     assert!(requests.contains_key(req_id));
+
+                    tracing::info!("🔍 match idx: {:?}", idx);
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
