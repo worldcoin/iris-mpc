@@ -217,22 +217,21 @@ pub struct TestCaseGenerator {
     db_indices_used_in_current_batch: HashSet<usize>,
     /// items against which the OR rule is used
     or_rule_matches: Vec<String>,
+    is_cpu: bool,
 }
 
 impl TestCaseGenerator {
-    pub fn new_seeded(db_size: usize, db_rng_seed: u64, internal_rng_seed: u64) -> Self {
-        // create a copy of the plain database for the test case generator, this needs
-        // to be in sync with `generate_db`
-        let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
+    pub fn new_with_db(db: &mut IrisDB, internal_rng_seed: u64, is_cpu: bool) -> Self {
         // Set the masks to all 1s for the first 10%
-        for i in 0..db_size / 10 {
+        let db_len = db.db.len();
+        for i in 0..db_len / 10 {
             db.db[i].mask = IrisCodeArray::ONES;
         }
         let rng = StdRng::seed_from_u64(internal_rng_seed);
         Self {
             enabled_test_cases: TestCase::default_test_set(),
-            initial_db_state: db,
-            full_mask_range: 0..db_size / 10,
+            initial_db_state: db.clone(),
+            full_mask_range: 0..db_len / 10,
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
             inserted_responses: HashMap::new(),
@@ -246,7 +245,20 @@ impl TestCaseGenerator {
             batch_duplicates: HashMap::new(),
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
+            is_cpu,
         }
+    }
+
+    pub fn new_seeded(
+        db_size: usize,
+        db_rng_seed: u64,
+        internal_rng_seed: u64,
+        is_cpu: bool,
+    ) -> Self {
+        // create a copy of the plain database for the test case generator, this needs
+        // to be in sync with `generate_db`
+        let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
+        Self::new_with_db(&mut db, internal_rng_seed, is_cpu)
     }
     pub fn enable_test_case(&mut self, test_case: TestCase) {
         if self.enabled_test_cases.contains(&test_case) {
@@ -293,7 +305,8 @@ impl TestCaseGenerator {
                 self.generate_query(idx);
 
             // Invalidate 10% of the queries, but ignore the batch duplicates
-            let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
+            // TODO: remove the check for cpu once batch deduplication is implemented
+            let is_valid = self.is_cpu || self.rng.gen_bool(0.10) || self.skip_invalidate;
             if is_valid {
                 requests.insert(request_id.to_string(), e2e_template.clone());
             }
@@ -341,20 +354,22 @@ impl TestCaseGenerator {
         }
 
         // for non-empty batches also add some deletions
-        for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
-            let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
-            if self.deleted_indices.contains(&(idx as u32))
-                || self.db_indices_used_in_current_batch.contains(&idx)
-            {
-                continue;
-            }
-            self.deleted_indices_buffer.push(idx as u32);
-            self.deleted_indices.insert(idx as u32);
-            tracing::info!("Deleting index {}", idx);
+        if max_deletions_per_batch > 0 {
+            for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
+                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                if self.deleted_indices.contains(&(idx as u32))
+                    || self.db_indices_used_in_current_batch.contains(&idx)
+                {
+                    continue;
+                }
+                self.deleted_indices_buffer.push(idx as u32);
+                self.deleted_indices.insert(idx as u32);
+                tracing::info!("Deleting index {}", idx);
 
-            batch0.deletion_requests_indices.push(idx as u32);
-            batch1.deletion_requests_indices.push(idx as u32);
-            batch2.deletion_requests_indices.push(idx as u32);
+                batch0.deletion_requests_indices.push(idx as u32);
+                batch1.deletion_requests_indices.push(idx as u32);
+                batch2.deletion_requests_indices.push(idx as u32);
+            }
         }
         Ok(([batch0, batch1, batch2], requests))
     }
@@ -418,7 +433,8 @@ impl TestCaseGenerator {
 
         // with a 10% chance we pick a template from the batch, to test the batch
         // deduplication mechanism
-        let pick_from_batch = self.rng.gen_bool(0.10);
+        // TODO: remove the check for cpu once batch deduplication is implemented
+        let pick_from_batch = !self.is_cpu && self.rng.gen_bool(0.10);
         let e2e_template = if pick_from_batch && !self.new_templates_in_batch.is_empty() {
             let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
             let (batch_idx, duplicate_request_id, template) =
@@ -890,9 +906,11 @@ impl TestCaseGenerator {
             }
 
             // send batches to servers
-            let res0_fut = handle0.submit_batch_query(batch0).await;
-            let res1_fut = handle1.submit_batch_query(batch1).await;
-            let res2_fut = handle2.submit_batch_query(batch2).await;
+            let (res0_fut, res1_fut, res2_fut) = tokio::join!(
+                handle0.submit_batch_query(batch0),
+                handle1.submit_batch_query(batch1),
+                handle2.submit_batch_query(batch2)
+            );
 
             let res0 = res0_fut.await;
             let res1 = res1_fut.await;
@@ -1114,12 +1132,11 @@ fn check_bucket_statistics(
     Ok(())
 }
 
-pub fn load_test_db(
+pub fn generate_test_db(
     party_id: usize,
     db_size: usize,
     db_rng_seed: u64,
-    loader: &mut impl InMemoryStore,
-) -> Result<()> {
+) -> Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
     let mut db = IrisDB::new_random_par(db_size, &mut rng);
 
@@ -1130,17 +1147,32 @@ pub fn load_test_db(
 
     let mut share_rng = StdRng::from_rng(rng).unwrap();
 
-    for (idx, iris) in db.db.into_iter().enumerate() {
+    let mut result = Vec::new();
+
+    for iris in db.db.into_iter() {
         let code =
             GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut share_rng)
                 [party_id]
-                .coefs;
+                .clone();
         let mask: GaloisRingTrimmedMaskCodeShare =
             GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut share_rng)[party_id]
                 .clone()
                 .into();
-        let mask = mask.coefs;
-        loader.load_single_record_from_db(idx, &code, &mask, &code, &mask);
+        result.push((code, mask));
+    }
+
+    result
+}
+
+pub fn load_test_db(
+    party_id: usize,
+    db_size: usize,
+    db_rng_seed: u64,
+    loader: &mut impl InMemoryStore,
+) -> Result<()> {
+    let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
+    for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
+        loader.load_single_record_from_db(idx, &code.coefs, &mask.coefs, &code.coefs, &mask.coefs);
         loader.increment_db_size(idx);
     }
 
