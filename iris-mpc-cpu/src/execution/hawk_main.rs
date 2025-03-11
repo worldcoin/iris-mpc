@@ -666,7 +666,7 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                tracing::debug!("Processing an Hawk job…");
+                tracing::info!("Processing an Hawk job…");
                 let mut both_insert_plans = [vec![], vec![]];
 
                 // For both eyes.

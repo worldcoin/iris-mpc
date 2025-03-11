@@ -893,9 +893,11 @@ impl TestCaseGenerator {
             }
 
             // send batches to servers
-            let res0_fut = handle0.submit_batch_query(batch0).await;
-            let res1_fut = handle1.submit_batch_query(batch1).await;
-            let res2_fut = handle2.submit_batch_query(batch2).await;
+            let (res0_fut, res1_fut, res2_fut) = tokio::join!(
+                handle0.submit_batch_query(batch0),
+                handle1.submit_batch_query(batch1),
+                handle2.submit_batch_query(batch2)
+            );
 
             let res0 = res0_fut.await;
             let res1 = res1_fut.await;
