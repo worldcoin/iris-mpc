@@ -1,0 +1,29 @@
+env:
+  - name: SMPC__ENVIRONMENT
+    value: "stage"
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "hnsw-service"
+  - name: SMPC__MODE_OF_COMPUTE
+    value: "CPU"
+  - name: SMPC__MODE_OF_DEPLOYMENT
+    value: "STANDARD"
+  - name: SMPC__DATABASE__MIGRATE
+    value: "false"
+  - name: SMPC__DATABASE__CREATE
+    value: "false"
+  - name: SMPC__DATABASE__LOAD_PARALLELISM
+    value: "8"
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "64"
+  - name: SMPC__MAX_DB_SIZE
+    value: "10000"
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "10"
+  - name: SMPC__AWS__REGION
+    value: "eu-north-1"
+  - name: SMPC__SERVICE_PORTS
+    value: '["4000","4001","4002"]'
+  - name: SMPC__HEALTHCHECK_PORTS
+    value: '["3000","3001","3002"]'
+  - name: SMPC__SHARES_BUCKET_NAME
+    value: "wf-smpcv2-dev-sns-requests"
