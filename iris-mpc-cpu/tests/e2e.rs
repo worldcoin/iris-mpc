@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 20;
+const DB_SIZE: usize = 10;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 30;
@@ -29,23 +29,32 @@ async fn start_hawk_node(args: &HawkArgs) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
     let mut hawk_actor = HawkActor::from_cli(args).await?;
 
-    let sessions = vec![Arc::new(RwLock::new(
-        hawk_actor.new_session(StoreId::Left).await?,
-    ))];
+    let sessions = [
+        HawkHandle::new_sessions(&mut hawk_actor, HAWK_REQUEST_PARALLELISM, StoreId::Left).await?,
+        HawkHandle::new_sessions(&mut hawk_actor, HAWK_REQUEST_PARALLELISM, StoreId::Right).await?,
+    ];
 
     {
         let shares = generate_test_db(args.party_index, DB_SIZE, DB_RNG_SEED);
 
         for (idx, (code, mask)) in shares.into_iter().enumerate() {
             tracing::info!("🔍 Inserting iris {} of {}", idx, DB_SIZE);
-            let plans = hawk_actor
-                .search_to_insert(&sessions, vec![GaloisRingSharedIris { code, mask }])
-                .await?;
-            hawk_actor.insert(&sessions, plans).await?;
+            for i in 0..2 {
+                let plans = hawk_actor
+                    .search_to_insert(
+                        &sessions[i],
+                        vec![GaloisRingSharedIris {
+                            code: code.clone(),
+                            mask: mask.clone(),
+                        }],
+                    )
+                    .await?;
+                hawk_actor.insert(&sessions[i], plans).await?;
+            }
         }
     }
 
-    let handle = HawkHandle::new(hawk_actor, args.request_parallelism).await?;
+    let handle = HawkHandle::new_with_sessions(hawk_actor, sessions).await?;
     Ok(handle)
 }
 

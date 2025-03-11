@@ -654,7 +654,13 @@ impl HawkHandle {
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
         ];
+        Self::new_with_sessions(hawk_actor, sessions).await
+    }
 
+    pub async fn new_with_sessions(
+        mut hawk_actor: HawkActor,
+        sessions: [Vec<HawkSessionRef>; 2],
+    ) -> Result<Self> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
@@ -719,7 +725,7 @@ impl HawkHandle {
         Ok(Self { job_queue: tx })
     }
 
-    async fn new_sessions(
+    pub async fn new_sessions(
         hawk_actor: &mut HawkActor,
         request_parallelism: usize,
         store_id: StoreId,
