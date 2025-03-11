@@ -10,8 +10,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const DB_SIZE: usize = 30;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
-const NUM_BATCHES: usize = 30;
-const MAX_BATCH_SIZE: usize = 2;
+const NUM_BATCHES: usize = 10;
+const MAX_BATCH_SIZE: usize = 10;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 

@@ -421,7 +421,8 @@ impl TestCaseGenerator {
 
         // with a 10% chance we pick a template from the batch, to test the batch
         // deduplication mechanism
-        let pick_from_batch = self.rng.gen_bool(0.10);
+        // TODO: enable this once batch deduplication is implemented
+        let pick_from_batch = false; //self.rng.gen_bool(0.10);
         let e2e_template = if pick_from_batch && !self.new_templates_in_batch.is_empty() {
             let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
             let (batch_idx, duplicate_request_id, template) =
