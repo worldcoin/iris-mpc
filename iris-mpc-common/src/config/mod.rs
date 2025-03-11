@@ -41,6 +41,9 @@ pub struct Config {
     pub database: Option<DbConfig>,
 
     #[serde(default)]
+    pub cpu_database: Option<DbConfig>,
+
+    #[serde(default)]
     pub aws: Option<AwsConfig>,
 
     #[serde(default = "default_processing_timeout_secs")]
@@ -194,20 +197,23 @@ pub struct Config {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ModeOfCompute {
     /// Computation with standard CPUs (see HNSW graph).
-    CPU,
+    Cpu,
     /// Computation with Cuda GPU(s).
     #[default]
-    GPU,
+    Gpu,
 }
 
 /// Enumeration over set of deployment modes.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub enum ModeOfDeployment {
-    // Shadow mode specifically an HNSW test deployment.
-    SHADOW,
+    // shadow mode for when HSNW deployment does not read from the Gpu implementation
+    // it should create and write its own shares DB
+    ShadowIsolation,
+    // Shadow mode for when HNSW test deployment reads from the Gpu Implementation
+    ShadowReadOnly,
     // Standard mode for all other deployments.
     #[default]
-    STANDARD,
+    Standard,
 }
 
 fn default_load_chunks_parallelism() -> usize {
