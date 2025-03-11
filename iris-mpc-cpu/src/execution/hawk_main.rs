@@ -232,11 +232,7 @@ impl HawkActor {
         })
     }
 
-    pub fn own_identity(&self) -> Identity {
-        self.own_identity.clone()
-    }
-
-    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
