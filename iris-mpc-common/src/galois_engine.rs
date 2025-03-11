@@ -337,14 +337,21 @@ pub mod degree4 {
         }
     }
 
-    pub type GaloisShares = (
-        GaloisRingIrisCodeShare,
-        GaloisRingTrimmedMaskCodeShare,
-        Vec<GaloisRingIrisCodeShare>,
-        Vec<GaloisRingTrimmedMaskCodeShare>,
-        Vec<GaloisRingIrisCodeShare>,
-        Vec<GaloisRingTrimmedMaskCodeShare>,
-    );
+    #[derive(Clone)]
+    pub struct GaloisShares {
+        /// Iris code from a request.
+        pub code: GaloisRingIrisCodeShare,
+        /// Mask from the request.
+        pub mask: GaloisRingTrimmedMaskCodeShare,
+        /// Iris rotations (centered iris in the middle).
+        pub code_rotated: Vec<GaloisRingIrisCodeShare>,
+        /// Mask rotations (centered mask in the middle).
+        pub mask_rotated: Vec<GaloisRingTrimmedMaskCodeShare>,
+        /// Iris rotations with Lagrange interpolations.
+        pub code_interpolated: Vec<GaloisRingIrisCodeShare>,
+        /// Mask rotations with Lagrange interpolations.
+        pub mask_interpolated: Vec<GaloisRingTrimmedMaskCodeShare>,
+    }
 
     pub fn preprocess_iris_message_shares(
         code_share: GaloisRingIrisCodeShare,
@@ -365,14 +372,14 @@ pub mod degree4 {
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
         GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
-        Ok((
-            store_iris_shares,
-            store_mask_shares,
-            db_iris_shares,
-            db_mask_shares,
-            code_share.all_rotations(),
-            mask_share.all_rotations(),
-        ))
+        Ok(GaloisShares {
+            code: store_iris_shares,
+            mask: store_mask_shares,
+            code_rotated: db_iris_shares,
+            mask_rotated: db_mask_shares,
+            code_interpolated: code_share.all_rotations(),
+            mask_interpolated: mask_share.all_rotations(),
+        })
     }
 
     pub struct FullGaloisRingIrisCodeShare {

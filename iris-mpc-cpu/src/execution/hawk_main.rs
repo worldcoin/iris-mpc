@@ -981,12 +981,12 @@ mod tests {
         let mut out = [(); 3].map(|_| IrisQueryBatchEntries::default());
         for share in shares {
             let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
-            out[0].code.push(one.0);
-            out[0].mask.push(one.1);
-            out[1].code.extend(one.2);
-            out[1].mask.extend(one.3);
-            out[2].code.extend(one.4);
-            out[2].mask.extend(one.5);
+            out[0].code.push(one.code);
+            out[0].mask.push(one.mask);
+            out[1].code.extend(one.code_rotated);
+            out[1].mask.extend(one.mask_rotated);
+            out[2].code.extend(one.code_interpolated);
+            out[2].mask.extend(one.mask_interpolated);
         }
         out
     }
