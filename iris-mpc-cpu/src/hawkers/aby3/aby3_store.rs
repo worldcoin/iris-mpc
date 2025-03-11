@@ -90,6 +90,18 @@ pub struct Query {
 /// Reference to a query.
 pub type QueryRef = Arc<Query>;
 
+impl Query {
+    pub fn from_processed(
+        query: GaloisRingSharedIris,
+        processed_query: GaloisRingSharedIris,
+    ) -> QueryRef {
+        Arc::new(Query {
+            query,
+            processed_query,
+        })
+    }
+}
+
 /// Creates a new query from a secret shared iris.
 /// The input iris is preprocessed for faster evaluation of distances, see [Aby3Store::eval_distance].
 pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {

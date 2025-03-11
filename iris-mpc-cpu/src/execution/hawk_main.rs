@@ -6,7 +6,7 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{prepare_query, Aby3Store, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -22,6 +22,7 @@ use eyre::Result;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
+    ROTATIONS,
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
@@ -43,7 +44,9 @@ pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
 mod is_match_batch;
 mod matching;
+mod rot;
 use is_match_batch::calculate_is_match;
+use rot::VecRots;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
@@ -135,15 +138,14 @@ pub struct InsertPlanV<V: VectorStore> {
 }
 
 impl<V: VectorStore> InsertPlanV<V> {
-    pub fn match_count(&self) -> usize {
-        self.match_count
-    }
-
-    pub fn nearest_neighbors(&self) -> Vec<V::VectorRef> {
+    pub fn match_ids(&self) -> Vec<V::VectorRef> {
         self.links
-            .first()
-            .map(|layer| layer.iter().map(|(id, _)| id.clone()).collect())
-            .unwrap_or_default()
+            .iter()
+            .take(1)
+            .flat_map(|bottom_layer| bottom_layer.iter())
+            .take(self.match_count)
+            .map(|(id, _)| id.clone())
+            .collect_vec()
     }
 }
 
@@ -287,46 +289,57 @@ impl HawkActor {
         })
     }
 
-    pub async fn search(
+    pub async fn search_both_eyes(
         &self,
-        sessions: &[HawkSessionRef],
-        iris_shares: Vec<GaloisRingSharedIris>,
-    ) -> Result<Vec<SearchResult>> {
-        Ok(self
-            .search_to_insert(sessions, iris_shares)
-            .await?
-            .iter()
-            .map(|plan| {
-                plan.links
-                    .first()
-                    .and_then(|layer| layer.get_nearest())
-                    .cloned()
-            })
-            .collect::<Option<Vec<SearchResult>>>()
-            .unwrap_or_default())
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
+        let (left, right) = futures::join!(
+            self.search_rotations(&sessions[LEFT], &queries[LEFT]),
+            self.search_rotations(&sessions[RIGHT], &queries[RIGHT]),
+        );
+        Ok([left?, right?])
     }
 
-    pub async fn search_to_insert(
+    async fn search_rotations(
         &self,
         sessions: &[HawkSessionRef],
-        iris_shares: Vec<GaloisRingSharedIris>,
+        queries: &VecRequests<VecRots<QueryRef>>,
+    ) -> Result<VecRequests<VecRots<InsertPlan>>> {
+        // Flatten the rotations from all requests.
+        let flat_queries = VecRots::flatten(queries);
+        // Do it all in parallel.
+        let flat_results = self.search_parallel(sessions, flat_queries).await?;
+        // Nest the results per request again.
+        Ok(VecRots::unflatten(flat_results))
+    }
+
+    async fn search_parallel(
+        &self,
+        sessions: &[HawkSessionRef],
+        queries: Vec<QueryRef>,
     ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
 
         // Distribute the requests over the given sessions in parallel.
-        for chunk in iris_shares.chunks(sessions.len()) {
+        for chunk in queries.chunks(sessions.len()) {
             let tasks = izip!(chunk, sessions)
-                .map(|(iris, session)| {
+                .map(|(query, session)| {
                     let search_params = Arc::clone(&self.search_params);
                     let session = Arc::clone(session);
-                    let iris = iris.clone();
+                    let query = query.clone();
 
                     tokio::spawn(async move {
                         let mut session = session.write().await;
                         let graph_store = Arc::clone(&session.graph_store);
                         let graph_store = graph_store.read().await;
-                        Self::search_to_insert_one(&search_params, &graph_store, &mut session, iris)
-                            .await
+                        Self::search_to_insert_one(
+                            &search_params,
+                            &graph_store,
+                            &mut session,
+                            query,
+                        )
+                        .await
                     })
                 })
                 .collect_vec();
@@ -344,10 +357,9 @@ impl HawkActor {
         search_params: &HnswSearcher,
         graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
-        iris: GaloisRingSharedIris,
+        query: QueryRef,
     ) -> InsertPlan {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng);
-        let query = prepare_query(iris);
 
         let (links, set_ep) = search_params
             .search_to_insert(
@@ -503,7 +515,7 @@ struct HawkJob {
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    pub shares: BothEyes<Vec<GaloisRingSharedIris>>,
+    queries: BothEyes<VecRequests<VecRots<QueryRef>>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -511,25 +523,62 @@ pub struct HawkRequest {
 impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
         Self {
-            shares: [
-                GaloisRingSharedIris::from_batch(batch.left_iris_requests.clone()),
-                GaloisRingSharedIris::from_batch(batch.right_iris_requests.clone()),
-            ],
+            queries: [
+                // For left and right eyes.
+                (
+                    &batch.left_iris_rotated_requests.code,
+                    &batch.left_iris_rotated_requests.mask,
+                    &batch.left_iris_interpolated_requests.code,
+                    &batch.left_iris_interpolated_requests.mask,
+                ),
+                (
+                    &batch.right_iris_rotated_requests.code,
+                    &batch.right_iris_rotated_requests.mask,
+                    &batch.right_iris_interpolated_requests.code,
+                    &batch.right_iris_interpolated_requests.mask,
+                ),
+            ]
+            .map(|(codes, masks, codes_proc, masks_proc)| {
+                // Associate the raw and processed versions of codes and masks.
+                izip!(codes, masks, codes_proc, masks_proc)
+                    // The batch is a concatenation of rotations.
+                    .chunks(ROTATIONS)
+                    .into_iter()
+                    .map(|chunk| {
+                        // Collect the rotations for one request.
+                        chunk
+                            .map(|(code, mask, code_proc, mask_proc)| {
+                                // Convert to the type of Aby3Store and into Arc.
+                                Query::from_processed(
+                                    GaloisRingSharedIris {
+                                        code: code.clone(),
+                                        mask: mask.clone(),
+                                    },
+                                    GaloisRingSharedIris {
+                                        code: code_proc.clone(),
+                                        mask: mask_proc.clone(),
+                                    },
+                                )
+                            })
+                            .collect_vec()
+                            .into()
+                    })
+                    .collect_vec()
+            }),
         }
     }
 }
 
 impl HawkRequest {
-    fn shares_to_search(&self) -> &BothEyes<Vec<GaloisRingSharedIris>> {
-        // TODO: obtain rotated and mirrored versions.
-        &self.shares
+    fn search_queries(&self) -> &BothEyes<VecRequests<VecRots<QueryRef>>> {
+        &self.queries
     }
 
-    fn filter_for_insertion(
+    fn filter_for_insertion<T>(
         &self,
-        both_insert_plans: BothEyes<Vec<InsertPlan>>,
+        both_insert_plans: BothEyes<VecRequests<T>>,
         is_matches: &[bool],
-    ) -> (Vec<usize>, BothEyes<Vec<InsertPlan>>) {
+    ) -> (VecRequests<usize>, BothEyes<VecRequests<T>>) {
         let filtered = both_insert_plans.map(|plans| {
             izip!(plans, is_matches)
                 .filter_map(|(plan, &is_match)| is_match.not().then_some(plan))
@@ -687,47 +736,44 @@ impl HawkHandle {
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 tracing::info!("Processing an Hawk job…");
-                let mut both_insert_plans = [vec![], vec![]];
 
-                // For both eyes.
-                for (sessions, iris_shares, insert_plans) in izip!(
-                    &sessions,
-                    job.request.shares_to_search(),
-                    &mut both_insert_plans
-                ) {
-                    // Search for nearest neighbors.
-                    *insert_plans = hawk_actor
-                        .search_to_insert(sessions, iris_shares.clone())
-                        .await
-                        .unwrap();
+                let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
+                    job.request.search_queries();
 
-                    // TODO: Optimize for pure searches (rotations).
-                }
+                // Search for nearest neighbors.
+                // For both eyes, all requests, and rotations.
+                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = hawk_actor
+                    .search_both_eyes(&sessions, search_queries)
+                    .await
+                    .unwrap();
 
                 let match_result = {
-                    let step1 = matching::BatchStep1::new(&both_insert_plans);
+                    let step1 = matching::BatchStep1::new(&search_results);
                     // Go fetch the missing vector IDs and calculate their is_match.
-                    let missing_is_match = calculate_is_match(
-                        &both_insert_plans,
-                        step1.missing_vector_ids(),
-                        &sessions,
-                    )
-                    .await;
+                    let missing_is_match =
+                        calculate_is_match(search_queries, step1.missing_vector_ids(), &sessions)
+                            .await;
                     step1.step2(&missing_is_match)
                 };
 
                 let mut results = HawkResult::new(match_result);
 
-                let (insert_indices, both_insert_plans) = job
+                let (insert_indices, search_results) = job
                     .request
-                    .filter_for_insertion(both_insert_plans, results.is_matches());
+                    .filter_for_insertion(search_results, results.is_matches());
 
                 // Insert into the database.
                 if !hawk_actor.args.disable_persistence {
                     // For both eyes.
-                    for (side, sessions, insert_plans) in
-                        izip!(&STORE_IDS, &sessions, both_insert_plans)
+                    for (side, sessions, search_results) in
+                        izip!(&STORE_IDS, &sessions, search_results)
                     {
+                        // Focus on the main results (forget rotations).
+                        let insert_plans = search_results
+                            .into_iter()
+                            .map(VecRots::into_center)
+                            .collect();
+
                         // Insert in memory, and return the plans to update the persistent database.
                         let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
 
@@ -826,7 +872,10 @@ mod tests {
     };
     use futures::future::JoinAll;
     use iris_mpc_common::{
-        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, iris_db::db::IrisDB, job::BatchMetadata,
+        galois_engine::degree4::preprocess_iris_message_shares,
+        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
+        iris_db::db::IrisDB,
+        job::{BatchMetadata, IrisQueryBatchEntries},
     };
     use std::ops::Not;
     use tokio::time::sleep;
@@ -883,13 +932,22 @@ mod tests {
             .collect_vec();
 
         let all_results = izip!(irises, handles.clone())
-            .map(|(share, mut handle)| async move {
+        .map(|(shares, mut handle)| async move {
+                // TODO: different test irises for each eye.
+                let shares_right = shares.clone();
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests] = receive_batch_shares(shares);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests] = receive_batch_shares(shares_right);
+
                 let batch = BatchQuery {
-                    left_iris_requests: GaloisRingSharedIris::to_batch(&share),
-                    right_iris_requests: GaloisRingSharedIris::to_batch(&share),
-                    // TODO: different test irises for each eye.
-                    // TODO: Rotations in db_left / db_right.
-                    // TODO: Lagrange interpolation in query_left / query_right.
+                    // Iris shares.
+                    left_iris_requests,
+                    right_iris_requests,
+                    // All rotations.
+                    left_iris_rotated_requests,
+                    right_iris_rotated_requests,
+                    // All rotations, preprocessed.
+                    left_iris_interpolated_requests,
+                    right_iris_interpolated_requests,
 
                     // Batch details to be just copied to the result.
                     request_ids: vec!["X".to_string(); batch_size],
@@ -942,6 +1000,21 @@ mod tests {
         assert_eq!(batch_size, result.actor_data.0[1].len());
 
         Ok(())
+    }
+
+    /// Prepare shares in the same format as `receive_batch()`.
+    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 3] {
+        let mut out = [(); 3].map(|_| IrisQueryBatchEntries::default());
+        for share in shares {
+            let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
+            out[0].code.push(one.code);
+            out[0].mask.push(one.mask);
+            out[1].code.extend(one.code_rotated);
+            out[1].mask.extend(one.mask_rotated);
+            out[2].code.extend(one.code_interpolated);
+            out[2].mask.extend(one.mask_interpolated);
+        }
+        out
     }
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
