@@ -16,7 +16,7 @@ use std::{
     ops::{Index, IndexMut},
     str::FromStr,
 };
-use tracing::info;
+use tracing::debug;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
@@ -138,7 +138,7 @@ impl VectorStore for PlaintextStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Self::DistanceRef {
-        info!(event_type = EvaluateDistance.id());
+        debug!(event_type = EvaluateDistance.id());
         let query_code = &self.points[*query];
         let vector_code = &self.points[*vector];
         query_code.data.distance_fraction(&vector_code.data)
@@ -154,7 +154,7 @@ impl VectorStore for PlaintextStore {
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
     ) -> bool {
-        info!(event_type = CompareDistance.id());
+        debug!(event_type = CompareDistance.id());
         let (a, b) = *distance1; // a/b
         let (c, d) = *distance2; // c/d
         (a as i32) * (d as i32) - (b as i32) * (c as i32) < 0

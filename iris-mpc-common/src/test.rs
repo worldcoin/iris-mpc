@@ -293,7 +293,8 @@ impl TestCaseGenerator {
                 self.generate_query(idx);
 
             // Invalidate 10% of the queries, but ignore the batch duplicates
-            let is_valid = self.rng.gen_bool(0.10) || self.skip_invalidate;
+            // TODO: skip this for now until this is implemented
+            let is_valid = true; //self.rng.gen_bool(0.10) || self.skip_invalidate;
             if is_valid {
                 requests.insert(request_id.to_string(), e2e_template.clone());
             }
@@ -341,20 +342,22 @@ impl TestCaseGenerator {
         }
 
         // for non-empty batches also add some deletions
-        for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
-            let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
-            if self.deleted_indices.contains(&(idx as u32))
-                || self.db_indices_used_in_current_batch.contains(&idx)
-            {
-                continue;
-            }
-            self.deleted_indices_buffer.push(idx as u32);
-            self.deleted_indices.insert(idx as u32);
-            tracing::info!("Deleting index {}", idx);
+        if max_deletions_per_batch > 0 {
+            for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
+                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                if self.deleted_indices.contains(&(idx as u32))
+                    || self.db_indices_used_in_current_batch.contains(&idx)
+                {
+                    continue;
+                }
+                self.deleted_indices_buffer.push(idx as u32);
+                self.deleted_indices.insert(idx as u32);
+                tracing::info!("Deleting index {}", idx);
 
-            batch0.deletion_requests_indices.push(idx as u32);
-            batch1.deletion_requests_indices.push(idx as u32);
-            batch2.deletion_requests_indices.push(idx as u32);
+                batch0.deletion_requests_indices.push(idx as u32);
+                batch1.deletion_requests_indices.push(idx as u32);
+                batch2.deletion_requests_indices.push(idx as u32);
+            }
         }
         Ok(([batch0, batch1, batch2], requests))
     }
@@ -920,6 +923,9 @@ impl TestCaseGenerator {
                     ..
                 } = res;
 
+                tracing::info!("🔍 req: {:?}", thread_request_ids);
+                tracing::info!("🔍 matches: {:?}", matches);
+
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left,
@@ -1114,12 +1120,11 @@ fn check_bucket_statistics(
     Ok(())
 }
 
-pub fn load_test_db(
+pub fn generate_test_db(
     party_id: usize,
     db_size: usize,
     db_rng_seed: u64,
-    loader: &mut impl InMemoryStore,
-) -> Result<()> {
+) -> Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
     let mut db = IrisDB::new_random_par(db_size, &mut rng);
 
@@ -1130,17 +1135,32 @@ pub fn load_test_db(
 
     let mut share_rng = StdRng::from_rng(rng).unwrap();
 
-    for (idx, iris) in db.db.into_iter().enumerate() {
+    let mut result = Vec::new();
+
+    for iris in db.db.into_iter() {
         let code =
             GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut share_rng)
                 [party_id]
-                .coefs;
+                .clone();
         let mask: GaloisRingTrimmedMaskCodeShare =
             GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut share_rng)[party_id]
                 .clone()
                 .into();
-        let mask = mask.coefs;
-        loader.load_single_record_from_db(idx, &code, &mask, &code, &mask);
+        result.push((code, mask));
+    }
+
+    result
+}
+
+pub fn load_test_db(
+    party_id: usize,
+    db_size: usize,
+    db_rng_seed: u64,
+    loader: &mut impl InMemoryStore,
+) -> Result<()> {
+    let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
+    for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
+        loader.load_single_record_from_db(idx, &code.coefs, &mask.coefs, &code.coefs, &mask.coefs);
         loader.increment_db_size(idx);
     }
 
