@@ -1,5 +1,5 @@
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::indexer::{messages::OnIndexationStart, supervisors::IndexFromDbSupervisor};
+use iris_mpc_cpu::indexation::{messages::OnIndexationStart, supervisors::IndexFromDbSupervisor};
 use std::future::pending;
 use tracing_subscriber::EnvFilter;
 

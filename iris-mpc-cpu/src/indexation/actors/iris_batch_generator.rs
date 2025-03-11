@@ -67,13 +67,13 @@ impl IrisBatchGenerator {
         // Update internal state.
         self.update_state().await;
 
-        // Signal end of indexation if upto tip.
+        // If at tip then signal end of indexation.
         if self.range_for_indexation.is_none() {
             self.supervisor_ref
                 .tell(messages::OnIndexationEnd)
                 .await
                 .unwrap();
-        // Signal next batch to be indexed.
+        // Otherwise signal that a new batch is awaiting indexation.
         } else {
             self.supervisor_ref
                 .tell(messages::OnBatchIndexationStart {

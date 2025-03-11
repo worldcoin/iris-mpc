@@ -87,7 +87,10 @@ impl Message<messages::OnBatchElementIndexationStart> for IrisDataFetcher {
         msg: messages::OnBatchElementIndexationStart,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
+        // Pull data from store.
         let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
+
+        // Signal to supervisor.
         self.supervisor_ref
             .tell(messages::OnIrisDataPulledFromStore::from(&iris_data))
             .await

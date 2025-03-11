@@ -1,4 +1,4 @@
-use crate::indexer::{
+use super::super::{
     actors::{IrisBatchGenerator, IrisDataFetcher},
     messages,
 };
