@@ -1,10 +1,11 @@
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::indexer;
-use kameo::actor::pubsub::{PubSub, Publish, Subscribe};
+use iris_mpc_cpu::indexer::{messages::OnIndexationStart, supervisors::IndexFromDbSupervisor};
+use std::future::pending;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialise tracing.
     tracing_subscriber::fmt()
         .with_env_filter("trace".parse::<EnvFilter>().unwrap())
         .without_time()
@@ -13,45 +14,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Spinup: tracing initialised.");
 
     // Set config.
-    let config: Config = Config::load_config("SMPC").unwrap();
-    tracing::info!("Spinup: configuration loaded.");
+    let config = Config::load_config("SMPC").unwrap();
 
-    // Set brokers.
-    let on_indexation_start = kameo::spawn(PubSub::<indexer::messages::OnIndexationStart>::new());
-    let on_iris_id_pulled_from_store =
-        kameo::spawn(PubSub::<indexer::messages::OnIrisIdPulledFromStore>::new());
-    let on_iris_data_pulled_from_store =
-        kameo::spawn(PubSub::<indexer::messages::OnIrisDataPulledFromStore>::new());
+    // Spawn supervisor.
+    let a = IndexFromDbSupervisor::new(config);
+    kameo::spawn(a).tell(OnIndexationStart).await?;
 
-    // Set actor references.
-    let ref_iris_id_stream_reader = kameo::spawn(
-        indexer::actors::IrisIdStreamReader::new(
-            config.clone(),
-            on_iris_id_pulled_from_store.clone(),
-        )
-        .await,
-    );
-
-    let ref_iris_data_loader = kameo::spawn(
-        indexer::actors::IrisDataLoader::new(
-            config.clone(),
-            on_iris_data_pulled_from_store.clone(),
-        )
-        .await,
-    );
-
-    // Set event subscribers.
-    on_indexation_start
-        .ask(Subscribe(ref_iris_id_stream_reader))
-        .await?;
-    on_iris_id_pulled_from_store
-        .ask(Subscribe(ref_iris_data_loader))
-        .await?;
-
-    // Publish.
-    on_indexation_start
-        .ask(Publish(indexer::messages::OnIndexationStart))
-        .await?;
-
-    Ok(())
+    // TODO: block until a supervisor OnIndexationEnd | OnIndexationError event is emitted.
+    pending().await
 }

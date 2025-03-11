@@ -184,6 +184,29 @@ impl Store {
         Ok(count.0 as usize)
     }
 
+    /// Fetches a single row from Iris table.
+    ///
+    /// # Arguments
+    ///
+    /// * `id_of_iris` - Serial ID of Iris to be fetched.
+    ///
+    /// # Returns
+    ///
+    /// Maybe a `DbStoredIris` instance.
+    ///
+    pub async fn fetch_iris_by_id(
+        &self,
+        id_of_iris: i64,
+    ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
+        Ok(
+            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id == $1")
+                .bind(id_of_iris)
+                .fetch_one(&self.pool)
+                .await
+                .expect("DB operation failure :: Fetch Iris by ID."),
+        )
+    }
+
     /// Stream irises in order.
     pub async fn stream_irises(
         &self,

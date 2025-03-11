@@ -2402,6 +2402,7 @@ dependencies = [
  "sqlx",
  "static_assertions",
  "telemetry-batteries",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
