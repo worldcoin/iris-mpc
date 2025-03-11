@@ -59,9 +59,8 @@ async fn create_graph_from_plain_db(
     let mut shared_irises = HashMap::new();
 
     for (vector_id, iris) in store.points.iter().enumerate() {
-        let query = iris.data.clone().0;
-        let vector_id = VectorId::from_serial_id(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, query);
+        let vector_id: VectorId = VectorId::from_serial_id(vector_id as u32);
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 

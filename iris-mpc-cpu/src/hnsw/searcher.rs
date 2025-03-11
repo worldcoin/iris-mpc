@@ -14,7 +14,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tracing::{debug, info, instrument, trace_span, Instrument};
+use tracing::{debug, instrument, trace_span, Instrument};
 
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
