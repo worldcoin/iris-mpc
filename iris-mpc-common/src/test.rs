@@ -257,7 +257,7 @@ impl TestCaseGenerator {
     ) -> Self {
         // create a copy of the plain database for the test case generator, this needs
         // to be in sync with `generate_db`
-        let mut db = IrisDB::new_random_rng(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
+        let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
         Self::new_with_db(&mut db, internal_rng_seed, is_cpu)
     }
     pub fn enable_test_case(&mut self, test_case: TestCase) {
