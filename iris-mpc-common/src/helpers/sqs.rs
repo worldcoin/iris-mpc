@@ -139,8 +139,7 @@ pub async fn delete_messages_until_sequence_num(
                 break;
             }
         } else {
-            tracing::info!("No more messages in the queue. Done.");
-            break;
+            tracing::info!("Could not find more messages in the queue. Retrying.");
         }
     }
 
