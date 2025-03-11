@@ -314,6 +314,7 @@ impl GrpcHandle {
         Ok(())
     }
 
+    // This function should be called after all parties have called `create_session`
     pub async fn wait_for_session(&self, session_id: SessionId) -> eyre::Result<()> {
         while matches!(
             self.submit(GrpcTask::IsSessionReady(session_id)).await?,
@@ -679,71 +680,93 @@ mod tests {
             });
         }
 
+        // Multiple parties sending messages to each other
+        let all_parties_talk = |identities: Vec<Identity>,
+                                players: Vec<GrpcHandle>,
+                                session_id: SessionId| async move {
+            let mut tasks = JoinSet::new();
+            for (player_id, player) in players.iter().enumerate() {
+                let role = Role::new(player_id);
+                let next = role.next(3).index();
+                let prev = role.prev(3).index();
+
+                let player = player.clone();
+                let next_id = identities[next].clone();
+                let prev_id = identities[prev].clone();
+
+                let message_to_next =
+                    format!("From player {} to player {} with love", player_id, next).into_bytes();
+                let message_to_prev =
+                    format!("From player {} to player {} with love", player_id, prev).into_bytes();
+
+                tasks.spawn(async move {
+                    // Sending
+                    player
+                        .send(message_to_next.clone(), &next_id, &session_id)
+                        .await
+                        .unwrap();
+                    player
+                        .send(message_to_prev.clone(), &prev_id, &session_id)
+                        .await
+                        .unwrap();
+
+                    // Receiving
+                    let received_message_from_prev =
+                        player.receive(&prev_id, &session_id).await.unwrap();
+                    let expected_message_from_prev =
+                        format!("From player {} to player {} with love", prev, player_id)
+                            .into_bytes();
+                    assert_eq!(received_message_from_prev, expected_message_from_prev);
+                    let received_message_from_next =
+                        player.receive(&next_id, &session_id).await.unwrap();
+                    let expected_message_from_next =
+                        format!("From player {} to player {} with love", next, player_id)
+                            .into_bytes();
+                    assert_eq!(received_message_from_next, expected_message_from_next);
+                });
+            }
+            tasks.join_all().await;
+        };
+
         // Each party sending and receiving messages to each other
         {
             let players = players.clone();
+            let identities = identities.clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(1);
 
                 create_session_helper(session_id, &players).await.unwrap();
 
-                let mut tasks = JoinSet::new();
-                // Send messages
-                for (player_id, player) in players.iter().enumerate() {
-                    let role = Role::new(player_id);
-                    let next = role.next(3).index();
-                    let prev = role.prev(3).index();
-
-                    let player = player.clone();
-                    let next_id = identities[next].clone();
-                    let prev_id = identities[prev].clone();
-
-                    tasks.spawn(async move {
-                        // Sending
-                        let msg_to_next =
-                            format!("From player {} to player {} with love", player_id, next)
-                                .into_bytes();
-                        let msg_to_prev =
-                            format!("From player {} to player {} with love", player_id, prev)
-                                .into_bytes();
-                        player
-                            .send(msg_to_next.clone(), &next_id, &session_id)
-                            .await
-                            .unwrap();
-                        player
-                            .send(msg_to_prev.clone(), &prev_id, &session_id)
-                            .await
-                            .unwrap();
-
-                        // Receiving
-                        let received_msg_from_prev =
-                            player.receive(&prev_id, &session_id).await.unwrap();
-                        let expected_msg_from_prev =
-                            format!("From player {} to player {} with love", prev, player_id)
-                                .into_bytes();
-                        assert_eq!(received_msg_from_prev, expected_msg_from_prev);
-                        let received_msg_from_next =
-                            player.receive(&next_id, &session_id).await.unwrap();
-                        let expected_msg_from_next =
-                            format!("From player {} to player {} with love", next, player_id)
-                                .into_bytes();
-                        assert_eq!(received_msg_from_next, expected_msg_from_next);
-                    });
-                }
-                tasks.join_all().await;
+                // Test that parties can send and receive messages
+                all_parties_talk(identities, players, session_id).await;
             });
         }
 
         // Parties create a session consecutively
         {
             let players = players.clone();
-            jobs.spawn(async move {
-                let session_id = SessionId::from(2);
+            let session_id = SessionId::from(2);
+            // Session is consecutively created
+            {
+                let players = players.clone();
+                let mut create_session_jobs = JoinSet::new();
+                create_session_jobs.spawn(async move {
+                    let session_id = SessionId::from(2);
 
-                for player in players.iter() {
-                    player.create_session(session_id).await.unwrap();
-                }
-            });
+                    for player in players.iter() {
+                        player.create_session(session_id).await.unwrap();
+                    }
+
+                    // Wait for all parties to create the session
+                    for player in players.iter() {
+                        player.wait_for_session(session_id).await.unwrap();
+                    }
+                });
+                create_session_jobs.join_all().await;
+            }
+
+            // Test that parties can send and receive messages
+            all_parties_talk(identities, players, session_id).await;
         }
 
         jobs.join_all().await;
