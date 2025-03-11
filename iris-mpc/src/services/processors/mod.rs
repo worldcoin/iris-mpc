@@ -5,7 +5,8 @@ pub mod result_message;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+    preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+    GaloisShares,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
@@ -16,15 +17,6 @@ use iris_mpc_store::Store;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::{spawn_blocking, JoinHandle};
-
-pub type GaloisShares = (
-    GaloisRingIrisCodeShare,
-    GaloisRingTrimmedMaskCodeShare,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-);
 
 type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
@@ -108,35 +100,6 @@ fn get_iris_shares_parse_task(
             ))
         });
     Ok(handle)
-}
-
-fn preprocess_iris_message_shares(
-    code_share: GaloisRingIrisCodeShare,
-    mask_share: GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<GaloisShares> {
-    let mut code_share = code_share;
-    let mut mask_share = mask_share;
-
-    // Original for storage.
-    let store_iris_shares = code_share.clone();
-    let store_mask_shares = mask_share.clone();
-
-    // With rotations for in-memory database.
-    let db_iris_shares = code_share.all_rotations();
-    let db_mask_shares = mask_share.all_rotations();
-
-    // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
-    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
-
-    Ok((
-        store_iris_shares,
-        store_mask_shares,
-        db_iris_shares,
-        db_mask_shares,
-        code_share.all_rotations(),
-        mask_share.all_rotations(),
-    ))
 }
 
 pub async fn process_identity_deletions(

@@ -337,6 +337,44 @@ pub mod degree4 {
         }
     }
 
+    pub type GaloisShares = (
+        GaloisRingIrisCodeShare,
+        GaloisRingTrimmedMaskCodeShare,
+        Vec<GaloisRingIrisCodeShare>,
+        Vec<GaloisRingTrimmedMaskCodeShare>,
+        Vec<GaloisRingIrisCodeShare>,
+        Vec<GaloisRingTrimmedMaskCodeShare>,
+    );
+
+    pub fn preprocess_iris_message_shares(
+        code_share: GaloisRingIrisCodeShare,
+        mask_share: GaloisRingTrimmedMaskCodeShare,
+    ) -> eyre::Result<GaloisShares> {
+        let mut code_share = code_share;
+        let mut mask_share = mask_share;
+
+        // Original for storage.
+        let store_iris_shares = code_share.clone();
+        let store_mask_shares = mask_share.clone();
+
+        // With rotations for in-memory database.
+        let db_iris_shares = code_share.all_rotations();
+        let db_mask_shares = mask_share.all_rotations();
+
+        // With Lagrange interpolation.
+        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
+        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
+
+        Ok((
+            store_iris_shares,
+            store_mask_shares,
+            db_iris_shares,
+            db_mask_shares,
+            code_share.all_rotations(),
+            mask_share.all_rotations(),
+        ))
+    }
+
     pub struct FullGaloisRingIrisCodeShare {
         pub code: GaloisRingIrisCodeShare,
         pub mask: GaloisRingTrimmedMaskCodeShare,
