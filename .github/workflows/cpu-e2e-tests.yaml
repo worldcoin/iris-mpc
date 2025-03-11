@@ -1,0 +1,60 @@
+name: CPU E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types: [opened, synchronize]
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  e2e-tests:
+    runs-on:
+      labels: ubuntu-22.04-64core
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get all files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@v45
+        with:
+          files_yaml: |
+            src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - iris-mpc-cpu/**
+              - iris-mpc-common/**
+
+      # The following steps will only run if any of the relevant files have changed
+      - name: Install Dependencies
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: sudo apt install protobuf-compiler
+
+      - name: Cache build products
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: Swatinem/rust-cache@v2.7.3
+        with:
+          key: "e2e-test"
+
+      - name: Install Rust
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: rustup toolchain install 1.81.0
+
+      - name: Set Rust as default
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: rustup default 1.81.0
+
+      - name: Run CPU E2E tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
+        env:
+          RUST_LOG: info
+          RUST_BACKTRACE: 1
