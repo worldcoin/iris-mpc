@@ -31,20 +31,21 @@ pub struct OnBatchElementIndexationStart {
 }
 
 // Event: raised when raw Iris data is ready for processing.
+// TODO: use byte slice rather than vecs
 #[derive(Clone, Debug, Default)]
 pub struct OnIrisDataPulledFromStore {
     // Iris ID, see pgres primary key.
     pub(crate) id_of_iris: i64,
 
     // Iris code share: left.
-    pub(crate) code_left: Vec<u16>,
-
-    // Iris code share: right.
-    pub(crate) code_right: Vec<u16>,
+    pub(crate) left_code: Vec<u16>,
 
     // Iris mask share: left.
-    pub(crate) mask_left: Vec<u16>,
+    pub(crate) left_mask: Vec<u16>,
+
+    // Iris code share: right.
+    pub(crate) right_code: Vec<u16>,
 
     // Iris mask share: right.
-    pub(crate) mask_right: Vec<u16>,
+    pub(crate) right_mask: Vec<u16>,
 }

@@ -66,28 +66,33 @@ impl IrisDataFetcher {
 // Message Handlers.
 // ------------------------------------------------------------------------
 
+impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
+    fn from(value: &IrisData) -> Self {
+        Self {
+            id_of_iris: value.id(),
+            left_code: value.left_code().to_vec(),
+            left_mask: value.left_mask().to_vec(),
+            right_code: value.right_code().to_vec(),
+            right_mask: value.right_mask().to_vec(),
+        }
+    }
+}
+
 // Message handler.
 impl Message<messages::OnBatchElementIndexationStart> for IrisDataFetcher {
-    type Reply = Result<IrisData, IndexationError>;
+    type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
         msg: messages::OnBatchElementIndexationStart,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        let g = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
-
+        let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
         self.supervisor_ref
-            .tell(messages::OnIrisDataPulledFromStore {
-                id_of_iris: g.id(),
-                code_left: g.left_code().to_vec(),
-                code_right: g.right_code().to_vec(),
-                mask_left: g.left_mask().to_vec(),
-                mask_right: g.right_mask().to_vec(),
-            })
+            .tell(messages::OnIrisDataPulledFromStore::from(&iris_data))
             .await
             .unwrap();
 
-        Ok(g)
+        Ok(())
     }
 }

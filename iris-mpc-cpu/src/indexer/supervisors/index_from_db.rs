@@ -1,5 +1,5 @@
 use crate::indexer::{
-    actors::{IrisBatchProducer, IrisDataFetcher},
+    actors::{IrisBatchGenerator, IrisDataFetcher},
     messages,
 };
 use iris_mpc_common::config::Config;
@@ -18,7 +18,7 @@ use tracing;
 
 // Actor: Genesis indexation supervisor.
 pub struct Supervisor {
-    a1_ref: Option<ActorRef<IrisBatchProducer>>,
+    a1_ref: Option<ActorRef<IrisBatchGenerator>>,
     a2_ref: Option<ActorRef<IrisDataFetcher>>,
     config: Config,
 }
@@ -118,7 +118,7 @@ impl Actor for Supervisor {
         tracing::info!("Supervisor :: lifecycle :: on_start");
 
         // Instantiate associated actors.
-        let a1 = IrisBatchProducer::new(self.config.clone(), ref_to_self.clone());
+        let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
         let a2 = IrisDataFetcher::new(self.config.clone(), ref_to_self.clone());
 
         // Spawn associated actors.
