@@ -68,7 +68,7 @@ impl IrisBatchProducer {
         self.update_state().await;
 
         // Signal end of indexation if upto tip.
-        if self.range_for_indexation == None {
+        if self.range_for_indexation.is_none() {
             self.supervisor_ref
                 .tell(messages::OnIndexationEnd)
                 .await
