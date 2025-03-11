@@ -164,7 +164,7 @@ mod e2e_test {
         let mut handle2 = rx2.await??;
 
         let mut test_case_generator =
-            TestCaseGenerator::new_seeded(DB_SIZE, DB_RNG_SEED, INTERNAL_RNG_SEED);
+            TestCaseGenerator::new_seeded(DB_SIZE, DB_RNG_SEED, INTERNAL_RNG_SEED, false);
 
         test_case_generator.enable_bucket_statistic_checks(
             N_BUCKETS,

@@ -217,10 +217,11 @@ pub struct TestCaseGenerator {
     db_indices_used_in_current_batch: HashSet<usize>,
     /// items against which the OR rule is used
     or_rule_matches: Vec<String>,
+    is_cpu: bool,
 }
 
 impl TestCaseGenerator {
-    pub fn new_with_db(db: &mut IrisDB, internal_rng_seed: u64) -> Self {
+    pub fn new_with_db(db: &mut IrisDB, internal_rng_seed: u64, is_cpu: bool) -> Self {
         // Set the masks to all 1s for the first 10%
         let db_len = db.db.len();
         for i in 0..db_len / 10 {
@@ -244,14 +245,20 @@ impl TestCaseGenerator {
             batch_duplicates: HashMap::new(),
             db_indices_used_in_current_batch: HashSet::new(),
             or_rule_matches: Vec::new(),
+            is_cpu,
         }
     }
 
-    pub fn new_seeded(db_size: usize, db_rng_seed: u64, internal_rng_seed: u64) -> Self {
+    pub fn new_seeded(
+        db_size: usize,
+        db_rng_seed: u64,
+        internal_rng_seed: u64,
+        is_cpu: bool,
+    ) -> Self {
         // create a copy of the plain database for the test case generator, this needs
         // to be in sync with `generate_db`
         let mut db = IrisDB::new_random_rng(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
-        Self::new_with_db(&mut db, internal_rng_seed)
+        Self::new_with_db(&mut db, internal_rng_seed, is_cpu)
     }
     pub fn enable_test_case(&mut self, test_case: TestCase) {
         if self.enabled_test_cases.contains(&test_case) {
@@ -298,8 +305,8 @@ impl TestCaseGenerator {
                 self.generate_query(idx);
 
             // Invalidate 10% of the queries, but ignore the batch duplicates
-            // TODO: skip this for now until this is implemented
-            let is_valid = true; //self.rng.gen_bool(0.10) || self.skip_invalidate;
+            // TODO: remove the check for cpu once batch deduplication is implemented
+            let is_valid = self.is_cpu || self.rng.gen_bool(0.10) || self.skip_invalidate;
             if is_valid {
                 requests.insert(request_id.to_string(), e2e_template.clone());
             }
@@ -426,8 +433,8 @@ impl TestCaseGenerator {
 
         // with a 10% chance we pick a template from the batch, to test the batch
         // deduplication mechanism
-        // TODO: enable this once batch deduplication is implemented
-        let pick_from_batch = false; //self.rng.gen_bool(0.10);
+        // TODO: remove the check for cpu once batch deduplication is implemented
+        let pick_from_batch = !self.is_cpu && self.rng.gen_bool(0.10);
         let e2e_template = if pick_from_batch && !self.new_templates_in_batch.is_empty() {
             let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
             let (batch_idx, duplicate_request_id, template) =
@@ -931,10 +938,6 @@ impl TestCaseGenerator {
                     ..
                 } = res;
 
-                tracing::info!("🔍 req: {:?}", thread_request_ids);
-                tracing::info!("🔍 matches: {:?}", matches);
-                tracing::info!("🔍 match ids: {:?}", match_ids);
-
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left,
@@ -972,8 +975,6 @@ impl TestCaseGenerator {
                     matched_batch_request_ids
                 ) {
                     assert!(requests.contains_key(req_id));
-
-                    tracing::info!("🔍 match idx: {:?}", idx);
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 

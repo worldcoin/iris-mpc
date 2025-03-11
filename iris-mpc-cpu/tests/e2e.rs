@@ -23,8 +23,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 const DB_SIZE: usize = 1000;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
-const NUM_BATCHES: usize = 10;
-const MAX_BATCH_SIZE: usize = 2;
+const NUM_BATCHES: usize = 5;
+const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 
@@ -118,12 +118,10 @@ async fn e2e_test() -> Result<()> {
     let mut handle1 = handle1?;
     let mut handle2 = handle2?;
 
-    let mut test_case_generator = TestCaseGenerator::new_with_db(&mut db, INTERNAL_RNG_SEED);
+    let mut test_case_generator = TestCaseGenerator::new_with_db(&mut db, INTERNAL_RNG_SEED, true);
 
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
-    // test_case_generator.disable_test_case(TestCase::PreviouslyInserted);
-    // test_case_generator.disable_test_case(TestCase::NonMatch);
 
     test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
