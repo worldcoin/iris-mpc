@@ -170,7 +170,7 @@ impl Default for SharedIrisesRef {
 
 // Constructor.
 impl SharedIrisesRef {
-    pub(crate) fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
         let next_id = points
             .keys()
             .map(|v| v.to_serial_id() + 1)

@@ -151,6 +151,19 @@ impl<V: VectorStore> InsertPlanV<V> {
 
 impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+        Self::from_cli_with_graph_and_store(
+            args,
+            GraphMem::<Aby3Store>::new(),
+            [(); 2].map(|_| SharedIrisesRef::default()),
+        )
+        .await
+    }
+
+    pub async fn from_cli_with_graph_and_store(
+        args: &HawkArgs,
+        graph: GraphMem<Aby3Store>,
+        iris_store: BothEyes<SharedIrisesRef>,
+    ) -> Result<Self> {
         let search_params = Arc::new(HnswSearcher::default());
 
         let identities = generate_local_identities();
@@ -205,8 +218,7 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
-        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(GraphMem::<Aby3Store>::new())));
+        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
 
         Ok(HawkActor {
             args: args.clone(),
@@ -610,21 +622,27 @@ impl HawkResult {
     }
 
     fn merged_results(&self) -> Vec<u32> {
+        let match_ids = self.match_ids();
         self.connect_plans.0[0]
             .iter()
-            .map(|plan| {
-                plan.as_ref()
-                    .map_or(0, |plan| plan.inserted_vector.to_serial_id())
+            .enumerate()
+            .map(|(idx, plan)| match plan {
+                Some(plan) => plan.inserted_vector.to_serial_id(),
+                None => match_ids[idx][0],
             })
             .collect()
+    }
+
+    fn match_ids(&self) -> Vec<Vec<u32>> {
+        self.match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()))
     }
 
     fn job_result(self, batch: BatchQuery) -> ServerJobResult {
         let n_requests = self.is_matches.len();
 
-        let match_ids = self
-            .match_results
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+        let match_ids = self.match_ids();
+
         let partial_match_ids_left = self
             .match_results
             .filter_map(|(id, [l, _r])| l.then_some(id.to_serial_id()));
@@ -634,8 +652,10 @@ impl HawkResult {
         let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
         let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
 
+        let merged_results = self.merged_results();
+
         ServerJobResult {
-            merged_results: self.merged_results(),
+            merged_results,
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
@@ -703,13 +723,19 @@ impl HawkHandle {
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
         ];
+        Self::new_with_sessions(hawk_actor, sessions).await
+    }
 
+    pub async fn new_with_sessions(
+        mut hawk_actor: HawkActor,
+        sessions: [Vec<HawkSessionRef>; 2],
+    ) -> Result<Self> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                tracing::debug!("Processing an Hawk job…");
+                tracing::info!("Processing an Hawk job…");
 
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
@@ -765,7 +791,7 @@ impl HawkHandle {
         Ok(Self { job_queue: tx })
     }
 
-    async fn new_sessions(
+    pub async fn new_sessions(
         hawk_actor: &mut HawkActor,
         request_parallelism: usize,
         store_id: StoreId,
