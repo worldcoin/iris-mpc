@@ -72,7 +72,7 @@ async fn create_graph_from_plain_db(
 async fn start_hawk_node(args: &HawkArgs, db: &mut IrisDB) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    let (mpc_graph, aby3_store) = create_graph_from_plain_db(args.party_index, &db).await?;
+    let (mpc_graph, aby3_store) = create_graph_from_plain_db(args.party_index, db).await?;
     let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, mpc_graph, aby3_store).await?;
 
     let handle = HawkHandle::new(hawk_actor, HAWK_REQUEST_PARALLELISM).await?;
