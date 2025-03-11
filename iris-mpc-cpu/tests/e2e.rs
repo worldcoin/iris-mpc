@@ -1,14 +1,13 @@
 use eyre::Result;
-use iris_mpc_common::test::{generate_test_db, load_test_db, TestCase, TestCaseGenerator};
+use iris_mpc_common::test::{generate_test_db, TestCase, TestCaseGenerator};
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, StoreId},
     protocol::shared_iris::GaloisRingSharedIris,
 };
-use std::{sync::Arc, time::Duration};
-use tokio::sync::RwLock;
+use std::time::Duration;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-const DB_SIZE: usize = 10;
+const DB_SIZE: usize = 30;
 const DB_RNG_SEED: u64 = 0xdeadbeef;
 const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 30;
@@ -96,11 +95,12 @@ async fn e2e_test() -> Result<()> {
 
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
-    test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
+    // test_case_generator.disable_test_case(TestCase::PreviouslyInserted);
     // test_case_generator.disable_test_case(TestCase::NonMatch);
+
+    test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::CloseToThreshold);
-    test_case_generator.disable_test_case(TestCase::PreviouslyInserted);
     test_case_generator.disable_test_case(TestCase::PreviouslyDeleted);
     test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
     test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
