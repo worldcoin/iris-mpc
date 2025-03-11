@@ -11,11 +11,11 @@ use crate::{
 
 use backon::{ExponentialBuilder, Retryable};
 use eyre::eyre;
-use std::{collections::HashMap, str::FromStr, time::Duration};
+use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
-        oneshot,
+        oneshot, Mutex,
     },
     time::{sleep, timeout},
 };
@@ -32,9 +32,9 @@ fn err_to_status(e: eyre::Error) -> Status {
     Status::internal(e.to_string())
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct MessageQueueStore {
-    queues: HashMap<Identity, UnboundedReceiver<SendRequest>>,
+    queues: HashMap<Identity, Arc<Mutex<UnboundedReceiver<SendRequest>>>>,
 }
 
 impl MessageQueueStore {
@@ -46,7 +46,7 @@ impl MessageQueueStore {
         if self.queues.contains_key(&sender_id) {
             return Err(eyre!("Player {:?} already has a message queue", sender_id));
         }
-        self.queues.insert(sender_id, stream);
+        self.queues.insert(sender_id, Arc::new(Mutex::new(stream)));
         Ok(())
     }
 
@@ -59,7 +59,12 @@ impl MessageQueueStore {
             "RECEIVE: Sender {sender_id:?} hasn't been found in the message queues"
         )))?;
 
-        let msg = queue.recv().await.ok_or(eyre!("No message received"))?;
+        let msg = queue
+            .lock()
+            .await
+            .recv()
+            .await
+            .ok_or(eyre!("No message received"))?;
 
         Ok(msg.data)
     }
@@ -151,31 +156,51 @@ impl GrpcHandle {
         // Loop to handle incoming tasks from job queue
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result = match job.task {
-                    GrpcTask::Send(task) => grpc
-                        .send(task.value, &task.receiver, &task.session_id)
-                        .map(|_| MessageResult::Empty),
-                    GrpcTask::Receive(task) => grpc
-                        .receive(&task.sender, &task.session_id)
-                        .await
-                        .map(MessageResult::ReceivedBytes),
-                    GrpcTask::CreateSession(session_id) => grpc
-                        .create_session(session_id)
-                        .await
-                        .map(|_| MessageResult::Empty),
-                    GrpcTask::IsSessionReady(session_id) => Ok(MessageResult::IsSessionReady(
-                        grpc.is_session_ready(session_id),
-                    )),
-                    GrpcTask::ConnectToParty(task) => grpc
-                        .connect_to_party(task.party_id, &task.address)
-                        .await
-                        .map(|_| MessageResult::Empty),
-                    GrpcTask::StartMessageStream(task) => grpc
-                        .start_message_stream(task.sender, task.session_id, task.stream)
-                        .await
-                        .map(|_| MessageResult::Empty),
-                };
-                let _ = job.return_channel.send(job_result);
+                match job.task {
+                    GrpcTask::Send(task) => {
+                        let job_result = grpc
+                            .send(task.value, &task.receiver, &task.session_id)
+                            .map(|_| MessageResult::Empty);
+                        let _ = job.return_channel.send(job_result);
+                    }
+                    GrpcTask::Receive(task) => {
+                        let mut grpc = grpc.clone();
+                        tokio::spawn(async move {
+                            let job_result = grpc
+                                .receive(&task.sender, &task.session_id)
+                                .await
+                                .map(MessageResult::ReceivedBytes);
+                            let _ = job.return_channel.send(job_result);
+                        });
+                    }
+                    GrpcTask::CreateSession(session_id) => {
+                        let job_result = grpc
+                            .create_session(session_id)
+                            .await
+                            .map(|_| MessageResult::Empty);
+                        let _ = job.return_channel.send(job_result);
+                    }
+                    GrpcTask::IsSessionReady(session_id) => {
+                        let job_result = Ok(MessageResult::IsSessionReady(
+                            grpc.is_session_ready(session_id),
+                        ));
+                        let _ = job.return_channel.send(job_result);
+                    }
+                    GrpcTask::ConnectToParty(task) => {
+                        let job_result = grpc
+                            .connect_to_party(task.party_id, &task.address)
+                            .await
+                            .map(|_| MessageResult::Empty);
+                        let _ = job.return_channel.send(job_result);
+                    }
+                    GrpcTask::StartMessageStream(task) => {
+                        let job_result = grpc
+                            .start_message_stream(task.sender, task.session_id, task.stream)
+                            .await
+                            .map(|_| MessageResult::Empty);
+                        let _ = job.return_channel.send(job_result);
+                    }
+                }
             }
         });
 
@@ -339,6 +364,7 @@ pub struct GrpcConfig {
 // WARNING: this implementation assumes that messages for a specific player
 // within one session are sent in order and consecutively. Don't send messages
 // to the same player in parallel within the same session. Use batching instead.
+#[derive(Clone)]
 pub struct GrpcNetworking {
     party_id: Identity,
     // other party id -> client to call that party
