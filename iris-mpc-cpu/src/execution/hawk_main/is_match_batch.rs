@@ -6,7 +6,7 @@ use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
-use std::{error::Error, iter, sync::Arc};
+use std::{collections::HashMap, error::Error, iter, sync::Arc};
 
 pub async fn calculate_is_match(
     queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
@@ -123,14 +123,10 @@ fn unsplit_tasks<T, E: Error>(chunks: Vec<Result<Vec<T>, E>>) -> Vec<T> {
 }
 
 fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool> {
-    results
-        .rotations
-        .into_iter()
-        .reduce(|mut acc, m| {
-            for (v, is_match) in m {
-                *acc.entry(v).or_default() |= is_match;
-            }
-            acc
-        })
-        .unwrap_or_default()
+    results.iter().fold(HashMap::new(), |mut acc, m| {
+        for (v, is_match) in m {
+            *acc.entry(*v).or_default() |= is_match;
+        }
+        acc
+    })
 }

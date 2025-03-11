@@ -289,7 +289,7 @@ impl HawkActor {
         Ok([left?, right?])
     }
 
-    pub async fn search_rotations(
+    async fn search_rotations(
         &self,
         sessions: &[HawkSessionRef],
         queries: &VecRequests<VecRots<QueryRef>>,
@@ -302,7 +302,7 @@ impl HawkActor {
         Ok(VecRots::unflatten(flat_results))
     }
 
-    pub async fn search_parallel(
+    async fn search_parallel(
         &self,
         sessions: &[HawkSessionRef],
         queries: Vec<QueryRef>,

@@ -6,7 +6,7 @@ use itertools::Itertools;
 /// VecRots are lists of things for each rotation.
 #[derive(Clone, Debug)]
 pub struct VecRots<R> {
-    pub rotations: Vec<R>,
+    rotations: Vec<R>,
 }
 
 impl<R> Deref for VecRots<R> {
