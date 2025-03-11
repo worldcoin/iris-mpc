@@ -1,12 +1,12 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3_store::VectorId;
+pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{BootSession, Session, SessionId},
     },
-    hawkers::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -1041,7 +1041,7 @@ mod tests {
 mod tests_db {
     use super::*;
     use crate::{
-        hawkers::aby3_store::VectorId,
+        hawkers::aby3::aby3_store::VectorId,
         hnsw::{
             graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
             SortedNeighborhood,

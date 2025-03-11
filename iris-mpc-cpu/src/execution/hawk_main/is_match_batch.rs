@@ -2,7 +2,7 @@ use super::{
     rot::VecRots, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
     LEFT, RIGHT,
 };
-use crate::{hawkers::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
