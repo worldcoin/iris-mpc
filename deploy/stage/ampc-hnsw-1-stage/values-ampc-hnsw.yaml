@@ -87,7 +87,7 @@ initContainer:
       #!/usr/bin/env bash
 
       # Set up environment variables
-      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.hnsw.worldcoin.dev --query "HostedZones[].Id" --output text)
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".stage.hnsw.worldcoin.dev --query "HostedZones[0].Id" --output text)
 
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
@@ -112,7 +112,3 @@ initContainer:
 
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-
-      cd /libs
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublas.so.12.2.5.6 .
-      aws s3 cp s3://wf-smpcv2-stage-libs/libcublasLt.so.12.2.5.6 .
