@@ -73,11 +73,11 @@ impl IrisBatchGenerator {
 
         // If at tip then signal end of indexation.
         if self.batch_for_indexation.is_none() {
-            let msg = messages::OnGenesisIndexationEnd;
+            let msg = messages::OnIndexationEnd;
             self.supervisor_ref.tell(msg).await.unwrap();
         // Otherwise signal that a new batch is awaiting indexation.
         } else {
-            let msg = messages::OnGenesisIndexationOfBatchBegin {
+            let msg = messages::OnIndexationOfBatchBegin {
                 batch: self.batch_for_indexation.as_ref().unwrap().to_owned(),
             };
             self.supervisor_ref.tell(msg).await.unwrap();
@@ -169,18 +169,18 @@ impl IrisBatchGenerator {
 }
 
 // ------------------------------------------------------------------------
-// Message handlers.
+// Actor message handlers.
 // ------------------------------------------------------------------------
 
 // Message: OnIndexationStart.
-impl Message<messages::OnGenesisIndexationBegin> for IrisBatchGenerator {
+impl Message<messages::OnIndexationBegin> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnGenesisIndexationBegin,
+        _: messages::OnIndexationBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         self.do_indexation_step().await;
@@ -188,14 +188,14 @@ impl Message<messages::OnGenesisIndexationBegin> for IrisBatchGenerator {
 }
 
 // Message: OnBatchIndexationEnd.
-impl Message<messages::OnGenesisIndexationOfBatchEnd> for IrisBatchGenerator {
+impl Message<messages::OnIndexationOfBatchEnd> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnGenesisIndexationOfBatchEnd,
+        _: messages::OnIndexationOfBatchEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         self.do_indexation_step().await;

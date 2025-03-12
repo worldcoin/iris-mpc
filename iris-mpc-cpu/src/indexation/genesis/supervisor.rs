@@ -41,54 +41,55 @@ impl Supervisor {
 }
 
 // ------------------------------------------------------------------------
-// Message handlers.
+// Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<messages::OnGenesisIndexationEnd> for Supervisor {
+impl Message<messages::OnIndexationEnd> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnGenesisIndexationEnd,
+        _: messages::OnIndexationEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnIndexationEnd :: Supervisor");
     }
 }
 
-impl Message<messages::OnGenesisIndexationBegin> for Supervisor {
+impl Message<messages::OnIndexationBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnGenesisIndexationBegin,
+        _: messages::OnIndexationBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnIndexationStart :: Supervisor");
     }
 }
 
-impl Message<messages::OnGenesisIndexationOfBatchBegin> for Supervisor {
+impl Message<messages::OnIndexationOfBatchBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnGenesisIndexationOfBatchBegin,
+        msg: messages::OnIndexationOfBatchBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnBatchIndexationStart :: Supervisor");
 
+        // TODO: spawn pool to process concurrently.
         for iris_id in msg.batch {
             self.a2_ref
                 .as_ref()
                 .unwrap()
-                .tell(messages::OnGenesisIndexationOfBatchItemBegin {
+                .tell(messages::OnIndexationOfBatchItemBegin {
                     id_of_iris: iris_id,
                 })
                 .await
@@ -112,7 +113,7 @@ impl Message<messages::OnIrisDataPulledFromStore> for Supervisor {
 }
 
 // ------------------------------------------------------------------------
-// Lifecycle handlers.
+// Actor lifecycle handlers.
 // ------------------------------------------------------------------------
 
 impl Actor for Supervisor {
@@ -137,7 +138,7 @@ impl Actor for Supervisor {
         self.a1_ref
             .as_ref()
             .unwrap()
-            .tell(messages::OnGenesisIndexationBegin)
+            .tell(messages::OnIndexationBegin)
             .await?;
 
         Ok(())

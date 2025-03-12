@@ -63,7 +63,7 @@ impl IrisDataFetcher {
 }
 
 // ------------------------------------------------------------------------
-// Message Handlers.
+// Actor message Handlers.
 // ------------------------------------------------------------------------
 
 impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
@@ -79,12 +79,12 @@ impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
 }
 
 // Message handler.
-impl Message<messages::OnGenesisIndexationOfBatchItemBegin> for IrisDataFetcher {
+impl Message<messages::OnIndexationOfBatchItemBegin> for IrisDataFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnGenesisIndexationOfBatchItemBegin,
+        msg: messages::OnIndexationOfBatchItemBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         // Pull data from store.

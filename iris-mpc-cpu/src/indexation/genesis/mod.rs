@@ -4,7 +4,7 @@ mod messages;
 mod supervisor;
 
 pub use errors::IndexationError;
-pub use messages::OnGenesisIndexationBegin;
 pub use messages::OnGenesisIndexationEnd;
-pub use messages::OnGenesisIndexationError;
+pub use messages::OnIndexationEnd;rror
+pub use messages::OnIndexationBegin;
 pub use supervisor::Supervisor;
