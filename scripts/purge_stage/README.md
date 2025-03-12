@@ -35,3 +35,32 @@ sso_region = us-east-1
 sso_account_id = 510867353226
 sso_role_name = PowerUserAccess
 ```
+
+### Instructions
+#### Purge queues
+* to purge SMPC CPU queues
+```bash
+sh purge_stage_queues.sh cpu
+```
+* to purge SMPC GPU queues
+```bash
+sh purge_stage_queues.sh gpu
+```
+#### Purge mongo collections
+* to purge CPU SMPC iris mongo collections
+```bash
+sh purge_stage_mongo_collections.sh cpu
+```
+* to purge GPU SMPC iris mongo collections
+```bash
+sh purge_stage_mongo_collections.sh gpu
+```
+#### Purge stage dbs
+* to purge rds CPU SMPC clusters
+```bash
+sh purge_stage_dbs.sh cpu
+```
+* to purge rds GPU SMPC clusters
+```bash
+sh purge_stage_dbs.sh gpu
+```

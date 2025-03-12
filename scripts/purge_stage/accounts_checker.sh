@@ -4,11 +4,19 @@ ORB_STAGE_ACCOUNT_ID="510867353226"
 MPC_1_STAGE_ACCOUNT_ID="024848486749"
 MPC_2_STAGE_ACCOUNT_ID="024848486818"
 MPC_3_STAGE_ACCOUNT_ID="024848486770"
+MPC_VPC_STAGE_ACCOUNT_ID="302263054573"
 
 ACTUAL_ORB_ACCOUNT_ID=$(aws sts get-caller-identity --profile worldcoin-stage --query Account --output text)
 if [ "$ACTUAL_ORB_ACCOUNT_ID" != "$ORB_STAGE_ACCOUNT_ID" ]; then
     echo "The actual account ID does not match the expected account ID for the 'worldcoin-stage' profile."
     echo "$ACTUAL_ORB_ACCOUNT_ID != $ORB_STAGE_ACCOUNT_ID"
+    exit 1
+fi
+
+ACTUAL_MPC_VPC_ACCOUNT_ID=$(aws sts get-caller-identity --profile worldcoin-smpcv-io-vpc --query Account --output text)
+if [ "$ACTUAL_MPC_VPC_ACCOUNT_ID" != "$MPC_VPC_STAGE_ACCOUNT_ID" ]; then
+    echo "The actual account ID does not match the expected account ID for the 'worldcoin-smpcv-io-vpc' profile."
+    echo "$ACTUAL_MPC_VPC_ACCOUNT_ID != $MPC_VPC_STAGE_ACCOUNT_ID"
     exit 1
 fi
 
