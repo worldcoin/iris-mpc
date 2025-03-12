@@ -1,9 +1,9 @@
 env:
   - name: RUST_LOG
-  - value: "info"
+    value: "info"
 
   - name: RUST_BACKTRACE
-  - value: "full"
+    value: "full"
 
   - name: SMPC__ENVIRONMENT
     value: "stage"
