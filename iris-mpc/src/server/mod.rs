@@ -264,14 +264,13 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         config.healthcheck_ports.clone(),
         "ready",
     );
+    let all_readiness_addresses_clone = all_readiness_addresses.clone();
 
     let unready_check = tokio::spawn(async move {
-        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected_but_unready = [false, false];
 
         loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
+            for (i, host) in all_readiness_addresses_clone.iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
@@ -316,14 +315,12 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
-        let next_node = &all_health_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_health_addresses[(config.party_id + 2) % 3];
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
 
         loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
+            for (i, host) in all_health_addresses.iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
                     // If it's the first time after startup, we allow a few retries to let the other
@@ -446,12 +443,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         "startup-sync",
     );
 
-    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
-    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
-
     tracing::info!("Database store length is: {}", store_len);
     let mut states = vec![my_state.clone()];
-    for host in [next_node, prev_node].iter() {
+    for host in all_startup_sync_addresses.iter() {
         let res = reqwest::get(host.as_str()).await;
         match res {
             Ok(res) => {
@@ -627,19 +621,13 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "ready",
-    );
+    let all_readiness_addresses = all_readiness_addresses.clone();
 
     let ready_check = tokio::spawn(async move {
-        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
         let mut connected = [false, false];
 
         loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
+            for (i, host) in all_readiness_addresses.iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
 
                 if res.is_ok() && res.as_ref().unwrap().status().is_success() {
