@@ -1,6 +1,6 @@
 #[allow(dead_code)]
 use super::{
-    super::supervisors::IndexFromDbSupervisor as Supervisor,
+    super::supervisor::Supervisor,
     super::{errors::IndexationError, messages},
 };
 use iris_mpc_common::config::Config;
@@ -79,12 +79,12 @@ impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
 }
 
 // Message handler.
-impl Message<messages::OnBatchElementIndexationStart> for IrisDataFetcher {
+impl Message<messages::OnGenesisIndexationOfBatchItemBegin> for IrisDataFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnBatchElementIndexationStart,
+        msg: messages::OnGenesisIndexationOfBatchItemBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         // Pull data from store.

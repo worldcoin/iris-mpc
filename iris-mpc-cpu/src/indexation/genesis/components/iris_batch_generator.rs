@@ -1,6 +1,5 @@
-#[allow(dead_code)]
 use super::{
-    super::supervisors::IndexFromDbSupervisor as Supervisor,
+    super::supervisor::Supervisor,
     super::{errors::IndexationError, messages},
 };
 use iris_mpc_common::config::Config;
@@ -11,7 +10,6 @@ use kameo::{
     Actor,
 };
 use rand::prelude::*;
-use tracing::info;
 
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
@@ -23,7 +21,7 @@ pub struct IrisBatchGenerator {
     // System configuration information.
     config: Config,
 
-    // Set of Iris identifiers to exclude from indexing.
+    // Set of Iris serial identifiers to exclude from indexing.
     deletions_for_exclusion: Option<Vec<i64>>,
 
     // ID of most recent Iris data indexed.
@@ -32,8 +30,8 @@ pub struct IrisBatchGenerator {
     // ID of most recent Iris data within store.
     height_of_protocol: Option<i64>,
 
-    // Latest range of Iris identifiers signalled for processing.
-    range_for_indexation: Option<(i64, i64)>,
+    // Current batch of Iris serial identifiers marked for indexation.
+    batch_for_indexation: Option<Vec<i64>>,
 
     // Size of each processing batch.
     size_of_batch: u32,
@@ -58,7 +56,7 @@ impl IrisBatchGenerator {
             deletions_for_exclusion: None,
             height_of_indexed: None,
             height_of_protocol: None,
-            range_for_indexation: None,
+            batch_for_indexation: None,
             size_of_batch: Self::DEFAULT_BATCH_SIZE,
             store: None,
             supervisor_ref,
@@ -74,19 +72,15 @@ impl IrisBatchGenerator {
         self.update_state().await;
 
         // If at tip then signal end of indexation.
-        if self.range_for_indexation.is_none() {
-            self.supervisor_ref
-                .tell(messages::OnIndexationEnd)
-                .await
-                .unwrap();
+        if self.batch_for_indexation.is_none() {
+            let msg = messages::OnGenesisIndexationEnd;
+            self.supervisor_ref.tell(msg).await.unwrap();
         // Otherwise signal that a new batch is awaiting indexation.
         } else {
-            self.supervisor_ref
-                .tell(messages::OnBatchIndexationStart {
-                    batch_range: self.range_for_indexation.unwrap(),
-                })
-                .await
-                .unwrap();
+            let msg = messages::OnGenesisIndexationOfBatchBegin {
+                batch: self.batch_for_indexation.as_ref().unwrap().to_owned(),
+            };
+            self.supervisor_ref.tell(msg).await.unwrap();
         }
     }
 
@@ -119,22 +113,26 @@ impl IrisBatchGenerator {
     }
 
     // Returns next range of Iris id's for processing.
-    fn get_next_range_for_indexation(&mut self) -> Option<(i64, i64)> {
+    fn get_next_batch_for_indexation(&mut self) -> Option<Vec<i64>> {
         let count_of_unprocessed =
             self.height_of_protocol.unwrap() - self.height_of_indexed.unwrap();
         if count_of_unprocessed == 0 {
-            None
-        } else if count_of_unprocessed < self.size_of_batch as i64 {
-            Some((
-                self.height_of_indexed.unwrap(),
-                self.height_of_indexed.unwrap() + count_of_unprocessed,
-            ))
-        } else {
-            Some((
-                self.height_of_indexed.unwrap(),
-                self.height_of_indexed.unwrap() + self.size_of_batch as i64,
-            ))
+            return None;
         }
+
+        let mut next_batch = Vec::<i64>::new();
+        let to_be_indexed = self.height_of_indexed.unwrap()..self.height_of_protocol.unwrap();
+        for i in to_be_indexed {
+            if self.deletions_for_exclusion.as_ref().unwrap().contains(&i) {
+                continue;
+            }
+            next_batch.push(i);
+            if next_batch.len() == self.size_of_batch as usize {
+                break;
+            }
+        }
+
+        Some(next_batch)
     }
 
     // Sets pointer to remote store.
@@ -157,10 +155,6 @@ impl IrisBatchGenerator {
         if self.deletions_for_exclusion.is_none() {
             self.deletions_for_exclusion =
                 Some(self.fetch_deletions_for_exclusion().await.unwrap());
-            info!(
-                "Deletions for exclusion: {:?}",
-                self.deletions_for_exclusion
-            );
         }
 
         // Set current protocol height.
@@ -169,8 +163,8 @@ impl IrisBatchGenerator {
         // Set current indexed height.
         self.height_of_indexed = Some(self.fetch_height_of_indexed().await.unwrap());
 
-        // Set next batch range.
-        self.range_for_indexation = self.get_next_range_for_indexation();
+        // Set next batch.
+        self.batch_for_indexation = self.get_next_batch_for_indexation();
     }
 }
 
@@ -179,14 +173,14 @@ impl IrisBatchGenerator {
 // ------------------------------------------------------------------------
 
 // Message: OnIndexationStart.
-impl Message<messages::OnIndexationStart> for IrisBatchGenerator {
+impl Message<messages::OnGenesisIndexationBegin> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnIndexationStart,
+        _: messages::OnGenesisIndexationBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         self.do_indexation_step().await;
@@ -194,14 +188,14 @@ impl Message<messages::OnIndexationStart> for IrisBatchGenerator {
 }
 
 // Message: OnBatchIndexationEnd.
-impl Message<messages::OnBatchIndexationEnd> for IrisBatchGenerator {
+impl Message<messages::OnGenesisIndexationOfBatchEnd> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnBatchIndexationEnd,
+        _: messages::OnGenesisIndexationOfBatchEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         self.do_indexation_step().await;

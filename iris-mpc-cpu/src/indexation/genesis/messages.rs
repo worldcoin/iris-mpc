@@ -1,31 +1,29 @@
-#![allow(dead_code)]
-
-// Event: raised when indexation is complete.
+// Event: raised when genesis indexation starts.
 #[derive(Clone, Debug)]
-pub struct OnIndexationEnd;
+pub struct OnGenesisIndexationBegin;
 
-// Event: raised when an indexation error occurs.
+// Event: raised when genesis indexation is complete.
 #[derive(Clone, Debug)]
-pub struct OnIndexationError;
+pub struct OnGenesisIndexationEnd;
 
-// Event: raised when indexation starts.
+// Event: raised when genesis indexation error occurs.
 #[derive(Clone, Debug)]
-pub struct OnIndexationStart;
-
-// Event: raised when an Iris batch has been processed.
-#[derive(Clone, Debug)]
-pub struct OnBatchIndexationEnd;
+pub struct OnGenesisIndexationError;
 
 // Event: raised when a new Iris batch for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnBatchIndexationStart {
+pub struct OnGenesisIndexationOfBatchBegin {
     // Range of Iris identifiers to be indexed.
-    pub(crate) batch_range: (i64, i64),
+    pub(crate) batch: Vec<i64>,
 }
+
+// Event: raised when an Iris batch has been processed.
+#[derive(Clone, Debug)]
+pub struct OnGenesisIndexationOfBatchEnd;
 
 // Event: raised when a new Iris for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnBatchElementIndexationStart {
+pub struct OnGenesisIndexationOfBatchItemBegin {
     // Range of Iris identifiers to be indexed.
     pub(crate) id_of_iris: i64,
 }
