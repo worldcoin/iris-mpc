@@ -1,6 +1,6 @@
 use aes_prng::AesRng;
 use clap::Parser;
-use iris_mpc_cpu::hawkers::aby3_store::Aby3Store;
+use iris_mpc_cpu::hawkers::aby3::test_utils::shared_random_setup_with_grpc;
 use rand::SeedableRng;
 use std::{error::Error, fs::File};
 use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Starting Local HNSW with {} vectors", database_size);
     let mut rng = AesRng::seed_from_u64(0_u64);
 
-    Aby3Store::shared_random_setup_with_grpc(&mut rng, database_size).await?;
+    shared_random_setup_with_grpc(&mut rng, database_size).await?;
 
     Ok(())
 }

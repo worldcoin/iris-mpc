@@ -14,7 +14,7 @@ use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use tracing::{debug, info, instrument, trace_span, Instrument};
+use tracing::{debug, instrument, trace_span, Instrument};
 
 /// The number of explicitly provided parameters for different layers of HNSW
 /// search, used by the `HnswParams` struct.
@@ -366,7 +366,7 @@ impl HnswSearcher {
                 .instrument(eval_dist_span.clone())
                 .await;
             opened.insert(c.clone());
-            info!(event_type = Operation::OpenNode.id(), ef, lc);
+            debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             for (e, eq) in c_links.into_iter() {
                 if W.len() == ef {
@@ -525,7 +525,7 @@ impl HnswSearcher {
                 .instrument(eval_dist_span.clone())
                 .await;
             opened.insert(c.clone());
-            info!(event_type = Operation::OpenNode.id(), ef, lc);
+            debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             // If W is not filled to size ef, insert neighbors in batches until it is
             if W.len() < ef && !c_links.is_empty() {
@@ -707,7 +707,7 @@ impl HnswSearcher {
             let mut c_links = HnswSearcher::open_node(store, graph, &c_vec, lc, q, &mut visited)
                 .instrument(eval_dist_span.clone())
                 .await;
-            info!(event_type = Operation::OpenNode.id(), ef = 1u64, lc);
+            debug!(event_type = Operation::OpenNode.id(), ef = 1u64, lc);
 
             // Find minimum distance node also including current node
             c_links.push((c_vec.clone(), c_dist.clone()));

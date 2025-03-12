@@ -1,72 +1,98 @@
 use super::{
-    BothEyes, HawkSession, HawkSessionRef, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId,
+    rot::VecRots, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
     LEFT, RIGHT,
 };
-use crate::{hawkers::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use futures::future::JoinAll;
+use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
-use std::iter;
+use std::{collections::HashMap, error::Error, iter, sync::Arc};
 
 pub async fn calculate_is_match(
-    plans: &BothEyes<VecRequests<InsertPlan>>,
-    vector_ids: VecRequests<BothEyes<VecEdges<VectorId>>>,
+    queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let n_requests = vector_ids.len();
-    let n_sessions = sessions[LEFT].len();
-    let n_per_session = n_requests.div_ceil(n_sessions);
-    assert_eq!(plans[LEFT].len(), n_requests);
-    assert_eq!(plans[RIGHT].len(), n_requests);
+) -> BothEyes<VecRequests<MapEdges<bool>>> {
+    let [vectors_left, vectors_right] = vector_ids;
 
-    // Organize as: request -> eye -> (query and its related vectors).
-    let requests = izip!(&plans[LEFT], &plans[RIGHT], vector_ids).map(|(pl, pr, vector_ids)| {
-        let [vectors_l, vectors_r] = vector_ids;
-        [(pl.query.clone(), vectors_l), (pr.query.clone(), vectors_r)]
-    });
-    // Prepare the requests into one chunk per session.
-    let per_session = chunk_vecs(requests, n_per_session);
+    // Parallelize left and right sessions (IO only).
+    let (out_l, out_r) = futures::join!(
+        per_side(&queries[LEFT], vectors_left, &sessions[LEFT]),
+        per_side(&queries[RIGHT], vectors_right, &sessions[RIGHT]),
+    );
+    [out_l, out_r]
+}
+
+async fn per_side(
+    queries: &VecRequests<VecRots<QueryRef>>,
+    vector_ids: VecRequests<VecEdges<VectorId>>,
+    sessions: &Vec<HawkSessionRef>,
+) -> VecRequests<MapEdges<bool>> {
+    // A request is to compare all rotations to a list of vectors.
+    // A task is to compare one rotation to the vectors.
+    let n_requests = vector_ids.len();
+    let n_tasks = n_requests * ROTATIONS;
+    let n_sessions = sessions.len();
+    assert_eq!(queries.len(), n_requests);
+
+    // Arc the requested vectors rather than cloning them.
+    let vector_ids = vector_ids.into_iter().map(Arc::new);
+
+    // For each request, broadcast the vectors to the rotations.
+    // Concatenate the tasks for all requests, to maximize parallelism.
+    let tasks = VecRots::flatten_broadcast(izip!(queries, vector_ids));
+    assert_eq!(tasks.len(), n_tasks);
+
+    // Prepare the tasks into one chunk per session.
+    let chunks = split_tasks(tasks, n_sessions);
 
     // Process the chunks in parallel (CPU and IO).
-    let results = izip!(per_session, &sessions[LEFT], &sessions[RIGHT])
-        .map(|(chunk, sl, sr)| calculate_is_match_session(chunk, [sl.clone(), sr.clone()]))
+    let results = izip!(chunks, sessions)
+        .map(|(chunk, session)| per_session(chunk, session.clone()))
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
         .await;
-    assert!(results.len() == n_sessions.min(n_requests));
+    assert_eq!(results.len(), n_sessions.min(n_tasks));
 
-    let r = results.into_iter().flat_map(Result::unwrap).collect_vec();
-    assert_eq!(r.len(), n_requests);
-    r
+    // Undo the chunking per session.
+    let results = unsplit_tasks(results);
+    assert_eq!(results.len(), n_tasks);
+
+    // Undo the flattening of rotations.
+    let results = VecRots::unflatten(results);
+
+    // Aggregate the results over rotations. ANY match.
+    let results = results
+        .into_iter()
+        .map(aggregate_rotation_results)
+        .collect_vec();
+
+    assert_eq!(results.len(), n_requests);
+    results
 }
 
-async fn calculate_is_match_session(
-    requests: VecRequests<BothEyes<(QueryRef, VecEdges<VectorId>)>>,
-    session: BothEyes<HawkSessionRef>,
-) -> VecRequests<BothEyes<MapEdges<bool>>> {
-    let mut session_l = session[LEFT].write().await;
-    let mut session_r = session[RIGHT].write().await;
+async fn per_session(
+    tasks: VecRequests<(QueryRef, Arc<VecEdges<VectorId>>)>,
+    session: HawkSessionRef,
+) -> VecRequests<MapEdges<bool>> {
+    let mut session = session.write().await;
 
-    let mut out = Vec::with_capacity(requests.len());
-    for request in requests {
-        let [(query_l, vectors_l), (query_r, vectors_r)] = &request;
-        // Parallelize left and right sessions (IO only).
-        let (out_l, out_r) = futures::join!(
-            calculate_is_match_one(query_l, vectors_l, &mut session_l),
-            calculate_is_match_one(query_r, vectors_r, &mut session_r),
-        );
-        out.push([out_l, out_r]);
+    let mut out = Vec::with_capacity(tasks.len());
+    for (query, vectors) in tasks {
+        let matches = per_query(query, &vectors, &mut session).await;
+        out.push(matches);
     }
     out
 }
 
-async fn calculate_is_match_one(
-    query: &QueryRef,
+async fn per_query(
+    query: QueryRef,
     vector_ids: &[VectorId],
     session: &mut HawkSession,
 ) -> MapEdges<bool> {
     let distances = session
         .aby3_store
-        .eval_distance_batch(query, vector_ids)
+        .eval_distance_batch(&query, vector_ids)
         .await;
 
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
@@ -76,10 +102,11 @@ async fn calculate_is_match_one(
         .collect()
 }
 
-fn chunk_vecs<T>(
-    v_iter: impl IntoIterator<Item = T>,
-    chunk_size: usize,
-) -> impl Iterator<Item = Vec<T>> {
+/// Split a Vec into at most `n_sessions` chunks.
+/// The last chunk may be smaller.
+/// Unlike `Itertools::chunks()` which borrows, this moves the items.
+fn split_tasks<T>(v_iter: Vec<T>, n_sessions: usize) -> impl Iterator<Item = Vec<T>> {
+    let chunk_size = v_iter.len().div_ceil(n_sessions);
     let mut v_iter = v_iter.into_iter();
     iter::from_fn(move || {
         let chunk = v_iter.by_ref().take(chunk_size).collect_vec();
@@ -88,5 +115,18 @@ fn chunk_vecs<T>(
         } else {
             Some(chunk)
         }
+    })
+}
+
+fn unsplit_tasks<T, E: Error>(chunks: Vec<Result<Vec<T>, E>>) -> Vec<T> {
+    chunks.into_iter().flat_map(Result::unwrap).collect_vec()
+}
+
+fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool> {
+    results.iter().fold(HashMap::new(), |mut acc, m| {
+        for (v, is_match) in m {
+            *acc.entry(*v).or_default() |= is_match;
+        }
+        acc
     })
 }

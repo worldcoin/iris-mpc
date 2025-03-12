@@ -11,7 +11,7 @@ use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare, GaloisShares,
 };
 use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
@@ -192,6 +192,9 @@ pub async fn receive_batch(
                                 UNIQUENESS_MESSAGE_TYPE,
                             )
                             .await?;
+                            if config.enable_sync_queues_on_sns_sequence_number {
+                                tracing::error!("Skip requests were used while SQS sync is enabled. This should not happen.");
+                            }
                             continue;
                         }
 
@@ -358,27 +361,7 @@ pub async fn receive_batch(
         }
     }
     for (index, handle) in handles.into_iter().enumerate() {
-        let (
-            (
-                (
-                    store_iris_shares_left,
-                    store_mask_shares_left,
-                    db_iris_shares_left,
-                    db_mask_shares_left,
-                    iris_shares_left,
-                    mask_shares_left,
-                ),
-                (
-                    store_iris_shares_right,
-                    store_mask_shares_right,
-                    db_iris_shares_right,
-                    db_mask_shares_right,
-                    iris_shares_right,
-                    mask_shares_right,
-                ),
-            ),
-            valid_entry,
-        ) = match handle
+        let ((share_left, share_right), valid_entry) = match handle
             .await
             .map_err(ReceiveRequestError::FailedToJoinHandle)?
         {
@@ -424,81 +407,57 @@ pub async fn receive_batch(
                 // batch in order to keep the same order across nodes
                 let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
                 let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
-                (
-                    (
-                        (
-                            dummy_code_share.clone(),
-                            dummy_mask_share.clone(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                        ),
-                        (
-                            dummy_code_share.clone(),
-                            dummy_mask_share.clone(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                        ),
-                    ),
-                    false,
-                )
+                let dummy = GaloisShares {
+                    code: dummy_code_share.clone(),
+                    mask: dummy_mask_share.clone(),
+                    code_rotated: dummy_code_share.all_rotations(),
+                    mask_rotated: dummy_mask_share.all_rotations(),
+                    code_interpolated: dummy_code_share.all_rotations(),
+                    mask_interpolated: dummy_mask_share.all_rotations(),
+                };
+                ((dummy.clone(), dummy), false)
             }
         };
 
         batch_query.valid_entries.push(valid_entry);
 
-        batch_query
-            .left_iris_requests
-            .code
-            .push(store_iris_shares_left);
-        batch_query
-            .left_iris_requests
-            .mask
-            .push(store_mask_shares_left);
+        batch_query.left_iris_requests.code.push(share_left.code);
+        batch_query.left_iris_requests.mask.push(share_left.mask);
         batch_query
             .left_iris_rotated_requests
             .code
-            .extend(db_iris_shares_left);
+            .extend(share_left.code_rotated);
         batch_query
             .left_iris_rotated_requests
             .mask
-            .extend(db_mask_shares_left);
+            .extend(share_left.mask_rotated);
         batch_query
             .left_iris_interpolated_requests
             .code
-            .extend(iris_shares_left);
+            .extend(share_left.code_interpolated);
         batch_query
             .left_iris_interpolated_requests
             .mask
-            .extend(mask_shares_left);
+            .extend(share_left.mask_interpolated);
 
-        batch_query
-            .right_iris_requests
-            .code
-            .push(store_iris_shares_right);
-        batch_query
-            .right_iris_requests
-            .mask
-            .push(store_mask_shares_right);
+        batch_query.right_iris_requests.code.push(share_right.code);
+        batch_query.right_iris_requests.mask.push(share_right.mask);
         batch_query
             .right_iris_rotated_requests
             .code
-            .extend(db_iris_shares_right);
+            .extend(share_right.code_rotated);
         batch_query
             .right_iris_rotated_requests
             .mask
-            .extend(db_mask_shares_right);
+            .extend(share_right.mask_rotated);
         batch_query
             .right_iris_interpolated_requests
             .code
-            .extend(iris_shares_right);
+            .extend(share_right.code_interpolated);
         batch_query
             .right_iris_interpolated_requests
             .mask
-            .extend(mask_shares_right);
+            .extend(share_right.mask_interpolated);
     }
 
     tracing::info!(

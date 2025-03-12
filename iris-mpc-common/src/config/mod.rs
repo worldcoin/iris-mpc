@@ -188,6 +188,12 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_modifications_sync: bool,
+
+    #[serde(default)]
+    pub enable_sync_queues_on_sns_sequence_number: bool,
+
+    #[serde(default = "default_sqs_sync_long_poll_seconds")]
+    pub sqs_sync_long_poll_seconds: i32,
 }
 
 /// Enumeration over set of compute modes.
@@ -289,6 +295,10 @@ fn default_healthcheck_ports() -> Vec<String> {
 
 fn default_max_deletions_per_batch() -> usize {
     100
+}
+
+fn default_sqs_sync_long_poll_seconds() -> i32 {
+    10
 }
 
 impl Config {
