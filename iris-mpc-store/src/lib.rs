@@ -6,6 +6,7 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
+use iris_mpc_common::config::ModeOfDeployment;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -138,10 +139,19 @@ pub struct Store {
 impl Store {
     /// Connect to a database based on Config URL, environment, and party_id.
     pub async fn new_from_config(config: &Config) -> Result<Self> {
-        let db_config = config
-            .database
-            .as_ref()
-            .ok_or(eyre!("Missing database config"))?;
+        // if running shadow mode in isolation, we should not read from the iris-mpc shares and instead create a new version
+        let db_config = if config.mode_of_deployment == ModeOfDeployment::ShadowIsolation {
+            config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing database config"))?
+        } else {
+            config
+                .database
+                .as_ref()
+                .ok_or(eyre!("Missing database config"))?
+        };
+
         let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
         Self::new(&db_config.url, &schema_name).await
     }
@@ -442,10 +452,10 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
     }
 
     pub async fn get_max_serial_id(&self) -> Result<usize> {
-        let id: (i64,) = sqlx::query_as("SELECT MAX(id) FROM irises")
+        let id: (Option<i64>,) = sqlx::query_as("SELECT MAX(id) FROM irises")
             .fetch_one(&self.pool)
             .await?;
-        Ok(id.0 as usize)
+        Ok(id.0.unwrap_or(0) as usize)
     }
 
     pub async fn insert_results(

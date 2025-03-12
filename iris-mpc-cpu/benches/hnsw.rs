@@ -3,7 +3,13 @@ use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criteri
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
 use iris_mpc_cpu::{
     execution::local::LocalRuntime,
-    hawkers::{aby3_store::Aby3Store, plaintext_store::PlaintextStore},
+    hawkers::{
+        aby3::{
+            aby3_store::prepare_query,
+            test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
+        },
+        plaintext_store::PlaintextStore,
+    },
     hnsw::{GraphMem, HnswSearcher},
     protocol::{
         ops::{
@@ -12,7 +18,7 @@ use iris_mpc_cpu::{
         },
         shared_iris::GaloisRingSharedIris,
     },
-    shares::{IntRing2k, RingElement, Share},
+    shares::{share::DistanceShare, IntRing2k, RingElement, Share},
 };
 use rand::{Rng, RngCore, SeedableRng};
 use rand_distr::{Distribution, Standard};
@@ -113,10 +119,10 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
                     .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap()
@@ -169,10 +175,10 @@ fn bench_gr_primitives(c: &mut Criterion) {
                         .unwrap();
                     cross_compare(
                         &mut player_session,
-                        ds_and_ts[0].clone(),
-                        ds_and_ts[1].clone(),
-                        ds_and_ts[2].clone(),
-                        ds_and_ts[3].clone(),
+                        &[(
+                            DistanceShare::new(ds_and_ts[0].clone(), ds_and_ts[1].clone()),
+                            DistanceShare::new(ds_and_ts[2].clone(), ds_and_ts[3].clone()),
+                        )],
                     )
                     .await
                     .unwrap();
@@ -199,7 +205,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
         let secret_searcher = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            Aby3Store::lazy_setup_from_files_with_grpc(
+            lazy_setup_from_files_with_grpc(
                 "./data/store.ndjson",
                 &format!("./data/graph_{}.dat", database_size),
                 &mut rng,
@@ -236,8 +242,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let mut vector_store = vector_store;
                             let mut graph_store = graph_store;
 
-                            let player_index = vector_store.get_owner_index();
-                            let query = vector_store.prepare_query(raw_query[player_index].clone());
+                            let player_index = get_owner_index(&vector_store).unwrap();
+                            let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
                             jobs.spawn(async move {
@@ -271,8 +277,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let mut vector_store = vector_store;
                             let mut graph_store = graph_store;
-                            let player_index = vector_store.get_owner_index();
-                            let query = vector_store.prepare_query(raw_query[player_index].clone());
+                            let player_index = get_owner_index(&vector_store).unwrap();
+                            let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             jobs.spawn(async move {
                                 let neighbors = searcher

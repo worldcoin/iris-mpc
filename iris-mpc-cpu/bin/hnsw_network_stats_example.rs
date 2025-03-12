@@ -2,7 +2,10 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
-    hawkers::aby3_store::Aby3Store,
+    hawkers::aby3::{
+        aby3_store::prepare_query,
+        test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
+    },
     hnsw::{metrics::network::NetworkFormatter, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
@@ -38,7 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let crate_root = env!("CARGO_MANIFEST_DIR");
     let data_dir = format!("{crate_root}/data");
-    let (_, vectors_graphs) = Aby3Store::lazy_setup_from_files_with_grpc(
+    let (_, vectors_graphs) = lazy_setup_from_files_with_grpc(
         &format!("{data_dir}/store.ndjson"),
         &format!("{data_dir}/graph_{database_size}.dat"),
         &mut rng,
@@ -58,8 +61,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut vector_store = vector_store;
         let mut graph_store = graph_store;
 
-        let player_index = vector_store.get_owner_index();
-        let query = vector_store.prepare_query(raw_query[player_index].clone());
+        let player_index = get_owner_index(&vector_store)?;
+        let query = prepare_query(raw_query[player_index].clone());
         let searcher = searcher.clone();
         let mut rng = rng.clone();
 

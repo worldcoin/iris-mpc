@@ -196,7 +196,7 @@ impl DeviceCompactQuery {
     }
 
     // TODO(Dragos) function signature can be compressed if there's a large refactor
-    // of server.rs to place the 2 engines into one struct and DBs into a single
+    // of iris_mpc_gpu to place the 2 engines into one struct and DBs into a single
     // struct.
     #[allow(clippy::too_many_arguments)]
     pub fn dot_products_against_db(

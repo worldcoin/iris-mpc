@@ -7,6 +7,7 @@ pub struct SyncState {
     pub db_len: u64,
     pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
+    pub next_sns_sequence_num: Option<u128>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,6 +85,14 @@ impl SyncResult {
             .sorted()
             .dedup()
             .collect()
+    }
+
+    pub fn max_sns_sequence_num(&self) -> Option<u128> {
+        self.all_states
+            .iter()
+            .map(|s| s.next_sns_sequence_num)
+            .max()
+            .expect("can get max u128 value")
     }
 
     /// Compare local `modifications` (my_state) to all other parties’
@@ -206,16 +215,19 @@ mod tests {
                 db_len: 123,
                 deleted_request_ids: vec!["most late".to_string()],
                 modifications: vec![],
+                next_sns_sequence_num: None,
             },
             SyncState {
                 db_len: 456,
                 deleted_request_ids: vec!["x".to_string(), "y".to_string()],
                 modifications: vec![],
+                next_sns_sequence_num: None,
             },
             SyncState {
                 db_len: 789,
                 deleted_request_ids: vec!["most ahead".to_string()],
                 modifications: vec![],
+                next_sns_sequence_num: None,
             },
         ];
         let deleted_request_ids = vec![
@@ -258,6 +270,7 @@ mod tests {
             db_len: modifications.len() as u64,
             deleted_request_ids: vec![],
             modifications,
+            next_sns_sequence_num: None,
         }
     }
 
@@ -521,11 +534,56 @@ mod tests {
         assert_eq!(delete_mod4.clone(), mod4_local);
     }
 
+    #[test]
+    fn test_max_sns_sequence_num() {
+        // 1. Test with mixed sequence values
+        let states = vec![
+            SyncState {
+                db_len: 10,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: Some(100),
+            },
+            SyncState {
+                db_len: 20,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: Some(200),
+            },
+            SyncState {
+                db_len: 30,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: None,
+            },
+        ];
+
+        let sync_result = SyncResult::new(states[0].clone(), states);
+        assert_eq!(sync_result.max_sns_sequence_num(), Some(200));
+
+        // 2. Test with all None sequence values
+        let state_with_none_sequence_num = SyncState {
+            db_len: 10,
+            deleted_request_ids: vec![],
+            modifications: vec![],
+            next_sns_sequence_num: None,
+        };
+        let all_states = vec![
+            state_with_none_sequence_num.clone(),
+            state_with_none_sequence_num.clone(),
+            state_with_none_sequence_num.clone(),
+        ];
+
+        let sync_result_none = SyncResult::new(state_with_none_sequence_num, all_states);
+        assert_eq!(sync_result_none.max_sns_sequence_num(), None);
+    }
+
     fn some_state() -> SyncState {
         SyncState {
             db_len: 123,
             deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
             modifications: vec![],
+            next_sns_sequence_num: None,
         }
     }
 }

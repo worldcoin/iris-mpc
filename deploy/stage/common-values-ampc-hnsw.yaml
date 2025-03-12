@@ -1,0 +1,52 @@
+image: "ghcr.io/worldcoin/iris-mpc-cpu:c2d631d821fe96827e8a92fd3bfd457afdd02b9e"
+
+environment: stage
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 30
+  httpGet:
+    path: /ready
+    port: health
+
+startupProbe:
+  initialDelaySeconds: 60
+  failureThreshold: 120
+  periodSeconds: 30
+  httpGet:
+    path: /ready
+    port: health
+
+resources:
+  limits:
+    cpu: 21
+    memory: 11Gi
+  requests:
+    cpu: 20
+    memory: 10Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534

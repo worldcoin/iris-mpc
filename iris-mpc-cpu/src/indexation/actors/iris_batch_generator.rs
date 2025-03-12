@@ -5,7 +5,6 @@ use super::{
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
-use itertools::Itertools;
 use kameo::{
     actor::ActorRef,
     message::{Context, Message},

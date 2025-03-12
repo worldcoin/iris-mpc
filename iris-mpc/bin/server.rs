@@ -8,9 +8,12 @@ use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
-use iris_mpc::aws::clients::AwsClients;
-use iris_mpc::aws::sns::{send_error_results_to_sns, send_results_to_sns};
-use iris_mpc::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::aws::clients::AwsClients;
+use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::processors::result_message::{
+    send_error_results_to_sns, send_results_to_sns,
+};
+use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -42,6 +45,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -299,6 +303,9 @@ async fn receive_batch(
                                 UNIQUENESS_MESSAGE_TYPE,
                             )
                             .await?;
+                            if config.enable_sync_queues_on_sns_sequence_number {
+                                tracing::error!("Skip requests were used while SQS sync is enabled. This should not happen.");
+                            }
                             continue;
                         }
 
@@ -336,9 +343,10 @@ async fn receive_batch(
                                         .or_rule_indices
                                         .push(serial_ids.iter().map(|x| x - 1).collect());
                                 } else {
-                                    tracing::error!(
-                                        "Received a uniqueness request without serial_ids"
+                                    tracing::warn!(
+                                        "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
+                                    batch_query.or_rule_indices.push(vec![]);
                                 }
                             }
                         }
@@ -748,8 +756,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     shutdown_handler.wait_for_shutdown_signal().await;
 
     // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::GPU
-        || config.mode_of_deployment != ModeOfDeployment::STANDARD
+    if config.mode_of_compute != ModeOfCompute::Gpu
+        || config.mode_of_deployment != ModeOfDeployment::Standard
     {
         panic!(
             "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
@@ -772,6 +780,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
+    let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client,
@@ -871,6 +880,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         db_len: store_len as u64,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
+        next_sns_sequence_num: next_sns_seq_number_future.await?,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1152,7 +1162,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             }
         }
     }
-    let sync_result = SyncResult::new(my_state, states);
+    let sync_result = SyncResult::new(my_state.clone(), states);
+
+    // sync the queues
+    if config.enable_sync_queues_on_sns_sequence_number {
+        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+        delete_messages_until_sequence_num(
+            &config,
+            &aws_clients.sqs_client,
+            my_state.next_sns_sequence_num,
+            max_sqs_sequence_num,
+        )
+        .await?;
+    }
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -1172,9 +1194,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         metrics::counter!("db.sync.rollback").increment(1);
     }
 
-    // Handle modifications sync (reauth & deletions)
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
+    // Handle modifications sync (reauth & deletions)
     if config.enable_modifications_sync {
         let (to_update, to_delete) = sync_result.compare_modifications();
         tracing::info!(

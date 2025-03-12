@@ -68,3 +68,10 @@ jobs:
       - name: Run Tests with DB
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release --features db_dependent -- --test-threads=1
+
+      - name: Run CPU E2E tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
+        env:
+          RUST_LOG: info
+          RUST_BACKTRACE: 1
