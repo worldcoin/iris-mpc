@@ -52,7 +52,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     shutdown_handler.wait_for_shutdown_signal().await;
 
     // Validate modes of compute/deployment.
-    if config.mode_of_compute != ModeOfCompute::CPU {
+    if config.mode_of_compute != ModeOfCompute::Cpu {
         panic!(
             "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
@@ -70,6 +70,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Creating new storage from: {:?}", config);
     let store = Store::new_from_config(&config).await?;
+    // TODO: In future, make the Graph store use only the HNSW DB cluster
     let graph_store = GraphStore::from_iris_store(&store);
 
     tracing::info!("Initialising AWS services");

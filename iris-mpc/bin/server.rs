@@ -756,8 +756,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     shutdown_handler.wait_for_shutdown_signal().await;
 
     // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::GPU
-        || config.mode_of_deployment != ModeOfDeployment::STANDARD
+    if config.mode_of_compute != ModeOfCompute::Gpu
+        || config.mode_of_deployment != ModeOfDeployment::Standard
     {
         panic!(
             "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
