@@ -63,14 +63,18 @@ pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> ey
 /// - Compares mask_dist * A < code_dist * B.
 pub async fn compare_threshold(
     session: &mut Session,
-    code_dist: Share<u32>,
-    mask_dist: Share<u32>,
-) -> eyre::Result<Share<Bit>> {
-    let mut x = mask_dist * A as u32;
-    let y = code_dist * B as u32;
-    x -= y;
+    distances: &[DistanceShare<u32>],
+) -> eyre::Result<Vec<Share<Bit>>> {
+    let diffs: Vec<Share<u32>> = distances
+        .iter()
+        .map(|d| {
+            let x = d.mask_dot.clone() * A as u32;
+            let y = d.code_dot.clone() * B as u32;
+            x - y
+        })
+        .collect();
 
-    single_extract_msb_u32::<32>(session, x).await
+    extract_msb_u32_batch(session, &diffs).await
 }
 
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
@@ -280,11 +284,12 @@ pub async fn galois_ring_is_match(
 /// Compares the given distance to a threshold and reveal the result.
 pub async fn compare_threshold_and_open(
     session: &mut Session,
-    distance: DistanceShare<u32>,
-) -> eyre::Result<bool> {
-    let bit = compare_threshold(session, distance.code_dot, distance.mask_dot).await?;
-    let opened = open_bin(session, &[bit]).await?[0];
-    Ok(opened.convert())
+    distances: &[DistanceShare<u32>],
+) -> eyre::Result<Vec<bool>> {
+    let bit = compare_threshold(session, distances).await?;
+    open_bin(session, &bit)
+        .await
+        .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
 
 #[cfg(test)]

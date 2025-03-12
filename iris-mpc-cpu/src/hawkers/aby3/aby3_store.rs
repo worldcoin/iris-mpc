@@ -305,9 +305,9 @@ impl VectorStore for Aby3Store {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-        compare_threshold_and_open(&mut self.session, distance.clone())
+        compare_threshold_and_open(&mut self.session, &[distance.clone()])
             .await
-            .unwrap()
+            .unwrap()[0]
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -330,6 +330,16 @@ impl VectorStore for Aby3Store {
             return vec![];
         }
         cross_compare(&mut self.session, distances).await.unwrap()
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Vec<bool> {
+        if distances.is_empty() {
+            return vec![];
+        }
+        compare_threshold_and_open(&mut self.session, distances)
+            .await
+            .unwrap()
     }
 }
 
