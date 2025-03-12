@@ -39,7 +39,7 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
 const DEFAULT_BATCH_SIZE: usize = 64;
 const DEFAULT_N_BATCHES: usize = 4;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(2);
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(30);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser, Clone)]
@@ -270,6 +270,7 @@ impl E2EClient {
 
     async fn run_e2e_test(&self) -> eyre::Result<()> {
         let used_file_indices = Arc::new(Mutex::new(HashSet::new()));
+        let used_response_indices = Arc::new(Mutex::new(HashSet::new()));
         for batch_idx in 0..self.n_batches {
             let mut handles = Vec::new();
             for _batch_query_idx in 0..self.batch_size {
@@ -283,6 +284,7 @@ impl E2EClient {
                 let client = self.clone();
                 let batch_size = self.batch_size;
                 let used_indices = used_file_indices.clone();
+                let used_response_indices = used_response_indices.clone();
                 let handle = tokio::spawn(async move {
                     let _permit = semaphore.acquire().await;
 
@@ -299,8 +301,17 @@ impl E2EClient {
                             let tmp = responses.lock().await;
                             tmp.len()
                         };
+                        let used_responses_indices_len = {
+                            let indices = used_response_indices.lock().await;
+                            indices.len()
+                        };
 
-                        let options = if responses_len == 0 { 1 } else { 2 };
+                        let options =
+                            if responses_len == 0 || used_responses_indices_len == responses_len {
+                                1
+                            } else {
+                                2
+                            };
 
                         match rng.gen_range(0..options) {
                             0 => {
@@ -344,9 +355,15 @@ impl E2EClient {
                             // }
                             1 => {
                                 let locked_responses = responses.lock().await;
+                                let mut locked_response_indices =
+                                    used_response_indices.lock().await;
 
                                 let keys_vec = locked_responses.keys().cloned().collect::<Vec<_>>();
-                                let keys_idx = rng.gen_range(0..keys_vec.len());
+                                let mut keys_idx = rng.gen_range(0..keys_vec.len());
+                                while locked_response_indices.contains(&keys_vec[keys_idx]) {
+                                    keys_idx = rng.gen_range(0..keys_vec.len());
+                                }
+                                let _ = locked_response_indices.insert(keys_vec[keys_idx]);
                                 let party_shares =
                                     { locked_responses.get(&keys_vec[keys_idx]).unwrap().clone() };
                                 {
