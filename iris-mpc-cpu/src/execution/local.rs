@@ -111,6 +111,7 @@ impl LocalRuntime {
                     let player = player.clone();
                     jobs.spawn(async move {
                         player.create_session(sess_id).await.unwrap();
+                        player.wait_for_session(sess_id).await.unwrap();
                     });
                 }
                 jobs.join_all().await;
