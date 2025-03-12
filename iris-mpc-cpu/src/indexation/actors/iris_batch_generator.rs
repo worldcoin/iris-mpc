@@ -5,11 +5,14 @@ use super::{
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
+use itertools::Itertools;
 use kameo::{
     actor::ActorRef,
     message::{Context, Message},
     Actor,
 };
+use rand::prelude::*;
+use tracing::info;
 
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
@@ -20,6 +23,9 @@ use kameo::{
 pub struct IrisBatchGenerator {
     // System configuration information.
     config: Config,
+
+    // Set of Iris identifiers to exclude from indexing.
+    deletions_for_exclusion: Option<Vec<i64>>,
 
     // ID of most recent Iris data indexed.
     height_of_indexed: Option<i64>,
@@ -50,6 +56,7 @@ impl IrisBatchGenerator {
 
         Self {
             config,
+            deletions_for_exclusion: None,
             height_of_indexed: None,
             height_of_protocol: None,
             range_for_indexation: None,
@@ -82,6 +89,16 @@ impl IrisBatchGenerator {
                 .await
                 .unwrap();
         }
+    }
+
+    // Fetches set of deletions that can be excluded from indexing.
+    async fn fetch_deletions_for_exclusion(&self) -> Result<Vec<i64>, IndexationError> {
+        // TODO: pull latest height from store.
+        let mut rng = rand::thread_rng();
+        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 100);
+        deletions.sort();
+
+        Ok(deletions)
     }
 
     // Fetches height of protocol from a store.
@@ -137,6 +154,16 @@ impl IrisBatchGenerator {
 
     // Updates state fields as per current indexation progress.
     async fn update_state(&mut self) {
+        // Set deletions for exclusion.
+        if self.deletions_for_exclusion.is_none() {
+            self.deletions_for_exclusion =
+                Some(self.fetch_deletions_for_exclusion().await.unwrap());
+            info!(
+                "Deletions for exclusion: {:?}",
+                self.deletions_for_exclusion
+            );
+        }
+
         // Set current protocol height.
         self.height_of_protocol = Some(self.fetch_height_of_protocol().await.unwrap());
 
