@@ -21,7 +21,6 @@ use sqlx::{
     migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
 };
 use std::ops::DerefMut;
-use tracing;
 
 const APP_NAME: &str = "SMPC";
 const MAX_CONNECTIONS: u32 = 100;
