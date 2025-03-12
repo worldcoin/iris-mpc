@@ -286,8 +286,8 @@ pub async fn compare_threshold_and_open(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
 ) -> eyre::Result<Vec<bool>> {
-    let bit = compare_threshold(session, distances).await?;
-    open_bin(session, &bit)
+    let bits = compare_threshold(session, distances).await?;
+    open_bin(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
