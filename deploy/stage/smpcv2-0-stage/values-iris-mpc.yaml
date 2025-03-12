@@ -15,7 +15,7 @@ env:
     value: "stage"
 
   - name: SMPC__SERVICE__SERVICE_NAME
-    value: "smpcv2-server-stage"
+    value: "iris-mpc-0"
 
   - name: SMPC__DATABASE__URL
     valueFrom:
