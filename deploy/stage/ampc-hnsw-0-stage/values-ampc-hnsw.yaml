@@ -1,29 +1,72 @@
 env:
+  - name: RUST_LOG
+    value: "info"
+
+  - name: RUST_BACKTRACE
+    value: "full"
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
+
   - name: SMPC__SERVICE__SERVICE_NAME
-    value: "hnsw-service"
+    value: "hnsw-service-stage"
+
   - name: SMPC__MODE_OF_COMPUTE
-    value: "CPU"
+    value: "Cpu"
+
   - name: SMPC__MODE_OF_DEPLOYMENT
-    value: "STANDARD"
-  - name: SMPC__DATABASE__MIGRATE
-    value: "false"
-  - name: SMPC__DATABASE__CREATE
-    value: "false"
-  - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "8"
-  - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "ShadowIsolation"
+
+  - name: SMPC__DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_URL
+        name: application
+
   - name: SMPC__MAX_DB_SIZE
     value: "10000"
-  - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "10"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
+
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
+
   - name: SMPC__HEALTHCHECK_PORTS
     value: '["3000","3001","3002"]'
+
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-dev-sns-requests"
+
+  - name: SMPC__REQUESTS_QUEUE_URL
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+
+  - name: SMPC__RESULTS_TOPIC_ARN
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "120"
+
+  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+    value: "65"
+
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+
+  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+
+  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
+    value: "256"
+
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "hnsw-0"
+
+  - name: SMPC__IMAGE_NAME
+    value: $(IMAGE_NAME)
