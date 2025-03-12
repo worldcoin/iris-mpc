@@ -32,9 +32,11 @@ fn err_to_status(e: eyre::Error) -> Status {
     Status::internal(e.to_string())
 }
 
+type Receiver = Arc<Mutex<UnboundedReceiver<SendRequest>>>;
+
 #[derive(Default, Clone)]
 struct MessageQueueStore {
-    queues: HashMap<Identity, Arc<Mutex<UnboundedReceiver<SendRequest>>>>,
+    queues: HashMap<Identity, Receiver>,
 }
 
 impl MessageQueueStore {
@@ -54,19 +56,13 @@ impl MessageQueueStore {
         self.queues.len()
     }
 
-    async fn pop(&mut self, sender_id: &Identity) -> eyre::Result<Vec<u8>> {
-        let queue = self.queues.get_mut(sender_id).ok_or(eyre!(format!(
-            "RECEIVE: Sender {sender_id:?} hasn't been found in the message queues"
-        )))?;
-
-        let msg = queue
-            .lock()
-            .await
-            .recv()
-            .await
-            .ok_or(eyre!("No message received"))?;
-
-        Ok(msg.data)
+    fn get_sender_queue(&self, sender_id: &Identity) -> eyre::Result<Receiver> {
+        self.queues
+            .get(sender_id)
+            .ok_or(eyre!(format!(
+                "Sender {sender_id:?} hasn't been found in the message queues"
+            )))
+            .cloned()
     }
 }
 
@@ -164,14 +160,28 @@ impl GrpcHandle {
                         let _ = job.return_channel.send(job_result);
                     }
                     GrpcTask::Receive(task) => {
-                        let mut grpc = grpc.clone();
-                        tokio::spawn(async move {
-                            let job_result = grpc
-                                .receive(&task.sender, &task.session_id)
-                                .await
-                                .map(MessageResult::ReceivedBytes);
-                            let _ = job.return_channel.send(job_result);
-                        });
+                        let sender = task.sender.clone();
+                        let session_id = task.session_id;
+                        let queue = grpc.get_message_queue(&sender, &session_id);
+                        let party_id = grpc.party_id.clone();
+                        match queue {
+                            Ok(q) => {
+                                tokio::spawn(async move {
+                                    let mut q = q.lock().await;
+                                    let job_result = match timeout(grpc.config.timeout_duration, q.recv()).await {
+                                        Ok(res) => res.ok_or(eyre!("No message received")).map(|msg| MessageResult::ReceivedBytes(msg.data)),
+                                        Err(_) => Err(eyre!(
+                                            "Party {party_id:?}: Timeout while waiting for message from {sender:?} in session \
+                                             {session_id:?}"
+                                        )),
+                                    };
+                                    let _ = job.return_channel.send(job_result);
+                                });
+                            }
+                            Err(e) => {
+                                let _ = job.return_channel.send(Err(e));
+                            }
+                        }
                     }
                     GrpcTask::CreateSession(session_id) => {
                         let job_result = grpc
@@ -364,7 +374,6 @@ pub struct GrpcConfig {
 // WARNING: this implementation assumes that messages for a specific player
 // within one session are sent in order and consecutively. Don't send messages
 // to the same player in parallel within the same session. Use batching instead.
-#[derive(Clone)]
 pub struct GrpcNetworking {
     party_id: Identity,
     // other party id -> client to call that party
@@ -511,7 +520,7 @@ impl GrpcNetworking {
     }
 }
 
-// Client implementation
+// I/O operations
 impl GrpcNetworking {
     fn send(
         &self,
@@ -546,34 +555,19 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    async fn receive(
+    fn get_message_queue(
         &mut self,
         sender: &Identity,
         session_id: &SessionId,
-    ) -> eyre::Result<Vec<u8>> {
-        // Just retrieve the first message from the corresponding queue
-        let queue = self
+    ) -> eyre::Result<Receiver> {
+        let session_queue = self
             .message_queues
             .get_mut(session_id)
             .ok_or(eyre!(format!(
                 "Session {session_id:?} hasn't been added to message queues"
             )))?;
 
-        tracing::trace!(
-            "Player {:?} is receiving message from {:?} in session {:?}",
-            self.party_id,
-            sender,
-            session_id
-        );
-
-        match timeout(self.config.timeout_duration, queue.pop(sender)).await {
-            Ok(res) => res,
-            Err(_) => Err(eyre!(
-                "Party {:?}: Timeout while waiting for message from {sender:?} in session \
-                 {session_id:?}",
-                self.party_id,
-            )),
-        }
+        session_queue.get_sender_queue(sender)
     }
 }
 
@@ -840,7 +834,7 @@ mod tests {
                 let res = alice.receive(&Identity::from("eve"), &session_id).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "RECEIVE: Sender Identity(\"eve\") hasn't been found in the message queues"
+                    "Sender Identity(\"eve\") hasn't been found in the message queues"
                 );
             });
         }
