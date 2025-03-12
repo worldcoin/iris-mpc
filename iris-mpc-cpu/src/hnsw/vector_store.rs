@@ -63,12 +63,14 @@ pub trait VectorStore: Clone + Debug {
     /// Override for more efficient batch distance evaluations.
     async fn eval_distance_batch(
         &mut self,
-        query: &Self::QueryRef,
+        queries: &[Self::QueryRef],
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
         let mut results = Vec::with_capacity(vectors.len());
-        for vector in vectors {
-            results.push(self.eval_distance(query, vector).await);
+        for query in queries {
+            for vector in vectors {
+                results.push(self.eval_distance(query, vector).await);
+            }
         }
         results
     }

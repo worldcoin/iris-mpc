@@ -79,20 +79,20 @@ async fn per_session(
 
     let mut out = Vec::with_capacity(tasks.len());
     for (query, vectors) in tasks {
-        let matches = per_query(query, &vectors, &mut session).await;
+        let matches = per_query(&[query], &vectors, &mut session).await;
         out.push(matches);
     }
     out
 }
 
 async fn per_query(
-    query: QueryRef,
+    queries: &[QueryRef],
     vector_ids: &[VectorId],
     session: &mut HawkSession,
 ) -> MapEdges<bool> {
     let distances = session
         .aby3_store
-        .eval_distance_batch(&query, vector_ids)
+        .eval_distance_batch(queries, vector_ids)
         .await;
 
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
