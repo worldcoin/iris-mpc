@@ -43,6 +43,7 @@ pub async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    next_seq_num: &mut u64,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -468,6 +469,9 @@ pub async fn receive_batch(
             .zip(batch_query.request_types.iter())
             .collect::<Vec<_>>()
     );
+
+    batch_query.next_seq_num = *next_seq_num;
+    *next_seq_num += batch_query.request_ids.len() as u64;
 
     Ok(Some(batch_query))
 }

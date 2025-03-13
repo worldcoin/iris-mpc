@@ -5,6 +5,7 @@ use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
     pub db_len: u64,
+    pub next_seq_num: u64,
     pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
@@ -85,6 +86,14 @@ impl SyncResult {
             .sorted()
             .dedup()
             .collect()
+    }
+
+    pub fn next_seq_num(&self) -> u64 {
+        self.all_states
+            .iter()
+            .map(|s| s.next_seq_num)
+            .max()
+            .unwrap_or(0)
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {

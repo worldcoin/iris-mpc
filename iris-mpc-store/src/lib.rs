@@ -194,6 +194,10 @@ impl Store {
         Ok(count.0 as usize)
     }
 
+    pub async fn next_seq_num(&self) -> Result<u64> {
+        todo!("get the sequence number")
+    }
+
     /// Stream irises in order.
     pub async fn stream_irises(
         &self,

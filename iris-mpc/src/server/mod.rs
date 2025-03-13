@@ -173,6 +173,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     let my_state = SyncState {
         db_len: store_len as u64,
+        next_seq_num: store.next_seq_num().await?,
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_sync_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
@@ -678,6 +679,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Start the main loop");
 
+    let mut next_seq_num = sync_result.next_seq_num();
+
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
@@ -714,9 +717,11 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             &shutdown_handler,
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
+            &mut next_seq_num,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
+
 
         loop {
             let now = Instant::now();
@@ -769,6 +774,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
                 &shutdown_handler,
                 &uniqueness_error_result_attribute,
                 &reauth_error_result_attribute,
+                &mut next_seq_num,
             );
 
             // await the result
