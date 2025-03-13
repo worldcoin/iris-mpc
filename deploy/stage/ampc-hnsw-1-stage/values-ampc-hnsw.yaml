@@ -71,6 +71,11 @@ env:
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
 
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
   - name: SMPC__SERVICE__METRICS__PORT
     value: "8125"
 
