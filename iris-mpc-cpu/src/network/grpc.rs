@@ -411,6 +411,13 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
+        if self.clients.contains_key(&party_id) {
+            return Err(eyre!(
+                "Player {:?} has already connected to player {:?}",
+                self.party_id,
+                party_id
+            ));
+        }
         let client = (|| async { PartyNodeClient::connect(address.to_string()).await })
             .retry(self.backoff())
             .sleep(tokio::time::sleep)
