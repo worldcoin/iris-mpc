@@ -1,5 +1,6 @@
 use super::{
     super::supervisor::Supervisor,
+    super::utils::fetch_iris_v1_deletions_from_s3,
     super::{errors::IndexationError, messages},
 };
 use iris_mpc_common::config::Config;
@@ -9,7 +10,6 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use rand::prelude::*;
 
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
@@ -99,12 +99,9 @@ impl IrisBatchGenerator {
 
     // Fetches set of V1 deletions that can be excluded from indexing.
     async fn fetch_deletions_for_exclusion_v1(&self) -> Result<Vec<i64>, IndexationError> {
-        // TODO: fetch from S3 bucket.
-        let mut rng = rand::thread_rng();
-        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
-        deletions.sort();
+        let identifiers = fetch_iris_v1_deletions_from_s3(&self.config).await?;
 
-        Ok(deletions)
+        Ok(identifiers)
     }
 
     // Fetches set of V2 deletions that can be excluded from indexing.

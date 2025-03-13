@@ -231,7 +231,7 @@ impl Store {
     ///
     /// # Returns
     ///
-    /// A set of serial identifiers.
+    /// A set of V2 serial identifiers marked as deleted.
     ///
     pub async fn fetch_iris_v2_deletions_by_party_id(
         &self,
