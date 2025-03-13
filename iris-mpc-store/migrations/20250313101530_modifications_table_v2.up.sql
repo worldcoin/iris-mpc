@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS modifications (
     s3_url TEXT,
     status TEXT NOT NULL,
     persisted BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT
+    created_at BIGINT NOT NULL DEFAULT (EXTRACT(EPOCH FROM NOW()) * 1000000)::BIGINT -- microseconds precision
 );
 
 -- create the index on created_at column to get the latest modifications faster
