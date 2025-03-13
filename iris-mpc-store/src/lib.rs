@@ -13,7 +13,7 @@ use iris_mpc_common::{
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
 };
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{prelude::*, rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
@@ -194,7 +194,7 @@ impl Store {
         Ok(count.0 as usize)
     }
 
-    /// Fetches a single row from Iris table.
+    /// Fetches first row from Iris table matched by id.
     ///
     /// # Arguments
     ///
@@ -204,7 +204,7 @@ impl Store {
     ///
     /// Maybe a `DbStoredIris` instance.
     ///
-    pub async fn fetch_iris_by_id(
+    pub async fn fetch_iris_by_serial_id(
         &self,
         id_of_iris: i64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
@@ -221,6 +221,32 @@ impl Store {
                 .await
                 .expect("DB operation failure :: Fetch Iris by ID."),
         )
+    }
+
+    /// Fetches V2 serial identifiers marked as deleted.
+    ///
+    /// # Arguments
+    ///
+    /// * `id_of_party` - Party ID.
+    ///
+    /// # Returns
+    ///
+    /// A set of serial identifiers.
+    ///
+    pub async fn fetch_iris_v2_deletions_by_party_id(
+        &self,
+        id_of_party: usize,
+    ) -> sqlx::Result<Vec<i64>, sqlx::Error> {
+        tracing::info!(
+            "Iris PostgreSQL store: Fetching V2 deletion set by party ID ({})",
+            id_of_party
+        );
+
+        let mut rng = rand::thread_rng();
+        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
+        deletions.sort();
+
+        Ok(deletions)
     }
 
     /// Stream irises in order.

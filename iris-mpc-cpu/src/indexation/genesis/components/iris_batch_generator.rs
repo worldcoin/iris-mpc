@@ -85,7 +85,7 @@ impl IrisBatchGenerator {
     }
 
     // Fetches set of deletions that can be excluded from indexing.
-    async fn fetch_deletions_for_exclusion(&self) -> Result<Vec<i64>, IndexationError> {
+    async fn fetch_deletions_for_exclusion(&mut self) -> Result<Vec<i64>, IndexationError> {
         let mut deletions = [
             self.fetch_deletions_for_exclusion_v1().await?,
             self.fetch_deletions_for_exclusion_v2().await?,
@@ -99,7 +99,7 @@ impl IrisBatchGenerator {
 
     // Fetches set of V1 deletions that can be excluded from indexing.
     async fn fetch_deletions_for_exclusion_v1(&self) -> Result<Vec<i64>, IndexationError> {
-        // TODO: fetch from store.
+        // TODO: fetch from S3 bucket.
         let mut rng = rand::thread_rng();
         let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
         deletions.sort();
@@ -108,11 +108,16 @@ impl IrisBatchGenerator {
     }
 
     // Fetches set of V2 deletions that can be excluded from indexing.
-    async fn fetch_deletions_for_exclusion_v2(&self) -> Result<Vec<i64>, IndexationError> {
-        // TODO: fetch from store.
-        let mut rng = rand::thread_rng();
-        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
-        deletions.sort();
+    async fn fetch_deletions_for_exclusion_v2(&mut self) -> Result<Vec<i64>, IndexationError> {
+        self.set_store().await.unwrap();
+        let deletions = self
+            .store
+            .as_ref()
+            .unwrap()
+            .fetch_iris_v2_deletions_by_party_id(self.config.party_id)
+            .await
+            .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
+            .unwrap();
 
         Ok(deletions)
     }

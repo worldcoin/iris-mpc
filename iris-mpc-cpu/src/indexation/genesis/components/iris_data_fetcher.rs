@@ -22,7 +22,7 @@ pub struct IrisDataFetcher {
     config: Config,
 
     // Store provider instance.
-    store: Option<IrisStore>,
+    iris_store: Option<IrisStore>,
 
     // Reference to supervisor.
     supervisor_ref: ActorRef<Supervisor>,
@@ -33,7 +33,7 @@ impl IrisDataFetcher {
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
             config,
-            store: None,
+            iris_store: None,
             supervisor_ref,
         }
     }
@@ -43,20 +43,20 @@ impl IrisDataFetcher {
     // Queries remote store for range of iris identifiers to be processed.
     async fn fetch_iris_data(&mut self, id_of_iris: i64) -> Result<IrisData, IndexationError> {
         // JIT set pointer to remote store.
-        if self.store.is_none() {
+        if self.iris_store.is_none() {
             match IrisStore::new_from_config(&self.config).await {
                 Ok(store) => {
-                    self.store = Some(store);
+                    self.iris_store = Some(store);
                 }
                 Err(_) => return Err(IndexationError::PostgresConnectionError),
             }
         }
 
         // Fetch iris data.
-        self.store
+        self.iris_store
             .as_ref()
             .unwrap()
-            .fetch_iris_by_id(id_of_iris)
+            .fetch_iris_by_serial_id(id_of_iris)
             .await
             .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
     }
