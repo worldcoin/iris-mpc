@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS modifications (
     persisted BOOLEAN NOT NULL DEFAULT FALSE
 );
 
-DROP INDEX IF EXISTS idx_modifications_created_at;
-
 DROP TABLE IF EXISTS modifications;
+
+DROP TRIGGER IF EXISTS before_insert_modifications ON modifications;
+
+DROP FUNCTION IF EXISTS assign_modification_id();

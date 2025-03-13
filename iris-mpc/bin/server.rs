@@ -163,7 +163,7 @@ async fn receive_batch(
             for sqs_message in messages {
                 let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
                     .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-                let sns_message_id = message.message_id.clone();
+                let sns_message_id = message.message_id;
 
                 // messages arrive to SQS through SNS. So, all the attributes set in SNS are
                 // moved into the SQS body.
@@ -241,7 +241,6 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                &sns_message_id,
                                 identity_deletion_request.serial_id as i64,
                                 IDENTITY_DELETION_MESSAGE_TYPE,
                                 None,
@@ -415,7 +414,6 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                &sns_message_id,
                                 reauth_request.serial_id as i64,
                                 REAUTH_MESSAGE_TYPE,
                                 Some(reauth_request.s3_key.as_str()),
@@ -1221,7 +1219,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
                 continue;
             }
-            tracing::info!("Applying modification to local node: {:?}", modification);
+            tracing::warn!("Applying modification to local node: {:?}", modification);
             metrics::counter!("db.modifications.rollforward").increment(1);
             let (lc, lm, rc, rm) = match modification.request_type.as_str() {
                 IDENTITY_DELETION_MESSAGE_TYPE => (
