@@ -285,19 +285,24 @@ impl VectorStore for Aby3Store {
         self.lift_distances(dist).await.unwrap()[0].clone()
     }
 
-    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
     async fn eval_distance_batch(
         &mut self,
-        query: &Self::QueryRef,
+        queries: &[Self::QueryRef],
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
         if vectors.is_empty() {
             return vec![];
         }
         let vectors = self.storage.iter_vectors(vectors).await;
-        let pairs = vectors
+        let pairs = queries
             .iter()
-            .map(|vector| (&query.processed_query, &**vector))
+            .flat_map(|q| {
+                vectors
+                    .iter()
+                    .map(|vector| (&q.processed_query, &**vector))
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
 
         let dist = self.eval_pairwise_distances(pairs).await;
@@ -621,10 +626,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&plaintext_inserts[0], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_inserts[0]], &plaintext_inserts)
             .await;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&plaintext_inserts[1], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_inserts[1]], &plaintext_inserts)
             .await;
         let dist_plain = dist1_plain
             .into_iter()
@@ -655,10 +660,10 @@ mod tests {
             let mut store = store.clone();
             jobs.spawn(async move {
                 let dist1_aby3 = store
-                    .eval_distance_batch(&player_preps[0], &player_inserts)
+                    .eval_distance_batch(&[player_preps[0].clone()], &player_inserts)
                     .await;
                 let dist2_aby3 = store
-                    .eval_distance_batch(&player_preps[1], &player_inserts)
+                    .eval_distance_batch(&[player_preps[1].clone()], &player_inserts)
                     .await;
                 let dist_aby3 = dist1_aby3
                     .into_iter()

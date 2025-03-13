@@ -92,7 +92,7 @@ async fn per_query(
 ) -> MapEdges<bool> {
     let distances = session
         .aby3_store
-        .eval_distance_batch(&query, vector_ids)
+        .eval_distance_batch(&[query], vector_ids)
         .await;
 
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
