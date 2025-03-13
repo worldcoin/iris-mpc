@@ -1,6 +1,5 @@
 use crate::{
     execution::{player::Identity, session::Session},
-    hawkers::plaintext_store::PointId,
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -30,7 +29,7 @@ pub type IrisRef = Arc<GaloisRingSharedIris>;
 /// Unique identifier for an iris inserted into the store.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
-    pub(crate) id: PointId,
+    id: u32,
 }
 
 impl Display for VectorId {
@@ -49,32 +48,26 @@ impl FromStr for VectorId {
     }
 }
 
-impl From<PointId> for VectorId {
-    fn from(id: PointId) -> Self {
-        VectorId { id }
-    }
-}
-
-impl From<&PointId> for VectorId {
-    fn from(id: &PointId) -> Self {
-        VectorId { id: *id }
-    }
-}
-
 impl From<usize> for VectorId {
     fn from(id: usize) -> Self {
-        VectorId { id: id.into() }
+        VectorId { id: id as u32 }
+    }
+}
+
+impl From<u32> for VectorId {
+    fn from(id: u32) -> Self {
+        VectorId { id }
     }
 }
 
 impl VectorId {
     pub fn from_serial_id(id: u32) -> Self {
-        VectorId { id: id.into() }
+        VectorId { id }
     }
 
     /// Returns the ID of a vector as a number.
     pub fn to_serial_id(&self) -> u32 {
-        self.id.0
+        self.id
     }
 }
 
@@ -130,9 +123,7 @@ impl SharedIrises {
     }
 
     fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId {
-            id: PointId(self.next_id),
-        };
+        let new_id = VectorId::from(self.next_id);
         self.next_id += 1;
         new_id
     }

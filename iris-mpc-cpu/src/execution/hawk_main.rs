@@ -1080,7 +1080,7 @@ mod tests_db {
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
         // The test data is a sequence of mutations on the graph.
-        let vectors = (0..5).map(VectorId::from).collect_vec();
+        let vectors = (0..5_u32).map(VectorId::from).collect_vec();
         let distance = DistanceShare::new(Default::default(), Default::default());
 
         let make_plans = |side| {
