@@ -98,14 +98,14 @@ impl Message<messages::OnIndexationOfBatchBegin> for Supervisor {
     }
 }
 
-impl Message<messages::OnIrisDataPulledFromStore> for Supervisor {
+impl Message<messages::OnFetchOfIrisData> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnIrisDataPulledFromStore,
+        _: messages::OnFetchOfIrisData,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnIrisDataPulledFromStore :: Supervisor");

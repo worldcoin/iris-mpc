@@ -63,10 +63,11 @@ impl IrisDataFetcher {
 }
 
 // ------------------------------------------------------------------------
-// Actor message Handlers.
+// Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
+// Message handler :: OnFetchOfIrisData.
+impl From<&IrisData> for messages::OnFetchOfIrisData {
     fn from(value: &IrisData) -> Self {
         Self {
             id_of_iris: value.id(),
@@ -78,7 +79,7 @@ impl From<&IrisData> for messages::OnIrisDataPulledFromStore {
     }
 }
 
-// Message handler.
+// Message handler :: OnIndexationOfBatchItemBegin.
 impl Message<messages::OnIndexationOfBatchItemBegin> for IrisDataFetcher {
     type Reply = Result<(), IndexationError>;
 
@@ -92,7 +93,7 @@ impl Message<messages::OnIndexationOfBatchItemBegin> for IrisDataFetcher {
 
         // Signal to supervisor.
         self.supervisor_ref
-            .tell(messages::OnIrisDataPulledFromStore::from(&iris_data))
+            .tell(messages::OnFetchOfIrisData::from(&iris_data))
             .await
             .unwrap();
 

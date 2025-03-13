@@ -71,11 +71,11 @@ impl IrisBatchGenerator {
         // Update internal state.
         self.update_state().await;
 
-        // If at tip then signal end of indexation.
+        // Signal end of indexation if at tip.
         if self.batch_for_indexation.is_none() {
             let msg = messages::OnIndexationEnd;
             self.supervisor_ref.tell(msg).await.unwrap();
-        // Otherwise signal that a new batch is awaiting indexation.
+        // Signal new batch is awaiting indexation.
         } else {
             let msg = messages::OnIndexationOfBatchBegin {
                 batch: self.batch_for_indexation.as_ref().unwrap().to_owned(),
@@ -86,9 +86,32 @@ impl IrisBatchGenerator {
 
     // Fetches set of deletions that can be excluded from indexing.
     async fn fetch_deletions_for_exclusion(&self) -> Result<Vec<i64>, IndexationError> {
-        // TODO: pull latest height from store.
+        let mut deletions = [
+            self.fetch_deletions_for_exclusion_v1().await?,
+            self.fetch_deletions_for_exclusion_v2().await?,
+        ]
+        .concat();
+        deletions.dedup();
+        deletions.sort();
+
+        Ok(deletions)
+    }
+
+    // Fetches set of V1 deletions that can be excluded from indexing.
+    async fn fetch_deletions_for_exclusion_v1(&self) -> Result<Vec<i64>, IndexationError> {
+        // TODO: fetch from store.
         let mut rng = rand::thread_rng();
-        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 100);
+        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
+        deletions.sort();
+
+        Ok(deletions)
+    }
+
+    // Fetches set of V2 deletions that can be excluded from indexing.
+    async fn fetch_deletions_for_exclusion_v2(&self) -> Result<Vec<i64>, IndexationError> {
+        // TODO: fetch from store.
+        let mut rng = rand::thread_rng();
+        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
         deletions.sort();
 
         Ok(deletions)
@@ -108,7 +131,7 @@ impl IrisBatchGenerator {
 
     // Fetches height of indexed from a store.
     async fn fetch_height_of_indexed(&self) -> Result<i64, IndexationError> {
-        // TODO: pull latest height from store.
+        // TODO: fetch from store | keep internal memo.
         Ok(1)
     }
 
@@ -172,7 +195,7 @@ impl IrisBatchGenerator {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-// Message: OnIndexationStart.
+// Message: OnIndexationBegin.
 impl Message<messages::OnIndexationBegin> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
@@ -183,11 +206,12 @@ impl Message<messages::OnIndexationBegin> for IrisBatchGenerator {
         _: messages::OnIndexationBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
+        // Initiate first indexation step.
         self.do_indexation_step().await;
     }
 }
 
-// Message: OnBatchIndexationEnd.
+// Message: OnIndexationOfBatchEnd.
 impl Message<messages::OnIndexationOfBatchEnd> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
@@ -198,6 +222,7 @@ impl Message<messages::OnIndexationOfBatchEnd> for IrisBatchGenerator {
         _: messages::OnIndexationOfBatchEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
+        // Initiate next indexation step.
         self.do_indexation_step().await;
     }
 }
