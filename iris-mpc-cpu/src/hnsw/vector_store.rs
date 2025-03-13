@@ -66,7 +66,7 @@ pub trait VectorStore: Clone + Debug {
         queries: &[Self::QueryRef],
         vectors: &[Self::VectorRef],
     ) -> Vec<Self::DistanceRef> {
-        let mut results = Vec::with_capacity(vectors.len());
+        let mut results = Vec::with_capacity(queries.len() * vectors.len());
         for query in queries {
             for vector in vectors {
                 results.push(self.eval_distance(query, vector).await);
