@@ -55,16 +55,17 @@ get_aws_secret() {
 clean_mpc_database() {
   local DATABASE_URL=$1
   local PARTY_ID=$2
+  local CLUSTER=$3
 
-  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ]; then
-    echo "Database URL and party ID are required"
+  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$CLUSTER" ]; then
+    echo "Database URL, party ID, and cluster are required"
     exit 1
   fi
 
   echo "Cleaning database for $PARTY_ID..."
   
   # Switch to the appropriate Kubernetes context
-  kubectx arn:aws:eks:eu-north-1:024848486749:cluster/smpcv2-${PARTY_ID}-stage || kubectx smpc-io-stage-$PARTY_ID
+  kubectx $CLUSTER || kubectx smpc-io-stage-$PARTY_ID
   kubens iris-mpc
   
   # Create and use a temporary pod for database operations
@@ -103,8 +104,8 @@ if [ -z "$MPC_0_DATABASE_URL" ] || [ -z "$MPC_1_DATABASE_URL" ] || [ -z "$MPC_2_
   exit 1
 fi
 
-clean_mpc_database "$MPC_0_DATABASE_URL" "0"
-clean_mpc_database "$MPC_1_DATABASE_URL" "1"
-clean_mpc_database "$MPC_2_DATABASE_URL" "2"
+clean_mpc_database "$MPC_0_DATABASE_URL" "0" arn:aws:eks:eu-north-1:024848486749:cluster/smpcv2-0-stage
+clean_mpc_database "$MPC_1_DATABASE_URL" "1" arn:aws:eks:eu-north-1:024848486818:cluster/smpcv2-1-stage
+clean_mpc_database "$MPC_2_DATABASE_URL" "2" arn:aws:eks:eu-north-1:024848486770:cluster/smpcv2-2-stage
 
 echo "All database cleanup operations completed successfully."
