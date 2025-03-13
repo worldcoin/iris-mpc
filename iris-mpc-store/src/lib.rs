@@ -1118,11 +1118,7 @@ pub mod tests {
         // Insert a few modifications
         for serial_id in 11..=15 {
             store
-                .insert_modification(
-                    serial_id,
-                    IDENTITY_DELETION_MESSAGE_TYPE,
-                    None,
-                )
+                .insert_modification(serial_id, IDENTITY_DELETION_MESSAGE_TYPE, None)
                 .await?;
         }
 
