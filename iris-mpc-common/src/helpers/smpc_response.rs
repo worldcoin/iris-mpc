@@ -96,7 +96,6 @@ pub struct ReAuthResult {
     pub success: bool,
     pub and_rule_matched_serial_ids: Vec<u32>,
     pub or_rule_used: bool,
-    pub or_rule_matched: Option<bool>,
     pub error: Option<bool>,
     pub error_reason: Option<String>,
 }
@@ -109,7 +108,6 @@ impl ReAuthResult {
         success: bool,
         and_rule_matched_serial_ids: Vec<u32>,
         or_rule_used: bool,
-        or_rule_matched: Option<bool>,
     ) -> Self {
         Self {
             reauth_id,
@@ -118,7 +116,6 @@ impl ReAuthResult {
             success,
             and_rule_matched_serial_ids,
             or_rule_used,
-            or_rule_matched,
             error: None,
             error_reason: None,
         }
@@ -137,7 +134,6 @@ impl ReAuthResult {
             success: false,
             and_rule_matched_serial_ids: vec![],
             or_rule_used: false,
-            or_rule_matched: None,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
         }
