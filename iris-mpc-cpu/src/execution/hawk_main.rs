@@ -12,7 +12,7 @@ use crate::{
         searcher::ConnectPlanV,
         GraphMem, HnswSearcher, VectorStore,
     },
-    network::grpc::{GrpcConfig, GrpcNetworking},
+    network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
 };
@@ -80,7 +80,7 @@ pub struct HawkActor {
     graph_store: BothEyes<GraphRef>,
 
     // ---- My network setup ----
-    networking: GrpcNetworking,
+    networking: GrpcHandle,
     own_identity: Identity,
     party_id: usize,
 }
@@ -183,6 +183,7 @@ impl HawkActor {
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
+        let networking = GrpcHandle::new(networking).await?;
 
         // Start server.
         {
@@ -256,7 +257,7 @@ impl HawkActor {
         self.networking.create_session(session_id).await?;
 
         // Wait until others ceated their side of the session.
-        self.networking.wait_for_session(session_id).await;
+        self.networking.wait_for_session(session_id).await?;
 
         let boot_session = BootSession {
             session_id,

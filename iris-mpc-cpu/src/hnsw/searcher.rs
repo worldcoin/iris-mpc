@@ -748,7 +748,9 @@ impl HnswSearcher {
             .filter(|e| visited.insert(e.clone()))
             .collect();
 
-        let distances = store.eval_distance_batch(query, &unvisited_neighbors).await;
+        let distances = store
+            .eval_distance_batch(&[query.clone()], &unvisited_neighbors)
+            .await;
 
         unvisited_neighbors
             .into_iter()
