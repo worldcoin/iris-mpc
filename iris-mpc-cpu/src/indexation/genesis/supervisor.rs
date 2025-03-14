@@ -105,10 +105,19 @@ impl Message<messages::OnFetchOfIrisData> for Supervisor {
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnFetchOfIrisData,
+        msg: messages::OnFetchOfIrisData,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!("Event :: OnIrisDataPulledFromStore :: Supervisor");
+        tracing::info!("Event :: OnFetchOfIrisData :: Supervisor");
+
+        self.a3_ref
+            .as_ref()
+            .unwrap()
+            .tell(messages::OnIndexationOfFetchedIrisDataBegin {
+                fetched_iris_data: msg,
+            })
+            .await
+            .unwrap()
     }
 }
 
@@ -125,7 +134,7 @@ impl Actor for Supervisor {
         // Instantiate associated actors.
         let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
         let a2 = IrisDataFetcher::new(self.config.clone(), ref_to_self.clone());
-        let a3 = GraphIndexer {};
+        let a3 = GraphIndexer::new(self.config.clone(), ref_to_self.clone());
         let a4 = GraphDataWriter {};
 
         // Spawn associated actors.

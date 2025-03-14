@@ -32,6 +32,15 @@ pub struct OnIndexationOfBatchItemBegin {
 // TODO: use byte slice rather than vecs
 #[derive(Clone, Debug, Default)]
 #[allow(dead_code)]
+pub struct OnIndexationOfFetchedIrisDataBegin {
+    // Fetched Iris data.
+    pub(crate) fetched_iris_data: OnFetchOfIrisData,
+}
+
+// Event: raised when raw Iris data is ready for processing.
+// TODO: use byte slice rather than vecs
+#[derive(Clone, Debug, Default)]
+#[allow(dead_code)]
 pub struct OnFetchOfIrisData {
     // Iris ID, see pgres primary key.
     pub(crate) id_of_iris: i64,

@@ -209,7 +209,7 @@ impl Store {
         id_of_iris: i64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
         tracing::info!(
-            "Iris PostgreSQL store: Fetching Iris by ID ({})",
+            "Iris PostgreSQL store: Fetching Iris by serial-id ({})",
             id_of_iris
         );
 
