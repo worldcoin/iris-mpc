@@ -1,11 +1,11 @@
 mod actors;
 mod errors;
-mod messages;
+mod signals;
 mod types;
 mod utils;
 
 pub use actors::Supervisor;
 pub use errors::IndexationError;
-pub use messages::OnBegin;
-pub use messages::OnEnd;
-pub use messages::OnError;
+pub use signals::OnBegin;
+pub use signals::OnEnd;
+pub use signals::OnError;

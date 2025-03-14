@@ -1,6 +1,7 @@
 use super::{
+    super::super::utils::log_signal,
     super::Supervisor,
-    super::{errors::IndexationError, messages, types::IrisGaloisShares},
+    super::{errors::IndexationError, signals, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
@@ -13,6 +14,9 @@ use kameo::{
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
 // ------------------------------------------------------------------------
+
+// Name for logging purposes.
+const NAME: &str = "IrisDataFetcher";
 
 // Fetches Iris shares from remote store.
 #[derive(Actor)]
@@ -67,15 +71,16 @@ impl IrisSharesFetcher {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-// Message handler :: OnIndexationOfBatchItemBegin.
-impl Message<messages::OnBeginBatchItem> for IrisSharesFetcher {
+impl Message<signals::OnBeginBatchItem> for IrisSharesFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnBeginBatchItem,
+        msg: signals::OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
+        log_signal(NAME, "OnBeginBatchItem");
+
         // Fetch data.
         let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
 
@@ -90,7 +95,7 @@ impl Message<messages::OnBeginBatchItem> for IrisSharesFetcher {
 
         // Signal to supervisor.
         self.supervisor_ref
-            .tell(messages::OnFetchOfIrisShares {
+            .tell(signals::OnFetchOfIrisShares {
                 serial_id: iris_data.id(),
                 shares,
             })

@@ -1,6 +1,6 @@
 use super::{
     super::Supervisor,
-    super::{errors::IndexationError, messages, types::IrisGaloisShares},
+    super::{errors::IndexationError, signals, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
@@ -12,6 +12,9 @@ use kameo::{
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
 // ------------------------------------------------------------------------
+
+// Name for logging purposes.
+const NAME: &str = "GraphIndexer";
 
 // Actor: Issues query/insert operations over in-memory HNSW graph.
 #[derive(Actor)]
@@ -36,7 +39,11 @@ impl GraphIndexer {
 
 impl GraphIndexer {
     async fn do_index_graph(&self, serial_id: i64, _: IrisGaloisShares) {
-        tracing::info!("TODO: Index graph :: Iris Serial ID {}", serial_id,);
+        tracing::info!(
+            "{} :: TODO :: Index graph for Iris serial ID {}",
+            NAME,
+            serial_id
+        );
     }
 }
 
@@ -44,17 +51,17 @@ impl GraphIndexer {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-// Message handler :: OnIndexationOfFetchedIrisDataBegin.
-impl Message<messages::OnBeginOfIrisSharesIndexation> for GraphIndexer {
+impl Message<signals::OnBeginIrisSharesIndexation> for GraphIndexer {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnBeginOfIrisSharesIndexation,
+        msg: signals::OnBeginIrisSharesIndexation,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        self.do_index_graph(msg.shares.serial_id, msg.shares.shares)
-            .await;
+        log_signal(NAME, "OnBeginIrisSharesIndexation");
+
+        self.do_index_graph(msg.serial_id, msg.shares).await;
 
         Ok(())
     }

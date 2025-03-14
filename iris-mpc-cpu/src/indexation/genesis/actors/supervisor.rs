@@ -8,13 +8,17 @@ use kameo::{
 };
 use tracing;
 use {
-    super::super::messages,
+    super::super::signals,
+    super::super::utils::{log_lifecycle, log_signal},
     super::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
 };
 
 // ------------------------------------------------------------------------
 // Declaration + state + ctor + methods.
 // ------------------------------------------------------------------------
+
+// Name for logging purposes.
+const NAME: &str = "Supervisor";
 
 // Actor: Genesis indexation supervisor.
 pub struct Supervisor {
@@ -44,78 +48,79 @@ impl Supervisor {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<messages::OnEnd> for Supervisor {
+impl Message<signals::OnEnd> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnEnd,
+        _: signals::OnEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!("Event :: OnIndexationEnd :: Supervisor");
+        log_signal(NAME, "OnEnd");
     }
 }
 
-impl Message<messages::OnBegin> for Supervisor {
+impl Message<signals::OnBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnBegin,
+        _: signals::OnBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!("Event :: OnIndexationStart :: Supervisor");
+        log_signal(NAME, "OnBegin");
     }
 }
 
-impl Message<messages::OnBeginBatch> for Supervisor {
+impl Message<signals::OnBeginBatch> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnBeginBatch,
+        msg: signals::OnBeginBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!("Event :: OnBatchIndexationStart :: Supervisor");
+        log_signal(NAME, "OnBeginBatch");
 
         // TODO: spawn pool to process concurrently.
         for iris_id in msg.batch {
-            self.a2_ref
-                .as_ref()
-                .unwrap()
-                .tell(messages::OnBeginBatchItem {
-                    id_of_iris: iris_id,
-                })
-                .await
-                .unwrap();
+            // Signal that a batch item is ready for processing.
+            let msg = signals::OnBeginBatchItem {
+                id_of_iris: iris_id,
+            };
+            self.a2_ref.as_ref().unwrap().tell(msg).await.unwrap();
         }
     }
 }
 
-impl Message<messages::OnFetchOfIrisShares> for Supervisor {
+impl Message<signals::OnFetchOfIrisShares> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnFetchOfIrisShares,
+        msg: signals::OnFetchOfIrisShares,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!("Event :: OnFetchOfIrisData :: Supervisor");
+        tracing::info!(
+            "{} :: Event :: OnFetchOfIrisShares :: Iris serial-id = {}",
+            NAME,
+            msg.serial_id
+        );
 
-        self.a3_ref
-            .as_ref()
-            .unwrap()
-            .tell(messages::OnBeginOfIrisSharesIndexation { shares: msg })
-            .await
-            .unwrap()
+        // Signal that Iris shares are ready for indexation.
+        let msg = signals::OnBeginIrisSharesIndexation {
+            serial_id: msg.serial_id,
+            shares: msg.shares,
+        };
+        self.a3_ref.as_ref().unwrap().tell(msg).await.unwrap()
     }
 }
 
@@ -127,7 +132,7 @@ impl Actor for Supervisor {
     type Mailbox = BoundedMailbox<Self>;
 
     async fn on_start(&mut self, ref_to_self: ActorRef<Self>) -> Result<(), BoxError> {
-        tracing::info!("Supervisor :: lifecycle :: on_start");
+        log_lifecycle(NAME, "on_start");
 
         // Instantiate associated actors.
         let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
@@ -142,11 +147,7 @@ impl Actor for Supervisor {
         self.a4_ref = Some(kameo::spawn(a4));
 
         // Signal start.
-        self.a1_ref
-            .as_ref()
-            .unwrap()
-            .tell(messages::OnBegin)
-            .await?;
+        self.a1_ref.as_ref().unwrap().tell(signals::OnBegin).await?;
 
         Ok(())
     }
