@@ -45,7 +45,7 @@ pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 mod is_match_batch;
 mod matching;
 mod rot;
-use is_match_batch::calculate_is_match;
+use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
 #[derive(Clone, Parser)]
@@ -751,9 +751,12 @@ impl HawkHandle {
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
                     // Go fetch the missing vector IDs and calculate their is_match.
-                    let missing_is_match =
-                        calculate_is_match(search_queries, step1.missing_vector_ids(), &sessions)
-                            .await;
+                    let missing_is_match = calculate_missing_is_match(
+                        search_queries,
+                        step1.missing_vector_ids(),
+                        &sessions,
+                    )
+                    .await;
                     step1.step2(&missing_is_match)
                 };
 
