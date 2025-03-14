@@ -1,6 +1,6 @@
 use super::{
-    super::supervisor::Supervisor,
     super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
+    super::Supervisor,
     super::{errors::IndexationError, messages},
 };
 use iris_mpc_common::config::Config;
@@ -77,7 +77,7 @@ impl IrisBatchGenerator {
             self.supervisor_ref.tell(msg).await.unwrap();
         // Signal new batch is awaiting indexation.
         } else {
-            let msg = messages::OnBeginOfBatchIndexation {
+            let msg = messages::OnBeginBatch {
                 batch: self.batch_for_indexation.as_ref().unwrap().to_owned(),
             };
             self.supervisor_ref.tell(msg).await.unwrap();
@@ -215,14 +215,14 @@ impl Message<messages::OnBegin> for IrisBatchGenerator {
 }
 
 // Message: OnIndexationOfBatchEnd.
-impl Message<messages::OnEndOfBatchIndexation> for IrisBatchGenerator {
+impl Message<messages::OnEndOfBatch> for IrisBatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnEndOfBatchIndexation,
+        _: messages::OnEndOfBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         // Initiate next indexation step.

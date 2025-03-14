@@ -8,8 +8,8 @@ use kameo::{
 };
 use tracing;
 use {
-    super::components::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
-    super::messages,
+    super::super::messages,
+    super::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
 };
 
 // ------------------------------------------------------------------------
@@ -72,14 +72,14 @@ impl Message<messages::OnBegin> for Supervisor {
     }
 }
 
-impl Message<messages::OnBeginOfBatchIndexation> for Supervisor {
+impl Message<messages::OnBeginBatch> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnBeginOfBatchIndexation,
+        msg: messages::OnBeginBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnBatchIndexationStart :: Supervisor");
@@ -89,7 +89,7 @@ impl Message<messages::OnBeginOfBatchIndexation> for Supervisor {
             self.a2_ref
                 .as_ref()
                 .unwrap()
-                .tell(messages::OnBeginOfBatchItemIndexation {
+                .tell(messages::OnBeginBatchItem {
                     id_of_iris: iris_id,
                 })
                 .await
@@ -113,9 +113,7 @@ impl Message<messages::OnFetchOfIrisShares> for Supervisor {
         self.a3_ref
             .as_ref()
             .unwrap()
-            .tell(messages::OnIndexationOfFetchedIrisDataBegin {
-                fetched_iris_data: msg,
-            })
+            .tell(messages::OnBeginOfIrisSharesIndexation { shares: msg })
             .await
             .unwrap()
     }

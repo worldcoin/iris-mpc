@@ -1,5 +1,5 @@
 use super::{
-    super::supervisor::Supervisor,
+    super::Supervisor,
     super::{errors::IndexationError, messages, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
@@ -45,19 +45,16 @@ impl GraphIndexer {
 // ------------------------------------------------------------------------
 
 // Message handler :: OnIndexationOfFetchedIrisDataBegin.
-impl Message<messages::OnIndexationOfFetchedIrisDataBegin> for GraphIndexer {
+impl Message<messages::OnBeginOfIrisSharesIndexation> for GraphIndexer {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnIndexationOfFetchedIrisDataBegin,
+        msg: messages::OnBeginOfIrisSharesIndexation,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        self.do_index_graph(
-            msg.fetched_iris_data.serial_id,
-            msg.fetched_iris_data.shares,
-        )
-        .await;
+        self.do_index_graph(msg.shares.serial_id, msg.shares.shares)
+            .await;
 
         Ok(())
     }

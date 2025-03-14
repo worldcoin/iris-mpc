@@ -1,5 +1,5 @@
 use super::{
-    super::supervisor::Supervisor,
+    super::Supervisor,
     super::{errors::IndexationError, messages, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
@@ -68,12 +68,12 @@ impl IrisSharesFetcher {
 // ------------------------------------------------------------------------
 
 // Message handler :: OnIndexationOfBatchItemBegin.
-impl Message<messages::OnBeginOfBatchItemIndexation> for IrisSharesFetcher {
+impl Message<messages::OnBeginBatchItem> for IrisSharesFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnBeginOfBatchItemIndexation,
+        msg: messages::OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         // Fetch data.

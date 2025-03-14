@@ -1,19 +1,19 @@
 use super::types::IrisGaloisShares;
 
-// Event: raised when genesis indexation starts.
+// Event: raised when genesis indexation process starts.
 #[derive(Clone, Debug)]
 pub struct OnBegin;
 
 // Event: raised when a new Iris batch for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnBeginOfBatchIndexation {
+pub struct OnBeginBatch {
     // Range of Iris identifiers to be indexed.
     pub(crate) batch: Vec<i64>,
 }
 
 // Event: raised when a new Iris for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnBeginOfBatchItemIndexation {
+pub struct OnBeginBatchItem {
     // Range of Iris identifiers to be indexed.
     pub(crate) id_of_iris: i64,
 }
@@ -24,7 +24,7 @@ pub struct OnEnd;
 
 // Event: raised when an Iris batch has been processed.
 #[derive(Clone, Debug)]
-pub struct OnEndOfBatchIndexation;
+pub struct OnEndOfBatch;
 
 // Event: raised when genesis indexation error occurs.
 #[derive(Clone, Debug)]
@@ -34,13 +34,12 @@ pub struct OnError;
 // TODO: use byte slice rather than vecs
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct OnIndexationOfFetchedIrisDataBegin {
+pub struct OnBeginOfIrisSharesIndexation {
     // Fetched Iris data.
-    pub(crate) fetched_iris_data: OnFetchOfIrisShares,
+    pub(crate) shares: OnFetchOfIrisShares,
 }
 
 // Event: raised when secret shared iris data has been fetched.
-// TODO: use byte slice rather than vecs
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct OnFetchOfIrisShares {
