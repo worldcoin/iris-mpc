@@ -93,27 +93,27 @@ pub async fn receive_batch(
 
                 match request_type {
                     IDENTITY_DELETION_MESSAGE_TYPE => {
-                        if !config.hawk_server_deletions_enabled {
-                            tracing::warn!(
-                                "Identity deletion is disabled, skipping deletion request"
-                            );
-                            continue;
+                        if config.hawk_server_deletions_enabled {
+                            // If it's a deletion request, we just store the serial_id and continue.
+                            // Deletion will take place when batch process starts.
+                            let identity_deletion_request: IdentityDeletionRequest =
+                                serde_json::from_str(&message.message).map_err(|e| {
+                                    ReceiveRequestError::json_parse_error(
+                                        "Identity deletion request",
+                                        e,
+                                    )
+                                })?;
+                            metrics::counter!("request.received", "type" => "identity_deletion")
+                                .increment(1);
+                            batch_query
+                                .deletion_requests_indices
+                                .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
+                            batch_query.deletion_requests_metadata.push(batch_metadata);
+                        } else {
+                            tracing::warn!("Identity deletions are disabled");
                         }
-                        // If it's a deletion request, we just store the serial_id and continue.
-                        // Deletion will take place when batch process starts.
-                        let identity_deletion_request: IdentityDeletionRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error(
-                                    "Identity deletion request",
-                                    e,
-                                )
-                            })?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
+                        // We still delete if the deletion is disabled, so that the queue doesn't
+                        // build up
                         client
                             .delete_message()
                             .queue_url(queue_url)
