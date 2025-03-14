@@ -8,7 +8,7 @@ use kameo::{
 };
 use tracing;
 use {
-    super::components::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisDataFetcher},
+    super::components::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
     super::messages,
 };
 
@@ -19,7 +19,7 @@ use {
 // Actor: Genesis indexation supervisor.
 pub struct Supervisor {
     a1_ref: Option<ActorRef<IrisBatchGenerator>>,
-    a2_ref: Option<ActorRef<IrisDataFetcher>>,
+    a2_ref: Option<ActorRef<IrisSharesFetcher>>,
     a3_ref: Option<ActorRef<GraphIndexer>>,
     a4_ref: Option<ActorRef<GraphDataWriter>>,
     config: Config,
@@ -44,42 +44,42 @@ impl Supervisor {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<messages::OnIndexationEnd> for Supervisor {
+impl Message<messages::OnEnd> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnIndexationEnd,
+        _: messages::OnEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnIndexationEnd :: Supervisor");
     }
 }
 
-impl Message<messages::OnIndexationBegin> for Supervisor {
+impl Message<messages::OnBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        _: messages::OnIndexationBegin,
+        _: messages::OnBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnIndexationStart :: Supervisor");
     }
 }
 
-impl Message<messages::OnIndexationOfBatchBegin> for Supervisor {
+impl Message<messages::OnBeginOfBatchIndexation> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnIndexationOfBatchBegin,
+        msg: messages::OnBeginOfBatchIndexation,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnBatchIndexationStart :: Supervisor");
@@ -89,7 +89,7 @@ impl Message<messages::OnIndexationOfBatchBegin> for Supervisor {
             self.a2_ref
                 .as_ref()
                 .unwrap()
-                .tell(messages::OnIndexationOfBatchItemBegin {
+                .tell(messages::OnBeginOfBatchItemIndexation {
                     id_of_iris: iris_id,
                 })
                 .await
@@ -98,14 +98,14 @@ impl Message<messages::OnIndexationOfBatchBegin> for Supervisor {
     }
 }
 
-impl Message<messages::OnFetchOfIrisData> for Supervisor {
+impl Message<messages::OnFetchOfIrisShares> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: messages::OnFetchOfIrisData,
+        msg: messages::OnFetchOfIrisShares,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
         tracing::info!("Event :: OnFetchOfIrisData :: Supervisor");
@@ -133,7 +133,7 @@ impl Actor for Supervisor {
 
         // Instantiate associated actors.
         let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
-        let a2 = IrisDataFetcher::new(self.config.clone(), ref_to_self.clone());
+        let a2 = IrisSharesFetcher::new(self.config.clone(), ref_to_self.clone());
         let a3 = GraphIndexer::new(self.config.clone(), ref_to_self.clone());
         let a4 = GraphDataWriter {};
 
@@ -147,7 +147,7 @@ impl Actor for Supervisor {
         self.a1_ref
             .as_ref()
             .unwrap()
-            .tell(messages::OnIndexationBegin)
+            .tell(messages::OnBegin)
             .await?;
 
         Ok(())

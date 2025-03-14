@@ -6,4 +6,4 @@ mod iris_data_fetcher;
 pub use graph_data_writer::GraphDataWriter;
 pub use graph_indexer::GraphIndexer;
 pub use iris_batch_generator::IrisBatchGenerator;
-pub use iris_data_fetcher::IrisDataFetcher;
+pub use iris_data_fetcher::IrisSharesFetcher;

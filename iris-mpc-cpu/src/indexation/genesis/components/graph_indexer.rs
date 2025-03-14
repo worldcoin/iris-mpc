@@ -1,6 +1,6 @@
 use super::{
     super::supervisor::Supervisor,
-    super::{errors::IndexationError, messages},
+    super::{errors::IndexationError, messages, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
@@ -15,6 +15,7 @@ use kameo::{
 
 // Actor: Issues query/insert operations over in-memory HNSW graph.
 #[derive(Actor)]
+#[allow(dead_code)]
 pub struct GraphIndexer {
     // System configuration information.
     config: Config,
@@ -33,30 +34,8 @@ impl GraphIndexer {
     }
 }
 
-// // Iris ID, see pgres primary key.
-// pub(crate) id_of_iris: i64,
-
-// // Iris code share: left.
-// pub(crate) left_code: Vec<u16>,
-
-// // Iris mask share: left.
-// pub(crate) left_mask: Vec<u16>,
-
-// // Iris code share: right.
-// pub(crate) right_code: Vec<u16>,
-
-// // Iris mask share: right.
-// pub(crate) right_mask: Vec<u16>,
-
 impl GraphIndexer {
-    async fn index_graph_from_fetched_iris_data(
-        &self,
-        serial_id: i64,
-        _: Vec<u16>,
-        _: Vec<u16>,
-        _: Vec<u16>,
-        _: Vec<u16>,
-    ) {
+    async fn do_index_graph(&self, serial_id: i64, _: IrisGaloisShares) {
         tracing::info!("TODO: Index graph :: Iris Serial ID {}", serial_id,);
     }
 }
@@ -74,12 +53,9 @@ impl Message<messages::OnIndexationOfFetchedIrisDataBegin> for GraphIndexer {
         msg: messages::OnIndexationOfFetchedIrisDataBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        self.index_graph_from_fetched_iris_data(
-            msg.fetched_iris_data.id_of_iris,
-            msg.fetched_iris_data.left_code,
-            msg.fetched_iris_data.left_mask,
-            msg.fetched_iris_data.right_code,
-            msg.fetched_iris_data.right_mask,
+        self.do_index_graph(
+            msg.fetched_iris_data.serial_id,
+            msg.fetched_iris_data.shares,
         )
         .await;
 

@@ -1,59 +1,52 @@
+use super::types::IrisGaloisShares;
+
 // Event: raised when genesis indexation starts.
 #[derive(Clone, Debug)]
-pub struct OnIndexationBegin;
-
-// Event: raised when genesis indexation is complete.
-#[derive(Clone, Debug)]
-pub struct OnIndexationEnd;
-
-// Event: raised when genesis indexation error occurs.
-#[derive(Clone, Debug)]
-pub struct OnIndexationError;
+pub struct OnBegin;
 
 // Event: raised when a new Iris batch for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnIndexationOfBatchBegin {
+pub struct OnBeginOfBatchIndexation {
     // Range of Iris identifiers to be indexed.
     pub(crate) batch: Vec<i64>,
 }
 
-// Event: raised when an Iris batch has been processed.
-#[derive(Clone, Debug)]
-pub struct OnIndexationOfBatchEnd;
-
 // Event: raised when a new Iris for indexation has been produced.
 #[derive(Clone, Debug)]
-pub struct OnIndexationOfBatchItemBegin {
+pub struct OnBeginOfBatchItemIndexation {
     // Range of Iris identifiers to be indexed.
     pub(crate) id_of_iris: i64,
 }
 
+// Event: raised when genesis indexation is complete.
+#[derive(Clone, Debug)]
+pub struct OnEnd;
+
+// Event: raised when an Iris batch has been processed.
+#[derive(Clone, Debug)]
+pub struct OnEndOfBatchIndexation;
+
+// Event: raised when genesis indexation error occurs.
+#[derive(Clone, Debug)]
+pub struct OnError;
+
 // Event: raised when raw Iris data is ready for processing.
 // TODO: use byte slice rather than vecs
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct OnIndexationOfFetchedIrisDataBegin {
     // Fetched Iris data.
-    pub(crate) fetched_iris_data: OnFetchOfIrisData,
+    pub(crate) fetched_iris_data: OnFetchOfIrisShares,
 }
 
-// Event: raised when raw Iris data is ready for processing.
+// Event: raised when secret shared iris data has been fetched.
 // TODO: use byte slice rather than vecs
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct OnFetchOfIrisData {
-    // Iris ID, see pgres primary key.
-    pub(crate) id_of_iris: i64,
+pub struct OnFetchOfIrisShares {
+    // Iris serial ID.
+    pub(crate) serial_id: i64,
 
-    // Iris code share: left.
-    pub(crate) left_code: Vec<u16>,
-
-    // Iris mask share: left.
-    pub(crate) left_mask: Vec<u16>,
-
-    // Iris code share: right.
-    pub(crate) right_code: Vec<u16>,
-
-    // Iris mask share: right.
-    pub(crate) right_mask: Vec<u16>,
+    // Party's iris secret shares.
+    pub(crate) shares: IrisGaloisShares,
 }

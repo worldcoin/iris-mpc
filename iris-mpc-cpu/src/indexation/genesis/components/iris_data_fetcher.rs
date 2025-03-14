@@ -1,7 +1,6 @@
-#[allow(dead_code)]
 use super::{
     super::supervisor::Supervisor,
-    super::{errors::IndexationError, messages},
+    super::{errors::IndexationError, messages, types::IrisGaloisShares},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
@@ -15,9 +14,10 @@ use kameo::{
 // Declaration + state + ctor + methods.
 // ------------------------------------------------------------------------
 
-// Actor: Reads Iris data from remote store.
+// Fetches Iris shares from remote store.
 #[derive(Actor)]
-pub struct IrisDataFetcher {
+#[allow(dead_code)]
+pub struct IrisSharesFetcher {
     // System configuration information.
     config: Config,
 
@@ -29,7 +29,7 @@ pub struct IrisDataFetcher {
 }
 
 // Constructors.
-impl IrisDataFetcher {
+impl IrisSharesFetcher {
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
             config,
@@ -39,7 +39,8 @@ impl IrisDataFetcher {
     }
 }
 
-impl IrisDataFetcher {
+// Methods.
+impl IrisSharesFetcher {
     // Queries remote store for range of iris identifiers to be processed.
     async fn fetch_iris_data(&mut self, id_of_iris: i64) -> Result<IrisData, IndexationError> {
         // JIT set pointer to remote store.
@@ -66,34 +67,33 @@ impl IrisDataFetcher {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-// Message handler :: OnFetchOfIrisData.
-impl From<&IrisData> for messages::OnFetchOfIrisData {
-    fn from(value: &IrisData) -> Self {
-        Self {
-            id_of_iris: value.id(),
-            left_code: value.left_code().to_vec(),
-            left_mask: value.left_mask().to_vec(),
-            right_code: value.right_code().to_vec(),
-            right_mask: value.right_mask().to_vec(),
-        }
-    }
-}
-
 // Message handler :: OnIndexationOfBatchItemBegin.
-impl Message<messages::OnIndexationOfBatchItemBegin> for IrisDataFetcher {
+impl Message<messages::OnBeginOfBatchItemIndexation> for IrisSharesFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: messages::OnIndexationOfBatchItemBegin,
+        msg: messages::OnBeginOfBatchItemIndexation,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        // Pull data from store.
+        // Fetch data.
         let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
+
+        // Instantiate shares.
+        let shares = IrisGaloisShares::new(
+            self.config.party_id,
+            iris_data.left_code(),
+            iris_data.left_mask(),
+            iris_data.right_code(),
+            iris_data.right_mask(),
+        );
 
         // Signal to supervisor.
         self.supervisor_ref
-            .tell(messages::OnFetchOfIrisData::from(&iris_data))
+            .tell(messages::OnFetchOfIrisShares {
+                serial_id: iris_data.id(),
+                shares,
+            })
             .await
             .unwrap();
 
