@@ -48,7 +48,7 @@ env:
     value: '["0.0.0.0","node.1.stage.hnsw.worldcoin.dev","node.2.stage.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-dev-sns-requests"
+    value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
