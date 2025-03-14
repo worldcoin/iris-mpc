@@ -1,1 +1,1 @@
-ALTER TABLE modifications ADD COLUMN sns_message_body TEXT;
+ALTER TABLE modifications ADD COLUMN result_message_body TEXT;

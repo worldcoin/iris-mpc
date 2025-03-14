@@ -114,7 +114,7 @@ pub struct StoredModification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
-    pub sns_message_body: Option<String>,
+    pub result_message_body: Option<String>,
 }
 
 impl From<StoredModification> for Modification {
@@ -126,7 +126,7 @@ impl From<StoredModification> for Modification {
             s3_url: stored.s3_url,
             status: stored.status,
             persisted: stored.persisted,
-            sns_message_body: stored.sns_message_body,
+            result_message_body: stored.result_message_body,
         }
     }
 }
@@ -496,7 +496,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 s3_url,
                 status,
                 persisted,
-                sns_message_body
+                result_message_body
             "#,
         )
         .bind(serial_id)
@@ -520,7 +520,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 s3_url,
                 status,
                 persisted,
-                sns_message_body
+                result_message_body
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -534,7 +534,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(modifications)
     }
 
-    /// Update the status, persisted flag, and sns_message_body of the
+    /// Update the status, persisted flag, and result_message_body of the
     /// modifications based on their id.
     pub async fn update_modifications(
         &self,
@@ -550,7 +550,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
         let sns_message_bodies: Vec<Option<String>> = modifications
             .iter()
-            .map(|m| m.sns_message_body.clone())
+            .map(|m| m.result_message_body.clone())
             .collect();
 
         sqlx::query(
@@ -558,13 +558,13 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
             UPDATE modifications
             SET status = data.status,
                 persisted = data.persisted,
-                sns_message_body = data.sns_message_body
+                result_message_body = data.result_message_body
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
                     unnest($3::bool[])    as persisted,
-                    unnest($4::text[])    as sns_message_body
+                    unnest($4::text[])    as result_message_body
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -1184,7 +1184,7 @@ pub mod tests {
         assert_eq!(actual.s3_url, expected_s3_url);
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
-        assert_eq!(actual.sns_message_body, expected_sns_body);
+        assert_eq!(actual.result_message_body, expected_sns_body);
     }
 
     #[tokio::test]
