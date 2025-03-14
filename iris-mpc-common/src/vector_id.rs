@@ -2,10 +2,10 @@ use std::{fmt::Display, num::ParseIntError, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
-/// Unique identifier for an iris inserted into the store.
+/// Unique identifier for an immutable pair of iris codes.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
-    id: u32,
+    pub id: u32,
 }
 
 impl Display for VectorId {

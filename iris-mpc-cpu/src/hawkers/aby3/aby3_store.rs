@@ -69,7 +69,7 @@ pub struct SharedIrises {
 impl SharedIrises {
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
         self.points.insert(vector_id, iris);
-        self.next_id = self.next_id.max(vector_id.to_serial_id() + 1);
+        self.next_id = self.next_id.max(vector_id.id + 1);
     }
 
     fn next_id(&mut self) -> VectorId {

@@ -6,13 +6,13 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::config::ModeOfDeployment;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
 };
+use iris_mpc_common::{config::ModeOfDeployment, vector_id::VectorId};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -67,9 +67,14 @@ pub struct DbStoredIris {
 }
 
 impl DbStoredIris {
-    /// The index which is contiguous and starts from 0.
+    /// The index which is contiguous and starts from 1.
     pub fn index(&self) -> usize {
         self.id as usize
+    }
+
+    pub fn vector_id(&self) -> VectorId {
+        // TODO: Distinguish vector_id from serial_id.
+        VectorId::from_serial_id(self.id as u32)
     }
 
     pub fn left_code(&self) -> &[u16] {
