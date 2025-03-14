@@ -55,6 +55,7 @@ pub trait InMemoryStore {
     fn load_single_record_from_s3(
         &mut self,
         index: usize,
+        vector_id: VectorId,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
@@ -95,7 +96,7 @@ pub trait InMemoryStore {
             .collect::<Vec<_>>();
         self.load_single_record_from_db(
             index,
-            VectorId::from(index),
+            vector_id,
             &left_code,
             &left_mask,
             &right_code,

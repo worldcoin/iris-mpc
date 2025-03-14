@@ -2417,6 +2417,7 @@ impl InMemoryStore for ServerActor {
     fn load_single_record_from_s3(
         &mut self,
         index: usize,
+        _vector_id: VectorId,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
