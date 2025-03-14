@@ -1,7 +1,11 @@
 use super::{
     super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
     super::Supervisor,
-    super::{errors::IndexationError, signals, utils::logger},
+    super::{
+        errors::IndexationError,
+        signals::{OnBegin, OnBeginBatch, OnEnd, OnEndOfBatch},
+        utils::logger,
+    },
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
@@ -12,15 +16,15 @@ use kameo::{
 };
 
 // ------------------------------------------------------------------------
-// Declaration + state + ctor + methods.
+// Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
 // Name for logging purposes.
-const NAME: &str = "IrisBatchGenerator";
+const NAME: &str = "BatchGenerator";
 
 // Actor: Generates batches of Iris identifiers for processing.
 #[derive(Actor)]
-pub struct IrisBatchGenerator {
+pub struct BatchGenerator {
     // System configuration information.
     config: Config,
 
@@ -47,7 +51,7 @@ pub struct IrisBatchGenerator {
 }
 
 // Constructors.
-impl IrisBatchGenerator {
+impl BatchGenerator {
     // TODO: move to config.
     const DEFAULT_BATCH_SIZE: u32 = 42;
 
@@ -68,7 +72,7 @@ impl IrisBatchGenerator {
 }
 
 // Methods.
-impl IrisBatchGenerator {
+impl BatchGenerator {
     // Processes an indexation step.
     async fn do_indexation_step(&mut self) {
         // Update internal state.
@@ -76,12 +80,12 @@ impl IrisBatchGenerator {
 
         // Signal end of indexation if at tip.
         if self.batch_for_indexation.is_none() {
-            let msg = signals::OnEnd;
+            let msg = OnEnd;
             self.supervisor_ref.tell(msg).await.unwrap();
         // Signal new batch is awaiting indexation.
         } else {
-            let msg = signals::OnBeginBatch {
-                batch: self.batch_for_indexation.as_ref().unwrap().to_owned(),
+            let msg = OnBeginBatch {
+                serial_ids: self.batch_for_indexation.as_ref().unwrap().to_owned(),
             };
             self.supervisor_ref.tell(msg).await.unwrap();
         }
@@ -201,34 +205,26 @@ impl IrisBatchGenerator {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<signals::OnBegin> for IrisBatchGenerator {
+impl Message<OnBegin> for BatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(
-        &mut self,
-        _: signals::OnBegin,
-        _: Context<'_, Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_signal(NAME, "OnBegin", None);
+    async fn handle(&mut self, _: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message(NAME, "OnBegin", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;
     }
 }
 
-impl Message<signals::OnEndOfBatch> for IrisBatchGenerator {
+impl Message<OnEndOfBatch> for BatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(
-        &mut self,
-        _: signals::OnEndOfBatch,
-        _: Context<'_, Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_signal(NAME, "OnEndOfBatch", None);
+    async fn handle(&mut self, _: OnEndOfBatch, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message(NAME, "OnEndOfBatch", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;

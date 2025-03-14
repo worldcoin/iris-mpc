@@ -8,25 +8,14 @@ pub struct OnBegin;
 #[derive(Clone, Debug)]
 pub struct OnBeginBatch {
     // Set of Iris serial identifiers to be indexed.
-    pub(crate) batch: Vec<i64>,
+    pub(crate) serial_ids: Vec<i64>,
 }
 
 // Signals that a new Iris identifier is ready for processing.
 #[derive(Clone, Debug)]
 pub struct OnBeginBatchItem {
-    // Range of Iris identifiers to be indexed.
-    pub(crate) id_of_iris: i64,
-}
-
-// Signals that Iris shares are ready for indexation.
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct OnBeginIrisSharesIndexation {
-    // Iris serial ID.
+    // Serial ID of Iris being indexed.
     pub(crate) serial_id: i64,
-
-    // Party's iris secret shares.
-    pub(crate) shares: IrisGaloisShares,
 }
 
 // Signals that indexation is complete.
@@ -44,7 +33,7 @@ pub struct OnError;
 // Signals that Iris shares have been fetched from a store.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-pub struct OnFetchOfIrisShares {
+pub struct OnFetchIrisShares {
     // Iris serial ID.
     pub(crate) serial_id: i64,
 

@@ -7,22 +7,23 @@ use kameo::{
     Actor,
 };
 use {
-    super::super::signals,
+    super::super::signals::{OnBegin, OnBeginBatch, OnBeginBatchItem, OnEnd, OnFetchIrisShares},
     super::super::utils::logger,
-    super::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
+    super::{BatchGenerator, GraphDataWriter, GraphIndexer, SharesFetcher},
 };
 
 // ------------------------------------------------------------------------
-// Declaration + state + ctor + methods.
+// Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
 // Name for logging purposes.
 const NAME: &str = "Supervisor";
 
 // Actor: Genesis indexation supervisor.
+#[derive(Clone)]
 pub struct Supervisor {
-    a1_ref: Option<ActorRef<IrisBatchGenerator>>,
-    a2_ref: Option<ActorRef<IrisSharesFetcher>>,
+    a1_ref: Option<ActorRef<BatchGenerator>>,
+    a2_ref: Option<ActorRef<SharesFetcher>>,
     a3_ref: Option<ActorRef<GraphIndexer>>,
     a4_ref: Option<ActorRef<GraphDataWriter>>,
     config: Config,
@@ -47,78 +48,71 @@ impl Supervisor {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<signals::OnEnd> for Supervisor {
+impl Message<OnEnd> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(
-        &mut self,
-        _: signals::OnEnd,
-        _: Context<'_, Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_signal(NAME, "OnEnd", None);
+    async fn handle(&mut self, _: OnEnd, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message(NAME, "OnEnd", None);
     }
 }
 
-impl Message<signals::OnBegin> for Supervisor {
+impl Message<OnBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(
-        &mut self,
-        _: signals::OnBegin,
-        _: Context<'_, Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_signal(NAME, "OnBegin", None);
+    async fn handle(&mut self, _: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message(NAME, "OnBegin", None);
     }
 }
 
-impl Message<signals::OnBeginBatch> for Supervisor {
+impl Message<OnBeginBatch> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: signals::OnBeginBatch,
+        msg: OnBeginBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_signal(NAME, "OnBeginBatch", None);
+        logger::log_message(NAME, "OnBeginBatch", None);
 
-        // TODO: spawn pool to process concurrently.
-        for iris_id in msg.batch {
-            // Signal that a batch item is ready for processing.
-            let msg = signals::OnBeginBatchItem {
-                id_of_iris: iris_id,
-            };
+        // Signal to other interested actors.
+        self.a3_ref
+            .as_ref()
+            .unwrap()
+            .tell(msg.clone())
+            .await
+            .unwrap();
+
+        // For each item in batch, signal that it is ready to be processing.
+        for serial_id in msg.serial_ids {
+            let msg = OnBeginBatchItem { serial_id };
             self.a2_ref.as_ref().unwrap().tell(msg).await.unwrap();
         }
     }
 }
 
-impl Message<signals::OnFetchOfIrisShares> for Supervisor {
+impl Message<OnFetchIrisShares> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
     async fn handle(
         &mut self,
-        msg: signals::OnFetchOfIrisShares,
+        msg: OnFetchIrisShares,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_signal(
+        logger::log_message(
             NAME,
             "OnFetchOfIrisShares",
             Some(format!("iris serial-id = {}", msg.serial_id).as_str()),
         );
 
         // Signal that Iris shares are ready for indexation.
-        let msg = signals::OnBeginIrisSharesIndexation {
-            serial_id: msg.serial_id,
-            shares: msg.shares,
-        };
         self.a3_ref.as_ref().unwrap().tell(msg).await.unwrap()
     }
 }
@@ -140,10 +134,10 @@ impl Actor for Supervisor {
         logger::log_lifecycle(NAME, "on_start", None);
 
         // Instantiate associated actors.
-        let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
-        let a2 = IrisSharesFetcher::new(self.config.clone(), ref_to_self.clone());
+        let a1 = BatchGenerator::new(self.config.clone(), ref_to_self.clone());
+        let a2 = SharesFetcher::new(self.config.clone(), ref_to_self.clone());
         let a3 = GraphIndexer::new(self.config.clone(), ref_to_self.clone());
-        let a4 = GraphDataWriter {};
+        let a4 = GraphDataWriter::new(self.config.clone(), ref_to_self.clone());
 
         // Spawn associated actors.
         self.a1_ref = Some(kameo::spawn(a1));
@@ -152,7 +146,7 @@ impl Actor for Supervisor {
         self.a4_ref = Some(kameo::spawn(a4));
 
         // Signal start.
-        self.a1_ref.as_ref().unwrap().tell(signals::OnBegin).await?;
+        self.a1_ref.as_ref().unwrap().tell(OnBegin).await?;
 
         Ok(())
     }

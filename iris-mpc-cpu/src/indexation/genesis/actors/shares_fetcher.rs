@@ -1,7 +1,11 @@
 use super::{
     super::utils::logger,
     super::Supervisor,
-    super::{errors::IndexationError, signals, types::IrisGaloisShares},
+    super::{
+        errors::IndexationError,
+        signals::{OnBeginBatchItem, OnFetchIrisShares},
+        types::IrisGaloisShares,
+    },
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
@@ -12,16 +16,16 @@ use kameo::{
 };
 
 // ------------------------------------------------------------------------
-// Declaration + state + ctor + methods.
+// Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
 // Name for logging purposes.
-const NAME: &str = "IrisDataFetcher";
+const NAME: &str = "SharesFetcher";
 
 // Fetches Iris shares from remote store.
-#[derive(Actor)]
+#[derive(Actor, Clone)]
 #[allow(dead_code)]
-pub struct IrisSharesFetcher {
+pub struct SharesFetcher {
     // System configuration information.
     config: Config,
 
@@ -33,7 +37,7 @@ pub struct IrisSharesFetcher {
 }
 
 // Constructors.
-impl IrisSharesFetcher {
+impl SharesFetcher {
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
             config,
@@ -44,7 +48,7 @@ impl IrisSharesFetcher {
 }
 
 // Methods.
-impl IrisSharesFetcher {
+impl SharesFetcher {
     // Queries remote store for range of iris identifiers to be processed.
     async fn fetch_iris_data(&mut self, id_of_iris: i64) -> Result<IrisData, IndexationError> {
         // JIT set pointer to remote store.
@@ -71,18 +75,18 @@ impl IrisSharesFetcher {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<signals::OnBeginBatchItem> for IrisSharesFetcher {
+impl Message<OnBeginBatchItem> for SharesFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: signals::OnBeginBatchItem,
+        msg: OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_signal(NAME, "OnBeginBatchItem", None);
+        logger::log_message(NAME, "OnBeginBatchItem", None);
 
         // Fetch data.
-        let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();
+        let iris_data = self.fetch_iris_data(msg.serial_id).await.unwrap();
 
         // Instantiate shares.
         let shares = IrisGaloisShares::new(
@@ -94,13 +98,11 @@ impl Message<signals::OnBeginBatchItem> for IrisSharesFetcher {
         );
 
         // Signal to supervisor.
-        self.supervisor_ref
-            .tell(signals::OnFetchOfIrisShares {
-                serial_id: iris_data.id(),
-                shares,
-            })
-            .await
-            .unwrap();
+        let msg = OnFetchIrisShares {
+            serial_id: iris_data.id(),
+            shares,
+        };
+        self.supervisor_ref.tell(msg).await.unwrap();
 
         Ok(())
     }

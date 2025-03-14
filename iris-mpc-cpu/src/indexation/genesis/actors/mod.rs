@@ -1,11 +1,11 @@
+mod batch_generator;
 mod graph_data_writer;
 mod graph_indexer;
-mod iris_batch_generator;
-mod iris_data_fetcher;
+mod shares_fetcher;
 mod supervisor;
 
+pub use batch_generator::BatchGenerator;
 pub use graph_data_writer::GraphDataWriter;
 pub use graph_indexer::GraphIndexer;
-pub use iris_batch_generator::IrisBatchGenerator;
-pub use iris_data_fetcher::IrisSharesFetcher;
+pub use shares_fetcher::SharesFetcher;
 pub use supervisor::Supervisor;
