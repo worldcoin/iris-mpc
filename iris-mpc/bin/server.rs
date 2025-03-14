@@ -1219,7 +1219,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
                 continue;
             }
-            tracing::info!("Applying modification to local node: {:?}", modification);
+            tracing::warn!("Applying modification to local node: {:?}", modification);
             metrics::counter!("db.modifications.rollforward").increment(1);
             let (lc, lm, rc, rm) = match modification.request_type.as_str() {
                 IDENTITY_DELETION_MESSAGE_TYPE => (
@@ -1250,9 +1250,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
         }
         tx.commit().await?;
-
-        // reset modifications table's postgres sequence in case we deleted some rows
-        store.reset_modifications_sequence().await?;
     }
 
     if download_shutdown_handler.is_shutting_down() {

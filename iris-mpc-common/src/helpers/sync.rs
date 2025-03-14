@@ -95,7 +95,7 @@ impl SyncResult {
             .expect("can get max u128 value")
     }
 
-    /// Compare local `modifications` (my_state) to all other parties’
+    /// Compare local `modifications` (my_state) to all other parties'
     /// modifications (all_states), grouping by `id`. Returns: (to_update,
     /// to_delete)
     /// - `to_update`: modifications the local node should add (e.g., mark
@@ -131,14 +131,13 @@ impl SyncResult {
                 .all(|m| m.status == ModificationStatus::InProgress.to_string());
             let any_persisted = group_mods.iter().any(|m| m.persisted);
 
-            // If they're all in-progress => ignore the modification by deleting it
             if all_in_progress {
+                // If they're all in-progress => ignore the modification by deleting it
                 if let Some(local_m) = local_copy {
                     to_delete.push(local_m.clone());
                 }
-            }
-            // If any node completed => unify to COMPLETED
-            else if any_completed {
+            } else if any_completed {
+                // If any node completed => unify to COMPLETED
                 match local_copy {
                     None => {
                         // If an item is completed for a party, it should at least exist in the
@@ -150,10 +149,10 @@ impl SyncResult {
                         );
                     }
                     Some(local_m) => {
-                        // If local is not "completed" or doesn't match the final persisted
                         if local_m.status != ModificationStatus::Completed.to_string()
                             || local_m.persisted != any_persisted
                         {
+                            // If local is not "completed" or doesn't match the final persisted
                             // We'll roll forward local_m
                             let mut roll_forward = local_m.clone();
                             roll_forward.status = ModificationStatus::Completed.to_string();
