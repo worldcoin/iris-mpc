@@ -47,7 +47,6 @@ use iris_mpc_store::{
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -715,7 +714,7 @@ async fn send_last_modifications_to_sns(
     let mut reauth_messages = Vec::new();
     for modification in &last_modifications {
         let body = modification
-            .sns_message_body
+            .result_message_body
             .as_ref()
             .expect("Missing SNS message body")
             .clone();
@@ -1255,9 +1254,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         let to_update: Vec<&Modification> = to_update
             .iter_mut()
             .map(|modification| {
-                modification
-                    .update_sns_message_node_id(party_id)
-                    .expect("Failed to update node_id");
+                if config.enable_modifications_replay {
+                    modification
+                        .update_result_message_node_id(party_id)
+                        .expect("Failed to update node_id");
+                }
                 &*modification
             })
             .collect();
@@ -1309,16 +1310,18 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         tx.commit().await?;
     }
 
-    // replay last `max_modification_lookback` modifications to SNS
-    send_last_modifications_to_sns(
-        &store,
-        &aws_clients.sns_client,
-        &config,
-        &reauth_result_attributes,
-        &identity_deletion_result_attributes,
-        max_modification_lookback,
-    )
-    .await?;
+    if config.enable_modifications_replay {
+        // replay last `max_modification_lookback` modifications to SNS
+        send_last_modifications_to_sns(
+            &store,
+            &aws_clients.sns_client,
+            &config,
+            &reauth_result_attributes,
+            &identity_deletion_result_attributes,
+            max_modification_lookback,
+        )
+        .await?;
+    }
 
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");

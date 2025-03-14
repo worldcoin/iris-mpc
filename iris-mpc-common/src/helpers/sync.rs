@@ -50,19 +50,19 @@ pub struct Modification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
-    pub sns_message_body: Option<String>,
+    pub result_message_body: Option<String>,
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool, sns_message_body: &str) {
+    pub fn mark_completed(&mut self, persisted: bool, result_message_body: &str) {
         self.status = ModificationStatus::Completed.to_string();
-        self.sns_message_body = Some(sns_message_body.to_string());
+        self.result_message_body = Some(result_message_body.to_string());
         self.persisted = persisted;
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
-    pub fn update_sns_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
-        if let Some(message) = &self.sns_message_body {
+    pub fn update_result_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+        if let Some(message) = &self.result_message_body {
             // Parse the JSON message
             match serde_json::from_str::<serde_json::Value>(message) {
                 Ok(mut json_value) => {
@@ -74,7 +74,7 @@ impl Modification {
                                 "node_id".to_string(),
                                 serde_json::Value::Number(serde_json::Number::from(party_id)),
                             );
-                            self.sns_message_body = Some(serde_json::to_string(&json_value)?);
+                            self.result_message_body = Some(serde_json::to_string(&json_value)?);
                         } else {
                             return Err(eyre::eyre!("Message body does not contain node_id"));
                         }
@@ -85,7 +85,7 @@ impl Modification {
                 }
             }
         } else {
-            return Err(eyre::eyre!("SNS message body is None"));
+            return Err(eyre::eyre!("Result message body is None"));
         }
         Ok(())
     }
@@ -295,7 +295,7 @@ mod tests {
             s3_url: s3_url.map(|s| s.to_string()),
             status: status.to_string(),
             persisted,
-            sns_message_body: None,
+            result_message_body: None,
         }
     }
 
@@ -638,18 +638,18 @@ mod tests {
             s3_url: "http://example.com/123".to_string().into(),
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
-            sns_message_body: Some(serialized_reauth),
+            result_message_body: Some(serialized_reauth),
         };
 
         // Update the node_id in the serialized message
         let new_party_id = 2;
         modification
-            .update_sns_message_node_id(new_party_id)
+            .update_result_message_node_id(new_party_id)
             .unwrap();
 
         // Deserialize and check if node_id was updated
         let updated_reauth_result: ReAuthResult =
-            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+            serde_json::from_str(&modification.result_message_body.unwrap()).unwrap();
         assert_eq!(updated_reauth_result.node_id, new_party_id);
         assert_eq!(
             updated_reauth_result.reauth_id,
@@ -682,18 +682,18 @@ mod tests {
             s3_url: None,
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
-            sns_message_body: Some(serialized_deletion),
+            result_message_body: Some(serialized_deletion),
         };
 
         // Update the node_id in the serialized message
         let new_party_id = 0;
         modification
-            .update_sns_message_node_id(new_party_id)
+            .update_result_message_node_id(new_party_id)
             .unwrap();
 
         // Deserialize and check if node_id was updated
         let updated_deletion_result: IdentityDeletionResult =
-            serde_json::from_str(&modification.sns_message_body.unwrap()).unwrap();
+            serde_json::from_str(&modification.result_message_body.unwrap()).unwrap();
         assert_eq!(updated_deletion_result.node_id, new_party_id);
         assert_eq!(
             updated_deletion_result.serial_id,
