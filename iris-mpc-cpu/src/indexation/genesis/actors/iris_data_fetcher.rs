@@ -1,5 +1,5 @@
 use super::{
-    super::super::utils::log_signal,
+    super::utils::log_signal,
     super::Supervisor,
     super::{errors::IndexationError, signals, types::IrisGaloisShares},
 };

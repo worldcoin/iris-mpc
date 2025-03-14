@@ -1,7 +1,7 @@
 use super::{
     super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
     super::Supervisor,
-    super::{errors::IndexationError, signals},
+    super::{errors::IndexationError, signals, utils::log_signal},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;

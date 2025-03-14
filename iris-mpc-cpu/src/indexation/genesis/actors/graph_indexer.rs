@@ -1,6 +1,6 @@
 use super::{
     super::Supervisor,
-    super::{errors::IndexationError, signals, types::IrisGaloisShares},
+    super::{errors::IndexationError, signals, types::IrisGaloisShares, utils::log_signal},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
