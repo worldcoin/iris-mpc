@@ -2363,6 +2363,8 @@ dependencies = [
  "async-channel",
  "async-stream",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "backon",
  "bincode",
  "bytemuck",

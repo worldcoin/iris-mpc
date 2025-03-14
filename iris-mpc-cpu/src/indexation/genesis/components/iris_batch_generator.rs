@@ -1,6 +1,6 @@
 use super::{
     super::supervisor::Supervisor,
-    super::utils::fetch_iris_v1_deletions_from_s3,
+    super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
     super::{errors::IndexationError, messages},
 };
 use iris_mpc_common::config::Config;
@@ -91,17 +91,18 @@ impl IrisBatchGenerator {
             self.fetch_deletions_for_exclusion_v2().await?,
         ]
         .concat();
+
+        // TODO remove once mocked service calls are fully implemented.
         deletions.dedup();
         deletions.sort();
 
         Ok(deletions)
     }
 
-    // Fetches set of V1 deletions that can be excluded from indexing.
+    // Fetches set of V2 deletions that can be excluded from indexing.
     async fn fetch_deletions_for_exclusion_v1(&self) -> Result<Vec<i64>, IndexationError> {
-        let identifiers = fetch_iris_v1_deletions_from_s3(&self.config).await?;
-
-        Ok(identifiers)
+        // TODO: remove use of config.clone.
+        fetch_iris_v1_deletions_from_s3(&self.config).await
     }
 
     // Fetches set of V2 deletions that can be excluded from indexing.
