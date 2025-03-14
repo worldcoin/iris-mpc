@@ -743,7 +743,7 @@ async fn send_last_modifications_to_sns(
     if !deletion_messages.is_empty() {
         send_results_to_sns(
             deletion_messages,
-            &Vec::new(), // Not sure what these "empty" messages represent
+            &Vec::new(),
             sns_client,
             config,
             deletion_message_attributes,
@@ -1251,7 +1251,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             to_update,
             to_delete
         );
-        // Update node_id in each modification because they are coming more another more advanced node
+        // Update node_id in each modification because they are coming from another more advanced node
         let to_update: Vec<&Modification> = to_update
             .iter_mut()
             .map(|modification| {
@@ -1309,7 +1309,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         tx.commit().await?;
     }
 
-    // replay last 2 x `max_modification_lookback` modifications to SNS
+    // replay last `max_modification_lookback` modifications to SNS
     send_last_modifications_to_sns(
         &store,
         &aws_clients.sns_client,
@@ -1538,7 +1538,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
                     );
                     let result_string = serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize reauth result")
                         .expect("failed to serialize reauth result");
                     modifications
                         .get_mut(&serial_id)
