@@ -1,9 +1,9 @@
-name: Branch - Build and push docker image
+name: Branch - Hawk Build and push docker image 
 
 on:
   push:
     branches:
-      - "POP-2269/abandon-postgres-auto-increment-id-in-modifications"
+      - "POP-2269/add-pushing-branches-for-cpu"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -11,7 +11,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository }}-cpu
 
 jobs:
   docker:
@@ -41,7 +41,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

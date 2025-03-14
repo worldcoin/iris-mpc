@@ -139,13 +139,6 @@ pub async fn process_job_result(
         .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
         .map(|(i, _)| {
             let reauth_id = request_ids[i].clone();
-            let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
-            let or_rule_matched = if *or_rule_used {
-                // if or rule was used and reauth was successful, then or rule was matched
-                Some(successful_reauths[i])
-            } else {
-                None
-            };
             let result_event = ReAuthResult::new(
                 reauth_id.clone(),
                 party_id,
@@ -153,7 +146,6 @@ pub async fn process_job_result(
                 successful_reauths[i],
                 match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                 *reauth_or_rule_used.get(&reauth_id).unwrap(),
-                or_rule_matched,
             );
             serde_json::to_string(&result_event).wrap_err("failed to serialize reauth result")
         })

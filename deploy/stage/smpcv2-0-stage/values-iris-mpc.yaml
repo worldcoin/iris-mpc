@@ -90,7 +90,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1200000"
+    value: "10000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "1300000"
@@ -146,6 +146,9 @@ env:
     value: $(IMAGE_NAME)
 
   - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"
 
 initContainer:

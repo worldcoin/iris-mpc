@@ -1219,7 +1219,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
                 continue;
             }
-            tracing::info!("Applying modification to local node: {:?}", modification);
+            tracing::warn!("Applying modification to local node: {:?}", modification);
             metrics::counter!("db.modifications.rollforward").increment(1);
             let (lc, lm, rc, rm) = match modification.request_type.as_str() {
                 IDENTITY_DELETION_MESSAGE_TYPE => (
@@ -1250,9 +1250,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
         }
         tx.commit().await?;
-
-        // reset modifications table's postgres sequence in case we deleted some rows
-        store.reset_modifications_sequence().await?;
     }
 
     if download_shutdown_handler.is_shutting_down() {
@@ -1462,12 +1459,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .map(|(i, _)| {
                     let reauth_id = request_ids[i].clone();
                     let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
-                    let or_rule_matched = if *or_rule_used {
-                        // if or rule was used and reauth was successful, then or rule was matched
-                        Some(successful_reauths[i])
-                    } else {
-                        None
-                    };
                     let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     let success = successful_reauths[i];
                     modifications
@@ -1481,7 +1472,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         success,
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
-                        or_rule_matched,
                     );
                     serde_json::to_string(&result_event)
                         .wrap_err("failed to serialize reauth result")

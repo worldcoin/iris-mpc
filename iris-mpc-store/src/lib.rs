@@ -635,7 +635,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
         // Extract the IDs from the modifications.
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
-        tracing::info!(
+        tracing::warn!(
             "Deleting modifications {:?} with IDs: {:?}",
             modifications,
             ids
@@ -652,49 +652,6 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .execute(tx.deref_mut())
         .await?;
 
-        Ok(())
-    }
-
-    pub async fn reset_modifications_sequence(&self) -> Result<()> {
-        // Query the current maximum id from modifications
-        let max_id: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM modifications")
-            .fetch_one(&self.pool)
-            .await?;
-
-        match max_id {
-            Some(max) => {
-                tracing::info!("Resetting modifications sequence to {}", max);
-                // Table is not empty: set sequence to max with is_called=true so that nextval()
-                // returns max+1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        $1,
-                        true
-                    )
-                    "#,
-                )
-                .bind(max)
-                .execute(&self.pool)
-                .await?;
-            }
-            None => {
-                // Table is empty: set sequence to 1 with is_called=false so that nextval()
-                // returns 1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        1,
-                        false
-                    )
-                    "#,
-                )
-                .execute(&self.pool)
-                .await?;
-            }
-        }
         Ok(())
     }
 
@@ -1370,34 +1327,7 @@ pub mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, m1.id);
 
-        // Reset the modifications sequence after deletion and insert a new one.
-        store.reset_modifications_sequence().await?;
-        let m4 = store
-            .insert_modification(15, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        // The new modification should have id 2 after sequence reset.
-        assert_eq!(m4.id, 2);
-
         // Clean up the temporary schema.
-        cleanup(&store, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reset_modifications_sequence() -> Result<()> {
-        let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
-
-        // Reset the sequence when the table is empty.
-        store.reset_modifications_sequence().await?;
-
-        // Expect the sequence to start at 1.
-        let m1 = store
-            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        assert_eq!(m1.id, 1);
-
-        // Clean up
         cleanup(&store, &schema_name).await?;
         Ok(())
     }
