@@ -19,9 +19,8 @@ use iris_mpc_common::helpers::aws::{
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
-    CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError, SQSMessage,
-    UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-    REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError, SQSMessage, UniquenessRequest,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
@@ -93,48 +92,28 @@ pub async fn receive_batch(
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
-                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
-                        let circuit_breaker_request: CircuitBreakerRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "circuit_breaker")
-                            .increment(1);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        if let Some(batch_size) = circuit_breaker_request.batch_size {
-                            // Updating the batch size to ensure we process the messages in the next
-                            // loop
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!(
-                                "Updating batch size to {} due to circuit breaker message",
-                                batch_size
-                            );
-                        }
-                    }
-
                     IDENTITY_DELETION_MESSAGE_TYPE => {
-                        // If it's a deletion request, we just store the serial_id and continue.
-                        // Deletion will take place when batch process starts.
-                        let identity_deletion_request: IdentityDeletionRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error(
-                                    "Identity deletion request",
-                                    e,
-                                )
-                            })?;
-                        metrics::counter!("request.received", "type" => "identity_deletion")
-                            .increment(1);
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
+                        if config.hawk_server_deletions_enabled {
+                            // If it's a deletion request, we just store the serial_id and continue.
+                            // Deletion will take place when batch process starts.
+                            let identity_deletion_request: IdentityDeletionRequest =
+                                serde_json::from_str(&message.message).map_err(|e| {
+                                    ReceiveRequestError::json_parse_error(
+                                        "Identity deletion request",
+                                        e,
+                                    )
+                                })?;
+                            metrics::counter!("request.received", "type" => "identity_deletion")
+                                .increment(1);
+                            batch_query
+                                .deletion_requests_indices
+                                .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
+                            batch_query.deletion_requests_metadata.push(batch_metadata);
+                        } else {
+                            tracing::warn!("Identity deletions are disabled");
+                        }
+                        // We still delete if the deletion is disabled, so that the queue doesn't
+                        // build up
                         client
                             .delete_message()
                             .queue_url(queue_url)
@@ -232,10 +211,9 @@ pub async fn receive_batch(
                         batch_query
                             .request_ids
                             .push(uniqueness_request.signup_id.clone());
-                        batch_query.request_types.push(
-                            iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE
-                                .to_string(),
-                        );
+                        batch_query
+                            .request_types
+                            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
@@ -275,70 +253,73 @@ pub async fn receive_batch(
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
 
-                        if reauth_request.use_or_rule
-                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                        {
-                            tracing::error!(
-                                "Received a reauth request with use_or_rule set to true, but LUC \
-                                 is not enabled. Skipping request."
-                            );
-                            continue;
-                        }
-
-                        if config.enable_reauth {
-                            msg_counter += 1;
-
-                            if let Some(batch_size) = reauth_request.batch_size {
-                                // Updating the batch size instantly makes it a bit unpredictable,
-                                // since if we're already above the
-                                // new limit, we'll still process the current
-                                // batch at the higher limit. On the other
-                                // hand, updating it after the batch is
-                                // processed would not let us "unblock" the protocol if we're stuck
-                                // with low throughput.
-                                *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                    batch_size.clamp(1, max_batch_size);
-                                tracing::info!("Updating batch size to {}", batch_size);
+                        if config.hawk_server_reauths_enabled {
+                            if reauth_request.use_or_rule
+                                && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                            {
+                                tracing::error!(
+                                    "Received a reauth request with use_or_rule set to true, but LUC \
+                                     is not enabled. Skipping request."
+                                );
+                                continue;
                             }
 
-                            batch_query
-                                .request_ids
-                                .push(reauth_request.reauth_id.clone());
-                            batch_query.request_types.push(
-                                iris_mpc_common::helpers::smpc_request::REAUTH_MESSAGE_TYPE
-                                    .to_string(),
-                            );
-                            batch_query.metadata.push(batch_metadata);
-                            batch_query.reauth_target_indices.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.serial_id - 1,
-                            );
-                            batch_query.reauth_use_or_rule.insert(
-                                reauth_request.reauth_id.clone(),
-                                reauth_request.use_or_rule,
-                            );
+                            if config.enable_reauth {
+                                msg_counter += 1;
 
-                            let or_rule_indices = if reauth_request.use_or_rule {
-                                vec![reauth_request.serial_id - 1]
+                                if let Some(batch_size) = reauth_request.batch_size {
+                                    // Updating the batch size instantly makes it a bit unpredictable,
+                                    // since if we're already above the
+                                    // new limit, we'll still process the current
+                                    // batch at the higher limit. On the other
+                                    // hand, updating it after the batch is
+                                    // processed would not let us "unblock" the protocol if we're stuck
+                                    // with low throughput.
+                                    *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                        batch_size.clamp(1, max_batch_size);
+                                    tracing::info!("Updating batch size to {}", batch_size);
+                                }
+
+                                batch_query
+                                    .request_ids
+                                    .push(reauth_request.reauth_id.clone());
+                                batch_query
+                                    .request_types
+                                    .push(REAUTH_MESSAGE_TYPE.to_string());
+                                batch_query.metadata.push(batch_metadata);
+                                batch_query.reauth_target_indices.insert(
+                                    reauth_request.reauth_id.clone(),
+                                    reauth_request.serial_id - 1,
+                                );
+                                batch_query.reauth_use_or_rule.insert(
+                                    reauth_request.reauth_id.clone(),
+                                    reauth_request.use_or_rule,
+                                );
+
+                                let or_rule_indices = if reauth_request.use_or_rule {
+                                    vec![reauth_request.serial_id - 1]
+                                } else {
+                                    vec![]
+                                };
+                                batch_query.or_rule_indices.push(or_rule_indices);
+
+                                let semaphore = Arc::clone(&semaphore);
+                                let s3_client_clone = s3_client.clone();
+                                let bucket_name = config.shares_bucket_name.clone();
+                                let s3_key = reauth_request.s3_key.clone();
+                                let handle = get_iris_shares_parse_task(
+                                    party_id,
+                                    shares_encryption_key_pairs,
+                                    semaphore,
+                                    s3_client_clone,
+                                    bucket_name,
+                                    s3_key,
+                                )?;
+
+                                handles.push(handle);
                             } else {
-                                vec![]
-                            };
-                            batch_query.or_rule_indices.push(or_rule_indices);
-
-                            let semaphore = Arc::clone(&semaphore);
-                            let s3_client_clone = s3_client.clone();
-                            let bucket_name = config.shares_bucket_name.clone();
-                            let s3_key = reauth_request.s3_key.clone();
-                            let handle = get_iris_shares_parse_task(
-                                party_id,
-                                shares_encryption_key_pairs,
-                                semaphore,
-                                s3_client_clone,
-                                bucket_name,
-                                s3_key,
-                            )?;
-
-                            handles.push(handle);
+                                tracing::warn!("Reauth is disabled, skipping reauth request");
+                            }
                         } else {
                             tracing::warn!("Reauth is disabled, skipping reauth request");
                         }

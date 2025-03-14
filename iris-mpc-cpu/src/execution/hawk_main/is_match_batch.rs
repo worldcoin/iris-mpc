@@ -9,39 +9,47 @@ use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc};
 use tokio::task::JoinError;
 
-pub async fn calculate_is_match(
-    queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
+pub async fn calculate_missing_is_match(
+    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> BothEyes<VecRequests<MapEdges<bool>>> {
-    let [vectors_left, vectors_right] = vector_ids;
+    let [missing_vectors_left, missing_vectors_right] = missing_vector_ids;
 
     // Parallelize left and right sessions (IO only).
     let (out_l, out_r) = futures::join!(
-        per_side(&queries[LEFT], vectors_left, &sessions[LEFT]),
-        per_side(&queries[RIGHT], vectors_right, &sessions[RIGHT]),
+        per_side(&search_queries[LEFT], missing_vectors_left, &sessions[LEFT]),
+        per_side(
+            &search_queries[RIGHT],
+            missing_vectors_right,
+            &sessions[RIGHT]
+        ),
     );
     [out_l, out_r]
 }
 
 async fn per_side(
     queries: &VecRequests<VecRots<QueryRef>>,
-    vector_ids: VecRequests<VecEdges<VectorId>>,
+    missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSessionRef>,
 ) -> VecRequests<MapEdges<bool>> {
-    // A request is to compare all rotations to a list of vectors.
+    // A request is to compare all rotations to a list of vectors - it is the length of the vector ids.
+    let n_requests = missing_vector_ids.len();
     // A task is to compare one rotation to the vectors.
-    let n_requests = vector_ids.len();
     let n_tasks = n_requests * ROTATIONS;
     let n_sessions = sessions.len();
     assert_eq!(queries.len(), n_requests);
 
+    tracing::info!("per_side_match_batch sessions: {}", n_sessions);
+    tracing::info!("per_side_match_batch requests:{}", n_requests);
+    tracing::info!("per_side_match_batch tasks: {}", n_tasks);
+
     // Arc the requested vectors rather than cloning them.
-    let vector_ids = vector_ids.into_iter().map(Arc::new);
+    let missing_vector_ids = missing_vector_ids.into_iter().map(Arc::new);
 
     // For each request, broadcast the vectors to the rotations.
     // Concatenate the tasks for all requests, to maximize parallelism.
-    let tasks = VecRots::flatten_broadcast(izip!(queries, vector_ids));
+    let tasks = VecRots::flatten_broadcast(izip!(queries, missing_vector_ids));
     assert_eq!(tasks.len(), n_tasks);
 
     // Prepare the tasks into one chunk per session.
