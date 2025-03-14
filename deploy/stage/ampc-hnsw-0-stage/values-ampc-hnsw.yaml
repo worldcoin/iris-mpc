@@ -41,9 +41,6 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HEALTHCHECK_PORTS
-    value: '["3000","3001","3002"]'
-
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
     value: '3000'
 
