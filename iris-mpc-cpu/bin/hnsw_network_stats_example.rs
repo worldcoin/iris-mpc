@@ -2,6 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_cpu::{
+    execution::local::generate_local_identities,
     hawkers::aby3::{
         aby3_store::prepare_query,
         test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
@@ -55,23 +56,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
     let raw_query = GaloisRingSharedIris::generate_shares_locally(&mut rng, on_the_fly_query);
 
+    let identities = generate_local_identities();
+
     let mut jobs = JoinSet::new();
 
     for (vector_store, graph_store) in vectors_graphs.into_iter() {
-        let mut vector_store = vector_store;
-        let mut graph_store = graph_store;
-
-        let player_index = get_owner_index(&vector_store)?;
+        let player_index = get_owner_index(&vector_store).await?;
         let query = prepare_query(raw_query[player_index].clone());
         let searcher = searcher.clone();
         let mut rng = rng.clone();
 
-        let party_id = vector_store.owner.clone();
+        let party_id = identities[player_index].clone();
         let party_span = trace_span!(target: "searcher", "party", party = ?party_id);
 
+        let vector_store = vector_store.clone();
+        let mut graph_store = graph_store;
         jobs.spawn(async move {
+            let mut vector_store = vector_store.lock().await;
             searcher
-                .insert(&mut vector_store, &mut graph_store, &query, &mut rng)
+                .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
                 .instrument(party_span)
                 .await;
         });
