@@ -19,9 +19,8 @@ use iris_mpc_common::helpers::aws::{
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
-    CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError, SQSMessage,
-    UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-    REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError, SQSMessage, UniquenessRequest,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
@@ -93,33 +92,13 @@ pub async fn receive_batch(
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
-                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
-                        let circuit_breaker_request: CircuitBreakerRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "circuit_breaker")
-                            .increment(1);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        if let Some(batch_size) = circuit_breaker_request.batch_size {
-                            // Updating the batch size to ensure we process the messages in the next
-                            // loop
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!(
-                                "Updating batch size to {} due to circuit breaker message",
-                                batch_size
-                            );
-                        }
-                    }
-
                     IDENTITY_DELETION_MESSAGE_TYPE => {
+                        if !config.hawk_server_deletions_enabled {
+                            tracing::warn!(
+                                "Identity deletion is disabled, skipping deletion request"
+                            );
+                            continue;
+                        }
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
                         let identity_deletion_request: IdentityDeletionRequest =
@@ -232,10 +211,9 @@ pub async fn receive_batch(
                         batch_query
                             .request_ids
                             .push(uniqueness_request.signup_id.clone());
-                        batch_query.request_types.push(
-                            iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE
-                                .to_string(),
-                        );
+                        batch_query
+                            .request_types
+                            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
                         batch_query.metadata.push(batch_metadata);
 
                         let semaphore = Arc::clone(&semaphore);
@@ -255,6 +233,10 @@ pub async fn receive_batch(
                     }
 
                     REAUTH_MESSAGE_TYPE => {
+                        if !config.hawk_server_reauths_enabled {
+                            tracing::warn!("Reauth is disabled, skipping reauth request");
+                            continue;
+                        }
                         let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
 
                         let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
