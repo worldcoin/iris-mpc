@@ -132,7 +132,7 @@ async fn graph_from_plain(
     recompute_distances: bool,
 ) -> GraphMem<Aby3Store> {
     let ep = graph_store.get_entry_point().await;
-    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId { id: vector_ref }, layer_count));
+    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId::from(vector_ref), layer_count));
 
     let layers = graph_store.get_layers();
 
@@ -141,10 +141,10 @@ async fn graph_from_plain(
         let links = layer.get_links_map();
         let mut shared_links = HashMap::new();
         for (source_v, queue) in links {
-            let source_v = source_v.into();
+            let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
             for (target_v, dist) in queue.as_vec_ref() {
-                let target_v = target_v.into();
+                let target_v = VectorId::from(*target_v);
                 let distance = if recompute_distances {
                     // recompute distances of graph edges from scratch
                     eval_vector_distance(vector_store, &source_v, &target_v).await

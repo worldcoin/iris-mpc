@@ -1802,6 +1802,7 @@ async fn load_db_records<'a>(
 
         actor.load_single_record_from_db(
             iris.index() - 1,
+            iris.vector_id(),
             iris.left_code(),
             iris.left_mask(),
             iris.right_code(),
@@ -1959,6 +1960,7 @@ async fn load_db(
 
             actor.load_single_record_from_s3(
                 iris.index() - 1,
+                iris.vector_id(),
                 iris.left_code_odd(),
                 iris.left_code_even(),
                 iris.right_code_odd(),

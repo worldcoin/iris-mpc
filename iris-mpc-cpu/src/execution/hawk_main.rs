@@ -453,13 +453,13 @@ pub struct IrisLoader<'a> {
 impl<'a> InMemoryStore for IrisLoader<'a> {
     fn load_single_record_from_db(
         &mut self,
-        index: usize,
+        _index: usize, // TODO: Map.
+        vector_id: VectorId,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        let vector_id = VectorId::from_serial_id(index as u32);
         for (side, code, mask) in izip!(
             &mut self.irises,
             [left_code, right_code],
@@ -1083,7 +1083,7 @@ mod tests_db {
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
         // The test data is a sequence of mutations on the graph.
-        let vectors = (0..5).map(VectorId::from).collect_vec();
+        let vectors = (0..5_u32).map(VectorId::from).collect_vec();
         let distance = DistanceShare::new(Default::default(), Default::default());
 
         let make_plans = |side| {
