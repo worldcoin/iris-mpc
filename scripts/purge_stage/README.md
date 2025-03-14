@@ -2,7 +2,7 @@
 
 To make sure the scripts included in this repository are working properly, you need to have the following AWS profiles defined in your environment:
 
-### SMPCv2
+### SMPCv2 profiles
 ```yaml
 [profile worldcoin-iam]
 sso_start_url = https://worldcoin.awsapps.com/start
@@ -34,4 +34,37 @@ sso_start_url = https://worldcoin.awsapps.com/start
 sso_region = us-east-1
 sso_account_id = 510867353226
 sso_role_name = PowerUserAccess
+```
+
+### Instructions
+* install jq
+```bash
+brew install jq
+```
+#### Purge queues
+* to purge SMPC CPU queues
+```bash
+sh purge_stage_queues.sh cpu
+```
+* to purge SMPC GPU queues
+```bash
+sh purge_stage_queues.sh gpu
+```
+#### Purge mongo collections
+* to purge CPU SMPC iris mongo collections
+```bash
+sh purge_stage_mongo_collections.sh cpu
+```
+* to purge GPU SMPC iris mongo collections
+```bash
+sh purge_stage_mongo_collections.sh gpu
+```
+#### Purge stage dbs
+* to purge rds CPU SMPC clusters
+```bash
+sh purge_stage_dbs.sh cpu
+```
+* to purge rds GPU SMPC clusters
+```bash
+sh purge_stage_dbs.sh gpu
 ```

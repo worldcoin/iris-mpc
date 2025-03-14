@@ -1,6 +1,6 @@
 env:
   - name: RUST_LOG
-    value: "info"
+    value: "debug"
 
   - name: RUST_BACKTRACE
     value: "full"
@@ -41,9 +41,6 @@ env:
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'
 
-  - name: SMPC__HEALTHCHECK_PORTS
-    value: '["3000","3001","3002"]'
-
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
     value: '3000'
 
@@ -51,7 +48,7 @@ env:
     value: '["node.0.stage.hnsw.worldcoin.dev", "0.0.0.0", "node.2.stage.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-dev-sns-requests"
+    value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:

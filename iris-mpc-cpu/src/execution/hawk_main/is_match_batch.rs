@@ -6,45 +6,55 @@ use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, error::Error, iter, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
+use tokio::task::JoinError;
 
-pub async fn calculate_is_match(
-    queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
+pub async fn calculate_missing_is_match(
+    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> BothEyes<VecRequests<MapEdges<bool>>> {
-    let [vectors_left, vectors_right] = vector_ids;
+    let [missing_vectors_left, missing_vectors_right] = missing_vector_ids;
 
     // Parallelize left and right sessions (IO only).
     let (out_l, out_r) = futures::join!(
-        per_side(&queries[LEFT], vectors_left, &sessions[LEFT]),
-        per_side(&queries[RIGHT], vectors_right, &sessions[RIGHT]),
+        per_side(&search_queries[LEFT], missing_vectors_left, &sessions[LEFT]),
+        per_side(
+            &search_queries[RIGHT],
+            missing_vectors_right,
+            &sessions[RIGHT]
+        ),
     );
     [out_l, out_r]
 }
 
 async fn per_side(
     queries: &VecRequests<VecRots<QueryRef>>,
-    vector_ids: VecRequests<VecEdges<VectorId>>,
+    missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSessionRef>,
 ) -> VecRequests<MapEdges<bool>> {
-    // A request is to compare all rotations to a list of vectors.
+    // A request is to compare all rotations to a list of vectors - it is the length of the vector ids.
+    let n_requests = missing_vector_ids.len();
     // A task is to compare one rotation to the vectors.
-    let n_requests = vector_ids.len();
     let n_tasks = n_requests * ROTATIONS;
     let n_sessions = sessions.len();
     assert_eq!(queries.len(), n_requests);
 
+    tracing::info!("per_side_match_batch sessions: {}", n_sessions);
+    tracing::info!("per_side_match_batch requests:{}", n_requests);
+    tracing::info!("per_side_match_batch tasks: {}", n_tasks);
+
     // Arc the requested vectors rather than cloning them.
-    let vector_ids = vector_ids.into_iter().map(Arc::new);
+    let missing_vector_ids = missing_vector_ids.into_iter().map(Arc::new);
 
     // For each request, broadcast the vectors to the rotations.
     // Concatenate the tasks for all requests, to maximize parallelism.
-    let tasks = VecRots::flatten_broadcast(izip!(queries, vector_ids));
+    let tasks = VecRots::flatten_broadcast(izip!(queries, missing_vector_ids));
     assert_eq!(tasks.len(), n_tasks);
 
     // Prepare the tasks into one chunk per session.
     let chunks = split_tasks(tasks, n_sessions);
+    assert!(chunks.len() <= n_sessions);
 
     // Process the chunks in parallel (CPU and IO).
     let results = izip!(chunks, sessions)
@@ -52,7 +62,6 @@ async fn per_side(
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
         .await;
-    assert_eq!(results.len(), n_sessions.min(n_tasks));
 
     // Undo the chunking per session.
     let results = unsplit_tasks(results);
@@ -103,22 +112,23 @@ async fn per_query(
 }
 
 /// Split a Vec into at most `n_sessions` chunks.
-/// The last chunk may be smaller.
+/// Chunks may not be of equal size.
 /// Unlike `Itertools::chunks()` which borrows, this moves the items.
-fn split_tasks<T>(v_iter: Vec<T>, n_sessions: usize) -> impl Iterator<Item = Vec<T>> {
-    let chunk_size = v_iter.len().div_ceil(n_sessions);
-    let mut v_iter = v_iter.into_iter();
-    iter::from_fn(move || {
-        let chunk = v_iter.by_ref().take(chunk_size).collect_vec();
-        if chunk.is_empty() {
-            None // Stop.
-        } else {
-            Some(chunk)
-        }
-    })
+fn split_tasks<T>(tasks: Vec<T>, n_sessions: usize) -> Vec<Vec<T>> {
+    let n_sessions = n_sessions.min(tasks.len());
+    let chunk_size = tasks.len() / n_sessions;
+    let rest_size = tasks.len() % n_sessions;
+
+    let mut task_iter = tasks.into_iter();
+    (0..n_sessions)
+        .map(|chunk_i| {
+            let one_rest = (chunk_i < rest_size) as usize;
+            task_iter.by_ref().take(chunk_size + one_rest).collect_vec()
+        })
+        .collect_vec()
 }
 
-fn unsplit_tasks<T, E: Error>(chunks: Vec<Result<Vec<T>, E>>) -> Vec<T> {
+fn unsplit_tasks<T>(chunks: Vec<Result<Vec<T>, JoinError>>) -> Vec<T> {
     chunks.into_iter().flat_map(Result::unwrap).collect_vec()
 }
 
@@ -129,4 +139,27 @@ fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool
         }
         acc
     })
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_split_tasks() {
+        let tasks = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
+        let expect = vec![10, 20, 30, 40, 50, 60, 70, 80, 90];
+        let per_query = |q| q * 10;
+        let per_session = |chunk: Vec<i32>| Ok(chunk.into_iter().map(per_query).collect_vec());
+
+        for n_sessions in [1, 2, 3, 7, 8, 9, 10] {
+            let chunks = split_tasks(tasks.clone(), n_sessions);
+            assert_eq!(chunks.len(), n_sessions.min(tasks.len()));
+
+            let results = chunks.into_iter().map(per_session).collect_vec();
+
+            let results = unsplit_tasks(results);
+            assert_eq!(results, expect);
+        }
+    }
 }

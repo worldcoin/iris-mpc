@@ -197,6 +197,12 @@ pub struct Config {
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
+
+    #[serde(default = "default_hawk_server_deletions_enabled")]
+    pub hawk_server_deletions_enabled: bool,
+
+    #[serde(default = "default_hawk_server_reauths_enabled")]
+    pub hawk_server_reauths_enabled: bool,
 }
 
 /// Enumeration over set of compute modes.
@@ -305,6 +311,14 @@ fn default_max_deletions_per_batch() -> usize {
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
     10
+}
+
+fn default_hawk_server_reauths_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_deletions_enabled() -> bool {
+    false
 }
 
 impl Config {

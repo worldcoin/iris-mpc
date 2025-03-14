@@ -1,9 +1,9 @@
-name: Build and push image for iris-mpc-cpu
+name: Branch - Hawk Build and push docker image 
 
 on:
   push:
     branches:
-      - main
+      - "POP-2269/add-pushing-branches-for-cpu"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -11,7 +11,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "iris-mpc-cpu"
+  IMAGE_NAME: ${{ github.repository }}-cpu
 
 jobs:
   docker:
@@ -45,4 +45,3 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.hawk

@@ -3,7 +3,10 @@
 # This script provides a way to update the targetRevision of an ArgoCD application in all SMPC stage clusters.
 # The script will loop through each cluster, port-forward ArgoCD server, authenticate to it, update the targetRevision of the application, and close port-forward.
 #
-# Usage: ./argo_stage_update_revision.sh <your-branch | main>
+# Usage examples:
+#   ./scripts/argo_stage_update_revision.sh $(git branch --show-current)
+#   ./scripts/argo_stage_update_revision.sh main
+#   ./scripts/argo_stage_update_revision.sh <another-branch>
 #
 # Pre-requisites:
 # 1. Ensure that you have the ArgoCD CLI installed on your local machine. (brew install argocd)
