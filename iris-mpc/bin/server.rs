@@ -26,8 +26,7 @@ use iris_mpc_common::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
             SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -187,32 +186,6 @@ async fn receive_batch(
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
-                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
-                        let circuit_breaker_request: CircuitBreakerRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "circuit_breaker")
-                            .increment(1);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        if let Some(batch_size) = circuit_breaker_request.batch_size {
-                            // Updating the batch size to ensure we process the messages in the next
-                            // loop
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!(
-                                "Updating batch size to {} due to circuit breaker message",
-                                batch_size
-                            );
-                        }
-                    }
-
                     IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
