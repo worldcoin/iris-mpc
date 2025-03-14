@@ -12,64 +12,14 @@ use crate::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    num::ParseIntError,
-    str::FromStr,
-    sync::Arc,
-    vec,
-};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::instrument;
 
+pub use iris_mpc_common::vector_id::VectorId;
+
 /// Reference to an iris in the Shamir secret shared form over a Galois ring.
 pub type IrisRef = Arc<GaloisRingSharedIris>;
-
-/// Unique identifier for an iris inserted into the store.
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct VectorId {
-    id: u32,
-}
-
-impl Display for VectorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.id, f)
-    }
-}
-
-impl FromStr for VectorId {
-    type Err = ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(VectorId {
-            id: FromStr::from_str(s)?,
-        })
-    }
-}
-
-impl From<usize> for VectorId {
-    fn from(id: usize) -> Self {
-        VectorId { id: id as u32 }
-    }
-}
-
-impl From<u32> for VectorId {
-    fn from(id: u32) -> Self {
-        VectorId { id }
-    }
-}
-
-impl VectorId {
-    pub fn from_serial_id(id: u32) -> Self {
-        VectorId { id }
-    }
-
-    /// Returns the ID of a vector as a number.
-    pub fn to_serial_id(&self) -> u32 {
-        self.id
-    }
-}
 
 /// Iris to be searcher or inserted into the store.
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
