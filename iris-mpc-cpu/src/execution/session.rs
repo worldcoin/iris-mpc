@@ -18,13 +18,12 @@ impl From<u64> for SessionId {
 
 pub type NetworkingImpl = Arc<dyn Networking + Send + Sync>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Session {
     pub boot_session: BootSession,
     pub setup: Prf,
 }
 
-#[derive(Clone)]
 pub struct BootSession {
     pub session_id: SessionId,
     pub role_assignments: Arc<HashMap<Role, Identity>>,
