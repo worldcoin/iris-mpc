@@ -1,7 +1,7 @@
 use super::{
     super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
     super::Supervisor,
-    super::{errors::IndexationError, signals, utils::log_signal},
+    super::{errors::IndexationError, signals, utils::logger},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
@@ -211,7 +211,7 @@ impl Message<signals::OnBegin> for IrisBatchGenerator {
         _: signals::OnBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnBegin");
+        logger::log_signal(NAME, "OnBegin", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;
@@ -228,7 +228,7 @@ impl Message<signals::OnEndOfBatch> for IrisBatchGenerator {
         _: signals::OnEndOfBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnEndOfBatch");
+        logger::log_signal(NAME, "OnEndOfBatch", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;

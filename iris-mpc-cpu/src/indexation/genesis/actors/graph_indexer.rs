@@ -1,6 +1,6 @@
 use super::{
     super::Supervisor,
-    super::{errors::IndexationError, signals, types::IrisGaloisShares, utils::log_signal},
+    super::{errors::IndexationError, signals, types::IrisGaloisShares, utils::logger},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
@@ -39,10 +39,9 @@ impl GraphIndexer {
 
 impl GraphIndexer {
     async fn do_index_graph(&self, serial_id: i64, _: IrisGaloisShares) {
-        tracing::info!(
-            "{} :: TODO :: Index graph for Iris serial ID {}",
+        logger::log_todo(
             NAME,
-            serial_id
+            format!("Index graph for Iris serial ID {}", serial_id).as_str(),
         );
     }
 }
@@ -59,7 +58,7 @@ impl Message<signals::OnBeginIrisSharesIndexation> for GraphIndexer {
         msg: signals::OnBeginIrisSharesIndexation,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnBeginIrisSharesIndexation");
+        logger::log_signal(NAME, "OnBeginIrisSharesIndexation", None);
 
         self.do_index_graph(msg.serial_id, msg.shares).await;
 

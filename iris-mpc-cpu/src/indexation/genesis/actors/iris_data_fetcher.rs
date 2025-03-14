@@ -1,5 +1,5 @@
 use super::{
-    super::utils::log_signal,
+    super::utils::logger,
     super::Supervisor,
     super::{errors::IndexationError, signals, types::IrisGaloisShares},
 };
@@ -79,7 +79,7 @@ impl Message<signals::OnBeginBatchItem> for IrisSharesFetcher {
         msg: signals::OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnBeginBatchItem");
+        logger::log_signal(NAME, "OnBeginBatchItem", None);
 
         // Fetch data.
         let iris_data = self.fetch_iris_data(msg.id_of_iris).await.unwrap();

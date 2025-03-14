@@ -6,10 +6,9 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use tracing;
 use {
     super::super::signals,
-    super::super::utils::{log_lifecycle, log_signal},
+    super::super::utils::logger,
     super::{GraphDataWriter, GraphIndexer, IrisBatchGenerator, IrisSharesFetcher},
 };
 
@@ -35,11 +34,11 @@ impl Supervisor {
         assert!(config.database.is_some());
 
         Self {
-            config,
             a1_ref: None,
             a2_ref: None,
             a3_ref: None,
             a4_ref: None,
+            config,
         }
     }
 }
@@ -58,7 +57,7 @@ impl Message<signals::OnEnd> for Supervisor {
         _: signals::OnEnd,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnEnd");
+        logger::log_signal(NAME, "OnEnd", None);
     }
 }
 
@@ -72,7 +71,7 @@ impl Message<signals::OnBegin> for Supervisor {
         _: signals::OnBegin,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnBegin");
+        logger::log_signal(NAME, "OnBegin", None);
     }
 }
 
@@ -86,7 +85,7 @@ impl Message<signals::OnBeginBatch> for Supervisor {
         msg: signals::OnBeginBatch,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        log_signal(NAME, "OnBeginBatch");
+        logger::log_signal(NAME, "OnBeginBatch", None);
 
         // TODO: spawn pool to process concurrently.
         for iris_id in msg.batch {
@@ -109,10 +108,10 @@ impl Message<signals::OnFetchOfIrisShares> for Supervisor {
         msg: signals::OnFetchOfIrisShares,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        tracing::info!(
-            "{} :: Event :: OnFetchOfIrisShares :: Iris serial-id = {}",
+        logger::log_signal(
             NAME,
-            msg.serial_id
+            "OnFetchOfIrisShares",
+            Some(format!("iris serial-id = {}", msg.serial_id).as_str()),
         );
 
         // Signal that Iris shares are ready for indexation.
@@ -131,8 +130,14 @@ impl Message<signals::OnFetchOfIrisShares> for Supervisor {
 impl Actor for Supervisor {
     type Mailbox = BoundedMailbox<Self>;
 
+    /// Lifecycle event handler: on_start.
+    ///
+    /// # Arguments
+    ///
+    /// * `ref_to_self` - Self referential kameo actor pointer.
+    ///
     async fn on_start(&mut self, ref_to_self: ActorRef<Self>) -> Result<(), BoxError> {
-        log_lifecycle(NAME, "on_start");
+        logger::log_lifecycle(NAME, "on_start", None);
 
         // Instantiate associated actors.
         let a1 = IrisBatchGenerator::new(self.config.clone(), ref_to_self.clone());
