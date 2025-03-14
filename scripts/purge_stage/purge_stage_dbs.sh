@@ -104,8 +104,8 @@ if [ -z "$MPC_0_DATABASE_URL" ] || [ -z "$MPC_1_DATABASE_URL" ] || [ -z "$MPC_2_
   exit 1
 fi
 
-clean_mpc_database "$MPC_0_DATABASE_URL" "0" arn:aws:eks:eu-north-1:024848486749:cluster/smpcv2-0-stage
-clean_mpc_database "$MPC_1_DATABASE_URL" "1" arn:aws:eks:eu-north-1:024848486818:cluster/smpcv2-1-stage
-clean_mpc_database "$MPC_2_DATABASE_URL" "2" arn:aws:eks:eu-north-1:024848486770:cluster/smpcv2-2-stage
+clean_mpc_database "$MPC_0_DATABASE_URL" "0" arn:aws:eks:eu-north-1:$MPC_0_STAGE_ACCOUNT_ID:cluster/smpcv2-0-stage
+clean_mpc_database "$MPC_1_DATABASE_URL" "1" arn:aws:eks:eu-north-1:$MPC_1_STAGE_ACCOUNT_ID:cluster/smpcv2-1-stage
+clean_mpc_database "$MPC_2_DATABASE_URL" "2" arn:aws:eks:eu-north-1:$MPC_2_STAGE_ACCOUNT_ID:cluster/smpcv2-2-stage
 
 echo "All database cleanup operations completed successfully."
