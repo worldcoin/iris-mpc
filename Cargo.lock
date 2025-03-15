@@ -2383,6 +2383,7 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-build",
+ "tower 0.4.13",
  "tracing",
  "tracing-forest",
  "tracing-subscriber",
