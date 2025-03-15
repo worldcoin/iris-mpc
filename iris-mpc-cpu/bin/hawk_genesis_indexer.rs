@@ -17,8 +17,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::load_config("SMPC").unwrap();
 
     // Spawn supervisor.
-    let a = Supervisor::new(config);
-    kameo::spawn(a).tell(OnBegin).await?;
+    let a_ref = kameo::spawn(Supervisor::new(config));
+
+    // Signal supervisor to begin indexation.
+    a_ref.tell(OnBegin).await?;
 
     // TODO: block until a supervisor OnIndexationEnd | OnIndexationError event is emitted.
     pending().await

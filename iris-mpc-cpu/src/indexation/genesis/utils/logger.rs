@@ -1,15 +1,19 @@
-/// Logs an actor informatino message.
+use kameo::Actor;
+
+/// Logs an actor information message.
 ///
 /// # Arguments
 ///
-/// * `actor` - Name of actor.
 /// * `msg_type` - Type of information message.
 /// * `msg` - An actor life-cycle information message.
 ///
-pub(crate) fn log_info(actor: &str, msg_type: &str, msg: Option<&str>) {
+fn log_info<A>(msg_type: &str, msg: Option<&str>)
+where
+    A: Actor,
+{
     match msg {
-        Some(info) => tracing::info!("GENESIS::{} :: {} :: {}", actor, msg_type, info),
-        None => tracing::info!("GENESIS::{} :: {}", actor, msg_type),
+        Some(info) => tracing::info!("GENESIS::{} :: {} :: {}", A::name(), msg_type, info),
+        None => tracing::info!("GENESIS::{} :: {}", A::name(), msg_type),
     }
 }
 
@@ -17,31 +21,40 @@ pub(crate) fn log_info(actor: &str, msg_type: &str, msg: Option<&str>) {
 ///
 /// # Arguments
 ///
-/// * `actor` - Name of actor.
-/// * `msg` - An actor life-cycle message.
+/// * `episode` - Actor lifecycle episode.
+/// * `msg` - Actor life-cycle message.
+/// * `info` - Other pertinent information.
 ///
-pub(crate) fn log_lifecycle(actor: &str, episode: &str, msg: Option<&str>) {
-    log_info(actor, format!("Lifecycle::{}", episode).as_str(), msg)
+pub(crate) fn log_lifecycle<A>(episode: &str, info: Option<&str>)
+where
+    A: Actor,
+{
+    log_info::<A>(format!("Lifecycle::{}", episode).as_str(), info)
 }
 
 /// Logs an actor message receipt.
 ///
 /// # Arguments
 ///
-/// * `actor` - Name of actor receiving a message.
-/// * `msg` - An actor message.
+/// * `msg_type` - Type of message received by an actor.
+/// * `info` - Other pertinent information.
 ///
-pub(crate) fn log_message(actor: &str, event: &str, msg: Option<&str>) {
-    log_info(actor, format!("Message::{}", event).as_str(), msg)
+pub(crate) fn log_message<A>(msg_type: &str, info: Option<&str>)
+where
+    A: Actor,
+{
+    log_info::<A>(format!("Message::{}", msg_type).as_str(), info)
 }
 
 /// Logs an actor todo message.
 ///
 /// # Arguments
 ///
-/// * `actor` - Name of actor emitting a todo message.
-/// * `msg` - An actor todo message.
+/// * `info` - An actor todo message.
 ///
-pub(crate) fn log_todo(actor: &str, msg: &str) {
-    log_info(actor, format!("TODO::{}", msg).as_str(), None);
+pub(crate) fn log_todo<A>(info: &str)
+where
+    A: Actor,
+{
+    log_info::<A>(format!("TODO::{}", info).as_str(), None);
 }

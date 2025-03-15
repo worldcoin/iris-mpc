@@ -19,9 +19,6 @@ use kameo::{
 // Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
-// Name for logging purposes.
-const NAME: &str = "BatchGenerator";
-
 // Actor: Generates batches of Iris identifiers for processing.
 #[derive(Actor)]
 pub struct BatchGenerator {
@@ -211,7 +208,7 @@ impl Message<OnBegin> for BatchGenerator {
 
     // Handler.
     async fn handle(&mut self, _: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message(NAME, "OnBegin", None);
+        logger::log_message::<Self>("OnBegin", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;
@@ -224,7 +221,7 @@ impl Message<OnEndOfBatch> for BatchGenerator {
 
     // Handler.
     async fn handle(&mut self, _: OnEndOfBatch, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message(NAME, "OnEndOfBatch", None);
+        logger::log_message::<Self>("OnEndOfBatch", None);
 
         // Crank indexation step.
         self.do_indexation_step().await;

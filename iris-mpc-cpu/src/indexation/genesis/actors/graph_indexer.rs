@@ -18,9 +18,6 @@ use kameo::{
 // Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
-// Name for logging purposes.
-const NAME: &str = "GraphIndexer";
-
 // Actor: Issues query/insert operations over in-memory HNSW graph.
 #[derive(Actor)]
 #[allow(dead_code)]
@@ -48,8 +45,7 @@ impl GraphIndexer {
 
 impl GraphIndexer {
     async fn do_index_batch(&self) {
-        logger::log_todo(
-            NAME,
+        logger::log_todo::<Self>(
             format!("Index graph for Iris batch of size {}", self.batch.len()).as_str(),
         );
     }
@@ -65,7 +61,7 @@ impl Message<OnBeginBatch> for GraphIndexer {
 
     // Handler.
     async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message(NAME, "OnBeginBatch", None);
+        logger::log_message::<Self>("OnBeginBatch", None);
 
         // Initialise new batch.
         self.batch = Vec::with_capacity(msg.serial_ids.len());
@@ -80,7 +76,7 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
         msg: OnFetchIrisShares,
         _: Ctx<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message(NAME, "OnFetchOfIrisShares", None);
+        logger::log_message::<Self>("OnFetchOfIrisShares", None);
 
         // Grow next indexation batch & index when full.
         self.batch.push(msg.shares);

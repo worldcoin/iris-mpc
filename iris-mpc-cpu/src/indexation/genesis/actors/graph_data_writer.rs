@@ -6,9 +6,6 @@ use kameo::{actor::ActorRef, Actor};
 // Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
-// Name for logging purposes.
-const _: &str = "GraphDataWriter";
-
 // Actor: Writes HNSW graph data to store.
 #[derive(Actor)]
 #[allow(dead_code)]

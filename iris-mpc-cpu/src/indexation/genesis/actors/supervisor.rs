@@ -3,7 +3,7 @@ use kameo::{
     actor::ActorRef,
     error::BoxError,
     mailbox::bounded::BoundedMailbox,
-    message::{Context, Message},
+    message::{Context as Ctx, Message},
     Actor,
 };
 use {
@@ -15,9 +15,6 @@ use {
 // ------------------------------------------------------------------------
 // Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
-
-// Name for logging purposes.
-const NAME: &str = "Supervisor";
 
 // Actor: Genesis indexation supervisor.
 #[derive(Clone)]
@@ -32,7 +29,7 @@ pub struct Supervisor {
 impl Supervisor {
     // Ctor.
     pub fn new(config: Config) -> Self {
-        assert!(config.database.is_some());
+        assert!(config.aws.is_some() && config.database.is_some());
 
         Self {
             a1_ref: None,
@@ -48,23 +45,13 @@ impl Supervisor {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<OnEnd> for Supervisor {
-    // Reply type.
-    type Reply = ();
-
-    // Handler.
-    async fn handle(&mut self, _: OnEnd, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message(NAME, "OnEnd", None);
-    }
-}
-
 impl Message<OnBegin> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, _: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message(NAME, "OnBegin", None);
+    async fn handle(&mut self, _: OnBegin, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self>("OnBegin", None);
     }
 }
 
@@ -73,12 +60,8 @@ impl Message<OnBeginBatch> for Supervisor {
     type Reply = ();
 
     // Handler.
-    async fn handle(
-        &mut self,
-        msg: OnBeginBatch,
-        _: Context<'_, Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_message(NAME, "OnBeginBatch", None);
+    async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self>("OnBeginBatch", None);
 
         // Signal to other interested actors.
         self.a3_ref
@@ -96,6 +79,16 @@ impl Message<OnBeginBatch> for Supervisor {
     }
 }
 
+impl Message<OnEnd> for Supervisor {
+    // Reply type.
+    type Reply = ();
+
+    // Handler.
+    async fn handle(&mut self, _: OnEnd, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self>("OnEnd", None);
+    }
+}
+
 impl Message<OnFetchIrisShares> for Supervisor {
     // Reply type.
     type Reply = ();
@@ -104,11 +97,10 @@ impl Message<OnFetchIrisShares> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnFetchIrisShares,
-        _: Context<'_, Self, Self::Reply>,
+        _: Ctx<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message(
-            NAME,
-            "OnFetchOfIrisShares",
+        logger::log_message::<Self>(
+            "OnFetchIrisShares",
             Some(format!("iris serial-id = {}", msg.serial_id).as_str()),
         );
 
@@ -122,7 +114,13 @@ impl Message<OnFetchIrisShares> for Supervisor {
 // ------------------------------------------------------------------------
 
 impl Actor for Supervisor {
+    // By default mailbox is limited to 1000 messages.
     type Mailbox = BoundedMailbox<Self>;
+
+    /// Actor name - overrides auto-derived name.
+    fn name() -> &'static str {
+        "Supervisor"
+    }
 
     /// Lifecycle event handler: on_start.
     ///
@@ -131,7 +129,7 @@ impl Actor for Supervisor {
     /// * `ref_to_self` - Self referential kameo actor pointer.
     ///
     async fn on_start(&mut self, ref_to_self: ActorRef<Self>) -> Result<(), BoxError> {
-        logger::log_lifecycle(NAME, "on_start", None);
+        logger::log_lifecycle::<Self>("on_start", None);
 
         // Instantiate associated actors.
         let a1 = BatchGenerator::new(self.config.clone(), ref_to_self.clone());

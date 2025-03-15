@@ -19,9 +19,6 @@ use kameo::{
 // Actor name + state + ctor + methods.
 // ------------------------------------------------------------------------
 
-// Name for logging purposes.
-const NAME: &str = "SharesFetcher";
-
 // Fetches Iris shares from remote store.
 #[derive(Actor, Clone)]
 #[allow(dead_code)]
@@ -83,7 +80,7 @@ impl Message<OnBeginBatchItem> for SharesFetcher {
         msg: OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message(NAME, "OnBeginBatchItem", None);
+        logger::log_message::<Self>("OnBeginBatchItem", None);
 
         // Fetch data.
         let iris_data = self.fetch_iris_data(msg.serial_id).await.unwrap();
