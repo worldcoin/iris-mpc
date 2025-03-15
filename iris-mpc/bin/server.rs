@@ -1576,6 +1576,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())
                 .await?;
 
+            // persist uniqueness results into db
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
 
@@ -1592,7 +1593,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         db_serial_ids
                     ));
                 }
+            }
 
+            // persist reauth results into db
+            if !config_bg.disable_persistence {
                 for (i, success) in successful_reauths.iter().enumerate() {
                     if !success {
                         continue;
