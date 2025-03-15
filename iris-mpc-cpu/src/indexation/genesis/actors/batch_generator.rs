@@ -87,7 +87,7 @@ impl BatchGenerator {
         }
 
         // Increment batch count.
-        if batch.is_empty() == false {
+        if !batch.is_empty() {
             self.batch_count += 1;
         }
 

@@ -54,7 +54,7 @@ where
     // TODO: optimise via a cache.
     let f: Vec<&str> = type_name::<M>().split("::").collect();
 
-    log_info::<A>(f.last().unwrap(), Some(&msg.to_string().as_str()));
+    log_info::<A>(f.last().unwrap(), Some(msg.to_string().as_str()));
 }
 
 /// Logs an actor todo message.
