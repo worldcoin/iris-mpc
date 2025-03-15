@@ -198,7 +198,7 @@ impl Store {
     ///
     /// # Arguments
     ///
-    /// * `id_of_iris` - Serial ID of Iris to be fetched.
+    /// * `serial_id` - Serial ID of Iris to be fetched.
     ///
     /// # Returns
     ///
@@ -206,14 +206,14 @@ impl Store {
     ///
     pub async fn fetch_iris_by_serial_id(
         &self,
-        id_of_iris: i64,
+        serial_id: i64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
         tracing::info!(
             "Iris PostgreSQL store: Fetching Iris by serial-id ({})",
-            id_of_iris
+            serial_id
         );
 
-        let id_of_iris = id_of_iris as i32;
+        let id_of_iris = serial_id as i32;
         Ok(
             sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
                 .bind(id_of_iris)
@@ -227,7 +227,7 @@ impl Store {
     ///
     /// # Arguments
     ///
-    /// * `id_of_party` - Party ID.
+    /// * `party_id` - Party ID.
     ///
     /// # Returns
     ///
@@ -235,11 +235,11 @@ impl Store {
     ///
     pub async fn fetch_iris_v2_deletions_by_party_id(
         &self,
-        id_of_party: usize,
+        party_id: usize,
     ) -> sqlx::Result<Vec<i64>, sqlx::Error> {
         tracing::info!(
             "Iris PostgreSQL store: Fetching V2 deletion set by party ID ({})",
-            id_of_party
+            party_id
         );
 
         // TODO: Implement fetching V2 deletions by party ID.

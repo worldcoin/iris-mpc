@@ -1,12 +1,13 @@
 use super::{
-    super::utils::fetch_iris_v1_deletions as fetch_iris_v1_deletions_from_s3,
     super::Supervisor,
     super::{
         errors::IndexationError,
         messages::{OnBegin, OnBeginBatch, OnEnd, OnEndBatch},
+        types::IrisSerialId,
         utils::logger,
     },
 };
+use aws_sdk_s3::{config::Region as S3_Region, Client as S3_CLient};
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
 use kameo::{
@@ -16,6 +17,7 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
+use rand::prelude::*;
 use std::iter::Peekable;
 use std::ops::Range;
 
@@ -25,17 +27,17 @@ use std::ops::Range;
 
 // Actor: Generates batches of Iris identifiers for processing.
 pub struct BatchGenerator {
+    // Count of generated batches.
+    batch_count: usize,
+
     // System configuration information.
     config: Config,
 
     // Iterator over range of Iris serial identifiers to be indexed.
-    indexation_range_iter: Peekable<Range<i64>>,
+    indexation_range_iter: Peekable<Range<IrisSerialId>>,
 
     // Set of Iris serial identifiers to exclude from indexing.
-    indexation_exclusions: Vec<i64>,
-
-    // Iris store provider.
-    store: Option<IrisStore>,
+    indexation_exclusions: Vec<IrisSerialId>,
 
     // Reference to supervisor.
     supervisor_ref: ActorRef<Supervisor>,
@@ -47,13 +49,11 @@ impl BatchGenerator {
     const DEFAULT_BATCH_SIZE: usize = 42;
 
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
-        assert!(config.database.is_some());
-
         Self {
+            batch_count: 0,
             config,
             indexation_exclusions: vec![],
             indexation_range_iter: (0..0).peekable(),
-            store: None,
             supervisor_ref,
         }
     }
@@ -64,10 +64,12 @@ impl BatchGenerator {
     // Processes an indexation step.
     async fn do_indexation_step(&mut self) {
         // Build a batch.
-        let mut batch = Vec::<i64>::new();
+        let mut batch = Vec::<IrisSerialId>::new();
         while self.indexation_range_iter.peek().is_some() {
             // Set next id.
             let next_id = self.indexation_range_iter.by_ref().next().unwrap();
+
+            // Skip exclusions.
             if self.indexation_exclusions.contains(&next_id) {
                 logger::log_info::<Self>(
                     format!("Excluding deletion :: serial-id={}", next_id).as_str(),
@@ -84,78 +86,27 @@ impl BatchGenerator {
             }
         }
 
-        // Signal either new batch or end of indexation.
+        // Increment batch count.
+        if batch.is_empty() == false {
+            self.batch_count += 1;
+        }
+
+        // Signal.
         if batch.is_empty() {
-            let msg = OnEnd;
+            // End of indexation.
+            let msg = OnEnd {
+                batch_count: self.batch_count,
+            };
             self.supervisor_ref.tell(msg).await.unwrap();
         } else {
-            let msg = OnBeginBatch { serial_ids: batch };
+            // New batch.
+            let msg = OnBeginBatch {
+                batch_idx: self.batch_count,
+                batch_size: batch.len(),
+                iris_serial_ids: batch,
+            };
             self.supervisor_ref.tell(msg).await.unwrap();
         }
-    }
-
-    // Fetches set of deletions to be excluded from indexing.
-    async fn fetch_deletions_for_exclusion(&mut self) -> Result<Vec<i64>, IndexationError> {
-        let mut deletions = [
-            self.fetch_deletions_for_exclusion_v1().await?,
-            self.fetch_deletions_for_exclusion_v2().await?,
-        ]
-        .concat();
-
-        deletions.dedup();
-        deletions.sort();
-
-        Ok(deletions)
-    }
-
-    // Fetches set of V2 deletions from AWS-S3.
-    async fn fetch_deletions_for_exclusion_v1(&self) -> Result<Vec<i64>, IndexationError> {
-        fetch_iris_v1_deletions_from_s3(&self.config).await
-    }
-
-    // Fetches set of V2 deletions from store.
-    async fn fetch_deletions_for_exclusion_v2(&mut self) -> Result<Vec<i64>, IndexationError> {
-        let deletions = self
-            .store
-            .as_ref()
-            .unwrap()
-            .fetch_iris_v2_deletions_by_party_id(self.config.party_id)
-            .await
-            .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-            .unwrap();
-
-        Ok(deletions)
-    }
-
-    // Fetches height of protocol from store.
-    async fn fetch_height_of_protocol(&mut self) -> Result<i64, IndexationError> {
-        self.store
-            .as_ref()
-            .unwrap()
-            .count_irises()
-            .await
-            .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-            .map(|val| val as i64)
-    }
-
-    // Fetches height of indexed from store.
-    async fn fetch_height_of_indexed(&self) -> Result<i64, IndexationError> {
-        // TODO: fetch from store.
-        Ok(1)
-    }
-
-    // Sets pointer to remote store.
-    async fn set_store(&mut self) -> Result<(), IndexationError> {
-        if self.store.is_none() {
-            match IrisStore::new_from_config(&self.config).await {
-                Ok(store) => {
-                    self.store = Some(store);
-                }
-                Err(_) => return Err(IndexationError::PostgresConnectionError),
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -168,10 +119,10 @@ impl Message<OnBegin> for BatchGenerator {
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, _: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnBegin", None);
+    async fn handle(&mut self, msg: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, OnBegin>(&msg);
 
-        // Crank next indexation step.
+        // Crank indexation step.
         self.do_indexation_step().await;
     }
 }
@@ -181,10 +132,10 @@ impl Message<OnEndBatch> for BatchGenerator {
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, _: OnEndBatch, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnEndBatch", None);
+    async fn handle(&mut self, msg: OnEndBatch, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, OnEndBatch>(&msg);
 
-        // Crank next indexation step.
+        // Crank indexation step.
         self.do_indexation_step().await;
     }
 }
@@ -208,24 +159,22 @@ impl Actor for BatchGenerator {
     async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), BoxError> {
         logger::log_lifecycle::<Self>("on_start", None);
 
-        // Initialise store pointer.
-        self.set_store().await?;
+        // Set store client.
+        let store = IrisStore::new_from_config(&self.config).await?;
 
-        // Initialise indexation exclusions.
-        self.indexation_exclusions = self.fetch_deletions_for_exclusion().await?;
-        logger::log_info::<Self>(
-            format!(
-                "Count of deletions for exclusion = {}",
-                self.indexation_exclusions.len()
-            )
-            .as_str(),
-            None,
-        );
+        // Set indexation exclusions.
+        self.indexation_exclusions = [
+            fetch_iris_v1_deletions(&self.config).await.unwrap(),
+            fetch_iris_v2_deletions(&store, &self.config).await.unwrap(),
+        ]
+        .concat();
 
-        // Initialise indexation range.
-        let height_of_protocol = self.fetch_height_of_protocol().await?;
-        let height_of_indexed = self.fetch_height_of_indexed().await?;
-        self.indexation_range_iter = (height_of_indexed..height_of_protocol).peekable();
+        // Set indexation range.
+        let height_of_protocol = fetch_height_of_protocol(&store).await?;
+        let height_of_indexed = fetch_height_of_indexed(&store).await?;
+        self.indexation_range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
+
+        // Emit log entries.
         logger::log_info::<Self>(
             format!(
                 "Range of serial-id's to index = {}..{}",
@@ -234,7 +183,125 @@ impl Actor for BatchGenerator {
             .as_str(),
             None,
         );
+        logger::log_info::<Self>(
+            format!(
+                "Deletions for exclusion = {}",
+                self.indexation_exclusions.len()
+            )
+            .as_str(),
+            None,
+        );
 
         Ok(())
     }
+}
+
+// ------------------------------------------------------------------------
+// Helper methods.
+// ------------------------------------------------------------------------
+
+/// Fetches height of indexed from store.
+///
+/// # Arguments
+///
+/// * `store` - Iris store provider.
+///
+/// # Returns
+///
+/// Height of indexed Iris's.
+///
+async fn fetch_height_of_indexed(_: &IrisStore) -> Result<IrisSerialId, IndexationError> {
+    // TODO: fetch from store.
+    Ok(1)
+}
+
+/// Fetches height of protocol from store.
+///
+/// # Arguments
+///
+/// * `store` - Iris store provider.
+///
+/// # Returns
+///
+/// Height of stored Iris's.
+///
+async fn fetch_height_of_protocol(store: &IrisStore) -> Result<IrisSerialId, IndexationError> {
+    store
+        .count_irises()
+        .await
+        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
+        .map(|val| val as IrisSerialId)
+}
+
+/// Fetches V1 serial identifiers marked as deleted.
+///
+/// # Arguments
+///
+/// * `config` - System configuration information.
+///
+/// # Returns
+///
+/// A set of Iris V1 serial identifiers marked as deleted.
+///
+async fn fetch_iris_v1_deletions(config: &Config) -> Result<Vec<IrisSerialId>, IndexationError> {
+    // Destructure AWS configuration settings.
+    let aws_endpoint = config
+        .aws
+        .as_ref()
+        .ok_or(IndexationError::AwsConfigurationError)?
+        .endpoint
+        .as_ref()
+        .ok_or(IndexationError::AwsConfigurationError)?;
+    let aws_region = config
+        .aws
+        .as_ref()
+        .unwrap()
+        .region
+        .as_ref()
+        .ok_or(IndexationError::AwsConfigurationError)?;
+
+    // Set AWS S3 client.
+    let aws_config = aws_config::from_env()
+        .region(S3_Region::new(aws_region.clone()))
+        .load()
+        .await;
+    let s3_cfg = aws_sdk_s3::config::Builder::from(&aws_config)
+        .endpoint_url(aws_endpoint.clone())
+        .force_path_style(true)
+        .build();
+    let _ = S3_CLient::from_conf(s3_cfg);
+
+    // Set AWS S3 response.
+    // TODO: test once resource has been deployed
+
+    // TODO: remove temporary code that returns a random set of identifiers.
+    let mut rng = rand::thread_rng();
+    let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
+    identifiers.sort();
+
+    Ok(identifiers)
+}
+
+/// Fetches V2 serial identifiers marked as deleted.
+///
+/// # Arguments
+///
+/// * `store` - Iris store provider.
+/// * `config` - System configuration information.
+///
+/// # Returns
+///
+/// A set of Iris V2 serial identifiers marked as deleted.
+///
+async fn fetch_iris_v2_deletions(
+    store: &IrisStore,
+    config: &Config,
+) -> Result<Vec<IrisSerialId>, IndexationError> {
+    let deletions = store
+        .fetch_iris_v2_deletions_by_party_id(config.party_id)
+        .await
+        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
+        .unwrap();
+
+    Ok(deletions)
 }

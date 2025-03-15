@@ -1,5 +1,8 @@
 use crate::protocol::shared_iris::GaloisRingSharedIris;
 
+// An iris pair identifier.
+pub type IrisSerialId = i64;
+
 // Galois field element shares over raw iris biometric data.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]

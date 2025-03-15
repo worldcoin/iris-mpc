@@ -8,7 +8,8 @@ use kameo::{
 };
 use {
     super::super::messages::{
-        OnBegin, OnBeginBatch, OnBeginBatchItem, OnEnd, OnEndBatch, OnFetchIrisShares,
+        OnBegin, OnBeginBatch, OnBeginBatchItem, OnBeginGraphIndexation, OnEnd, OnEndBatch,
+        OnFetchIrisShares,
     },
     super::super::utils::logger,
     super::{BatchGenerator, GraphDataWriter, GraphIndexer, SharesFetcher},
@@ -52,8 +53,8 @@ impl Message<OnBegin> for Supervisor {
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, _: OnBegin, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnBegin", None);
+    async fn handle(&mut self, msg: OnBegin, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, OnBegin>(&msg);
     }
 }
 
@@ -63,7 +64,7 @@ impl Message<OnBeginBatch> for Supervisor {
 
     // Handler.
     async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnBeginBatch", None);
+        logger::log_message::<Self, OnBeginBatch>(&msg);
 
         // Signal to other interested actors.
         self.a3_ref
@@ -74,10 +75,36 @@ impl Message<OnBeginBatch> for Supervisor {
             .unwrap();
 
         // For each item in batch, signal that it is ready to be processing.
-        for serial_id in msg.serial_ids {
-            let msg = OnBeginBatchItem { serial_id };
+        for (idx, serial_id) in msg.iris_serial_ids.iter().enumerate() {
+            let msg = OnBeginBatchItem {
+                batch_idx: msg.batch_idx,
+                batch_item_idx: idx + 1,
+                iris_serial_id: *serial_id,
+            };
             self.a2_ref.as_ref().unwrap().tell(msg).await.unwrap();
         }
+    }
+}
+
+impl Message<OnBeginGraphIndexation> for Supervisor {
+    // Reply type.
+    type Reply = ();
+
+    // Handler.
+    async fn handle(
+        &mut self,
+        msg: OnBeginGraphIndexation,
+        _: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnBeginGraphIndexation>(&msg);
+
+        // Signal to other interested actors.
+        self.a3_ref
+            .as_ref()
+            .unwrap()
+            .tell(msg.clone())
+            .await
+            .unwrap();
     }
 }
 
@@ -86,8 +113,8 @@ impl Message<OnEnd> for Supervisor {
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, _: OnEnd, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnEnd", None);
+    async fn handle(&mut self, msg: OnEnd, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, OnEnd>(&msg);
     }
 }
 
@@ -97,7 +124,7 @@ impl Message<OnEndBatch> for Supervisor {
 
     // Handler.
     async fn handle(&mut self, msg: OnEndBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnEndBatch", None);
+        logger::log_message::<Self, OnEndBatch>(&msg);
 
         // Signal to other interested actors.
         self.a1_ref
@@ -119,12 +146,9 @@ impl Message<OnFetchIrisShares> for Supervisor {
         msg: OnFetchIrisShares,
         _: Ctx<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message::<Self>(
-            "OnFetchIrisShares",
-            Some(format!("iris serial-id = {}", msg.serial_id).as_str()),
-        );
+        logger::log_message::<Self, OnFetchIrisShares>(&msg);
 
-        // Signal that Iris shares are ready for indexation.
+        // Signal to other interested actors.
         self.a3_ref.as_ref().unwrap().tell(msg).await.unwrap()
     }
 }

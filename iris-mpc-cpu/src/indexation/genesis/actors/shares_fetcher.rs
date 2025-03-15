@@ -4,7 +4,7 @@ use super::{
     super::{
         errors::IndexationError,
         messages::{OnBeginBatchItem, OnFetchIrisShares},
-        types::IrisGaloisShares,
+        types::{IrisGaloisShares, IrisSerialId},
     },
 };
 use iris_mpc_common::config::Config;
@@ -47,7 +47,10 @@ impl SharesFetcher {
 // Methods.
 impl SharesFetcher {
     // Queries remote store for range of iris identifiers to be processed.
-    async fn fetch_iris_data(&mut self, id_of_iris: i64) -> Result<IrisData, IndexationError> {
+    async fn fetch_iris_data(
+        &mut self,
+        serial_id: IrisSerialId,
+    ) -> Result<IrisData, IndexationError> {
         // JIT set pointer to remote store.
         if self.iris_store.is_none() {
             match IrisStore::new_from_config(&self.config).await {
@@ -62,7 +65,7 @@ impl SharesFetcher {
         self.iris_store
             .as_ref()
             .unwrap()
-            .fetch_iris_by_serial_id(id_of_iris)
+            .fetch_iris_by_serial_id(serial_id)
             .await
             .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
     }
@@ -80,10 +83,10 @@ impl Message<OnBeginBatchItem> for SharesFetcher {
         msg: OnBeginBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message::<Self>("OnBeginBatchItem", None);
+        logger::log_message::<Self, OnBeginBatchItem>(&msg);
 
         // Fetch data.
-        let stored = self.fetch_iris_data(msg.serial_id).await.unwrap();
+        let stored = self.fetch_iris_data(msg.iris_serial_id).await.unwrap();
 
         // Instantiate shares.
         let shares = IrisGaloisShares::new(
@@ -96,8 +99,10 @@ impl Message<OnBeginBatchItem> for SharesFetcher {
 
         // Signal to supervisor.
         let msg = OnFetchIrisShares {
-            serial_id: stored.id(),
-            shares,
+            batch_idx: msg.batch_idx,
+            batch_item_idx: msg.batch_item_idx,
+            iris_serial_id: stored.id(),
+            iris_shares: shares,
         };
         self.supervisor_ref.tell(msg).await.unwrap();
 

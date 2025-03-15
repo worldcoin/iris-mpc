@@ -2,7 +2,7 @@ use super::{
     super::Supervisor,
     super::{
         errors::IndexationError,
-        messages::{OnBeginBatch, OnEndBatch, OnFetchIrisShares},
+        messages::{OnBeginBatch, OnBeginGraphIndexation, OnEndBatch, OnFetchIrisShares},
         types::IrisGaloisShares,
         utils::logger,
     },
@@ -22,8 +22,11 @@ use kameo::{
 #[derive(Actor)]
 #[allow(dead_code)]
 pub struct GraphIndexer {
-    // Batch of Iris Galois shares awaiting indexation.
-    batch: Vec<IrisGaloisShares>,
+    // Indexation target, i.e. set of Iris Galois secret shares.
+    target: Vec<IrisGaloisShares>,
+
+    // Batch ordinal identifier.
+    batch_idx: usize,
 
     // System configuration information.
     config: Config,
@@ -36,18 +39,32 @@ pub struct GraphIndexer {
 impl GraphIndexer {
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
-            batch: Vec::new(),
+            target: Vec::new(),
+            batch_idx: 0,
             config,
             supervisor_ref,
         }
     }
 }
 
+// Methods.
 impl GraphIndexer {
     async fn do_index_batch(&self) {
         logger::log_todo::<Self>(
-            format!("Index graph for Iris batch of size {}", self.batch.len()).as_str(),
+            format!(
+                "Index graph for Iris batch {} of size {}",
+                self.batch_idx,
+                self.target.len()
+            )
+            .as_str(),
         );
+
+        // TODO: remove temporary signal emission.
+        let msg = OnEndBatch {
+            batch_idx: self.batch_idx,
+            batch_size: self.target.len(),
+        };
+        self.supervisor_ref.tell(msg).await.unwrap();
     }
 }
 
@@ -61,10 +78,27 @@ impl Message<OnBeginBatch> for GraphIndexer {
 
     // Handler.
     async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self>("OnBeginBatch", None);
+        logger::log_message::<Self, OnBeginBatch>(&msg);
 
-        // Reset batch to be processed.
-        self.batch = Vec::with_capacity(msg.serial_ids.len());
+        // Reset batch of shares to be processed.
+        self.target = Vec::with_capacity(msg.iris_serial_ids.len());
+        self.batch_idx = msg.batch_idx;
+    }
+}
+
+impl Message<OnBeginGraphIndexation> for GraphIndexer {
+    // Reply type.
+    type Reply = ();
+
+    // Handler.
+    async fn handle(
+        &mut self,
+        msg: OnBeginGraphIndexation,
+        _: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnBeginGraphIndexation>(&msg);
+
+        self.do_index_batch().await;
     }
 }
 
@@ -76,14 +110,17 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
         msg: OnFetchIrisShares,
         _: Ctx<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message::<Self>("OnFetchOfIrisShares", None);
+        logger::log_message::<Self, OnFetchIrisShares>(&msg);
 
-        // Grow next indexation batch & index when full.
-        self.batch.push(msg.shares);
-        if self.batch.len() == self.batch.capacity() {
-            self.do_index_batch().await;
-            // TODO move upstream when graph is being indexed.
-            let msg = OnEndBatch;
+        // Extend set of shares to be indexed.
+        self.target.push(msg.iris_shares);
+
+        // When batch is complete then signal readiness for indexing.
+        if self.target.len() == self.target.capacity() {
+            let msg = OnBeginGraphIndexation {
+                batch_idx: msg.batch_idx,
+                batch_size: self.target.len(),
+            };
             self.supervisor_ref.tell(msg).await.unwrap();
         }
 

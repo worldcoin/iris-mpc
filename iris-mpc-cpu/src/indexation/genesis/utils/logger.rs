@@ -1,4 +1,6 @@
+use core::fmt;
 use kameo::Actor;
+use std::any::type_name;
 
 /// Logs an actor information message.
 ///
@@ -12,7 +14,13 @@ where
     A: Actor,
 {
     match msg {
-        Some(info) => tracing::info!("GENESIS :: {} :: {} :: {}", A::name(), msg_type, info),
+        Some(info) => {
+            if info.is_empty() {
+                tracing::info!("GENESIS :: {} :: {}", A::name(), msg_type);
+            } else {
+                tracing::info!("GENESIS :: {} :: {} :: {}", A::name(), msg_type, info);
+            }
+        }
         None => tracing::info!("GENESIS :: {} :: {}", A::name(), msg_type),
     }
 }
@@ -36,14 +44,17 @@ where
 ///
 /// # Arguments
 ///
-/// * `msg_type` - Type of message received by an actor.
-/// * `info` - Other pertinent information.
+/// * `msg` - A message received by an actor.
 ///
-pub(crate) fn log_message<A>(msg_type: &str, info: Option<&str>)
+pub(crate) fn log_message<A, M>(msg: &M)
 where
     A: Actor,
+    M: fmt::Display,
 {
-    log_info::<A>(msg_type, info)
+    // TODO: optimise via a cache.
+    let f: Vec<&str> = type_name::<M>().split("::").collect();
+
+    log_info::<A>(f.last().unwrap(), Some(&msg.to_string().as_str()));
 }
 
 /// Logs an actor todo message.
