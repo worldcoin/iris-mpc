@@ -1,0 +1,103 @@
+use itertools::Itertools;
+
+type EYE = usize;
+type SESSION = usize;
+type REQUEST = usize;
+type ROTATION = usize;
+
+/// A batch is a list of tasks to do within the same unit of parallelism.
+/// Our unit of parallelism is one session of one eye side.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Batch {
+    i_eye: EYE,
+    i_session: SESSION,
+    tasks: Vec<Task>,
+}
+
+/// A task is something to do with one rotation of one request.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Task {
+    i_request: REQUEST,
+    i_rotation: ROTATION,
+}
+
+pub fn schedule(
+    n_eyes: usize,
+    n_sessions: usize,
+    n_requests: usize,
+    n_rotations: usize,
+) -> Vec<Batch> {
+    let n_tasks = n_requests * n_rotations;
+    let batch_size = n_tasks / n_sessions;
+    let rest_size = n_tasks % n_sessions;
+
+    (0..n_eyes)
+        .flat_map(|i_eye| {
+            let mut task_iter = (0..n_requests).flat_map(|i_request| {
+                (0..n_rotations).map(move |i_rotation| Task {
+                    i_request,
+                    i_rotation,
+                })
+            });
+
+            (0..n_sessions).map(move |i_session| {
+                // Some sessions get one more task if n_sessions does not divide n_tasks.
+                let one_more = (i_session < rest_size) as usize;
+
+                let tasks = task_iter.by_ref().take(batch_size + one_more).collect_vec();
+
+                Batch {
+                    i_eye,
+                    i_session,
+                    tasks,
+                }
+            })
+        })
+        .collect_vec()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use iris_mpc_common::ROTATIONS;
+
+    #[test]
+    fn test_schedule() {
+        test_schedule_impl(1, 1);
+        test_schedule_impl(1, 2);
+        test_schedule_impl(10, 1);
+        test_schedule_impl(1, 10);
+        test_schedule_impl(7, 10);
+        test_schedule_impl(10, 30);
+        test_schedule_impl(10, 97);
+    }
+
+    fn test_schedule_impl(n_sessions: usize, n_requests: usize) {
+        let n_eyes = 2;
+        let n_rotations = ROTATIONS;
+        let n_tasks = n_eyes * n_requests * n_rotations;
+
+        let batches = schedule(n_eyes, n_sessions, n_requests, n_rotations);
+        assert_eq!(batches.len(), n_eyes * n_sessions);
+
+        let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();
+        assert_eq!(count_tasks, n_tasks);
+
+        let unique_tasks = batches
+            .iter()
+            .flat_map(|b| {
+                assert!(b.i_eye < n_eyes);
+                assert!(b.i_session < n_sessions);
+
+                b.tasks.iter().map(|t| {
+                    assert!(t.i_request < n_requests);
+                    assert!(t.i_rotation < n_rotations);
+
+                    (b.i_eye, b.i_session, t.i_request, t.i_rotation)
+                })
+            })
+            .unique()
+            .count();
+        assert_eq!(unique_tasks, n_tasks);
+    }
+}

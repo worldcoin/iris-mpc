@@ -19,6 +19,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use intra_batch::intra_batch_is_match;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
@@ -42,9 +43,11 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+mod intra_batch;
 mod is_match_batch;
 mod matching;
 mod rot;
+mod scheduler;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -729,7 +732,7 @@ impl HawkHandle {
 
     pub async fn new_with_sessions(
         mut hawk_actor: HawkActor,
-        sessions: [Vec<HawkSessionRef>; 2],
+        sessions: BothEyes<Vec<HawkSessionRef>>,
     ) -> Result<Self> {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
 
@@ -740,6 +743,9 @@ impl HawkHandle {
 
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
+
+                let intra_results = intra_batch_is_match(search_queries, &sessions).await;
+                // TODO something with intra_results.
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
