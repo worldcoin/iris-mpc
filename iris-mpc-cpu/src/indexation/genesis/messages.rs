@@ -24,7 +24,7 @@ pub struct OnEnd;
 
 // Signals that Iris batch indexation is complete.
 #[derive(Clone, Debug)]
-pub struct OnEndOfBatch;
+pub struct OnEndBatch;
 
 // Signals that an indexation error occurred.
 #[derive(Clone, Debug)]

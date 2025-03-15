@@ -7,7 +7,9 @@ use kameo::{
     Actor,
 };
 use {
-    super::super::signals::{OnBegin, OnBeginBatch, OnBeginBatchItem, OnEnd, OnFetchIrisShares},
+    super::super::messages::{
+        OnBegin, OnBeginBatch, OnBeginBatchItem, OnEnd, OnEndBatch, OnFetchIrisShares,
+    },
     super::super::utils::logger,
     super::{BatchGenerator, GraphDataWriter, GraphIndexer, SharesFetcher},
 };
@@ -86,6 +88,24 @@ impl Message<OnEnd> for Supervisor {
     // Handler.
     async fn handle(&mut self, _: OnEnd, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
         logger::log_message::<Self>("OnEnd", None);
+    }
+}
+
+impl Message<OnEndBatch> for Supervisor {
+    // Reply type.
+    type Reply = ();
+
+    // Handler.
+    async fn handle(&mut self, msg: OnEndBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self>("OnEndBatch", None);
+
+        // Signal to other interested actors.
+        self.a1_ref
+            .as_ref()
+            .unwrap()
+            .tell(msg.clone())
+            .await
+            .unwrap();
     }
 }
 

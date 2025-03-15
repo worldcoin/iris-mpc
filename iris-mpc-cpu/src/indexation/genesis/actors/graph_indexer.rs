@@ -2,7 +2,7 @@ use super::{
     super::Supervisor,
     super::{
         errors::IndexationError,
-        signals::{OnBeginBatch, OnFetchIrisShares},
+        messages::{OnBeginBatch, OnEndBatch, OnFetchIrisShares},
         types::IrisGaloisShares,
         utils::logger,
     },
@@ -63,7 +63,7 @@ impl Message<OnBeginBatch> for GraphIndexer {
     async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
         logger::log_message::<Self>("OnBeginBatch", None);
 
-        // Initialise new batch.
+        // Reset batch to be processed.
         self.batch = Vec::with_capacity(msg.serial_ids.len());
     }
 }
@@ -82,6 +82,9 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
         self.batch.push(msg.shares);
         if self.batch.len() == self.batch.capacity() {
             self.do_index_batch().await;
+            // TODO move upstream when graph is being indexed.
+            let msg = OnEndBatch;
+            self.supervisor_ref.tell(msg).await.unwrap();
         }
 
         Ok(())

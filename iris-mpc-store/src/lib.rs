@@ -13,7 +13,7 @@ use iris_mpc_common::{
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
 };
-use rand::{prelude::*, rngs::StdRng, Rng, SeedableRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
@@ -242,11 +242,9 @@ impl Store {
             id_of_party
         );
 
-        let mut rng = rand::thread_rng();
-        let mut deletions = (1_i64..1000_i64).choose_multiple(&mut rng, 50);
-        deletions.sort();
+        // TODO: Implement fetching V2 deletions by party ID.
 
-        Ok(deletions)
+        Ok(vec![])
     }
 
     /// Stream irises in order.

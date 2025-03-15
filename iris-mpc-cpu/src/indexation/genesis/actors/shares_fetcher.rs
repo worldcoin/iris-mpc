@@ -3,7 +3,7 @@ use super::{
     super::Supervisor,
     super::{
         errors::IndexationError,
-        signals::{OnBeginBatchItem, OnFetchIrisShares},
+        messages::{OnBeginBatchItem, OnFetchIrisShares},
         types::IrisGaloisShares,
     },
 };
@@ -83,20 +83,20 @@ impl Message<OnBeginBatchItem> for SharesFetcher {
         logger::log_message::<Self>("OnBeginBatchItem", None);
 
         // Fetch data.
-        let iris_data = self.fetch_iris_data(msg.serial_id).await.unwrap();
+        let stored = self.fetch_iris_data(msg.serial_id).await.unwrap();
 
         // Instantiate shares.
         let shares = IrisGaloisShares::new(
             self.config.party_id,
-            iris_data.left_code(),
-            iris_data.left_mask(),
-            iris_data.right_code(),
-            iris_data.right_mask(),
+            stored.left_code(),
+            stored.left_mask(),
+            stored.right_code(),
+            stored.right_mask(),
         );
 
         // Signal to supervisor.
         let msg = OnFetchIrisShares {
-            serial_id: iris_data.id(),
+            serial_id: stored.id(),
             shares,
         };
         self.supervisor_ref.tell(msg).await.unwrap();

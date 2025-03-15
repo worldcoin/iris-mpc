@@ -7,13 +7,13 @@ use kameo::Actor;
 /// * `msg_type` - Type of information message.
 /// * `msg` - An actor life-cycle information message.
 ///
-fn log_info<A>(msg_type: &str, msg: Option<&str>)
+pub(crate) fn log_info<A>(msg_type: &str, msg: Option<&str>)
 where
     A: Actor,
 {
     match msg {
-        Some(info) => tracing::info!("GENESIS::{} :: {} :: {}", A::name(), msg_type, info),
-        None => tracing::info!("GENESIS::{} :: {}", A::name(), msg_type),
+        Some(info) => tracing::info!("GENESIS :: {} :: {} :: {}", A::name(), msg_type, info),
+        None => tracing::info!("GENESIS :: {} :: {}", A::name(), msg_type),
     }
 }
 
@@ -29,7 +29,7 @@ pub(crate) fn log_lifecycle<A>(episode: &str, info: Option<&str>)
 where
     A: Actor,
 {
-    log_info::<A>(format!("Lifecycle::{}", episode).as_str(), info)
+    log_info::<A>(format!("Lifecycle[{}]", episode).as_str(), info)
 }
 
 /// Logs an actor message receipt.
@@ -43,7 +43,7 @@ pub(crate) fn log_message<A>(msg_type: &str, info: Option<&str>)
 where
     A: Actor,
 {
-    log_info::<A>(format!("Message::{}", msg_type).as_str(), info)
+    log_info::<A>(msg_type, info)
 }
 
 /// Logs an actor todo message.
