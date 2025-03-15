@@ -25,6 +25,7 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status, Streaming,
 };
+use tower::discover::Change;
 
 type TonicResult<T> = Result<T, Status>;
 
@@ -386,6 +387,22 @@ pub struct GrpcNetworking {
     pub config: GrpcConfig,
 }
 
+impl PartyNodeClient<tonic::transport::Channel> {
+    /// Create a new client with a connection pool.
+    pub async fn connect_pool(
+        dst: String,
+        pool_size: usize,
+    ) -> Result<Self, tonic::transport::Error> {
+        let endpoint = tonic::transport::Endpoint::new(dst)?;
+        let (channel, pool) = Channel::balance_channel(pool_size);
+        for i in 0..pool_size {
+            pool.try_send(Change::Insert(i, endpoint.clone())).unwrap();
+        }
+        // TODO: Test the connection.
+        Ok(Self::new(channel))
+    }
+}
+
 impl GrpcNetworking {
     pub fn new(party_id: Identity, config: GrpcConfig) -> Self {
         GrpcNetworking {
@@ -411,10 +428,12 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
-        let client = (|| async { PartyNodeClient::connect(address.to_string()).await })
-            .retry(self.backoff())
-            .sleep(tokio::time::sleep)
-            .await?;
+        let pool_size = 4;
+        let client =
+            (|| async { PartyNodeClient::connect_pool(address.to_string(), pool_size).await })
+                .retry(self.backoff())
+                .sleep(tokio::time::sleep)
+                .await?;
         tracing::trace!(
             "Player {:?} connected to player {:?} at address {:?}",
             self.party_id,
