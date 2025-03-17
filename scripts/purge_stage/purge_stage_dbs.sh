@@ -71,7 +71,7 @@ clean_mpc_database() {
   if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$ACCOUNT_ID" ] || [ -z "$CLUSTER_NAME" ] || [-z "$NAMESPACE" ]; then
     echo "Database URL, party ID, account ID, cluster name and namespace are required"
     exit 1
-  fi  
+  fi
 
   CLUSTER="arn:aws:eks:eu-north-1:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
   echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER_NAME"
@@ -85,9 +85,10 @@ clean_mpc_database() {
   echo "Waiting 10s for db-cleaner pod to be ready..."
   sleep 10
 
-  echo "Cleaning Database for URL: $DATABASE_URL"
   # Remove the last segment after the last slash
   DATABASE_URL_WITH_CORRECT_NAME=$(echo "$DATABASE_URL" | sed 's|/[^/]*$||')
+
+  echo "Cleaning Database for URL: $DATABASE_URL_WITH_CORRECT_NAME"
   
   # Execute database cleanup commands
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE irises RESTART IDENTITY;'"

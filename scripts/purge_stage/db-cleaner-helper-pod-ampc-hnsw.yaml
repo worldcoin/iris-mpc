@@ -4,8 +4,6 @@ metadata:
   name: db-cleaner
   namespace: ampc-hnsw
 spec:
-  nodeSelector:
-    beta.kubernetes.io/instance-type: t3.medium
   securityContext:
     runAsUser: 0
   containers:
@@ -15,11 +13,11 @@ spec:
       image: postgres
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
-      args: [ "-c", "while true; do ping localhost; sleep 60; done" ]
       resources:
         limits:
-          cpu: 500m
-          memory: 512Mi
+          cpu: 1
+          memory: 1Gi
         requests:
-          cpu: 500m
-          memory: 512Mi
+          cpu: 1
+          memory: 1Gi
+
