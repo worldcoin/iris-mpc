@@ -713,6 +713,11 @@ async fn send_last_modifications_to_sns(
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     for modification in &last_modifications {
+        if modification.result_message_body.is_none() {
+            tracing::error!("Missing modification result message body");
+            continue;
+        }
+
         let body = modification
             .result_message_body
             .as_ref()
