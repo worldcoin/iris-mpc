@@ -548,7 +548,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
-        let sns_message_bodies: Vec<Option<String>> = modifications
+        let result_message_bodies: Vec<Option<String>> = modifications
             .iter()
             .map(|m| m.result_message_body.clone())
             .collect();
@@ -572,7 +572,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .bind(&ids)
         .bind(&statuses)
         .bind(&persisteds)
-        .bind(&sns_message_bodies)
+        .bind(&result_message_bodies)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1176,7 +1176,7 @@ pub mod tests {
         expected_s3_url: Option<String>,
         expected_status: ModificationStatus,
         expected_persisted: bool,
-        expected_sns_body: Option<String>,
+        expected_result_body: Option<String>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1184,7 +1184,7 @@ pub mod tests {
         assert_eq!(actual.s3_url, expected_s3_url);
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
-        assert_eq!(actual.result_message_body, expected_sns_body);
+        assert_eq!(actual.result_message_body, expected_result_body);
     }
 
     #[tokio::test]
