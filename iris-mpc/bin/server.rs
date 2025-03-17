@@ -703,6 +703,10 @@ async fn send_last_modifications_to_sns(
 ) -> eyre::Result<()> {
     // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
+    tracing::info!(
+        "Replaying last {} modification results to SNS",
+        last_modifications.len()
+    );
 
     if last_modifications.is_empty() {
         tracing::info!("No last modifications found to send to SNS");
