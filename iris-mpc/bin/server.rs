@@ -1257,7 +1257,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 if config.enable_modifications_replay {
                     modification
                         .update_result_message_node_id(party_id)
-                        .expect("Failed to update node_id");
+                        .map_err(|e| {
+                            tracing::error!("Failed to update modification node_id: {:?}", e)
+                        });
                 }
                 &*modification
             })
@@ -1320,7 +1322,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &identity_deletion_result_attributes,
             max_modification_lookback,
         )
-        .await?;
+        .await
+        .map_err(|e| tracing::error!("Failed to replay last modifications: {:?}", e));
     }
 
     if download_shutdown_handler.is_shutting_down() {
