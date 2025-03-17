@@ -152,7 +152,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
-    value: "false"
+    value: "true"
 
 initContainer:
   enabled: true
