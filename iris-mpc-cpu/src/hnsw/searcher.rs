@@ -867,7 +867,9 @@ impl HnswSearcher {
 
     /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
     /// into `graph` with the specified neighbors `links` and setting the entry point of the
-    /// graph if `set_ep` is `true`.
+    /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
+    /// newly inserted node in different graph layers in which it is to be inserted, starting
+    /// with layer 0.
     ///
     /// This function call does *not* update `graph`.
     pub async fn insert_prepare<V: VectorStore>(
