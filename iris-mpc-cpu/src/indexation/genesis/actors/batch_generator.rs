@@ -1,13 +1,11 @@
 use super::{
     super::Supervisor,
     super::{
-        errors::IndexationError,
         messages::{OnBegin, OnBeginBatch, OnEnd, OnEndBatch},
         types::IrisSerialId,
-        utils::logger,
+        utils::{fetcher, logger},
     },
 };
-use aws_sdk_s3::{config::Region as S3_Region, Client as S3_CLient};
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
 use kameo::{
@@ -17,7 +15,6 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use rand::prelude::*;
 use std::iter::Peekable;
 use std::ops::Range;
 
@@ -164,14 +161,18 @@ impl Actor for BatchGenerator {
 
         // Set indexation exclusions.
         self.indexation_exclusions = [
-            fetch_iris_v1_deletions(&self.config).await.unwrap(),
-            fetch_iris_v2_deletions(&store, &self.config).await.unwrap(),
+            fetcher::fetch_iris_v1_deletions(&self.config)
+                .await
+                .unwrap(),
+            fetcher::fetch_iris_v2_deletions(&store, &self.config)
+                .await
+                .unwrap(),
         ]
         .concat();
 
         // Set indexation range.
-        let height_of_protocol = fetch_height_of_protocol(&store).await?;
-        let height_of_indexed = fetch_height_of_indexed(&store).await?;
+        let height_of_protocol = fetcher::fetch_height_of_protocol(&store).await?;
+        let height_of_indexed = fetcher::fetch_height_of_indexed(&store).await?;
         self.indexation_range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
 
         // Emit log entries.
@@ -194,114 +195,4 @@ impl Actor for BatchGenerator {
 
         Ok(())
     }
-}
-
-// ------------------------------------------------------------------------
-// Helper methods.
-// ------------------------------------------------------------------------
-
-/// Fetches height of indexed from store.
-///
-/// # Arguments
-///
-/// * `store` - Iris store provider.
-///
-/// # Returns
-///
-/// Height of indexed Iris's.
-///
-async fn fetch_height_of_indexed(_: &IrisStore) -> Result<IrisSerialId, IndexationError> {
-    // TODO: fetch from store.
-    Ok(1)
-}
-
-/// Fetches height of protocol from store.
-///
-/// # Arguments
-///
-/// * `store` - Iris store provider.
-///
-/// # Returns
-///
-/// Height of stored Iris's.
-///
-async fn fetch_height_of_protocol(store: &IrisStore) -> Result<IrisSerialId, IndexationError> {
-    store
-        .count_irises()
-        .await
-        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-        .map(|val| val as IrisSerialId)
-}
-
-/// Fetches V1 serial identifiers marked as deleted.
-///
-/// # Arguments
-///
-/// * `config` - System configuration information.
-///
-/// # Returns
-///
-/// A set of Iris V1 serial identifiers marked as deleted.
-///
-async fn fetch_iris_v1_deletions(config: &Config) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // Destructure AWS configuration settings.
-    let aws_endpoint = config
-        .aws
-        .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?
-        .endpoint
-        .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?;
-    let aws_region = config
-        .aws
-        .as_ref()
-        .unwrap()
-        .region
-        .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?;
-
-    // Set AWS S3 client.
-    let aws_config = aws_config::from_env()
-        .region(S3_Region::new(aws_region.clone()))
-        .load()
-        .await;
-    let s3_cfg = aws_sdk_s3::config::Builder::from(&aws_config)
-        .endpoint_url(aws_endpoint.clone())
-        .force_path_style(true)
-        .build();
-    let _ = S3_CLient::from_conf(s3_cfg);
-
-    // Set AWS S3 response.
-    // TODO: test once resource has been deployed
-
-    // TODO: remove temporary code that returns a random set of identifiers.
-    let mut rng = rand::thread_rng();
-    let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
-    identifiers.sort();
-
-    Ok(identifiers)
-}
-
-/// Fetches V2 serial identifiers marked as deleted.
-///
-/// # Arguments
-///
-/// * `store` - Iris store provider.
-/// * `config` - System configuration information.
-///
-/// # Returns
-///
-/// A set of Iris V2 serial identifiers marked as deleted.
-///
-async fn fetch_iris_v2_deletions(
-    store: &IrisStore,
-    config: &Config,
-) -> Result<Vec<IrisSerialId>, IndexationError> {
-    let deletions = store
-        .fetch_iris_v2_deletions_by_party_id(config.party_id)
-        .await
-        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-        .unwrap();
-
-    Ok(deletions)
 }
