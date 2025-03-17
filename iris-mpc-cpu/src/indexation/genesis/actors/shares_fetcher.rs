@@ -1,14 +1,14 @@
 use super::{
-    super::utils::logger,
+    super::utils::{fetcher, logger},
     super::Supervisor,
     super::{
         errors::IndexationError,
         messages::{OnBeginBatchItem, OnFetchIrisShares},
-        types::{IrisGaloisShares, IrisSerialId},
+        types::IrisGaloisShares,
     },
 };
 use iris_mpc_common::config::Config;
-use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
+use iris_mpc_store::Store as IrisStore;
 use kameo::{
     actor::ActorRef,
     message::{Context, Message},
@@ -44,33 +44,6 @@ impl SharesFetcher {
     }
 }
 
-// Methods.
-impl SharesFetcher {
-    // Queries remote store for range of iris identifiers to be processed.
-    async fn fetch_iris_data(
-        &mut self,
-        serial_id: IrisSerialId,
-    ) -> Result<IrisData, IndexationError> {
-        // JIT set pointer to remote store.
-        if self.iris_store.is_none() {
-            match IrisStore::new_from_config(&self.config).await {
-                Ok(store) => {
-                    self.iris_store = Some(store);
-                }
-                Err(_) => return Err(IndexationError::PostgresConnectionError),
-            }
-        }
-
-        // Fetch iris data.
-        self.iris_store
-            .as_ref()
-            .unwrap()
-            .fetch_iris_by_serial_id(serial_id)
-            .await
-            .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-    }
-}
-
 // ------------------------------------------------------------------------
 // Actor message handlers.
 // ------------------------------------------------------------------------
@@ -85,10 +58,23 @@ impl Message<OnBeginBatchItem> for SharesFetcher {
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginBatchItem>(&msg);
 
-        // Fetch data.
-        let stored = self.fetch_iris_data(msg.iris_serial_id).await.unwrap();
+        // JIT set pointer to store.
+        if self.iris_store.is_none() {
+            match IrisStore::new_from_config(&self.config).await {
+                Ok(store) => {
+                    self.iris_store = Some(store);
+                }
+                Err(_) => return Err(IndexationError::PostgresConnectionError),
+            }
+        }
 
-        // Instantiate shares.
+        // Fetch iris data.
+        let stored =
+            fetcher::fetch_iris_data(self.iris_store.as_ref().unwrap(), msg.iris_serial_id)
+                .await
+                .unwrap();
+
+        // Instantiate Galois shares.
         let shares = IrisGaloisShares::new(
             self.config.party_id,
             stored.left_code(),

@@ -42,9 +42,6 @@ pub struct BatchGenerator {
 
 // Constructors.
 impl BatchGenerator {
-    // TODO: move to config.
-    const DEFAULT_BATCH_SIZE: usize = 42;
-
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
             batch_count: 0,
@@ -77,7 +74,7 @@ impl BatchGenerator {
 
             // Extend batch - escape if built.
             batch.push(next_id);
-            if batch.len() == Self::DEFAULT_BATCH_SIZE {
+            if batch.len() == self.config.max_batch_size {
                 batch.sort();
                 break;
             }
