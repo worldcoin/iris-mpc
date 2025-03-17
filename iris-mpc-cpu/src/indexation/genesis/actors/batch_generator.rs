@@ -59,33 +59,23 @@ impl BatchGenerator {
     async fn do_indexation_step(&mut self) {
         // Build a batch.
         let mut batch = Vec::<IrisSerialId>::new();
-        while self.indexation_range_iter.peek().is_some() {
+        while self.indexation_range_iter.peek().is_some()
+            && batch.len() < self.config.max_batch_size
+        {
             // Set next id.
             let next_id = self.indexation_range_iter.by_ref().next().unwrap();
 
             // Skip exclusions.
-            if self.indexation_exclusions.contains(&next_id) {
+            if !self.indexation_exclusions.contains(&next_id) {
+                batch.push(next_id);
+            } else {
                 logger::log_info::<Self>(
                     format!("Excluding deletion :: serial-id={}", next_id).as_str(),
                     None,
                 );
-                continue;
-            }
-
-            // Extend batch - escape if built.
-            batch.push(next_id);
-            if batch.len() == self.config.max_batch_size {
-                batch.sort();
-                break;
             }
         }
 
-        // Increment batch count.
-        if !batch.is_empty() {
-            self.batch_count += 1;
-        }
-
-        // Signal.
         if batch.is_empty() {
             // End of indexation.
             let msg = OnEnd {
@@ -94,6 +84,7 @@ impl BatchGenerator {
             self.supervisor_ref.tell(msg).await.unwrap();
         } else {
             // New batch.
+            self.batch_count += 1;
             let msg = OnBeginBatch {
                 batch_idx: self.batch_count,
                 batch_size: batch.len(),
