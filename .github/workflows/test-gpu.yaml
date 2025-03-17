@@ -1,11 +1,11 @@
 name: Rust GPU Tests
 
 on:
-  pull_request:
+  push:
 
-concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
-  cancel-in-progress: true
+#concurrency:
+#  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+#  cancel-in-progress: true
 
 jobs:
   e2e:
@@ -37,7 +37,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev protobuf-compiler
 
       - name: Install CUDA and NCCL dependencies
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true' && steps.cache-cuda-nccl.outputs.cache-hit != 'true'
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -48,6 +47,9 @@ jobs:
 
       - name: Find libs
         run: find /usr -name "libnvrtc*" && find /usr -name libcuda.so
+
+      - name: Find libs 2
+        run: find / -name "libnvrtc*"
 
       - name: Cache Rust build
         uses: actions/cache@v4
