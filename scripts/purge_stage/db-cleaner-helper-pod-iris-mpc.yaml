@@ -9,7 +9,9 @@ spec:
   securityContext:
     runAsUser: 0
   containers:
-    - name: db-cleaner
+    - securityContext:
+        allowPrivilegeEscalation: false
+      name: db-cleaner
       image: postgres
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
