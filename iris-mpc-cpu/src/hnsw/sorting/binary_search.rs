@@ -14,7 +14,7 @@ fn midpoint(left: usize, right: usize) -> usize {
 /// operation by default, and for this interpretation, the resulting index
 /// places the query after all elements "less than or equal to" the value, and
 /// before all elements "greater than" the value.
-pub struct BinarySearch<'a, Value: Clone> {
+pub struct BinarySearch<'a, Query, Value> {
     /// Index of left endpoint of search interval, inclusive
     left: usize,
 
@@ -22,22 +22,22 @@ pub struct BinarySearch<'a, Value: Clone> {
     right: usize,
 
     /// Query value for which we want the insertion index
-    query: &'a Value,
+    query: &'a Query,
 
     /// Reference to sorted array of values to which indexes refer
     arr: &'a [Value],
 }
 
-impl<'a, Value: Clone> BinarySearch<'a, Value> {
+impl<'a, Query, Value> BinarySearch<'a, Query, Value> {
     /// Generate the initial state for a binary search for a query over the full
     /// range of a given sorted array.
-    pub fn new(query: &'a Value, arr: &'a [Value]) -> Self {
+    pub fn new(query: &'a Query, arr: &'a [Value]) -> Self {
         BinarySearch::new_in_range(0, arr.len(), query, arr)
     }
 
     /// Generate the initial state for a binary search for a query of a
     /// specified interval within a given sorted array.
-    pub fn new_in_range(left: usize, right: usize, query: &'a Value, arr: &'a [Value]) -> Self {
+    pub fn new_in_range(left: usize, right: usize, query: &'a Query, arr: &'a [Value]) -> Self {
         debug_assert!(left <= right && right <= arr.len());
         Self {
             left,
@@ -69,12 +69,12 @@ impl<'a, Value: Clone> BinarySearch<'a, Value> {
     ///
     /// A `Some` value indicates that additional comparisons are needed, and a
     /// `None` value indicates that search has already converged to a result.
-    pub fn next_cmp(&self) -> Option<(Value, Value)> {
+    pub fn next_cmp(&self) -> Option<(&Query, &Value)> {
         if self.is_finished() {
             None
         } else {
             let middle = midpoint(self.left, self.right);
-            Some((self.query.clone(), self.arr[middle].clone()))
+            Some((self.query, self.arr.get(middle).unwrap()))
         }
     }
 
