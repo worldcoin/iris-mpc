@@ -1,7 +1,7 @@
 use crate::{
     execution::{
         player::*,
-        session::{BootSession, Session, SessionId},
+        session::{NetworkSession, Session, SessionId},
     },
     network::{grpc::setup_local_grpc_networking, local::LocalNetworkingStore, NetworkType},
     protocol::{ops::setup_replicated_prf, prf::PrfSeed},
@@ -84,10 +84,10 @@ impl LocalRuntime {
         let boot_sessions = match network_type {
             NetworkType::LocalChannel => {
                 let network = LocalNetworkingStore::from_host_ids(&identities);
-                let boot_sessions: Vec<BootSession> = (0..seeds.len())
+                let boot_sessions: Vec<NetworkSession> = (0..seeds.len())
                     .map(|i| {
                         let identity = identities[i].clone();
-                        BootSession {
+                        NetworkSession {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
                             networking: Box::new(network.get_local_network(identity.clone())),
@@ -111,9 +111,9 @@ impl LocalRuntime {
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new))
                     .collect::<eyre::Result<Vec<_>>>()?;
-                let boot_sessions: Vec<BootSession> =
+                let boot_sessions: Vec<NetworkSession> =
                     izip!(identities.into_iter(), grpc_sessions.into_iter())
-                        .map(|(id, session)| BootSession {
+                        .map(|(id, session)| NetworkSession {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
                             networking: Box::new(session),
@@ -139,8 +139,11 @@ impl LocalRuntime {
             .await
             .into_iter()
             .map(|t| {
-                let (boot_session, prf) = t?;
-                Ok(Session { boot_session, prf })
+                let (network_session, prf) = t?;
+                Ok(Session {
+                    network_session,
+                    prf,
+                })
             })
             .collect::<eyre::Result<Vec<_>>>()?;
         Ok(LocalRuntime { sessions })

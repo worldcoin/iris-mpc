@@ -95,30 +95,22 @@ where
         shares_a.push(c);
     }
 
-    let next_party = session.next_identity()?;
-    let sid = session.session_id();
-    let network = session.network();
+    let network = &mut session.network_session;
     let message = shares_a.clone();
     let message = if message.len() == 1 {
         NetworkValue::RingElement64(message[0])
     } else {
         NetworkValue::VecRing64(message)
     };
-    network
-        .send(message.to_network(), &next_party, &sid)
-        .await?;
+    network.send_next(message.to_network()).await?;
     Ok(shares_a)
 }
 
 pub(crate) async fn and_many_receive(
     session: &mut Session,
 ) -> Result<Vec<RingElement<u64>>, Error> {
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
-    let network = session.network();
-
     let shares_b = {
-        let serialized_other_share = network.receive(&prev_party, &sid).await;
+        let serialized_other_share = session.network_session.receive_prev().await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElement64(message)) => Ok(vec![message]),
             Ok(NetworkValue::VecRing64(message)) => Ok(message),
@@ -265,15 +257,14 @@ where
         }
     }
     let next_id = session.next_identity()?;
-    let sid = session.session_id();
-    let network = session.network();
+    let network = &mut session.network_session;
     trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
     network
-        .send(NetworkValue::VecRing16(wc).to_network(), &next_id, &sid)
+        .send_next(NetworkValue::VecRing16(wc).to_network())
         .await?;
 
     let c1 = {
-        let reply = network.receive(&next_id, &sid).await;
+        let reply = network.receive_next().await;
         match NetworkValue::from_network(reply) {
             Ok(NetworkValue::VecRing16(val)) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
@@ -292,13 +283,11 @@ async fn bit_inject_ot_2round_receiver(
     session: &mut Session,
     input: VecShare<Bit>,
 ) -> Result<VecShare<u16>, Error> {
-    let next_id = session.next_identity()?;
     let prev_id = session.prev_identity()?;
-    let sid = session.session_id();
-    let network = session.boot_session.networking.as_mut();
+    let network = &mut session.network_session;
 
     let (m0, m1, wc) = {
-        let reply_m0_and_m1 = network.receive(&next_id, &sid).await;
+        let reply_m0_and_m1 = network.receive_next().await;
         let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
         assert!(
             m0_and_m1.len() == 2,
@@ -316,7 +305,7 @@ async fn bit_inject_ot_2round_receiver(
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
         };
 
-        let reply_wc = network.receive(&prev_id, &sid).await;
+        let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
             Ok(NetworkValue::VecRing16(val)) => Ok(val),
             _ => Err(eyre!("Could not deserialize properly in bit inject")),
@@ -348,7 +337,7 @@ async fn bit_inject_ot_2round_receiver(
     // Reshare to Helper
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     network
-        .send(NetworkValue::VecRing16(send).to_network(), &prev_id, &sid)
+        .send_prev(NetworkValue::VecRing16(send).to_network())
         .await?;
 
     Ok(shares)
@@ -383,17 +372,15 @@ async fn bit_inject_ot_2round_sender(
     }
 
     let prev_id = session.prev_identity()?;
-    let sid = session.session_id();
-    let network = session.network();
-
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
         .map(NetworkValue::VecRing16)
         .collect::<Vec<_>>();
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     // Reshare to Helper
-    network
-        .send(NetworkValue::vec_to_network(&m0_and_m1), &prev_id, &sid)
+    session
+        .network_session
+        .send_prev(NetworkValue::vec_to_network(&m0_and_m1))
         .await?;
     Ok(shares)
 }
@@ -641,11 +628,7 @@ pub async fn extract_msb_u32_batch(
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Result<Vec<Bit>> {
-    // send to next_party
-    let next_party = session.next_identity()?;
-    let prev_party = session.prev_identity()?;
-    let sid = session.session_id();
-    let network = session.network();
+    let network = &mut session.network_session;
     let message = if shares.len() == 1 {
         NetworkValue::RingElementBit(shares[0].b).to_network()
     } else {
@@ -657,11 +640,11 @@ pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Res
         NetworkValue::vec_to_network(&bits)
     };
 
-    network.send(message, &next_party, &sid).await?;
+    network.send_next(message).await?;
 
     // receiving from previous party
     let c = {
-        let serialized_other_shares = network.receive(&prev_party, &sid).await;
+        let serialized_other_shares = network.receive_prev().await;
         if shares.len() == 1 {
             match NetworkValue::from_network(serialized_other_shares) {
                 Ok(NetworkValue::RingElementBit(message)) => Ok(vec![message]),
