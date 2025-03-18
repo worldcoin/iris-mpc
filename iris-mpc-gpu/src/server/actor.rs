@@ -1234,27 +1234,9 @@ impl ServerActor {
         Ok(())
     }
 
-    fn compare_query_against_db_and_self(
-        &mut self,
-        compact_device_queries: &DeviceCompactQuery,
-        compact_device_sums: &DeviceCompactSums,
-        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
-        eye_db: Eye,
-        batch_size: usize,
-    ) {
-        let batch_streams = &self.streams[0];
-        let batch_cublas = &self.cublas_handles[0];
-
-        // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
-        };
-
-        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
-            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
-            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
-        };
+    fn try_calculate_bucket_stats(&mut self, eye_db: Eye) {
+        // we use the batch_streams for this
+        let streams = &self.streams[0];
 
         let (
             match_distances_buffers_codes,
@@ -1275,7 +1257,6 @@ impl ServerActor {
                 &self.match_distances_indices_right,
             ),
         };
-
         let bucket_distance_counters = self
             .device_manager
             .devices()
@@ -1304,14 +1285,13 @@ impl ServerActor {
                 }
             );
 
-            self.device_manager.await_streams(batch_streams);
+            self.device_manager.await_streams(streams);
 
             let indices = match_distances_indices
                 .iter()
                 .enumerate()
                 .map(|(i, x)| {
-                    dtoh_on_stream_sync(x, &self.device_manager.device(i), &batch_streams[i])
-                        .unwrap()
+                    dtoh_on_stream_sync(x, &self.device_manager.device(i), &streams[i]).unwrap()
                 })
                 .collect::<Vec<_>>();
 
@@ -1328,7 +1308,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_codes,
                 self.match_distances_buffer_size,
-                batch_streams,
+                streams,
             );
 
             let match_distances_buffers_codes_view =
@@ -1339,7 +1319,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_masks,
                 self.match_distances_buffer_size,
-                batch_streams,
+                streams,
             );
 
             let match_distances_buffers_masks_view =
@@ -1348,7 +1328,7 @@ impl ServerActor {
             self.phase2_buckets.compare_multiple_thresholds(
                 &match_distances_buffers_codes_view,
                 &match_distances_buffers_masks_view,
-                batch_streams,
+                streams,
                 &(1..=self.n_buckets)
                     .map(|x: usize| {
                         Circuits::translate_threshold_a(
@@ -1359,9 +1339,7 @@ impl ServerActor {
                 &mut self.buckets,
             );
 
-            let buckets = self
-                .phase2_buckets
-                .open_buckets(&self.buckets, batch_streams);
+            let buckets = self.phase2_buckets.open_buckets(&self.buckets, streams);
 
             tracing::info!("Buckets: {:?}", buckets);
 
@@ -1398,11 +1376,11 @@ impl ServerActor {
                  codes: &[ChunkShare<u16>],
                  masks: &[ChunkShare<u16>],
                  buckets: &ChunkShare<u32>| {
-                    reset_slice(self.device_manager.devices(), counter, 0, batch_streams);
-                    reset_slice(self.device_manager.devices(), indices, 0xff, batch_streams);
-                    reset_share(self.device_manager.devices(), masks, 0xff, batch_streams);
-                    reset_share(self.device_manager.devices(), codes, 0xff, batch_streams);
-                    reset_single_share(self.device_manager.devices(), buckets, 0, batch_streams, 0);
+                    reset_slice(self.device_manager.devices(), counter, 0, streams);
+                    reset_slice(self.device_manager.devices(), indices, 0xff, streams);
+                    reset_share(self.device_manager.devices(), masks, 0xff, streams);
+                    reset_share(self.device_manager.devices(), codes, 0xff, streams);
+                    reset_single_share(self.device_manager.devices(), buckets, 0, streams, 0);
                 };
 
             match eye_db {
@@ -1426,10 +1404,36 @@ impl ServerActor {
                 }
             }
 
-            self.device_manager.await_streams(batch_streams);
+            self.device_manager.await_streams(streams);
 
             tracing::info!("Bucket calculation took {:?}", now.elapsed());
         }
+    }
+
+    fn compare_query_against_db_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+        batch_size: usize,
+    ) {
+        // we try to calculate the bucket stats here if we have collected enough of them
+        self.try_calculate_bucket_stats(eye_db);
+
+        let batch_streams = &self.streams[0];
+        let batch_cublas = &self.cublas_handles[0];
+
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+
+        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
+            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
+            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
+        };
 
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
@@ -1718,6 +1722,27 @@ impl ServerActor {
                 );
 
                 let res = self.phase2.take_result_buffer();
+
+                let (
+                    match_distances_buffers_codes,
+                    match_distances_buffers_masks,
+                    match_distances_counters,
+                    match_distances_indices,
+                ) = match eye_db {
+                    Eye::Left => (
+                        &self.match_distances_buffer_codes_left,
+                        &self.match_distances_buffer_masks_left,
+                        &self.match_distances_counter_left,
+                        &self.match_distances_indices_left,
+                    ),
+                    Eye::Right => (
+                        &self.match_distances_buffer_codes_right,
+                        &self.match_distances_buffer_masks_right,
+                        &self.match_distances_counter_right,
+                        &self.match_distances_indices_right,
+                    ),
+                };
+
                 record_stream_time!(
                     &self.device_manager,
                     request_streams,
