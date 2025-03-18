@@ -21,7 +21,6 @@ use kameo::{
 
 // Fetches Iris shares from remote store.
 #[derive(Actor, Clone)]
-#[allow(dead_code)]
 pub struct SharesFetcher {
     // System configuration information.
     config: Config,

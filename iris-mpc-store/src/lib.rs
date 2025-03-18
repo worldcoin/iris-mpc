@@ -225,22 +225,12 @@ impl Store {
 
     /// Fetches V2 serial identifiers marked as deleted.
     ///
-    /// # Arguments
-    ///
-    /// * `party_id` - Party ID.
-    ///
     /// # Returns
     ///
     /// A set of V2 serial identifiers marked as deleted.
     ///
-    pub async fn fetch_iris_v2_deletions_by_party_id(
-        &self,
-        party_id: usize,
-    ) -> sqlx::Result<Vec<i64>, sqlx::Error> {
-        tracing::info!(
-            "Iris PostgreSQL store: Fetching V2 deletion set by party ID ({})",
-            party_id
-        );
+    pub async fn fetch_iris_v2_deletions_by_party_id(&self) -> sqlx::Result<Vec<i64>, sqlx::Error> {
+        tracing::info!("Iris PostgreSQL store: Fetching V2 deletion set");
 
         // TODO: Implement fetching V2 deletions by party ID.
 

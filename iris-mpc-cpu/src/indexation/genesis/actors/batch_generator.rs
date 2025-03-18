@@ -148,15 +148,7 @@ impl Actor for BatchGenerator {
         let store = IrisStore::new_from_config(&self.config).await?;
 
         // Set indexation exclusions.
-        self.indexation_exclusions = [
-            fetcher::fetch_iris_v1_deletions(&self.config)
-                .await
-                .unwrap(),
-            fetcher::fetch_iris_v2_deletions(&store, &self.config)
-                .await
-                .unwrap(),
-        ]
-        .concat();
+        self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();
 
         // Set indexation range.
         let height_of_protocol = fetcher::fetch_height_of_protocol(&store).await?;

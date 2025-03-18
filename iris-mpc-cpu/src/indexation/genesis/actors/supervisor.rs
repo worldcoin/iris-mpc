@@ -12,7 +12,7 @@ use {
         OnFetchIrisShares,
     },
     super::super::utils::logger,
-    super::{BatchGenerator, GraphDataWriter, GraphIndexer, SharesFetcher},
+    super::{BatchGenerator, GraphIndexer, HawkManager, SharesFetcher},
 };
 
 // ------------------------------------------------------------------------
@@ -25,7 +25,7 @@ pub struct Supervisor {
     a1_ref: Option<ActorRef<BatchGenerator>>,
     a2_ref: Option<ActorRef<SharesFetcher>>,
     a3_ref: Option<ActorRef<GraphIndexer>>,
-    a4_ref: Option<ActorRef<GraphDataWriter>>,
+    a4_ref: Option<ActorRef<HawkManager>>,
     config: Config,
 }
 
@@ -179,7 +179,7 @@ impl Actor for Supervisor {
         let a1 = BatchGenerator::new(self.config.clone(), ref_to_self.clone());
         let a2 = SharesFetcher::new(self.config.clone(), ref_to_self.clone());
         let a3 = GraphIndexer::new(self.config.clone(), ref_to_self.clone());
-        let a4 = GraphDataWriter::new(self.config.clone(), ref_to_self.clone());
+        let a4 = HawkManager::new(self.config.clone(), ref_to_self.clone());
 
         // Spawn associated actors.
         self.a1_ref = Some(kameo::spawn(a1));

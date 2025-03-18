@@ -65,7 +65,7 @@ pub(crate) async fn fetch_iris_data(
     Ok(data)
 }
 
-/// Fetches V1 serial identifiers marked as deleted.
+/// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
 ///
@@ -73,9 +73,9 @@ pub(crate) async fn fetch_iris_data(
 ///
 /// # Returns
 ///
-/// A set of Iris V1 serial identifiers marked as deleted.
+/// A set of Iris serial identifiers marked as deleted.
 ///
-pub(crate) async fn fetch_iris_v1_deletions(
+pub(crate) async fn fetch_iris_deletions(
     config: &Config,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Destructure AWS configuration settings.
@@ -112,30 +112,6 @@ pub(crate) async fn fetch_iris_v1_deletions(
     let mut rng = rand::thread_rng();
     let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
     identifiers.sort();
-
-    Ok(identifiers)
-}
-
-/// Fetches V2 serial identifiers marked as deleted.
-///
-/// # Arguments
-///
-/// * `store` - Iris PostgreSQL store provider.
-/// * `config` - System configuration information.
-///
-/// # Returns
-///
-/// A set of Iris V2 serial identifiers marked as deleted.
-///
-pub(crate) async fn fetch_iris_v2_deletions(
-    store: &IrisPgresStore,
-    config: &Config,
-) -> Result<Vec<IrisSerialId>, IndexationError> {
-    let identifiers = store
-        .fetch_iris_v2_deletions_by_party_id(config.party_id)
-        .await
-        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
-        .unwrap();
 
     Ok(identifiers)
 }
