@@ -370,7 +370,7 @@ impl GrpcHandle {
 #[derive(Default, Clone)]
 pub struct GrpcConfig {
     pub timeout_duration: Duration,
-    pub n_connections: usize,
+    pub connection_parallelism: usize,
 }
 
 // WARNING: this implementation assumes that messages for a specific player
@@ -413,7 +413,7 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
-        let clients = (0..self.config.n_connections.max(1))
+        let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
                 let address = address.to_string();
                 (move || PartyNodeClient::connect(address.clone()))
@@ -586,7 +586,7 @@ impl GrpcNetworking {
 pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
         timeout_duration: Duration::from_secs(5),
-        n_connections: 2,
+        connection_parallelism: 2,
     };
 
     let nets = parties

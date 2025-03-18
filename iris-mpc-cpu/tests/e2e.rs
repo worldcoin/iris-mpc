@@ -26,6 +26,7 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
+const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 
 fn install_tracing() {
@@ -99,6 +100,7 @@ async fn e2e_test() -> Result<()> {
         party_index: 0,
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
+        connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         disable_persistence: false,
     };
     let args1 = HawkArgs {
