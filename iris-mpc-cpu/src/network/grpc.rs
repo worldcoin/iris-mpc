@@ -11,6 +11,7 @@ use crate::{
 
 use backon::{ExponentialBuilder, Retryable};
 use eyre::eyre;
+use futures::future::JoinAll;
 use std::{collections::HashMap, str::FromStr, sync::Arc, time::Duration};
 use tokio::{
     sync::{
@@ -369,6 +370,7 @@ impl GrpcHandle {
 #[derive(Default, Clone)]
 pub struct GrpcConfig {
     pub timeout_duration: Duration,
+    pub connection_parallelism: usize,
 }
 
 // WARNING: this implementation assumes that messages for a specific player
@@ -377,7 +379,7 @@ pub struct GrpcConfig {
 pub struct GrpcNetworking {
     party_id: Identity,
     // other party id -> client to call that party
-    clients: HashMap<Identity, PartyNodeClient<Channel>>,
+    clients: HashMap<Identity, Vec<PartyNodeClient<Channel>>>,
     // other party id -> outgoing streams to send messages to that party in different sessions
     outgoing_streams: OutgoingStreams,
     // session id -> incoming message streams
@@ -411,17 +413,25 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
-        let client = (|| async { PartyNodeClient::connect(address.to_string()).await })
-            .retry(self.backoff())
-            .sleep(tokio::time::sleep)
-            .await?;
+        let clients = (0..self.config.connection_parallelism.max(1))
+            .map(|_| {
+                let address = address.to_string();
+                (move || PartyNodeClient::connect(address.clone()))
+                    .retry(self.backoff())
+                    .sleep(tokio::time::sleep)
+            })
+            .map(tokio::spawn)
+            .collect::<JoinAll<_>>()
+            .await
+            .into_iter()
+            .collect::<Result<Result<Vec<PartyNodeClient<_>>, _>, _>>()??;
         tracing::trace!(
             "Player {:?} connected to player {:?} at address {:?}",
             self.party_id,
             party_id,
             address
         );
-        self.clients.insert(party_id.clone(), client);
+        self.clients.insert(party_id.clone(), clients);
         Ok(())
     }
 
@@ -433,7 +443,7 @@ impl GrpcNetworking {
             ));
         }
 
-        for (client_id, client) in self.clients.iter() {
+        for (client_id, clients) in self.clients.iter() {
             let (tx, rx) = mpsc::unbounded_channel();
             tracing::trace!(
                 "Player {:?} is adding outgoing stream of session {:?} for player {:?}",
@@ -453,7 +463,9 @@ impl GrpcNetworking {
                 "session_id",
                 AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
             );
-            let mut client = client.clone();
+
+            let round_robin = (session_id.0 as usize) % clients.len();
+            let mut client = clients[round_robin].clone();
             tokio::spawn(async move {
                 let _response = client.start_message_stream(request).await.unwrap();
             });
@@ -574,6 +586,7 @@ impl GrpcNetworking {
 pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
         timeout_duration: Duration::from_secs(5),
+        connection_parallelism: 1,
     };
 
     let nets = parties
