@@ -27,10 +27,10 @@ jobs:
         run: sudo apt install protobuf-compiler
 
       - name: Install Rust
-        run: rustup toolchain install 1.81.0
+        run: rustup toolchain install 1.85.0
 
       - name: Set Rust  as default
-        run: rustup default 1.81.0
+        run: rustup default 1.85.0
 
       - name: Install Rust clippy for checking clippy errors
         run: rustup component add clippy
