@@ -1,6 +1,7 @@
 use super::{
     super::Supervisor,
     super::{
+        errors::IndexationError,
         messages::{
             OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
         },
@@ -12,7 +13,6 @@ use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
 use kameo::{
     actor::ActorRef,
-    error::BoxError,
     mailbox::bounded::BoundedMailbox,
     message::{Context, Message},
     Actor,
@@ -109,7 +109,7 @@ impl Message<OnBeginIndexation> for BatchGenerator {
     async fn handle(
         &mut self,
         msg: OnBeginIndexation,
-        _: Context<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginIndexation>(&msg);
 
@@ -126,7 +126,7 @@ impl Message<OnEndIndexationOfBatch> for BatchGenerator {
     async fn handle(
         &mut self,
         msg: OnEndIndexationOfBatch,
-        _: Context<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnEndIndexationOfBatch>(&msg);
 
@@ -142,6 +142,7 @@ impl Message<OnEndIndexationOfBatch> for BatchGenerator {
 impl Actor for BatchGenerator {
     // By default mailbox is limited to 1000 messages.
     type Mailbox = BoundedMailbox<Self>;
+    type Error = IndexationError;
 
     /// Actor name - overrides auto-derived name.
     fn name() -> &'static str {
@@ -151,11 +152,14 @@ impl Actor for BatchGenerator {
     /// Lifecycle event handler: on_start.
     ///
     /// State initialisation hook.
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), BoxError> {
+    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
         // Set store client.
-        let store = IrisStore::new_from_config(&self.config).await?;
+        let store = IrisStore::new_from_config(&self.config)
+            .await
+            .map_err(|_| IndexationError::PostgresConnectionError)
+            .unwrap();
 
         // Set indexation exclusions.
         self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();

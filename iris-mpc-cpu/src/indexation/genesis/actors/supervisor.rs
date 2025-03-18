@@ -1,17 +1,20 @@
 use iris_mpc_common::config::Config;
 use kameo::{
     actor::ActorRef,
-    error::BoxError,
     mailbox::bounded::BoundedMailbox,
-    message::{Context as Ctx, Message},
+    message::{Context, Message},
     Actor,
 };
 use {
-    super::super::messages::{
-        OnBeginGraphIndexation, OnBeginIndexation, OnBeginIndexationOfBatch,
-        OnBeginIndexationOfBatchItem, OnEndIndexation, OnEndIndexationOfBatch, OnFetchIrisShares,
+    super::super::{
+        errors::IndexationError,
+        messages::{
+            OnBeginGraphIndexation, OnBeginIndexation, OnBeginIndexationOfBatch,
+            OnBeginIndexationOfBatchItem, OnEndIndexation, OnEndIndexationOfBatch,
+            OnFetchIrisShares,
+        },
+        utils::logger,
     },
-    super::super::utils::logger,
     super::{BatchGenerator, GraphIndexer, HawkManager, SharesFetcher},
 };
 
@@ -56,7 +59,7 @@ impl Message<OnBeginIndexationOfBatch> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnBeginIndexationOfBatch,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
@@ -89,7 +92,7 @@ impl Message<OnBeginGraphIndexation> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnBeginGraphIndexation,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginGraphIndexation>(&msg);
 
@@ -111,7 +114,7 @@ impl Message<OnEndIndexation> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnEndIndexation,
-        ctx: Ctx<'_, Self, Self::Reply>,
+        ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnEndIndexation>(&msg);
 
@@ -127,7 +130,7 @@ impl Message<OnEndIndexationOfBatch> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnEndIndexationOfBatch,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnEndIndexationOfBatch>(&msg);
 
@@ -149,7 +152,7 @@ impl Message<OnFetchIrisShares> for Supervisor {
     async fn handle(
         &mut self,
         msg: OnFetchIrisShares,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnFetchIrisShares>(&msg);
 
@@ -165,6 +168,7 @@ impl Message<OnFetchIrisShares> for Supervisor {
 impl Actor for Supervisor {
     // By default mailbox is limited to 1000 messages.
     type Mailbox = BoundedMailbox<Self>;
+    type Error = IndexationError;
 
     /// Actor name - overrides auto-derived name.
     fn name() -> &'static str {
@@ -175,16 +179,16 @@ impl Actor for Supervisor {
     ///
     /// # Arguments
     ///
-    /// * `ref_to_self` - Self referential kameo actor pointer.
+    /// * `actor_ref` - Self referential kameo actor pointer.
     ///
-    async fn on_start(&mut self, ref_to_self: ActorRef<Self>) -> Result<(), BoxError> {
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
         // Instantiate associated actors.
-        let a1 = BatchGenerator::new(self.config.clone(), ref_to_self.clone());
-        let a2 = SharesFetcher::new(self.config.clone(), ref_to_self.clone());
-        let a3 = GraphIndexer::new(self.config.clone(), ref_to_self.clone());
-        let a4 = HawkManager::new(self.config.clone(), ref_to_self.clone());
+        let a1 = BatchGenerator::new(self.config.clone(), actor_ref.clone());
+        let a2 = SharesFetcher::new(self.config.clone(), actor_ref.clone());
+        let a3 = GraphIndexer::new(self.config.clone(), actor_ref.clone());
+        let a4 = HawkManager::new(self.config.clone(), actor_ref.clone());
 
         // Spawn associated actors.
         self.a1_ref = Some(kameo::spawn(a1));
@@ -197,7 +201,9 @@ impl Actor for Supervisor {
             .as_ref()
             .unwrap()
             .tell(OnBeginIndexation)
-            .await?;
+            .await
+            .map_err(|_| IndexationError::BeginIndexationError)
+            .unwrap();
 
         Ok(())
     }

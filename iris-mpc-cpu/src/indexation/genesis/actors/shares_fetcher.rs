@@ -1,10 +1,10 @@
 use super::{
-    super::utils::{fetcher, logger},
     super::Supervisor,
     super::{
         errors::IndexationError,
         messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
         types::IrisGaloisShares,
+        utils::{fetcher, logger},
     },
 };
 use iris_mpc_common::config::Config;
@@ -53,7 +53,7 @@ impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
     async fn handle(
         &mut self,
         msg: OnBeginIndexationOfBatchItem,
-        _: Context<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginIndexationOfBatchItem>(&msg);
 

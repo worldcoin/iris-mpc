@@ -1,7 +1,7 @@
-use super::{super::utils::logger, super::Supervisor};
+use super::super::{errors::IndexationError, utils::logger, Supervisor};
 use crate::execution::hawk_main::{HawkActor, HawkArgs};
 use iris_mpc_common::config::Config;
-use kameo::{actor::ActorRef, error::BoxError, mailbox::bounded::BoundedMailbox, Actor};
+use kameo::{actor::ActorRef, mailbox::bounded::BoundedMailbox, Actor};
 
 // ------------------------------------------------------------------------
 // Actor name + state + ctor + methods.
@@ -36,6 +36,7 @@ impl HawkManager {
 impl Actor for HawkManager {
     // By default mailbox is limited to 1000 messages.
     type Mailbox = BoundedMailbox<Self>;
+    type Error = IndexationError;
 
     /// Actor name - overrides auto-derived name.
     fn name() -> &'static str {
@@ -48,7 +49,7 @@ impl Actor for HawkManager {
     ///
     /// * `ref_to_self` - Self referential kameo actor pointer.
     ///
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), BoxError> {
+    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
         let node_addresses: Vec<String> = self
@@ -65,7 +66,10 @@ impl Actor for HawkManager {
             disable_persistence: self.config.disable_persistence,
         };
 
-        let _ = HawkActor::from_cli(&hawk_args).await?;
+        let _ = HawkActor::from_cli(&hawk_args)
+            .await
+            .map_err(|_| IndexationError::HawkActorError)
+            .unwrap();
 
         Ok(())
     }

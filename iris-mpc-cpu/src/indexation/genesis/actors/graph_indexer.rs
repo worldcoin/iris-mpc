@@ -13,7 +13,7 @@ use super::{
 use iris_mpc_common::config::Config;
 use kameo::{
     actor::ActorRef,
-    message::{Context as Ctx, Message},
+    message::{Context, Message},
     Actor,
 };
 
@@ -83,7 +83,7 @@ impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
     async fn handle(
         &mut self,
         msg: OnBeginIndexationOfBatch,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
@@ -101,7 +101,7 @@ impl Message<OnBeginGraphIndexation> for GraphIndexer {
     async fn handle(
         &mut self,
         msg: OnBeginGraphIndexation,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginGraphIndexation>(&msg);
 
@@ -115,7 +115,7 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
     async fn handle(
         &mut self,
         msg: OnFetchIrisShares,
-        _: Ctx<'_, Self, Self::Reply>,
+        _: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         logger::log_message::<Self, OnFetchIrisShares>(&msg);
 

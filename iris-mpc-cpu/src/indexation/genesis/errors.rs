@@ -9,6 +9,12 @@ pub enum IndexationError {
     #[error("Failed to download resource from AWS S3")]
     AwsS3DownloadError,
 
+    #[error("Failed to begin indexation correctly")]
+    BeginIndexationError,
+
+    #[error("Failed to spawn Hawk actor")]
+    HawkActorError,
+
     #[error("Failed to connect to PostgreSQL dB")]
     PostgresConnectionError,
 
