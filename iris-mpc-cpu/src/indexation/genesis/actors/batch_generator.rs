@@ -1,7 +1,7 @@
 use super::{
     super::Supervisor,
     super::{
-        messages::{OnBegin, OnBeginBatch, OnEnd, OnEndBatch},
+        messages::{DoBeginIndexation, OnBeginBatch, OnEnd, OnEndBatch},
         types::IrisSerialId,
         utils::{fetcher, logger},
     },
@@ -99,13 +99,13 @@ impl BatchGenerator {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<OnBegin> for BatchGenerator {
+impl Message<DoBeginIndexation> for BatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnBegin, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnBegin>(&msg);
+    async fn handle(&mut self, msg: DoBeginIndexation, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, DoBeginIndexation>(&msg);
 
         // Crank indexation step.
         self.do_indexation_step().await;

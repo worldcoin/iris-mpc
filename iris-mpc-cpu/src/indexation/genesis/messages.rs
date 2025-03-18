@@ -7,7 +7,7 @@ use std::fmt;
 
 // Signals that indexation process starts.
 #[derive(Clone, Debug)]
-pub struct OnBegin;
+pub struct DoBeginIndexation;
 
 // Signals that a new Iris batch is ready for processing.
 #[derive(Clone, Debug)]
@@ -85,7 +85,7 @@ pub struct OnFetchIrisShares {
 // Trait implementations.
 // ------------------------------------------------------------------------
 
-impl fmt::Display for OnBegin {
+impl fmt::Display for DoBeginIndexation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "")
     }

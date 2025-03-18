@@ -1,6 +1,5 @@
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::indexation::genesis::{OnBegin, Supervisor};
-use std::future::pending;
+use iris_mpc_cpu::indexation::genesis::Supervisor;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -19,9 +18,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Spawn supervisor.
     let a_ref = kameo::spawn(Supervisor::new(config));
 
-    // Signal supervisor to begin indexation.
-    a_ref.tell(OnBegin).await?;
+    // Run supervisor until shutdown or killed.
+    a_ref.wait_for_stop().await;
 
-    // TODO: block until a supervisor OnIndexationEnd | OnIndexationError event is emitted.
-    pending().await
+    Ok(())
 }

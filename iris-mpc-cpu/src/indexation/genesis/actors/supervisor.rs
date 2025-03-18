@@ -8,8 +8,8 @@ use kameo::{
 };
 use {
     super::super::messages::{
-        OnBegin, OnBeginBatch, OnBeginBatchItem, OnBeginGraphIndexation, OnEnd, OnEndBatch,
-        OnFetchIrisShares,
+        DoBeginIndexation, OnBeginBatch, OnBeginBatchItem, OnBeginGraphIndexation, OnEnd,
+        OnEndBatch, OnFetchIrisShares,
     },
     super::super::utils::logger,
     super::{BatchGenerator, GraphIndexer, HawkManager, SharesFetcher},
@@ -47,16 +47,6 @@ impl Supervisor {
 // ------------------------------------------------------------------------
 // Actor message handlers.
 // ------------------------------------------------------------------------
-
-impl Message<OnBegin> for Supervisor {
-    // Reply type.
-    type Reply = ();
-
-    // Handler.
-    async fn handle(&mut self, msg: OnBegin, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnBegin>(&msg);
-    }
-}
 
 impl Message<OnBeginBatch> for Supervisor {
     // Reply type.
@@ -113,8 +103,10 @@ impl Message<OnEnd> for Supervisor {
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnEnd, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
+    async fn handle(&mut self, msg: OnEnd, ctx: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
         logger::log_message::<Self, OnEnd>(&msg);
+
+        ctx.actor_ref().stop_gracefully().await.unwrap();
     }
 }
 
@@ -188,7 +180,11 @@ impl Actor for Supervisor {
         self.a4_ref = Some(kameo::spawn(a4));
 
         // Signal start.
-        self.a1_ref.as_ref().unwrap().tell(OnBegin).await?;
+        self.a1_ref
+            .as_ref()
+            .unwrap()
+            .tell(DoBeginIndexation)
+            .await?;
 
         Ok(())
     }
