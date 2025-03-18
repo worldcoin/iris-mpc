@@ -454,6 +454,7 @@ pub struct IrisLoader<'a> {
     irises: BothEyes<SharedIrisesMut<'a>>,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> InMemoryStore for IrisLoader<'a> {
     fn load_single_record_from_db(
         &mut self,
@@ -502,6 +503,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
 pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
         let mut graph_tx = graph_store.tx().await?;

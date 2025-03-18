@@ -586,7 +586,7 @@ impl GrpcNetworking {
 pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
         timeout_duration: Duration::from_secs(5),
-        connection_parallelism: 2,
+        connection_parallelism: 1,
     };
 
     let nets = parties

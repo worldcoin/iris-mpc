@@ -196,6 +196,9 @@ pub struct Config {
     pub enable_modifications_sync: bool,
 
     #[serde(default)]
+    pub enable_modifications_replay: bool,
+
+    #[serde(default)]
     pub enable_sync_queues_on_sns_sequence_number: bool,
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
