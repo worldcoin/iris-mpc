@@ -114,6 +114,7 @@ pub struct StoredModification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub result_message_body: Option<String>,
 }
 
 impl From<StoredModification> for Modification {
@@ -125,6 +126,7 @@ impl From<StoredModification> for Modification {
             s3_url: stored.s3_url,
             status: stored.status,
             persisted: stored.persisted,
+            result_message_body: stored.result_message_body,
         }
     }
 }
@@ -536,7 +538,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                result_message_body
             "#,
         )
         .bind(serial_id)
@@ -559,7 +562,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                result_message_body
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -573,8 +577,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(modifications)
     }
 
-    /// Update the status and persisted flag of the modifications based on their
-    /// id.
+    /// Update the status, persisted flag, and result_message_body of the
+    /// modifications based on their id.
     pub async fn update_modifications(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -587,17 +591,23 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
+        let result_message_bodies: Vec<Option<String>> = modifications
+            .iter()
+            .map(|m| m.result_message_body.clone())
+            .collect();
 
         sqlx::query(
             r#"
             UPDATE modifications
             SET status = data.status,
-                persisted = data.persisted
+                persisted = data.persisted,
+                result_message_body = data.result_message_body
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
-                    unnest($3::bool[])    as persisted
+                    unnest($3::bool[])    as persisted,
+                    unnest($4::text[])    as result_message_body
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -605,6 +615,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .bind(&ids)
         .bind(&statuses)
         .bind(&persisteds)
+        .bind(&result_message_bodies)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1130,6 +1141,7 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         // 3. Insert another modification
@@ -1146,6 +1158,7 @@ pub mod tests {
             Some("https://example.com".to_string()),
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         // 5. Clean up
@@ -1180,6 +1193,7 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         assert_modification(
             second_last,
@@ -1189,12 +1203,14 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         cleanup(&store, &schema_name).await?;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn assert_modification(
         actual: &Modification,
         expected_id: i64,
@@ -1203,6 +1219,7 @@ pub mod tests {
         expected_s3_url: Option<String>,
         expected_status: ModificationStatus,
         expected_persisted: bool,
+        expected_result_body: Option<String>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1210,6 +1227,7 @@ pub mod tests {
         assert_eq!(actual.s3_url, expected_s3_url);
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
+        assert_eq!(actual.result_message_body, expected_result_body);
     }
 
     #[tokio::test]
@@ -1230,8 +1248,8 @@ pub mod tests {
 
         // Update the status & persisted fields for first two in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true);
-        m2.mark_completed(false);
+        m1.mark_completed(true, "m1");
+        m2.mark_completed(false, "m2");
 
         let modifications_to_update = vec![&m1, &m2];
         store
@@ -1251,6 +1269,7 @@ pub mod tests {
             Some("http://example.com/150".to_string()),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         assert_modification(
             &last_three[1],
@@ -1260,6 +1279,7 @@ pub mod tests {
             Some("http://example.com/50".to_string()),
             ModificationStatus::Completed,
             false,
+            Some("m2".to_string()),
         );
         assert_modification(
             &last_three[2],
@@ -1269,6 +1289,7 @@ pub mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some("m1".to_string()),
         );
 
         cleanup(&store, &schema_name).await?;
@@ -1293,7 +1314,7 @@ pub mod tests {
             .await?;
 
         // mark m1 as completed
-        m1.mark_completed(true);
+        m1.mark_completed(true, "m1");
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&m1]).await?;
         tx.commit().await?;
