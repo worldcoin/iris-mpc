@@ -58,9 +58,12 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        let mut bin_search = BinarySearch::new(&dist, &self.edges);
-        while let Some((dist_query, (_, dist_mid))) = bin_search.next_cmp() {
-            let res = store.less_than(dist_query, dist_mid).await;
+        let mut bin_search = BinarySearch {
+            left: 0,
+            right: self.edges.len(),
+        };
+        while let Some(cmp_idx) = bin_search.next() {
+            let res = store.less_than(&dist, &self.edges[cmp_idx].1).await;
             bin_search.update(res);
         }
         let index_asc = bin_search.result().unwrap();

@@ -14,47 +14,49 @@ fn midpoint(left: usize, right: usize) -> usize {
 /// operation by default, and for this interpretation, the resulting index
 /// places the query after all elements "less than or equal to" the value, and
 /// before all elements "greater than" the value.
-pub struct BinarySearch<'a, Query, Value> {
+pub struct BinarySearch {
     /// Index of left endpoint of search interval, inclusive
-    left: usize,
+    pub left: usize,
 
     /// Index of right endpoint of search interval, exclusive
-    right: usize,
+    pub right: usize,
+    // /// Query value for which we want the insertion index
+    // query: &'a Query,
 
-    /// Query value for which we want the insertion index
-    query: &'a Query,
-
-    /// Reference to sorted array of values to which indexes refer
-    arr: &'a [Value],
+    // /// Reference to sorted array of values to which indexes refer
+    // arr: &'a [Value],
 }
 
-impl<'a, Query, Value> BinarySearch<'a, Query, Value> {
-    /// Generate the initial state for a binary search for a query over the full
-    /// range of a given sorted array.
-    pub fn new(query: &'a Query, arr: &'a [Value]) -> Self {
-        BinarySearch::new_in_range(0, arr.len(), query, arr)
-    }
+impl BinarySearch {
+    // /// Generate the initial state for a binary search for a query over the full
+    // /// range of a given sorted array.
+    // pub fn new(left: usize, right: usize) -> Self {
 
-    /// Generate the initial state for a binary search for a query of a
-    /// specified interval within a given sorted array.
-    pub fn new_in_range(left: usize, right: usize, query: &'a Query, arr: &'a [Value]) -> Self {
-        debug_assert!(left <= right && right <= arr.len());
-        Self {
-            left,
-            right,
-            query,
-            arr,
-        }
-    }
+    //     BinarySearch::new_in_range(0, len)
+    // }
+
+    // /// Generate the initial state for a binary search for a query of a
+    // /// specified interval within a given sorted array.
+    // pub fn new_in_range(left: usize, right: usize, query: &'a Query, arr: &'a [Value]) -> Self {
+    //     debug_assert!(left <= right && right <= arr.len());
+    //     Self {
+    //         left,
+    //         right,
+    //         query,
+    //         arr,
+    //     }
+    // }
 
     /// Update the given binary search with comparison result `cmp_result`
     /// describing the outcome of `query < arr[middle]`.
     pub fn update(&mut self, cmp_result: bool) {
-        let middle = midpoint(self.left, self.right);
-        if cmp_result {
-            self.right = middle;
-        } else {
-            self.left = middle + 1;
+        if !self.is_finished() {
+            let middle = midpoint(self.left, self.right);
+            if cmp_result {
+                self.right = middle;
+            } else {
+                self.left = middle + 1;
+            }
         }
     }
 
@@ -69,12 +71,11 @@ impl<'a, Query, Value> BinarySearch<'a, Query, Value> {
     ///
     /// A `Some` value indicates that additional comparisons are needed, and a
     /// `None` value indicates that search has already converged to a result.
-    pub fn next_cmp(&self) -> Option<(&Query, &Value)> {
+    pub fn next(&self) -> Option<usize> {
         if self.is_finished() {
             None
         } else {
-            let middle = midpoint(self.left, self.right);
-            Some((self.query, self.arr.get(middle).unwrap()))
+            Some(midpoint(self.left, self.right))
         }
     }
 
