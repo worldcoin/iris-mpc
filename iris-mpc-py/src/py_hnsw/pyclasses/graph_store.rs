@@ -18,6 +18,7 @@ impl PyGraphStore {
     pub fn read_from_bin(filename: String) -> PyResult<Self> {
         let result = py_bindings::io::read_bin(&filename)
             .map_err(|_| PyIOError::new_err("Unable to read from file"))?;
+
         Ok(Self(result))
     }
 

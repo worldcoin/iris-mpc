@@ -1899,6 +1899,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 }
 
 // Helper function to load Aurora db records from the stream into memory
+#[allow(clippy::needless_lifetimes)]
 async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,

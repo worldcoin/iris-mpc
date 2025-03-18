@@ -91,6 +91,7 @@ mod buckets_test {
         result
     }
 
+    #[allow(clippy::precedence)]
     fn real_result_msb(code_input: Vec<u16>, mask_input: Vec<u16>) -> Vec<u32> {
         assert_eq!(code_input.len(), mask_input.len());
         let mod_ = 1u64 << (16 + B_BITS);
