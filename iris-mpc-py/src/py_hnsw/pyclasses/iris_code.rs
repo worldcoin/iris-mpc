@@ -39,7 +39,7 @@ impl PyIrisCode {
         py: Python<'py>,
         version: Option<String>,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let dict = PyDict::new_bound(py);
+        let dict = PyDict::new(py);
 
         dict.set_item("iris_codes", self.0.code.to_base64().unwrap())?;
         dict.set_item("mask_codes", self.0.mask.to_base64().unwrap())?;

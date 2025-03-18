@@ -47,6 +47,7 @@ pub struct SliceShare<'a, T: IntRing2k> {
     shares: &'a [Share<T>],
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: IntRing2k> SliceShare<'a, T> {
     pub fn split_at(&self, mid: usize) -> (SliceShare<T>, SliceShare<T>) {
         let (a, b) = self.shares.split_at(mid);
@@ -78,6 +79,7 @@ pub struct SliceShareMut<'a, T: IntRing2k> {
     shares: &'a mut [Share<T>],
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: IntRing2k> SliceShareMut<'a, T> {
     pub fn to_vec(&self) -> VecShare<T> {
         VecShare {
@@ -228,6 +230,7 @@ impl<T: IntRing2k> VecShare<T> {
 }
 
 impl VecShare<Bit> {
+    #[allow(clippy::manual_div_ceil)]
     pub fn pack<T: IntRing2k>(self) -> VecShare<T> {
         let outlen = (self.shares.len() + T::K - 1) / T::K;
         let mut out = VecShare::with_capacity(outlen);
@@ -362,6 +365,7 @@ impl<T: IntRing2k> BitXorAssign<Self> for VecShare<T> {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: IntRing2k> Deref for SliceShare<'a, T> {
     type Target = [Share<T>];
 
@@ -370,6 +374,7 @@ impl<'a, T: IntRing2k> Deref for SliceShare<'a, T> {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: IntRing2k> Deref for SliceShareMut<'a, T> {
     type Target = [Share<T>];
 
@@ -378,6 +383,7 @@ impl<'a, T: IntRing2k> Deref for SliceShareMut<'a, T> {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T: IntRing2k> DerefMut for SliceShareMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.shares

@@ -84,6 +84,7 @@ pub struct ChunkShareViewMut<'a, T> {
     pub b: CudaViewMut<'a, T>,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T> ChunkShareView<'a, T> {
     pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<T> {
         ChunkShareView {
