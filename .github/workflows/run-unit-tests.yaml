@@ -40,10 +40,10 @@ jobs:
           key: "test"
 
       - name: Install Rust
-        run: rustup toolchain install 1.81.0
+        run: rustup toolchain install 1.85.0
 
       - name: Set Rust  as default
-        run: rustup default 1.81.0
+        run: rustup default 1.85.0
 
       - name: Run Tests
         run: cargo test --release -- --test-threads=1
