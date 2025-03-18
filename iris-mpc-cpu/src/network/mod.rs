@@ -11,7 +11,8 @@ pub trait Networking {
         session_id: &SessionId,
     ) -> eyre::Result<()>;
 
-    async fn receive(&self, sender: &Identity, session_id: &SessionId) -> eyre::Result<Vec<u8>>;
+    async fn receive(&mut self, sender: &Identity, session_id: &SessionId)
+        -> eyre::Result<Vec<u8>>;
 }
 
 #[derive(Clone)]

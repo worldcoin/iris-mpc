@@ -82,7 +82,11 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(&self, sender: &Identity, _session_id: &SessionId) -> eyre::Result<Vec<u8>> {
+    async fn receive(
+        &mut self,
+        sender: &Identity,
+        _session_id: &SessionId,
+    ) -> eyre::Result<Vec<u8>> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))
@@ -111,7 +115,7 @@ mod tests {
         let networking_store = LocalNetworkingStore::from_host_ids(&identities);
 
         let alice = networking_store.get_local_network("alice".into());
-        let bob = networking_store.get_local_network("bob".into());
+        let mut bob = networking_store.get_local_network("bob".into());
 
         let task1 = tokio::spawn(async move {
             let recv = bob.receive(&"alice".into(), &1_u64.into()).await;

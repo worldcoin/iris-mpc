@@ -16,12 +16,12 @@ impl From<u64> for SessionId {
     }
 }
 
-pub type NetworkingImpl = Arc<dyn Networking + Send + Sync>;
+pub type NetworkingImpl = Box<dyn Networking + Send + Sync>;
 
 #[derive(Debug)]
 pub struct Session {
     pub boot_session: BootSession,
-    pub setup: Prf,
+    pub prf: Prf,
 }
 
 pub struct BootSession {
@@ -47,7 +47,7 @@ pub trait SessionHandles {
     fn own_role(&self) -> eyre::Result<Role>;
     fn own_identity(&self) -> Identity;
     fn identity(&self, role: &Role) -> eyre::Result<&Identity>;
-    fn network(&self) -> &NetworkingImpl;
+    fn network(&mut self) -> &mut NetworkingImpl;
     fn next_identity(&self) -> eyre::Result<Identity>;
     fn prev_identity(&self) -> eyre::Result<Identity>;
 }
@@ -89,8 +89,8 @@ impl SessionHandles for BootSession {
         }
     }
 
-    fn network(&self) -> &NetworkingImpl {
-        &self.networking
+    fn network(&mut self) -> &mut NetworkingImpl {
+        &mut self.networking
     }
 
     fn prev_identity(&self) -> eyre::Result<Identity> {
@@ -121,7 +121,7 @@ impl SessionHandles for Session {
     fn identity(&self, role: &Role) -> eyre::Result<&Identity> {
         self.boot_session.identity(role)
     }
-    fn network(&self) -> &NetworkingImpl {
+    fn network(&mut self) -> &mut NetworkingImpl {
         self.boot_session.network()
     }
     fn own_identity(&self) -> Identity {
@@ -135,11 +135,5 @@ impl SessionHandles for Session {
     }
     fn next_identity(&self) -> eyre::Result<Identity> {
         self.boot_session.next_identity()
-    }
-}
-
-impl Session {
-    pub fn prf_as_mut(&mut self) -> &mut Prf {
-        &mut self.setup
     }
 }
