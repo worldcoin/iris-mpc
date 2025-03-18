@@ -550,6 +550,45 @@ impl ShareDB {
         }
     }
 
+    pub fn prefetch_db_subset_into_chunk(
+        &self,
+        db: &SlicedProcessedDatabase,
+        buffers: &DBChunkBuffers,
+        indices: &[usize],
+        streams: &[CudaStream],
+    ) {
+        for idx in 0..self.device_manager.device_count() {
+            let device = self.device_manager.device(idx);
+            device.bind_to_thread().unwrap();
+
+            for (offset, wanted_idx) in indices.into_iter().enumerate() {
+                unsafe {
+                    cudarc::driver::sys::lib()
+                        .cuMemcpyHtoDAsync_v2(
+                            *buffers.limb_0[idx].device_ptr() + (offset * self.code_length) as u64,
+                            (db.code_gr.limb_0[idx] as usize + wanted_idx * self.code_length)
+                                as *mut _,
+                            self.code_length,
+                            streams[idx].stream,
+                        )
+                        .result()
+                        .unwrap();
+
+                    cudarc::driver::sys::lib()
+                        .cuMemcpyHtoDAsync_v2(
+                            *buffers.limb_1[idx].device_ptr() + (offset * self.code_length) as u64,
+                            (db.code_gr.limb_1[idx] as usize + wanted_idx * self.code_length)
+                                as *mut _,
+                            self.code_length,
+                            streams[idx].stream,
+                        )
+                        .result()
+                        .unwrap();
+                }
+            }
+        }
+    }
+
     pub fn dot<T>(
         &mut self,
         queries: &CudaVec2DSlicer<T>,

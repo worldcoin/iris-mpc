@@ -1519,6 +1519,208 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
     }
 
+    fn compare_query_against_db_subset_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+        batch_size: usize,
+        db_subset_idx: &[usize],
+    ) {
+        assert!(
+            eye_db == Eye::Right,
+            "We expect this to be called for the right eye only"
+        );
+
+        // we try to calculate the bucket stats here if we have collected enough of them
+        self.try_calculate_bucket_stats(eye_db);
+
+        // ---- START BATCH DEDUP ----
+        self.compare_query_against_self(
+            compact_device_queries,
+            compact_device_sums,
+            events,
+            eye_db,
+        );
+        // ---- END BATCH DEDUP ----
+
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+
+        // prepare a subset of the database by copying over the chosen indices
+        // Normally this is spread over multiple GPUs, but since we expect this to be a small
+        // subset, we just use the same identical chunk on all GPUs
+        let db_subset_size = db_subset_idx.len();
+        let chunk_size = vec![db_subset_size; self.device_manager.device_count()];
+        let dot_chunk_size = chunk_size
+            .iter()
+            .map(|&s| (s.max(1).div_ceil(64) * 64))
+            .collect::<Vec<_>>();
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "prefetch_db_chunk",
+            self.enable_debug_timing,
+            {
+                self.codes_engine.prefetch_db_subset_into_chunk(
+                    code_db_slices,
+                    &self.code_chunk_buffers[0],
+                    db_subset_idx,
+                    &self.streams[0],
+                );
+                self.masks_engine.prefetch_db_subset_into_chunk(
+                    mask_db_slices,
+                    &self.mask_chunk_buffers[0],
+                    db_subset_idx,
+                    &self.streams[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_dot",
+            self.enable_debug_timing,
+            {
+                compact_device_queries.dot_products_against_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    &CudaVec2DSlicerRawPointer::from(&self.code_chunk_buffers[0]),
+                    &CudaVec2DSlicerRawPointer::from(&self.mask_chunk_buffers[0]),
+                    &dot_chunk_size,
+                    0,
+                    &self.streams[0],
+                    &self.cublas_handles[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_reduce",
+            self.enable_debug_timing,
+            {
+                compact_device_sums.compute_dot_reducer_against_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    code_db_slices,
+                    mask_db_slices,
+                    &dot_chunk_size,
+                    0, // TODO
+                    &self.streams[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_reshare",
+            self.enable_debug_timing,
+            {
+                self.codes_engine
+                    .reshare_results(&dot_chunk_size, &self.streams[0]);
+                self.masks_engine
+                    .reshare_results(&dot_chunk_size, &self.streams[0]);
+            }
+        );
+
+        // ---- END PHASE 1 ----
+
+        // ---- START PHASE 2 ----
+        let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
+        let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
+        let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+        let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+
+        assert_eq!(
+            (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
+            0,
+            "Phase 2 input size must be a multiple of 64"
+        );
+        self.phase2
+            .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_threshold",
+            self.enable_debug_timing,
+            {
+                self.phase2
+                    .compare_threshold_masked_many(&code_dots, &mask_dots, &self.streams[0]);
+            }
+        );
+
+        let res = self.phase2.take_result_buffer();
+
+        let (
+            match_distances_buffers_codes,
+            match_distances_buffers_masks,
+            match_distances_counters,
+            match_distances_indices,
+        ) = match eye_db {
+            Eye::Left => (
+                &self.match_distances_buffer_codes_left,
+                &self.match_distances_buffer_masks_left,
+                &self.match_distances_counter_left,
+                &self.match_distances_indices_left,
+            ),
+            Eye::Right => (
+                &self.match_distances_buffer_codes_right,
+                &self.match_distances_buffer_masks_right,
+                &self.match_distances_counter_right,
+                &self.match_distances_indices_right,
+            ),
+        };
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_open",
+            self.enable_debug_timing,
+            {
+                open(
+                    &mut self.phase2,
+                    &res,
+                    &self.distance_comparator,
+                    db_match_bitmap,
+                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                    &dot_chunk_size,
+                    &chunk_size,
+                    offset,
+                    &self.current_db_sizes,
+                    &ignore_device_results,
+                    match_distances_buffers_codes,
+                    match_distances_buffers_masks,
+                    match_distances_counters,
+                    match_distances_indices,
+                    &code_dots,
+                    &mask_dots,
+                    batch_size,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
+                    &self.streams[0],
+                );
+                self.phase2.return_result_buffer(res);
+            }
+        );
+    }
+
     fn compare_query_against_db_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
