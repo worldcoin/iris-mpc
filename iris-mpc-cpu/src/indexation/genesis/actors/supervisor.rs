@@ -8,8 +8,8 @@ use kameo::{
 };
 use {
     super::super::messages::{
-        DoBeginIndexation, OnBeginBatch, OnBeginBatchItem, OnBeginGraphIndexation, OnEnd,
-        OnEndBatch, OnFetchIrisShares,
+        OnBeginGraphIndexation, OnBeginIndexation, OnBeginIndexationOfBatch,
+        OnBeginIndexationOfBatchItem, OnEndIndexation, OnEndIndexationOfBatch, OnFetchIrisShares,
     },
     super::super::utils::logger,
     super::{BatchGenerator, GraphIndexer, HawkManager, SharesFetcher},
@@ -48,15 +48,20 @@ impl Supervisor {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<OnBeginBatch> for Supervisor {
+impl Message<OnBeginIndexationOfBatch> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnBeginBatch>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnBeginIndexationOfBatch,
+        _: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
         // Signal to other interested actors.
+        // I.E. GraphIndexer.
         self.a3_ref
             .as_ref()
             .unwrap()
@@ -66,7 +71,7 @@ impl Message<OnBeginBatch> for Supervisor {
 
         // For each item in batch, signal that it is ready to be processing.
         for (idx, serial_id) in msg.iris_serial_ids.iter().enumerate() {
-            let msg = OnBeginBatchItem {
+            let msg = OnBeginIndexationOfBatchItem {
                 batch_idx: msg.batch_idx,
                 batch_item_idx: idx + 1,
                 iris_serial_id: *serial_id,
@@ -98,25 +103,33 @@ impl Message<OnBeginGraphIndexation> for Supervisor {
     }
 }
 
-impl Message<OnEnd> for Supervisor {
+impl Message<OnEndIndexation> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnEnd, ctx: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnEnd>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnEndIndexation,
+        ctx: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnEndIndexation>(&msg);
 
         ctx.actor_ref().stop_gracefully().await.unwrap();
     }
 }
 
-impl Message<OnEndBatch> for Supervisor {
+impl Message<OnEndIndexationOfBatch> for Supervisor {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnEndBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnEndBatch>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnEndIndexationOfBatch,
+        _: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnEndIndexationOfBatch>(&msg);
 
         // Signal to other interested actors.
         self.a1_ref
@@ -183,7 +196,7 @@ impl Actor for Supervisor {
         self.a1_ref
             .as_ref()
             .unwrap()
-            .tell(DoBeginIndexation)
+            .tell(OnBeginIndexation)
             .await?;
 
         Ok(())

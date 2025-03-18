@@ -6,6 +6,6 @@ mod utils;
 
 pub use actors::Supervisor;
 pub use errors::IndexationError;
-pub use messages::DoBeginIndexation;
-pub use messages::OnEnd;
+pub use messages::OnBeginIndexation;
+pub use messages::OnEndIndexation;
 pub use messages::OnError;

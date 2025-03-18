@@ -3,7 +3,7 @@ use super::{
     super::Supervisor,
     super::{
         errors::IndexationError,
-        messages::{OnBeginBatchItem, OnFetchIrisShares},
+        messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
         types::IrisGaloisShares,
     },
 };
@@ -47,15 +47,15 @@ impl SharesFetcher {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<OnBeginBatchItem> for SharesFetcher {
+impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
     type Reply = Result<(), IndexationError>;
 
     async fn handle(
         &mut self,
-        msg: OnBeginBatchItem,
+        msg: OnBeginIndexationOfBatchItem,
         _: Context<'_, Self, Self::Reply>,
     ) -> Self::Reply {
-        logger::log_message::<Self, OnBeginBatchItem>(&msg);
+        logger::log_message::<Self, OnBeginIndexationOfBatchItem>(&msg);
 
         // JIT set pointer to store.
         if self.iris_store.is_none() {

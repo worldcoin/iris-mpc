@@ -2,7 +2,10 @@ use super::{
     super::Supervisor,
     super::{
         errors::IndexationError,
-        messages::{OnBeginBatch, OnBeginGraphIndexation, OnEndBatch, OnFetchIrisShares},
+        messages::{
+            OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch,
+            OnFetchIrisShares,
+        },
         types::IrisGaloisShares,
         utils::logger,
     },
@@ -60,7 +63,7 @@ impl GraphIndexer {
         );
 
         // TODO: remove temporary signal emission.
-        let msg = OnEndBatch {
+        let msg = OnEndIndexationOfBatch {
             batch_idx: self.batch_idx,
             batch_size: self.target.len(),
         };
@@ -72,13 +75,17 @@ impl GraphIndexer {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<OnBeginBatch> for GraphIndexer {
+impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnBeginBatch, _: Ctx<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnBeginBatch>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnBeginIndexationOfBatch,
+        _: Ctx<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
         // Reset batch of shares to be processed.
         self.target = Vec::with_capacity(msg.iris_serial_ids.len());

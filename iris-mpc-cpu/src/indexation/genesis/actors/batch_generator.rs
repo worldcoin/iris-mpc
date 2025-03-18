@@ -1,7 +1,9 @@
 use super::{
     super::Supervisor,
     super::{
-        messages::{DoBeginIndexation, OnBeginBatch, OnEnd, OnEndBatch},
+        messages::{
+            OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
+        },
         types::IrisSerialId,
         utils::{fetcher, logger},
     },
@@ -78,14 +80,14 @@ impl BatchGenerator {
 
         if batch.is_empty() {
             // End of indexation.
-            let msg = OnEnd {
+            let msg = OnEndIndexation {
                 batch_count: self.batch_count,
             };
             self.supervisor_ref.tell(msg).await.unwrap();
         } else {
             // New batch.
             self.batch_count += 1;
-            let msg = OnBeginBatch {
+            let msg = OnBeginIndexationOfBatch {
                 batch_idx: self.batch_count,
                 batch_size: batch.len(),
                 iris_serial_ids: batch,
@@ -99,26 +101,34 @@ impl BatchGenerator {
 // Actor message handlers.
 // ------------------------------------------------------------------------
 
-impl Message<DoBeginIndexation> for BatchGenerator {
+impl Message<OnBeginIndexation> for BatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: DoBeginIndexation, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, DoBeginIndexation>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnBeginIndexation,
+        _: Context<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnBeginIndexation>(&msg);
 
         // Crank indexation step.
         self.do_indexation_step().await;
     }
 }
 
-impl Message<OnEndBatch> for BatchGenerator {
+impl Message<OnEndIndexationOfBatch> for BatchGenerator {
     // Reply type.
     type Reply = ();
 
     // Handler.
-    async fn handle(&mut self, msg: OnEndBatch, _: Context<'_, Self, Self::Reply>) -> Self::Reply {
-        logger::log_message::<Self, OnEndBatch>(&msg);
+    async fn handle(
+        &mut self,
+        msg: OnEndIndexationOfBatch,
+        _: Context<'_, Self, Self::Reply>,
+    ) -> Self::Reply {
+        logger::log_message::<Self, OnEndIndexationOfBatch>(&msg);
 
         // Crank indexation step.
         self.do_indexation_step().await;

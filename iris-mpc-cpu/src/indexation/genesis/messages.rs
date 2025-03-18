@@ -5,13 +5,13 @@ use std::fmt;
 // Definitions.
 // ------------------------------------------------------------------------
 
-// Signals that indexation process starts.
+// Signals start of indexation.
 #[derive(Clone, Debug)]
-pub struct DoBeginIndexation;
+pub struct OnBeginIndexation;
 
-// Signals that a new Iris batch is ready for processing.
+// Signals start of batch indexation.
 #[derive(Clone, Debug)]
-pub(crate) struct OnBeginBatch {
+pub(crate) struct OnBeginIndexationOfBatch {
     // Batch ordinal identifier.
     pub batch_idx: usize,
 
@@ -22,9 +22,9 @@ pub(crate) struct OnBeginBatch {
     pub iris_serial_ids: Vec<i64>,
 }
 
-// Signals that a new Iris identifier is ready for processing.
+// Signals start of batch item indexation.
 #[derive(Clone, Debug)]
-pub struct OnBeginBatchItem {
+pub struct OnBeginIndexationOfBatchItem {
     // Batch ordinal identifier.
     pub(crate) batch_idx: usize,
 
@@ -46,14 +46,14 @@ pub struct OnBeginGraphIndexation {
 }
 
 // Signals that indexation is complete.
-pub struct OnEnd {
+pub struct OnEndIndexation {
     // Batch count.
     pub(crate) batch_count: usize,
 }
 
 // Signals that Iris batch indexation is complete.
 #[derive(Clone, Debug)]
-pub struct OnEndBatch {
+pub struct OnEndIndexationOfBatch {
     // Batch ordinal identifier.
     pub(crate) batch_idx: usize,
 
@@ -85,13 +85,13 @@ pub struct OnFetchIrisShares {
 // Trait implementations.
 // ------------------------------------------------------------------------
 
-impl fmt::Display for DoBeginIndexation {
+impl fmt::Display for OnBeginIndexation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "")
     }
 }
 
-impl fmt::Display for OnBeginBatch {
+impl fmt::Display for OnBeginIndexationOfBatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -101,7 +101,7 @@ impl fmt::Display for OnBeginBatch {
     }
 }
 
-impl fmt::Display for OnBeginBatchItem {
+impl fmt::Display for OnBeginIndexationOfBatchItem {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -121,13 +121,13 @@ impl fmt::Display for OnBeginGraphIndexation {
     }
 }
 
-impl fmt::Display for OnEnd {
+impl fmt::Display for OnEndIndexation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "batch-count={}", self.batch_count)
     }
 }
 
-impl fmt::Display for OnEndBatch {
+impl fmt::Display for OnEndIndexationOfBatch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
