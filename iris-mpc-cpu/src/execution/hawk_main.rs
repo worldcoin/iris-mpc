@@ -180,6 +180,7 @@ impl HawkActor {
 
         let grpc_config = GrpcConfig {
             timeout_duration: Duration::from_secs(10),
+            n_connections: 8,
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
