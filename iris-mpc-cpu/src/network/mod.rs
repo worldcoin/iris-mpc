@@ -4,15 +4,9 @@ use async_trait::async_trait;
 /// Requirements for networking.
 #[async_trait]
 pub trait Networking {
-    async fn send(
-        &self,
-        value: Vec<u8>,
-        receiver: &Identity,
-        session_id: &SessionId,
-    ) -> eyre::Result<()>;
+    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> eyre::Result<()>;
 
-    async fn receive(&mut self, sender: &Identity, session_id: &SessionId)
-        -> eyre::Result<Vec<u8>>;
+    async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>>;
 }
 
 #[derive(Clone)]

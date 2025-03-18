@@ -33,13 +33,11 @@ pub struct NetworkSession {
 
 impl NetworkSession {
     async fn send(&self, value: Vec<u8>, receiver: &Identity) -> eyre::Result<()> {
-        self.networking
-            .send(value, receiver, &self.session_id)
-            .await
+        self.networking.send(value, receiver).await
     }
 
     async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>> {
-        self.networking.receive(sender, &self.session_id).await
+        self.networking.receive(sender).await
     }
 
     pub async fn send_next(&self, value: Vec<u8>) -> eyre::Result<()> {

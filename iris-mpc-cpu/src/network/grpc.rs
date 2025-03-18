@@ -52,12 +52,7 @@ pub struct GrpcSession {
 
 #[async_trait]
 impl Networking for GrpcSession {
-    async fn send(
-        &self,
-        value: Vec<u8>,
-        receiver: &Identity,
-        _session_id: &SessionId,
-    ) -> eyre::Result<()> {
+    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> eyre::Result<()> {
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
@@ -69,11 +64,7 @@ impl Networking for GrpcSession {
         Ok(())
     }
 
-    async fn receive(
-        &mut self,
-        sender: &Identity,
-        _session_id: &SessionId,
-    ) -> eyre::Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>> {
         let incoming_stream = self.in_streams.get_mut(sender).ok_or(eyre!(
             "Incoming stream for {sender:?} in session {:?} not found",
             self.session_id
@@ -277,6 +268,7 @@ impl GrpcHandle {
     }
 
     pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<GrpcSession> {
+        // Create outgoing streams and ask other parties to send incoming streams
         let task = GrpcTask::CreateOutgoingStreams(session_id);
         let res = self.submit(task).await?;
         let outstreams = match res {
@@ -284,8 +276,10 @@ impl GrpcHandle {
             _ => Err(eyre!("Wrong result type while creating outgoing streams")),
         }?;
 
+        // Wait for incoming streams to be created and sent by other parties
         self.wait_for_session(session_id).await?;
 
+        // Fetch incoming streams from GrpcNetworking
         let task = GrpcTask::CreateIncomingStreams(session_id);
         let res = self.submit(task).await?;
         let instreams = match res {
@@ -334,6 +328,7 @@ pub struct GrpcNetworking {
     // session_id -> incoming streams
     instreams: HashMap<SessionId, InStreams>,
     // sessions in use
+    // TODO: deletion logic
     active_sessions: HashSet<SessionId>,
 
     pub config: GrpcConfig,
@@ -616,13 +611,10 @@ mod tests {
                 let message_copy = message.clone();
 
                 let task1 = tokio::spawn(async move {
-                    alice
-                        .send(message.clone(), &"bob".into(), &session_id)
-                        .await
-                        .unwrap();
+                    alice.send(message.clone(), &"bob".into()).await.unwrap();
                 });
                 let task2 = tokio::spawn(async move {
-                    let received_message = bob.receive(&"alice".into(), &session_id).await.unwrap();
+                    let received_message = bob.receive(&"alice".into()).await.unwrap();
                     assert_eq!(message_copy, received_message);
                 });
                 let _ = tokio::try_join!(task1, task2).unwrap();
@@ -630,9 +622,7 @@ mod tests {
         }
 
         // Multiple parties sending messages to each other
-        let all_parties_talk = |identities: Vec<Identity>,
-                                sessions: Vec<GrpcSession>,
-                                session_id: SessionId| async move {
+        let all_parties_talk = |identities: Vec<Identity>, sessions: Vec<GrpcSession>| async move {
             let mut tasks = JoinSet::new();
             for (player_id, session) in sessions.into_iter().enumerate() {
                 let role = Role::new(player_id);
@@ -651,23 +641,21 @@ mod tests {
                 tasks.spawn(async move {
                     // Sending
                     session
-                        .send(message_to_next.clone(), &next_id, &session_id)
+                        .send(message_to_next.clone(), &next_id)
                         .await
                         .unwrap();
                     session
-                        .send(message_to_prev.clone(), &prev_id, &session_id)
+                        .send(message_to_prev.clone(), &prev_id)
                         .await
                         .unwrap();
 
                     // Receiving
-                    let received_message_from_prev =
-                        session.receive(&prev_id, &session_id).await.unwrap();
+                    let received_message_from_prev = session.receive(&prev_id).await.unwrap();
                     let expected_message_from_prev =
                         format!("From player {} to player {} with love", prev, player_id)
                             .into_bytes();
                     assert_eq!(received_message_from_prev, expected_message_from_prev);
-                    let received_message_from_next =
-                        session.receive(&next_id, &session_id).await.unwrap();
+                    let received_message_from_next = session.receive(&next_id).await.unwrap();
                     let expected_message_from_next =
                         format!("From player {} to player {} with love", next, player_id)
                             .into_bytes();
@@ -687,7 +675,7 @@ mod tests {
                 let players = create_session_helper(session_id, &players).await.unwrap();
 
                 // Test that parties can send and receive messages
-                all_parties_talk(identities, players, session_id).await;
+                all_parties_talk(identities, players).await;
             });
         }
 
@@ -719,7 +707,7 @@ mod tests {
             };
 
             // Test that parties can send and receive messages
-            all_parties_talk(identities, sessions, session_id).await;
+            all_parties_talk(identities, sessions).await;
         }
 
         jobs.join_all().await;
@@ -745,7 +733,7 @@ mod tests {
 
                 let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
                 let res = sessions[0]
-                    .send(message.clone(), &Identity::from("eve"), &session_id)
+                    .send(message.clone(), &Identity::from("eve"))
                     .await;
                 assert_eq!(
                     "Outgoing stream for Identity(\"eve\") in session SessionId(0) not found",
@@ -761,9 +749,7 @@ mod tests {
                 let session_id = SessionId::from(1);
                 let mut sessions = create_session_helper(session_id, &players).await.unwrap();
 
-                let res = sessions[0]
-                    .receive(&Identity::from("eve"), &session_id)
-                    .await;
+                let res = sessions[0].receive(&Identity::from("eve")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
                     "Incoming stream for Identity(\"eve\") in session SessionId(1) not found"
@@ -780,7 +766,7 @@ mod tests {
 
                 let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
                 let res = sessions[0]
-                    .send(message.clone(), &Identity::from("alice"), &session_id)
+                    .send(message.clone(), &Identity::from("alice"))
                     .await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
@@ -814,9 +800,7 @@ mod tests {
                 let session_id = SessionId::from(4);
                 let mut sessions = create_session_helper(session_id, &players).await.unwrap();
 
-                let res = sessions[0]
-                    .receive(&Identity::from("bob"), &session_id)
-                    .await;
+                let res = sessions[0].receive(&Identity::from("bob")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
                     "Party Identity(\"alice\"): Timeout while waiting for message from \

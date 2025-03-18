@@ -1,7 +1,4 @@
-use crate::{
-    execution::{player::Identity, session::SessionId},
-    network::Networking,
-};
+use crate::{execution::player::Identity, network::Networking};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use eyre::eyre;
@@ -59,20 +56,14 @@ pub struct LocalNetworking {
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(
-        &self,
-        val: Vec<u8>,
-        receiver: &Identity,
-        _session_id: &SessionId,
-    ) -> eyre::Result<(), eyre::Error> {
+    async fn send(&self, val: Vec<u8>, receiver: &Identity) -> eyre::Result<(), eyre::Error> {
         let (tx, _) = self
             .p2p_channels
             .get(&(self.owner.clone(), receiver.clone()))
             .ok_or_else(|| {
                 eyre!(format!(
-                    "p2p channel retrieve error when sending: owner: {:?}, receiver: {:?}. \
-                     session {:?}",
-                    self.owner, receiver, _session_id
+                    "p2p channel retrieve error when sending: owner: {:?}, receiver: {:?}",
+                    self.owner, receiver
                 ))
             })?
             .value()
@@ -82,11 +73,7 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(
-        &mut self,
-        sender: &Identity,
-        _session_id: &SessionId,
-    ) -> eyre::Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))
@@ -118,7 +105,7 @@ mod tests {
         let mut bob = networking_store.get_local_network("bob".into());
 
         let task1 = tokio::spawn(async move {
-            let recv = bob.receive(&"alice".into(), &1_u64.into()).await;
+            let recv = bob.receive(&"alice".into()).await;
             assert_eq!(
                 NetworkValue::from_network(recv).unwrap(),
                 NetworkValue::RingElement16(RingElement(777))
@@ -126,9 +113,7 @@ mod tests {
         });
         let task2 = tokio::spawn(async move {
             let value = NetworkValue::RingElement16(RingElement(777));
-            alice
-                .send(value.to_network(), &"bob".into(), &1_u64.into())
-                .await
+            alice.send(value.to_network(), &"bob".into()).await
         });
 
         let _ = tokio::try_join!(task1, task2).unwrap();
