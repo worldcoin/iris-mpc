@@ -36,7 +36,6 @@ sqlx.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
-tower = "0.4.13"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
 tracing-subscriber.workspace = true
