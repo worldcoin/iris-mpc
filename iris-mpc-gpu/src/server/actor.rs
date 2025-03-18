@@ -1410,29 +1410,19 @@ impl ServerActor {
         }
     }
 
-    fn compare_query_against_db_and_self(
+    fn compare_query_against_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
         compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
-        batch_size: usize,
     ) {
-        // we try to calculate the bucket stats here if we have collected enough of them
-        self.try_calculate_bucket_stats(eye_db);
-
         let batch_streams = &self.streams[0];
         let batch_cublas = &self.cublas_handles[0];
 
-        // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
-        };
-
-        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
-            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
-            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
+        let batch_match_bitmap = match eye_db {
+            Eye::Left => &self.batch_match_list_left,
+            Eye::Right => &self.batch_match_list_right,
         };
 
         // ---- START BATCH DEDUP ----
@@ -1527,7 +1517,38 @@ impl ServerActor {
         self.phase2_batch.return_result_buffer(res);
 
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
+    }
+
+    fn compare_query_against_db_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+        batch_size: usize,
+    ) {
+        // we try to calculate the bucket stats here if we have collected enough of them
+        self.try_calculate_bucket_stats(eye_db);
+
+        // ---- START BATCH DEDUP ----
+        self.compare_query_against_self(
+            compact_device_queries,
+            compact_device_sums,
+            events,
+            eye_db,
+        );
         // ---- END BATCH DEDUP ----
+
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+
+        let db_match_bitmap = match eye_db {
+            Eye::Left => &self.db_match_list_left,
+            Eye::Right => &self.db_match_list_right,
+        };
 
         let chunk_sizes = |chunk_idx: usize| {
             self.current_db_sizes
@@ -1629,7 +1650,7 @@ impl ServerActor {
             // ---- START PHASE 1 ----
             record_stream_time!(
                 &self.device_manager,
-                batch_streams,
+                request_streams,
                 events,
                 "db_dot",
                 self.enable_debug_timing,
