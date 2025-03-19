@@ -31,7 +31,7 @@ pub fn schedule(
     (0..n_eyes)
         .flat_map(|i_eye| {
             let mut task_iter = (0..n_rotations).flat_map(|i_rotation| {
-                (0..n_requests).map(move |i_request| Task {
+                range_forward_backward(n_requests).map(move |i_request| Task {
                     i_request,
                     i_rotation,
                 })
@@ -51,6 +51,15 @@ pub fn schedule(
             })
         })
         .collect_vec()
+}
+
+/// Like (0..n) but alternating between forward and backward iteration.
+/// The work of a task can depend on the index in `intra_batch_is_match`.
+/// This helps to distribute the indexes fairly among the sessions.
+fn range_forward_backward(n: usize) -> impl Iterator<Item = usize> {
+    let forward = 0..n / 2;
+    let backward = (n / 2..n).rev();
+    forward.interleave(backward)
 }
 
 #[cfg(test)]
@@ -96,5 +105,18 @@ mod test {
             .unique()
             .count();
         assert_eq!(unique_tasks, n_tasks);
+    }
+
+    fn test_range_forward_backward() -> Vec<usize> {
+        assert_eq!(range_forward_backward(0).collect_vec(), vec![]);
+        assert_eq!(range_forward_backward(1).collect_vec(), vec![0]);
+        assert_eq!(
+            range_forward_backward(7).collect_vec(),
+            vec![0, 6, 1, 5, 2, 4, 3]
+        );
+        assert_eq!(
+            range_forward_backward(8).collect_vec(),
+            vec![0, 7, 1, 6, 2, 5, 3, 4]
+        );
     }
 }
