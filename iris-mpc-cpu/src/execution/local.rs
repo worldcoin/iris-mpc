@@ -81,10 +81,10 @@ impl LocalRuntime {
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
         let sess_id = SessionId::from(0_u64);
-        let boot_sessions = match network_type {
+        let network_sessions = match network_type {
             NetworkType::LocalChannel => {
                 let network = LocalNetworkingStore::from_host_ids(&identities);
-                let boot_sessions: Vec<NetworkSession> = (0..seeds.len())
+                let network_sessions: Vec<NetworkSession> = (0..seeds.len())
                     .map(|i| {
                         let identity = identities[i].clone();
                         NetworkSession {
@@ -95,7 +95,7 @@ impl LocalRuntime {
                         }
                     })
                     .collect();
-                boot_sessions
+                network_sessions
             }
             NetworkType::GrpcChannel => {
                 let networks = setup_local_grpc_networking(identities.clone()).await?;
@@ -111,7 +111,7 @@ impl LocalRuntime {
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new))
                     .collect::<eyre::Result<Vec<_>>>()?;
-                let boot_sessions: Vec<NetworkSession> =
+                let network_sessions: Vec<NetworkSession> =
                     izip!(identities.into_iter(), grpc_sessions.into_iter())
                         .map(|(id, session)| NetworkSession {
                             session_id: sess_id,
@@ -120,12 +120,12 @@ impl LocalRuntime {
                             own_identity: id,
                         })
                         .collect();
-                boot_sessions
+                network_sessions
             }
         };
 
         let mut jobs = vec![];
-        for (player_id, mut boot_session) in boot_sessions.into_iter().enumerate() {
+        for (player_id, mut boot_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id];
             let task = tokio::spawn(async move {
                 let prf = setup_replicated_prf(&mut boot_session, player_seed)
