@@ -407,8 +407,14 @@ impl ServerActor {
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
 
-        let code_chunk_buffers = vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
-        let mask_chunk_buffers = vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
+        let code_chunk_buffers = vec![
+            codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+            codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+        ];
+        let mask_chunk_buffers = vec![
+            masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+            masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+        ];
 
         // Create all needed events
         let phase1_events = vec![device_manager.create_events(); 2];
@@ -1568,13 +1574,13 @@ impl ServerActor {
             "prefetch_db_chunk",
             self.enable_debug_timing,
             {
-                self.codes_engine.prefetch_db_subset_into_chunk(
+                self.codes_engine.prefetch_db_subset_into_chunk_buffers(
                     code_db_slices,
                     &self.code_chunk_buffers[0],
                     db_subset_idx,
                     &self.streams[0],
                 );
-                self.masks_engine.prefetch_db_subset_into_chunk(
+                self.masks_engine.prefetch_db_subset_into_chunk_buffers(
                     mask_db_slices,
                     &self.mask_chunk_buffers[0],
                     db_subset_idx,
@@ -1610,13 +1616,12 @@ impl ServerActor {
             "db_reduce",
             self.enable_debug_timing,
             {
-                compact_device_sums.compute_dot_reducer_against_db(
+                compact_device_sums.compute_dot_reducer_against_prepared_db(
                     &mut self.codes_engine,
                     &mut self.masks_engine,
-                    code_db_slices,
-                    mask_db_slices,
+                    &self.code_chunk_buffers[0].sums,
+                    &self.mask_chunk_buffers[0].sums,
                     &dot_chunk_size,
-                    0, // TODO
                     &self.streams[0],
                 );
             }
@@ -1684,6 +1689,11 @@ impl ServerActor {
                 &self.match_distances_counter_right,
                 &self.match_distances_indices_right,
             ),
+        };
+
+        let db_match_bitmap = match eye_db {
+            Eye::Left => &self.db_match_list_left,
+            Eye::Right => &self.db_match_list_right,
         };
 
         record_stream_time!(

@@ -288,4 +288,25 @@ impl DeviceCompactSums {
             2,
         );
     }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_dot_reducer_against_prepared_db(
+        &self,
+        code_engine: &mut ShareDB,
+        mask_engine: &mut ShareDB,
+        code_sums_gr: &CudaVec2DSlicer<u32>,
+        mask_sums_gr: &CudaVec2DSlicer<u32>,
+        database_sizes: &[usize],
+        streams: &[CudaStream],
+    ) {
+        code_engine.dot_reduce(&self.code_query, &code_sums_gr, database_sizes, 0, streams);
+        mask_engine.dot_reduce_and_multiply(
+            &self.mask_query,
+            &mask_sums_gr,
+            database_sizes,
+            0,
+            streams,
+            2,
+        );
+    }
 }
