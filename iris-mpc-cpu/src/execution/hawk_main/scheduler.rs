@@ -1,29 +1,26 @@
 use itertools::Itertools;
 
-type EYE = usize;
-type SESSION = usize;
-type REQUEST = usize;
-type ROTATION = usize;
-
 /// A batch is a list of tasks to do within the same unit of parallelism.
 /// Our unit of parallelism is one session of one eye side.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Batch {
-    i_eye: EYE,
-    i_session: SESSION,
-    tasks: Vec<Task>,
+    pub i_session: usize,
+    pub i_eye: usize,
+    pub tasks: Vec<Task>,
 }
 
-/// A task is something to do with one rotation of one request.
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A task within a batch is something to do with one rotation of one request.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Task {
-    i_request: REQUEST,
-    i_rotation: ROTATION,
+    pub i_request: usize,
+    pub i_rotation: usize,
 }
 
+/// Enumerate all combinations of eye sides, requests, and rotations.
+/// Distribute the tasks over a number of sessions.
 pub fn schedule(
-    n_eyes: usize,
     n_sessions: usize,
+    n_eyes: usize,
     n_requests: usize,
     n_rotations: usize,
 ) -> Vec<Batch> {
@@ -33,8 +30,8 @@ pub fn schedule(
 
     (0..n_eyes)
         .flat_map(|i_eye| {
-            let mut task_iter = (0..n_requests).flat_map(|i_request| {
-                (0..n_rotations).map(move |i_rotation| Task {
+            let mut task_iter = (0..n_rotations).flat_map(|i_rotation| {
+                (0..n_requests).map(move |i_request| Task {
                     i_request,
                     i_rotation,
                 })
@@ -77,7 +74,7 @@ mod test {
         let n_rotations = ROTATIONS;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
-        let batches = schedule(n_eyes, n_sessions, n_requests, n_rotations);
+        let batches = schedule(n_sessions, n_eyes, n_requests, n_rotations);
         assert_eq!(batches.len(), n_eyes * n_sessions);
 
         let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();

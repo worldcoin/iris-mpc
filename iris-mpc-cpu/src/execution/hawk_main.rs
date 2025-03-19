@@ -608,16 +608,18 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     match_results: matching::BatchStep2,
+    intra_results: Vec<Vec<usize>>,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
 }
 
 impl HawkResult {
-    fn new(match_results: matching::BatchStep2) -> Self {
+    fn new(match_results: matching::BatchStep2, intra_results: Vec<Vec<usize>>) -> Self {
         let is_matches = match_results.is_matches();
         let n_requests = is_matches.len();
         HawkResult {
             match_results,
+            intra_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
         }
@@ -648,6 +650,18 @@ impl HawkResult {
             .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()))
     }
 
+    fn matched_batch_request_ids(&self, request_ids: &[String]) -> Vec<Vec<String>> {
+        self.intra_results
+            .iter()
+            .map(|matching_indexes| {
+                matching_indexes
+                    .iter()
+                    .map(|&i| request_ids[i].clone())
+                    .collect_vec()
+            })
+            .collect_vec()
+    }
+
     fn job_result(self, batch: BatchQuery) -> ServerJobResult {
         let n_requests = self.is_matches.len();
 
@@ -663,6 +677,7 @@ impl HawkResult {
         let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
 
         let merged_results = self.merged_results();
+        let matched_batch_request_ids = self.matched_batch_request_ids(&batch.request_ids);
 
         ServerJobResult {
             merged_results,
@@ -678,13 +693,13 @@ impl HawkResult {
             partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
-            deleted_ids: vec![],                                    // TODO.
-            matched_batch_request_ids: vec![vec![]; n_requests],    // TODO.
-            anonymized_bucket_statistics_left: Default::default(),  // TODO.
+            deleted_ids: vec![], // TODO.
+            matched_batch_request_ids,
+            anonymized_bucket_statistics_left: Default::default(), // TODO.
             anonymized_bucket_statistics_right: Default::default(), // TODO.
-            successful_reauths: vec![false; n_requests],            // TODO.
-            reauth_target_indices: Default::default(),              // TODO.
-            reauth_or_rule_used: Default::default(),                // TODO.
+            successful_reauths: vec![false; n_requests],           // TODO.
+            reauth_target_indices: Default::default(),             // TODO.
+            reauth_or_rule_used: Default::default(),               // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
         }
@@ -750,8 +765,9 @@ impl HawkHandle {
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
 
-                let intra_results = intra_batch_is_match(search_queries, &sessions).await;
-                // TODO something with intra_results.
+                let intra_results = intra_batch_is_match(&sessions, search_queries)
+                    .await
+                    .unwrap();
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
@@ -772,7 +788,7 @@ impl HawkHandle {
                     step1.step2(&missing_is_match)
                 };
 
-                let mut results = HawkResult::new(match_result);
+                let mut results = HawkResult::new(match_result, intra_results);
 
                 let (insert_indices, search_results) = job
                     .request
