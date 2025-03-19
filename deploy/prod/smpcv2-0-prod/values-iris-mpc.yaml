@@ -110,6 +110,15 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
 
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_LOOKBACK_RECORDS
+    value: "500"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+    value: "true"
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
