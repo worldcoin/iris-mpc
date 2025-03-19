@@ -175,6 +175,9 @@ pub struct Config {
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
+    #[serde(default = "default_hawk_connection_parallelism")]
+    pub hawk_connection_parallelism: usize,
+
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
 
@@ -191,6 +194,9 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_modifications_sync: bool,
+
+    #[serde(default)]
+    pub enable_modifications_replay: bool,
 
     #[serde(default)]
     pub enable_sync_queues_on_sns_sequence_number: bool,
@@ -290,6 +296,10 @@ fn default_n_buckets() -> usize {
 }
 
 fn default_hawk_request_parallelism() -> usize {
+    10
+}
+
+fn default_hawk_connection_parallelism() -> usize {
     10
 }
 

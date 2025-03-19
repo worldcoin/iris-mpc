@@ -105,6 +105,7 @@ mod extract_msb_mod_test {
         res
     }
 
+    #[allow(clippy::precedence)]
     fn real_result_msb(input: Vec<u16>) -> Vec<u64> {
         let mod_ = 1u64 << (16 + B_BITS);
         let mut res = Vec::with_capacity(input.len());
