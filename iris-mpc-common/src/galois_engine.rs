@@ -172,7 +172,7 @@ pub mod degree4 {
 
         fn flipped_imaginary_coeffs(&self) -> Self {
             let mut coefs = self.coefs.clone();
-            let element = GaloisRingElement::<basis::Monomial>::from_coefs([0, 0, 0, 0]);
+            let element = GaloisRingElement::ZERO;
             let mut rng = StdRng::seed_from_u64(0);
             let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, &mut rng);
             for i in IRIS_CODE_LENGTH / 2..IRIS_CODE_LENGTH {
@@ -414,7 +414,7 @@ pub mod degree4 {
         let store_iris_shares = code_share.clone();
         let store_mask_shares = mask_share.clone();
 
-        // With rotations for in-memory database. // TODO: is this dead code?
+        // With rotations for in-memory database.
         let db_iris_shares = code_share.all_rotations();
         let db_mask_shares = mask_share.all_rotations();
 
