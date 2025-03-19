@@ -115,10 +115,10 @@ pub struct SlicedProcessedDatabase {
     pub code_sums_gr: CudaVec2DSlicerU32,
 }
 
-#[derive(Clone)]
 pub struct DBChunkBuffers {
     pub limb_0: Vec<CudaSlice<u8>>,
     pub limb_1: Vec<CudaSlice<u8>>,
+    pub sums: CudaVec2DSlicer<u32>,
 }
 
 pub struct ShareDB {
@@ -495,13 +495,34 @@ impl ShareDB {
     pub fn alloc_db_chunk_buffer(&self, max_chunk_size: usize) -> DBChunkBuffers {
         let mut limb_0 = vec![];
         let mut limb_1 = vec![];
+        let mut sums_0 = vec![];
+        let mut sums_1 = vec![];
         for device in self.device_manager.devices() {
-            unsafe {
-                limb_0.push(device.alloc(max_chunk_size * self.code_length).unwrap());
-                limb_1.push(device.alloc(max_chunk_size * self.code_length).unwrap());
-            }
+            limb_0.push(
+                device
+                    .alloc_zeros(max_chunk_size * self.code_length)
+                    .unwrap(),
+            );
+            limb_1.push(
+                device
+                    .alloc_zeros(max_chunk_size * self.code_length)
+                    .unwrap(),
+            );
+            sums_0.push(StreamAwareCudaSlice::from(
+                device.alloc_zeros(max_chunk_size).unwrap(),
+            ));
+            sums_1.push(StreamAwareCudaSlice::from(
+                device.alloc_zeros(max_chunk_size).unwrap(),
+            ));
         }
-        DBChunkBuffers { limb_0, limb_1 }
+        DBChunkBuffers {
+            limb_0,
+            limb_1,
+            sums: CudaVec2DSlicer {
+                limb_0: sums_0,
+                limb_1: sums_1,
+            },
+        }
     }
 
     pub fn prefetch_db_chunk(
@@ -550,7 +571,7 @@ impl ShareDB {
         }
     }
 
-    pub fn prefetch_db_subset_into_chunk(
+    pub fn prefetch_db_subset_into_chunk_buffers(
         &self,
         db: &SlicedProcessedDatabase,
         buffers: &DBChunkBuffers,
@@ -580,6 +601,28 @@ impl ShareDB {
                             (db.code_gr.limb_1[idx] as usize + wanted_idx * self.code_length)
                                 as *mut _,
                             self.code_length,
+                            streams[idx].stream,
+                        )
+                        .result()
+                        .unwrap();
+                    cudarc::driver::sys::lib()
+                        .cuMemcpyDtoDAsync_v2(
+                            *buffers.sums.limb_0[idx].device_ptr()
+                                + (offset * size_of::<u32>()) as u64,
+                            db.code_sums_gr.limb_0[idx].device_ptr()
+                                + (wanted_idx * size_of::<u32>()) as u64,
+                            size_of::<u32>(),
+                            streams[idx].stream,
+                        )
+                        .result()
+                        .unwrap();
+                    cudarc::driver::sys::lib()
+                        .cuMemcpyDtoDAsync_v2(
+                            *buffers.sums.limb_1[idx].device_ptr()
+                                + (offset * size_of::<u32>()) as u64,
+                            db.code_sums_gr.limb_1[idx].device_ptr()
+                                + (wanted_idx * size_of::<u32>()) as u64,
+                            size_of::<u32>(),
                             streams[idx].stream,
                         )
                         .result()
