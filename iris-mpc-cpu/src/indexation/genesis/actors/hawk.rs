@@ -62,10 +62,10 @@ impl Actor for HawkManager {
         let hawk_args = HawkArgs {
             party_index: self.config.party_id,
             addresses: node_addresses.clone(),
+            connection_parallelism: self.config.hawk_connection_parallelism,
             request_parallelism: self.config.hawk_request_parallelism,
             disable_persistence: self.config.disable_persistence,
         };
-
         let _ = HawkActor::from_cli(&hawk_args)
             .await
             .map_err(|_| IndexationError::HawkActorError)
