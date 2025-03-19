@@ -107,8 +107,9 @@ mod test {
         assert_eq!(unique_tasks, n_tasks);
     }
 
-    fn test_range_forward_backward() -> Vec<usize> {
-        assert_eq!(range_forward_backward(0).collect_vec(), vec![]);
+    #[test]
+    fn test_range_forward_backward() {
+        assert!(range_forward_backward(0).collect_vec().is_empty());
         assert_eq!(range_forward_backward(1).collect_vec(), vec![0]);
         assert_eq!(
             range_forward_backward(7).collect_vec(),

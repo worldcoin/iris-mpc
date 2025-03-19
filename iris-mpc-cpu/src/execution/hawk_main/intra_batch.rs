@@ -15,10 +15,13 @@ pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
     search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
 ) -> Result<VecRequests<Vec<usize>>> {
+    let n_sessions = sessions[LEFT].len();
+    assert_eq!(n_sessions, sessions[RIGHT].len());
+    let n_eyes = 2;
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
-    let batches = schedule(sessions[LEFT].len(), 2, n_requests, ROTATIONS);
+    let batches = schedule(n_sessions, n_eyes, n_requests, ROTATIONS);
 
     // TODO: move this up to the caller.
     let search_queries = [
@@ -104,11 +107,11 @@ fn aggregate_results(
     let mut join = HashMap::new();
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
-    for batches in results {
-        for batch in batches? {
-            let request_pair = (batch.task.i_request, batch.other_request);
+    for batch in results {
+        for match_result in batch? {
+            let request_pair = (match_result.task.i_request, match_result.other_request);
             let eyes_match = join.entry(request_pair).or_insert([false, false]);
-            eyes_match[batch.eye] |= batch.is_match;
+            eyes_match[match_result.eye] |= match_result.is_match;
         }
     }
 
