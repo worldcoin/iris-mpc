@@ -2,11 +2,12 @@
 
 # This script provides a way to update the targetRevision of an ArgoCD application in all SMPC stage clusters.
 # The script will loop through each cluster, port-forward ArgoCD server, authenticate to it, update the targetRevision of the application, and close port-forward.
-#
+# The script can be configured to use either CPU or GPU clusters by passing the appropriate argument. The default is GPU
 # Usage examples:
 #   ./scripts/argo_stage_update_revision.sh $(git branch --show-current)
 #   ./scripts/argo_stage_update_revision.sh main
 #   ./scripts/argo_stage_update_revision.sh <another-branch>
+#   ./scripts/argo_stage_update_revision.sh <another-branch> cpu 
 #
 # Pre-requisites:
 # 1. Ensure that you have the ArgoCD CLI installed on your local machine. (brew install argocd)
@@ -14,11 +15,34 @@
 # 3. Ensure that your kubeconfig is configured to access the target clusters.
 
 
-# Define clusters and ArgoCD application details
-CLUSTERS=("arn:aws:eks:eu-north-1:024848486749:cluster/smpcv2-0-stage" "arn:aws:eks:eu-north-1:024848486818:cluster/smpcv2-1-stage" "arn:aws:eks:eu-north-1:024848486770:cluster/smpcv2-2-stage")
-ARGOCD_PORTS=(8081 8082 8083)
-ARGOCD_APP="iris-mpc"
 NEW_BRANCH=$1
+
+MPCV2_TYPE=$2
+# if MPCV2_TYPE is not provided, set it to "gpu"
+if [ -z "$MPCV2_TYPE" ]; then
+    MPCV2_TYPE="gpu"
+fi
+
+if [ "$MPCV2_TYPE" == "cpu" ]; then
+  CLUSTER_NAME="ampc-hnsw"
+  ARGOCD_APP="ampc-hnsw"
+  echo "Using CPU cluster name: $CLUSTER_NAME"
+  echo "Using CPU argo app: $ARGOCD_APP"
+elif [ "$MPCV2_TYPE" == "gpu" ]; then
+  CLUSTER_NAME="smpcv2"
+  ARGOCD_APP="iris-mpc"
+  echo "Using GPU cluster name: $CLUSTER_NAME"
+  echo "Using GPU argo app: $ARGOCD_APP"
+else
+  printf "\nUnknown mpcv2 type: %s\n" "$MPCV2_TYPE"
+  printf "Available types: gpu, cpu\n"
+  exit 1
+fi
+
+
+# Define clusters and ArgoCD application details
+CLUSTERS=("arn:aws:eks:eu-north-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-north-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-north-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
+ARGOCD_PORTS=(8081 8082 8083)
 
 # Define a green color
 GREEN='\033[0;32m'
