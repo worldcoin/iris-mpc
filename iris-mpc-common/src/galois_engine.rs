@@ -171,14 +171,14 @@ pub mod degree4 {
         }
 
         fn flipped_imaginary_coeffs(&self) -> Self {
-            let mut coefs = self.coefs.clone();
+            let mut res = self.clone();
             let element = GaloisRingElement::ZERO;
             let mut rng = StdRng::seed_from_u64(0);
             let share = ShamirGaloisRingShare::encode_3_mat(&element.coefs, &mut rng);
             for i in IRIS_CODE_LENGTH / 2..IRIS_CODE_LENGTH {
-                coefs[i] = share[self.id - 1].y.coefs[i % 4].wrapping_sub(coefs[i]);
+                res.coefs[i] = share[self.id - 1].y.coefs[i % 4].wrapping_sub(res.coefs[i]);
             }
-            Self { id: self.id, coefs }
+            res
         }
 
         /// Wrap a code share. party_id is 0-based.
@@ -634,7 +634,7 @@ pub mod degree4 {
             }
             let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
-            return 0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64);
+            0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64)
         }
 
         #[test]
