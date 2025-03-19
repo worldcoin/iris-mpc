@@ -35,11 +35,11 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 16;
-const DEFAULT_BATCH_SIZE: usize = 64;
-const DEFAULT_N_BATCHES: usize = 4;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 4;
+const DEFAULT_BATCH_SIZE: usize = 10;
+const DEFAULT_N_BATCHES: usize = 3;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(30);
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(10);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser, Clone)]
@@ -237,11 +237,13 @@ impl E2EClient {
                 let requests = self.requests.clone();
                 let party_shares = self.file_data[party_shares_index].clone();
                 let expected_results = self.expected_results.clone();
-                party_shares_index += 1;
                 let handle = tokio::spawn(async move {
                     let _permit = semaphore.acquire().await;
                     let request_id = party_shares.signup_id.clone();
-                    println!("Sending iris code from file {}", request_id);
+                    println!(
+                        "Sending iris code {} from file {}",
+                        party_shares_index, request_id
+                    );
                     requests
                         .lock()
                         .await
@@ -250,12 +252,11 @@ impl E2EClient {
                         .lock()
                         .await
                         .insert(request_id.clone(), None);
-                    client
-                        .send_enrollment_request(party_shares.clone(), batch_size)
-                        .await?;
+                    client.send_enrollment_request(party_shares.clone()).await?;
                     Ok::<(), eyre::Report>(())
                 });
                 handles.push(handle);
+                party_shares_index += 1;
             }
             for handle in handles {
                 handle.await??;
@@ -282,7 +283,6 @@ impl E2EClient {
                 let rng_seed = self.rng_seed;
                 let has_file_data_loaded = self.data_from_file.is_some();
                 let client = self.clone();
-                let batch_size = self.batch_size;
                 let used_indices = used_file_indices.clone();
                 let used_response_indices = used_response_indices.clone();
                 let handle = tokio::spawn(async move {
@@ -334,25 +334,6 @@ impl E2EClient {
                                 }
                                 party_share_data
                             }
-                            // TODO add ability to send from DB directly from the postgres DB once initting the DB includes adding to the graph
-                            // 1 => {
-                            //
-                            //     println!("Sending new iris code for request id {}", request_id);
-                            //     // println!("Sending iris code from db for request id {}", request_id);
-                            //     // let db_len = {
-                            //     //     let tmp = thread_db2.lock().await;
-                            //     //     tmp.db.len()
-                            //     // };
-                            //     // let db_index = rng.gen_range(0..db_len);
-                            //     // {
-                            //     //     let mut tmp = thread_expected_results2.lock().await;
-                            //     //     tmp.insert(request_id.to_string(), Some(db_index as u32 + 1));
-                            //     // }
-                            //     // {
-                            //     //     let tmp = thread_db2.lock().await;
-                            //     //     tmp.db[db_index].clone()
-                            //     // }
-                            // }
                             1 => {
                                 let locked_responses = responses.lock().await;
                                 let mut locked_response_indices =
@@ -384,9 +365,7 @@ impl E2EClient {
                         let mut tmp = requests.lock().await;
                         tmp.insert(request_id.to_string(), party_shares.clone());
                     }
-                    client
-                        .send_enrollment_request(party_shares, batch_size)
-                        .await?;
+                    client.send_enrollment_request(party_shares).await?;
                     Ok::<(), eyre::Report>(())
                 });
                 handles.push(handle);
@@ -400,6 +379,7 @@ impl E2EClient {
             println!("Batch {} sent!", batch_idx);
             sleep(WAIT_AFTER_BATCH).await;
         }
+        println!("All batches sent!");
         Ok(())
     }
 
@@ -438,14 +418,16 @@ impl E2EClient {
                     let result: UniquenessResult = serde_json::from_str(sqs_message)
                         .context("Failed to parse UniquenessResult from Message")?;
 
-                    println!("Received result: {:?}", result);
-
                     let expected_result_option = {
                         let tmp = expected_results.lock().await;
                         tmp.get(&result.signup_id).cloned()
                     };
                     assert!(expected_result_option.is_some());
                     let expected_result = expected_result_option.unwrap();
+                    println!(
+                        "Received result: {:?} - expected result {:?}",
+                        result, expected_result
+                    );
 
                     if expected_result.is_none() {
                         // New insertion
@@ -480,11 +462,7 @@ impl E2EClient {
         })
     }
 
-    async fn send_enrollment_request(
-        &self,
-        party_shares: IrisCodePartyShares,
-        batch_size: usize,
-    ) -> eyre::Result<()> {
+    async fn send_enrollment_request(&self, party_shares: IrisCodePartyShares) -> eyre::Result<()> {
         let mut iris_shares_file_hashes: [String; 3] = Default::default();
         let mut iris_codes_shares_base64: [String; 3] = Default::default();
 
@@ -532,7 +510,8 @@ impl E2EClient {
         };
 
         let request_message = UniquenessRequest {
-            batch_size: Some(batch_size),
+            // TODO: in future use the batch size from the request
+            batch_size: Some(1),
             signup_id: party_shares.signup_id.clone(),
             s3_key: bucket_key,
             or_rule_serial_ids: None,
