@@ -1551,6 +1551,11 @@ impl ServerActor {
         );
         // ---- END BATCH DEDUP ----
 
+        // if the subset is completely empty, we can skip the whole process after we do the batch check
+        if db_subset_idx.is_empty() {
+            return;
+        }
+
         // which database are we querying against
         let (code_db_slices, mask_db_slices) = match eye_db {
             Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
@@ -1671,29 +1676,16 @@ impl ServerActor {
 
         let res = self.phase2.take_result_buffer();
 
-        let (
-            match_distances_buffers_codes,
-            match_distances_buffers_masks,
-            match_distances_counters,
-            match_distances_indices,
-        ) = match eye_db {
-            Eye::Left => (
-                &self.match_distances_buffer_codes_left,
-                &self.match_distances_buffer_masks_left,
-                &self.match_distances_counter_left,
-                &self.match_distances_indices_left,
-            ),
-            Eye::Right => (
-                &self.match_distances_buffer_codes_right,
-                &self.match_distances_buffer_masks_right,
-                &self.match_distances_counter_right,
-                &self.match_distances_indices_right,
-            ),
-        };
-
         let db_match_bitmap = match eye_db {
             Eye::Left => &self.db_match_list_left,
             Eye::Right => &self.db_match_list_right,
+        };
+
+        // we only care about device 0 results, since the rest is just duplicates
+        let ignore_device_results: Vec<bool> = {
+            let mut ignore_device_results = vec![true; self.device_manager.device_count()];
+            ignore_device_results[0] = false;
+            ignore_device_results
         };
 
         record_stream_time!(
@@ -1703,7 +1695,7 @@ impl ServerActor {
             "db_open",
             self.enable_debug_timing,
             {
-                open(
+                open_subset_results(
                     &mut self.phase2,
                     &res,
                     &self.distance_comparator,
@@ -1711,20 +1703,11 @@ impl ServerActor {
                     max_chunk_size * self.max_batch_size * ROTATIONS / 64,
                     &dot_chunk_size,
                     &chunk_size,
-                    offset,
                     &self.current_db_sizes,
                     &ignore_device_results,
-                    match_distances_buffers_codes,
-                    match_distances_buffers_masks,
-                    match_distances_counters,
-                    match_distances_indices,
-                    &code_dots,
-                    &mask_dots,
                     batch_size,
-                    self.match_distances_buffer_size
-                        * (100 + self.match_distances_buffer_size_extra_percent)
-                        / 100,
                     &self.streams[0],
+                    &db_subset_idx,
                 );
                 self.phase2.return_result_buffer(res);
             }
@@ -2255,6 +2238,60 @@ fn open(
         batch_size,
         max_bucket_distances,
         streams,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn open_subset_results(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    matches_bitmap: &[CudaSlice<u64>],
+    chunk_size: usize,
+    db_sizes: &[usize],
+    real_db_sizes: &[usize],
+    total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
+    batch_size: usize,
+    streams: &[CudaStream],
+    index_mapping: &[usize],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
+            .unwrap();
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
+            .unwrap();
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_results_with_index_mapping(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
+        index_mapping,
     );
 }
 

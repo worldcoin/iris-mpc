@@ -1,8 +1,8 @@
 use super::ROTATIONS;
 use crate::{
     helpers::{
-        device_manager::DeviceManager, launch_config_from_elements_and_threads,
-        DEFAULT_LAUNCH_CONFIG_THREADS,
+        device_manager::DeviceManager, htod_on_stream_sync,
+        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
 };
@@ -13,6 +13,7 @@ use cudarc::{
     },
     nvrtc::compile_ptx,
 };
+use rand::seq::index;
 use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
@@ -205,6 +206,63 @@ impl DistanceComparator {
                             &mask_dots[i].a,
                             &mask_dots[i].b,
                             max_bucket_distances,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_results_with_index_mapping(
+        &self,
+        results1: &[CudaView<u64>],
+        results2: &[CudaView<u64>],
+        results3: &[CudaView<u64>],
+        matches_bitmap: &[CudaSlice<u64>],
+        db_sizes: &[usize],
+        real_db_sizes: &[usize],
+        total_db_sizes: &[usize],
+        ignore_db_results: &[bool],
+        batch_size: usize,
+        streams: &[CudaStream],
+        index_mapping: &[usize],
+    ) {
+        for i in 0..self.device_manager.device_count() {
+            // Those correspond to 0 length dbs, which were just artificially increased to
+            // length 1 to avoid division by zero in the kernel
+            if ignore_db_results[i] {
+                continue;
+            }
+            let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+            self.device_manager.device(i).bind_to_thread().unwrap();
+            let index_mapping =
+                htod_on_stream_sync(index_mapping, &self.device_manager.device(i), &streams[i])
+                    .unwrap();
+
+            unsafe {
+                self.open_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &results1[i],
+                            &results2[i],
+                            &results3[i],
+                            &matches_bitmap[i],
+                            db_sizes[i],
+                            (batch_size * ROTATIONS) as u64,
+                            num_elements,
+                            real_db_sizes[i],
+                            total_db_sizes[i],
+                            &index_mapping,
                         ),
                     )
                     .unwrap();
