@@ -69,6 +69,7 @@ mod test {
 
     #[test]
     fn test_schedule() {
+        test_schedule_impl(1, 0);
         test_schedule_impl(1, 1);
         test_schedule_impl(1, 2);
         test_schedule_impl(10, 1);
@@ -80,14 +81,22 @@ mod test {
 
     fn test_schedule_impl(n_sessions: usize, n_requests: usize) {
         let n_eyes = 2;
+        let n_batches = n_eyes * n_sessions;
         let n_rotations = ROTATIONS;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
         let batches = schedule(n_sessions, n_eyes, n_requests, n_rotations);
-        assert_eq!(batches.len(), n_eyes * n_sessions);
+        assert_eq!(batches.len(), n_batches);
 
         let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();
         assert_eq!(count_tasks, n_tasks);
+
+        let unique_sessions = batches
+            .iter()
+            .map(|b| (b.i_eye, b.i_session))
+            .unique()
+            .count();
+        assert_eq!(unique_sessions, n_batches);
 
         let unique_tasks = batches
             .iter()
@@ -99,7 +108,7 @@ mod test {
                     assert!(t.i_request < n_requests);
                     assert!(t.i_rotation < n_rotations);
 
-                    (b.i_eye, b.i_session, t.i_request, t.i_rotation)
+                    (b.i_eye, t.i_request, t.i_rotation)
                 })
             })
             .unique()
