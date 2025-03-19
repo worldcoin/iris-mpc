@@ -59,6 +59,9 @@ pub struct HawkArgs {
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
+    #[clap(long, default_value_t = 2)]
+    pub connection_parallelism: usize,
+
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 }
@@ -180,6 +183,7 @@ impl HawkActor {
 
         let grpc_config = GrpcConfig {
             timeout_duration: Duration::from_secs(10),
+            connection_parallelism: args.connection_parallelism,
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
@@ -1125,7 +1129,8 @@ mod tests_db {
         let args = HawkArgs {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
-            request_parallelism: 2,
+            request_parallelism: 4,
+            connection_parallelism: 2,
             disable_persistence: false,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
