@@ -151,6 +151,15 @@ env:
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "20"
 
+  - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
