@@ -19,7 +19,7 @@ if [ "$CLEANUP_TYPE" == "cpu" ]; then
   echo "Using CPU secret: $SECRET_NAME"
   echo "Using CPU cluster name: $CLUSTER_NAME"
   echo "Using CPU namespace: $NAMESPACE"
-  elif [ "$CLEANUP_TYPE" == "gpu" ]; then
+elif [ "$CLEANUP_TYPE" == "gpu" ]; then
   SECRET_NAME="stage/iris-mpc/rds-aurora-master-password"
   CLUSTER_NAME="smpcv2"
   NAMESPACE="iris-mpc"
