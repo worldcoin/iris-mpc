@@ -52,18 +52,17 @@ async fn per_session(
     search_queries: &VecRequests<VecRots<QueryRef>>,
     session: &mut HawkSession,
     batch: Batch,
-) -> Vec<MatchResult> {
+) -> Vec<IsMatch> {
     // Enumerate the pairs of requests.
     // These are unordered pairs: if we do (i, j) we skip (j, i).
     let pairs = batch
         .tasks
         .into_iter()
         .flat_map(|task| {
-            (0..task.i_request).map(move |other_request| MatchResult {
+            (0..task.i_request).map(move |other_request| IsMatch {
                 eye: batch.i_eye,
                 task,
                 other_request,
-                is_match: false, // Set below.
             })
         })
         .collect_vec();
@@ -86,23 +85,20 @@ async fn per_session(
     let distances = session.aby3_store.lift_distances(distances).await.unwrap();
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
 
-    let mut pairs = pairs;
-    for (pair, is_match) in izip!(&mut pairs, is_matches) {
-        pair.is_match = is_match;
-    }
-    pairs
+    izip!(pairs, is_matches)
+        .filter_map(|(pair, is_match)| is_match.then_some(pair))
+        .collect_vec()
 }
 
-struct MatchResult {
+struct IsMatch {
     eye: usize,
     task: Task,
     other_request: usize,
-    is_match: bool,
 }
 
 fn aggregate_results(
     n_requests: usize,
-    results: Vec<Result<Vec<MatchResult>, JoinError>>,
+    results: Vec<Result<Vec<IsMatch>, JoinError>>,
 ) -> Result<VecRequests<Vec<usize>>> {
     let mut join = HashMap::new();
 
@@ -111,7 +107,7 @@ fn aggregate_results(
         for match_result in batch? {
             let request_pair = (match_result.task.i_request, match_result.other_request);
             let eyes_match = join.entry(request_pair).or_insert([false, false]);
-            eyes_match[match_result.eye] |= match_result.is_match;
+            eyes_match[match_result.eye] = true;
         }
     }
 
