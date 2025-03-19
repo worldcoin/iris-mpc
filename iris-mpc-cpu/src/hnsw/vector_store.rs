@@ -21,7 +21,7 @@ impl<T> Ref for T where
 
 /// The operations exposed by a vector store, sufficient for a search algorithm.
 #[allow(async_fn_in_trait)]
-pub trait VectorStore: Clone + Debug {
+pub trait VectorStore: Debug {
     /// Opaque reference to a query.
     ///
     /// Example: a preprocessed representation optimized for distance
