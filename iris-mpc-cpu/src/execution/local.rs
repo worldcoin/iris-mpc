@@ -125,13 +125,13 @@ impl LocalRuntime {
         };
 
         let mut jobs = vec![];
-        for (player_id, mut boot_session) in network_sessions.into_iter().enumerate() {
+        for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id];
             let task = tokio::spawn(async move {
-                let prf = setup_replicated_prf(&mut boot_session, player_seed)
+                let prf = setup_replicated_prf(&mut network_session, player_seed)
                     .await
                     .unwrap();
-                (boot_session, prf)
+                (network_session, prf)
             });
             jobs.push(task);
         }
