@@ -1,8 +1,9 @@
 use super::ROTATIONS;
 use crate::{
     helpers::{
-        device_manager::DeviceManager, htod_on_stream_sync,
-        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
+        device_manager::{self, DeviceManager},
+        htod_on_stream_sync, launch_config_from_elements_and_threads,
+        DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     server::actor::{reset_slice, DB_CHUNK_SIZE},
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
