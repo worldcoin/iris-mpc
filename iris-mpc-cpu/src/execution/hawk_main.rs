@@ -654,8 +654,21 @@ impl HawkResult {
     }
 
     fn match_ids(&self) -> Vec<Vec<u32>> {
-        self.match_results
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()))
+        // Graph matches.
+        let mut match_ids = self
+            .match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+
+        // Intra-batch matches. Find the serial IDs that were just inserted.
+        for (graph_matches, intra_matches) in izip!(match_ids.iter_mut(), &self.intra_results) {
+            for i_request in intra_matches {
+                if let Some(plan) = &self.connect_plans.0[LEFT][*i_request] {
+                    graph_matches.push(plan.inserted_vector.to_serial_id());
+                }
+            }
+        }
+
+        match_ids
     }
 
     fn matched_batch_request_ids(&self, request_ids: &[String]) -> Vec<Vec<String>> {
