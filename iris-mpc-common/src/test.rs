@@ -979,8 +979,9 @@ impl TestCaseGenerator {
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
                     if !self.or_rule_matches.contains(req_id) {
-                        assert_eq!(partial_left, partial_right);
-                        assert_eq!(partial_left, match_id);
+                        // TODO: disabled for now since we no longer compute this
+                        // assert_eq!(partial_left, partial_right);
+                        // assert_eq!(partial_left, match_id);
                     }
                     self.check_result(
                         req_id,
