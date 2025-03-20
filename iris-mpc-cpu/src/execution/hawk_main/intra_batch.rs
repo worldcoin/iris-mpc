@@ -59,10 +59,10 @@ async fn per_session(
         .tasks
         .into_iter()
         .flat_map(|task| {
-            (0..task.i_request).map(move |other_request| IsMatch {
+            (0..task.i_request).map(move |earlier_request| IsMatch {
                 eye: batch.i_eye,
                 task,
-                other_request,
+                earlier_request,
             })
         })
         .collect_vec();
@@ -73,7 +73,7 @@ async fn per_session(
         .map(|pair| {
             (
                 &search_queries[pair.task.i_request][pair.task.i_rotation].processed_query,
-                &search_queries[pair.other_request].center().query,
+                &search_queries[pair.earlier_request].center().query,
             )
         })
         .collect_vec();
@@ -93,7 +93,7 @@ async fn per_session(
 struct IsMatch {
     eye: usize,
     task: Task,
-    other_request: usize,
+    earlier_request: usize,
 }
 
 fn aggregate_results(
@@ -105,7 +105,7 @@ fn aggregate_results(
     // For each pair of request, reduce the result of all rotations with boolean ANY.
     for batch in results {
         for match_result in batch? {
-            let request_pair = (match_result.task.i_request, match_result.other_request);
+            let request_pair = (match_result.task.i_request, match_result.earlier_request);
             let eyes_match = join.entry(request_pair).or_insert([false, false]);
             eyes_match[match_result.eye] = true;
         }
@@ -114,11 +114,10 @@ fn aggregate_results(
     let mut match_lists = vec![Vec::new(); n_requests];
 
     // Find pairs with left AND right match.
-    for ((i_request, j_request), [left, right]) in join {
+    for ((i_request, earlier_request), [left, right]) in join {
         if left && right {
-            // The pair of matching requests track each other's index.
-            match_lists[i_request].push(j_request);
-            match_lists[j_request].push(i_request);
+            // This request is a duplicate of a request that came before it in the batch.
+            match_lists[i_request].push(earlier_request);
         }
     }
 

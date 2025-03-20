@@ -615,8 +615,16 @@ pub struct HawkResult {
 
 impl HawkResult {
     fn new(match_results: matching::BatchStep2, intra_results: Vec<Vec<usize>>) -> Self {
+        // Get matches from the graph.
         let is_matches = match_results.is_matches();
         let n_requests = is_matches.len();
+        assert_eq!(n_requests, intra_results.len());
+
+        // Add duplicate requests within the batch.
+        let is_matches = izip!(is_matches, &intra_results)
+            .map(|(graph_match, intra_match)| graph_match || !intra_match.is_empty())
+            .collect_vec();
+
         HawkResult {
             match_results,
             intra_results,
