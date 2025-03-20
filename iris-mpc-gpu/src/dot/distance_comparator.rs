@@ -482,7 +482,8 @@ impl DistanceComparator {
         tracing::info!("Partial matches len: {:?}", matches.len());
         tracing::info!("Partial matches: {:?}", matches);
 
-        let deduped: Vec<u32> = matches.into_iter().unique().collect();
+        let mut deduped: Vec<u32> = matches.into_iter().unique().collect();
+        deduped.sort();
         tracing::info!("Unique partial matches len: {:?}", deduped.len());
 
         deduped
