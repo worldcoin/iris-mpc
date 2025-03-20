@@ -176,14 +176,16 @@ impl SyncResult {
                     .expect("At least one completed modification");
                 match local_copy {
                     None => {
-                        // In a rare case of another party missing an in progress modification,
-                        // this party will fetch until modification id X while the other party will
-                        // fetch until mod id X-1. In this case, this party can override mod X-1.
+                        // If an item is completed for a party, it should at least exist in the
+                        // local state because it should have been added during receive_batch.
+                        // This can only happen when other party misses an in_progress mod.
+                        // Local party will fetch until modification id X while the other party will
+                        // fetch until mod id X-1. In this case, local party won't find X-1.
+                        // We log and skip updating to avoid rolling back to an older share in local.
                         tracing::info!(
-                            "Adding missing completed modification: {:?}",
+                            "Skip missing completed modification: {:?}",
                             first_completed
                         );
-                        to_update.push(first_completed.clone());
                     }
                     Some(local_m) => {
                         if local_m.status != ModificationStatus::Completed.to_string()
@@ -516,7 +518,8 @@ mod tests {
         // Suppose that we have a lookback window of 2 modifications.
         // If latest modification is IN_PROGRESS in local party and completely missing in other
         // party (not fetched from SQS yet), the other party will return modification outside the
-        // lookback window. In this case, local party should upsert it.
+        // lookback window. In this case, local party should skip outside-window modification and
+        // delete the latest in progress one.
         let mod2_local = create_modification(
             2,
             200,
@@ -562,11 +565,10 @@ mod tests {
         // Compare modifications across nodes.
         let (to_update, to_delete) = sync_result.compare_modifications();
 
-        assert_eq!(to_update.len(), 1, "Expected one modification to update");
+        assert_eq!(to_update.len(), 0, "Expected no modification to update");
         assert_eq!(to_delete.len(), 1, "Expected one modificatio to delete");
 
-        // Expectation: Local party should upsert the missing mod1 and delete mod3.
-        assert_eq!(to_update[0], mod1_other);
+        // Expectation: Local party should delete mod3.
         assert_eq!(to_delete[0], mod3_local);
     }
 
