@@ -102,6 +102,8 @@ async fn e2e_test() -> Result<()> {
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         disable_persistence: false,
+        match_distances_buffer_size: 64,
+        n_buckets: 10,
     };
     let args1 = HawkArgs {
         party_index: 1,

@@ -531,6 +531,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         connection_parallelism: config.hawk_connection_parallelism,
         disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
+        n_buckets: config.n_buckets,
     };
 
     tracing::info!(
