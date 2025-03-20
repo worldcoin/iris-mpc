@@ -45,18 +45,18 @@ criterion = "0.5"
 [features]
 default = []
 
-
 [[bin]]
 name = "iris-mpc-gpu"
 path = "bin/server.rs"
-
 
 [[bin]]
 name = "iris-mpc-hawk"
 path = "bin/server/iris_mpc_hawk.rs"
 
+[[bin]]
+name = "iris-mpc-hawk-genesis"
+path = "bin/server/iris_mpc_hawk_genesis.rs"
 
 [[bin]]
 name = "client"
 path = "bin/client/client.rs"
-
