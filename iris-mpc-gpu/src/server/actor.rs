@@ -784,14 +784,32 @@ impl ServerActor {
             }
         );
 
-        tracing::info!("Comparing right eye queries against DB and self");
-        self.compare_query_against_db_and_self(
-            &compact_device_queries_right,
-            &compact_device_sums_right,
-            &mut events,
-            Eye::Right,
-            batch_size,
-        );
+        if partial_matches_left.len() > DB_CHUNK_SIZE {
+            tracing::warn!(
+                "Partial matches left too large, doing full match: {} > {}",
+                partial_matches_left.len(),
+                DB_CHUNK_SIZE
+            );
+
+            tracing::info!("Comparing right eye queries against DB and self");
+            self.compare_query_against_db_and_self(
+                &compact_device_queries_right,
+                &compact_device_sums_right,
+                &mut events,
+                Eye::Right,
+                batch_size,
+            );
+        } else {
+            tracing::info!("Comparing right eye queries against DB subset");
+            self.compare_query_against_db_subset_and_self(
+                &compact_device_queries_right,
+                &compact_device_sums_right,
+                &mut events,
+                Eye::Right,
+                batch_size,
+                &partial_matches_left,
+            );
+        }
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1541,7 +1559,7 @@ impl ServerActor {
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
-        db_subset_idx: &[usize],
+        db_subset_idx: &[u32],
     ) {
         assert!(
             eye_db == Eye::Right,
@@ -2263,7 +2281,7 @@ fn open_subset_results(
     ignore_db_results: &[bool],
     batch_size: usize,
     streams: &[CudaStream],
-    index_mapping: &[usize],
+    index_mapping: &[u32],
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
