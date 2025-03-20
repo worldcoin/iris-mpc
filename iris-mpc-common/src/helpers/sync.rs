@@ -170,15 +170,20 @@ impl SyncResult {
                 }
             } else if any_completed {
                 // If any node completed => unify to COMPLETED
+                let first_completed = group_mods
+                    .iter()
+                    .find(|m| m.status == ModificationStatus::Completed.to_string())
+                    .expect("At least one completed modification");
                 match local_copy {
                     None => {
-                        // If an item is completed for a party, it should at least exist in the
-                        // local state because it should have been added during receive_batch.
-                        // So, this case should not happen.
-                        panic!(
-                            "Completed modification could not be found in local state: {:?}",
-                            group_mods
+                        // In a rare case of another party missing an in progress modification,
+                        // this party will fetch until modification id X while the other party will
+                        // fetch until mod id X-1. In this case, this party can override mod X-1.
+                        tracing::info!(
+                            "Adding missing completed modification: {:?}",
+                            first_completed
                         );
+                        to_update.push(first_completed.clone());
                     }
                     Some(local_m) => {
                         if local_m.status != ModificationStatus::Completed.to_string()
@@ -186,7 +191,7 @@ impl SyncResult {
                         {
                             // If local is not "completed" or doesn't match the final persisted
                             // We'll roll forward local_m
-                            let mut roll_forward = local_m.clone();
+                            let mut roll_forward = first_completed.clone();
                             roll_forward.status = ModificationStatus::Completed.to_string();
                             roll_forward.persisted = any_persisted;
                             tracing::warn!(
@@ -504,6 +509,65 @@ mod tests {
         // deleted.
         assert!(to_update.is_empty(), "Expected no modifications to update");
         assert!(to_delete.is_empty(), "Expected no modifications to delete");
+    }
+
+    #[test]
+    fn test_compare_modifications_update_outside_lookback_modification() {
+        // Suppose that we have a lookback window of 2 modifications.
+        // If latest modification is IN_PROGRESS in local party and completely missing in other
+        // party (not fetched from SQS yet), the other party will return modification outside the
+        // lookback window. In this case, local party should upsert it.
+        let mod2_local = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_local = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::InProgress,
+            false,
+        );
+        let my_state = create_sync_state(vec![mod2_local.clone(), mod3_local.clone()]);
+
+        let mut mod1_other = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        mod1_other.result_message_body = Some(
+            serde_json::to_string(&IdentityDeletionResult {
+                node_id: 1,
+                serial_id: 100,
+                success: true,
+            })
+            .unwrap(),
+        );
+        let mod2_other = mod2_local;
+        let other_state = create_sync_state(vec![mod1_other.clone(), mod2_other]);
+        let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        // Compare modifications across nodes.
+        let (to_update, to_delete) = sync_result.compare_modifications();
+
+        assert_eq!(to_update.len(), 1, "Expected one modification to update");
+        assert_eq!(to_delete.len(), 1, "Expected one modificatio to delete");
+
+        // Expectation: Local party should upsert the missing mod1 and delete mod3.
+        assert_eq!(to_update[0], mod1_other);
+        assert_eq!(to_delete[0], mod3_local);
     }
 
     #[test]
