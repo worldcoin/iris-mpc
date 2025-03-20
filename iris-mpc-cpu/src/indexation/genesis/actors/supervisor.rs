@@ -15,7 +15,7 @@ use {
         },
         utils::logger,
     },
-    super::{BatchGenerator, GraphIndexer, HawkManager, SharesFetcher},
+    super::{BatchGenerator, GraphIndexer, SharesFetcher},
 };
 
 // ------------------------------------------------------------------------
@@ -28,7 +28,6 @@ pub struct Supervisor {
     a1_ref: Option<ActorRef<BatchGenerator>>,
     a2_ref: Option<ActorRef<SharesFetcher>>,
     a3_ref: Option<ActorRef<GraphIndexer>>,
-    a4_ref: Option<ActorRef<HawkManager>>,
     config: Config,
 }
 
@@ -41,7 +40,6 @@ impl Supervisor {
             a1_ref: None,
             a2_ref: None,
             a3_ref: None,
-            a4_ref: None,
             config,
         }
     }
@@ -188,13 +186,11 @@ impl Actor for Supervisor {
         let a1 = BatchGenerator::new(self.config.clone(), actor_ref.clone());
         let a2 = SharesFetcher::new(self.config.clone(), actor_ref.clone());
         let a3 = GraphIndexer::new(self.config.clone(), actor_ref.clone());
-        let a4 = HawkManager::new(self.config.clone(), actor_ref.clone());
 
         // Spawn associated actors.
         self.a1_ref = Some(kameo::spawn(a1));
         self.a2_ref = Some(kameo::spawn(a2));
         self.a3_ref = Some(kameo::spawn(a3));
-        self.a4_ref = Some(kameo::spawn(a4));
 
         // Signal start.
         self.a1_ref

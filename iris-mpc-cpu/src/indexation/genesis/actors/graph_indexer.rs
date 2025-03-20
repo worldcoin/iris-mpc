@@ -10,9 +10,11 @@ use super::{
         utils::logger,
     },
 };
+use crate::hawkers::aby3::aby3_store::SharedIrisesRef;
 use iris_mpc_common::config::Config;
 use kameo::{
     actor::ActorRef,
+    mailbox::bounded::BoundedMailbox,
     message::{Context, Message},
     Actor,
 };
@@ -22,17 +24,18 @@ use kameo::{
 // ------------------------------------------------------------------------
 
 // Actor: Issues query/insert operations over in-memory HNSW graph.
-#[derive(Actor)]
 #[allow(dead_code)]
 pub struct GraphIndexer {
     // Indexation target, i.e. set of Iris Galois secret shares.
-    target: Vec<IrisGaloisShares>,
+    batch: Vec<IrisGaloisShares>,
 
     // Batch ordinal identifier.
     batch_idx: usize,
 
     // System configuration information.
     config: Config,
+
+    iris_store: Option<[SharedIrisesRef; 2]>,
 
     // Reference to supervisor.
     supervisor_ref: ActorRef<Supervisor>,
@@ -42,8 +45,9 @@ pub struct GraphIndexer {
 impl GraphIndexer {
     pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
         Self {
-            target: Vec::new(),
+            batch: Vec::new(),
             batch_idx: 0,
+            iris_store: None,
             config,
             supervisor_ref,
         }
@@ -57,7 +61,7 @@ impl GraphIndexer {
             format!(
                 "Index graph for Iris batch {} of size {}",
                 self.batch_idx,
-                self.target.len()
+                self.batch.len()
             )
             .as_str(),
         );
@@ -65,7 +69,7 @@ impl GraphIndexer {
         // TODO: remove temporary signal emission.
         let msg = OnEndIndexationOfBatch {
             batch_idx: self.batch_idx,
-            batch_size: self.target.len(),
+            batch_size: self.batch.len(),
         };
         self.supervisor_ref.tell(msg).await.unwrap();
     }
@@ -88,7 +92,7 @@ impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
         logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
         // Reset batch of shares to be processed.
-        self.target = Vec::with_capacity(msg.iris_serial_ids.len());
+        self.batch = Vec::with_capacity(msg.iris_serial_ids.len());
         self.batch_idx = msg.batch_idx;
     }
 }
@@ -120,16 +124,43 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
         logger::log_message::<Self, OnFetchIrisShares>(&msg);
 
         // Extend set of shares to be indexed.
-        self.target.push(msg.iris_shares);
+        self.batch.push(msg.iris_shares);
 
         // When batch is complete then signal readiness for indexing.
-        if self.target.len() == self.target.capacity() {
+        if self.batch.len() == self.batch.capacity() {
             let msg = OnBeginGraphIndexation {
                 batch_idx: msg.batch_idx,
-                batch_size: self.target.len(),
+                batch_size: self.batch.len(),
             };
             self.supervisor_ref.tell(msg).await.unwrap();
         }
+
+        Ok(())
+    }
+}
+
+impl Actor for GraphIndexer {
+    // By default mailbox is limited to 1000 messages.
+    type Mailbox = BoundedMailbox<Self>;
+    type Error = IndexationError;
+
+    /// Actor name - overrides auto-derived name.
+    fn name() -> &'static str {
+        "GraphIndexer"
+    }
+
+    /// Lifecycle event handler: on_start.
+    ///
+    /// State initialisation hook.
+    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
+        logger::log_lifecycle::<Self>("on_start", None);
+
+        // let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
+        // let d = IrisLoader {
+        //     party_id: self.config.party_id.clone(),
+        //     db_size: &mut 0_usize,
+        //     irises: [iris_store[0].write().await, iris_store[1].write().await],
+        // };
 
         Ok(())
     }
