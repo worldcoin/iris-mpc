@@ -25,7 +25,7 @@ pub struct EntryPoint<VectorRef> {
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
-#[derive(Default, Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     /// Starting vector and layer for HNSW search
     entry_point: Option<EntryPoint<V::VectorRef>>,
@@ -34,6 +34,15 @@ pub struct GraphMem<V: VectorStore> {
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
     layers: Vec<Layer<V>>,
+}
+
+impl<V: VectorStore> Clone for GraphMem<V> {
+    fn clone(&self) -> Self {
+        GraphMem {
+            entry_point: self.entry_point.clone(),
+            layers: self.layers.clone(),
+        }
+    }
 }
 
 impl<V: VectorStore> GraphMem<V> {
@@ -144,11 +153,19 @@ impl<V: VectorStore> GraphMem<V> {
     }
 }
 
-#[derive(PartialEq, Eq, Default, Clone, Debug, Serialize, Deserialize)]
+#[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
+}
+
+impl<V: VectorStore> Clone for Layer<V> {
+    fn clone(&self) -> Self {
+        Layer {
+            links: self.links.clone(),
+        }
+    }
 }
 
 impl<V: VectorStore> Layer<V> {

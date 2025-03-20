@@ -296,10 +296,7 @@ pub async fn compare_threshold_and_open(
 mod tests {
     use super::*;
     use crate::{
-        execution::{
-            local::{generate_local_identities, LocalRuntime},
-            player::Identity,
-        },
+        execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
         protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
@@ -309,8 +306,8 @@ mod tests {
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
     use rstest::rstest;
-    use std::collections::HashMap;
-    use tokio::task::JoinSet;
+    use std::{collections::HashMap, sync::Arc};
+    use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -392,11 +389,9 @@ mod tests {
         // P2: [seed_2, seed_1]
         // This is done by calling next() on the PRFs and see whether they match with
         // the ones created from scratch.
-        let prf0 = runtime
-            .sessions
-            .get_mut(&"alice".into())
-            .unwrap()
-            .prf_as_mut();
+
+        // Alice
+        let prf0 = runtime.sessions[0].prf_as_mut();
         assert_eq!(
             prf0.get_my_prf().next_u64(),
             Prf::new(seeds[0], seeds[2]).get_my_prf().next_u64()
@@ -406,11 +401,8 @@ mod tests {
             Prf::new(seeds[0], seeds[2]).get_prev_prf().next_u64()
         );
 
-        let prf1 = runtime
-            .sessions
-            .get_mut(&"bob".into())
-            .unwrap()
-            .prf_as_mut();
+        // Bob
+        let prf1 = runtime.sessions[1].prf_as_mut();
         assert_eq!(
             prf1.get_my_prf().next_u64(),
             Prf::new(seeds[1], seeds[0]).get_my_prf().next_u64()
@@ -420,11 +412,8 @@ mod tests {
             Prf::new(seeds[1], seeds[0]).get_prev_prf().next_u64()
         );
 
-        let prf2 = runtime
-            .sessions
-            .get_mut(&"charlie".into())
-            .unwrap()
-            .prf_as_mut();
+        // Charlie
+        let prf2 = runtime.sessions[2].prf_as_mut();
         assert_eq!(
             prf2.get_my_prf().next_u64(),
             Prf::new(seeds[2], seeds[1]).get_my_prf().next_u64()
@@ -480,7 +469,7 @@ mod tests {
         let four_shares = create_array_sharing(&mut rng, &four_items);
 
         let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let identities = generate_local_identities();
 
         let four_share_map = HashMap::from([
             (identities[0].clone(), four_shares.p0),
@@ -498,16 +487,27 @@ mod tests {
             .await
             .unwrap();
 
+        let sessions: Vec<Arc<Mutex<Session>>> = runtime
+            .sessions
+            .into_iter()
+            .map(|s| Arc::new(Mutex::new(s)))
+            .collect();
+
         let mut jobs = JoinSet::new();
-        for player in identities.iter() {
-            let mut player_session = runtime.sessions.get(player).unwrap().clone();
-            let four_shares = four_share_map.get(player).unwrap().clone();
+        for session in sessions {
+            let session_lock = session.lock().await;
+            let four_shares = four_share_map
+                .get(&session_lock.own_identity())
+                .unwrap()
+                .clone();
+            let session = session.clone();
             jobs.spawn(async move {
-                let four_shares = batch_signed_lift_vec(&mut player_session, four_shares)
+                let mut session = session.lock().await;
+                let four_shares = batch_signed_lift_vec(&mut session, four_shares)
                     .await
                     .unwrap();
                 let out_shared = cross_mul(
-                    &mut player_session,
+                    &mut session,
                     &[(
                         DistanceShare {
                             code_dot: four_shares[0].clone(),
@@ -523,7 +523,7 @@ mod tests {
                 .unwrap()[0]
                     .clone();
 
-                open_single(&player_session, out_shared).await.unwrap()
+                open_single(&session, out_shared).await.unwrap()
             });
         }
         // check first party output is equal to the expected result.
@@ -577,7 +577,7 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
+        let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
@@ -588,14 +588,15 @@ mod tests {
             GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
-        for (index, player) in runtime.get_identities().iter().cloned().enumerate() {
-            let mut player_session = runtime.sessions.get(&player).unwrap().clone();
+        for (index, session) in sessions.iter().enumerate() {
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {
                 y.code.preprocess_iris_code_query_share();
                 y.mask.preprocess_mask_code_query_share();
             });
+            let session = session.clone();
             jobs.spawn(async move {
+                let mut player_session = session.lock().await;
                 let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
