@@ -39,6 +39,9 @@ use tokio::{
     task::JoinSet,
 };
 use tonic::transport::Server;
+use iris_mpc_common::helpers::statistics::BucketStatistics;
+use iris_mpc_common::job::Eye;
+
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
@@ -64,6 +67,9 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
+
+    #[clap(long, default_value_t = 64)]
+    pub match_distances_buffer_size: usize
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -81,6 +87,7 @@ pub struct HawkActor {
     db_size: usize,
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
+    anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
     // ---- My network setup ----
     networking: GrpcHandle,
@@ -224,6 +231,18 @@ impl HawkActor {
             .collect::<Result<()>>()?;
 
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
+        let bucket_statistics_left = BucketStatistics::new(
+            args.match_distances_buffer_size,
+            10,
+            my_index,
+            Eye::Left,
+        );
+        let bucket_statistics_right = BucketStatistics::new(
+            args.match_distances_buffer_size,
+            10,
+            my_index,
+            Eye::Right,
+        );
 
         Ok(HawkActor {
             args: args.clone(),
@@ -231,6 +250,7 @@ impl HawkActor {
             db_size: 0,
             iris_store,
             graph_store,
+            anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
@@ -1131,6 +1151,7 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            match_distances_buffer_size: 10,
             disable_persistence: false,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
