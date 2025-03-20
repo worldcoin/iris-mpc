@@ -149,7 +149,11 @@ pub(crate) async fn transposed_pack_and(
     x2: Vec<VecShare<u64>>,
 ) -> Result<Vec<VecShare<u64>>, Error> {
     if x1.len() != x2.len() {
-        return Err(eyre!("Inputs have different length"));
+        return Err(eyre!(
+            "Inputs have different length {} {}",
+            x1.len(),
+            x2.len()
+        ));
     }
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
     let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
@@ -517,6 +521,7 @@ pub(crate) async fn lift<const K: usize>(
 }
 
 // MSB related code
+#[allow(dead_code)]
 pub(crate) async fn binary_add_3_get_msb(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
@@ -575,6 +580,113 @@ pub(crate) async fn binary_add_3_get_msb(
     Ok(res)
 }
 
+// MSB related code
+pub(crate) async fn binary_add_3_get_msb_prefix(
+    session: &mut Session,
+    x1: Vec<VecShare<u64>>,
+    x2: Vec<VecShare<u64>>,
+    mut x3: Vec<VecShare<u64>>,
+) -> Result<VecShare<u64>, Error> {
+    let len = x1.len();
+    debug_assert!(len == x2.len() && len == x3.len());
+
+    // Let x1, x2, x3 are integers modulo 2^K.
+
+    // Full adder where x3 plays the role of an input carry, i.e.,
+    // c = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) and
+    // s = x1 XOR x2 XOR x3
+    // Note that x1 + x2 + x3 = 2 * c + s mod 2^k
+    let mut x2x3 = x2;
+    transposed_pack_xor_assign(&mut x2x3, &x3);
+    // x1 XOR x2 XOR x3
+    let s = transposed_pack_xor(&x1, &x2x3);
+
+    // Compute 2 * c mod 2^k
+    // x1 XOR x3
+    let mut x1x3 = x1;
+    transposed_pack_xor_assign(&mut x1x3, &x3);
+    // Chop off the MSBs of these values as they are anyway removed by 2 * c later on.
+    x1x3.pop().expect("No elements here");
+    x2x3.pop().expect("No elements here");
+    x3.pop().expect("No elements here");
+    // (x1 XOR x3) AND (x2 XOR x3) = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) XOR x3
+    let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
+    // (x1 AND x2) XOR (x3 AND (x1 XOR x2))
+    transposed_pack_xor_assign(&mut c, &x3);
+
+    // Find the MSB of 2 * c + s using the parallel prefix adder
+    let mut a = s;
+    // The LSB of 2 * c is zero, so we can ignore the LSB of s
+    a.remove(0);
+    let mut b = c;
+
+    // Compute carry propagates p = a XOR b and carry generates g = a AND b
+    let mut p = transposed_pack_xor(&a, &b);
+    // The MSB of g is used to compute the carry of the whole sum, we don't need it as there is reduction modulo 2^k
+    a.pop();
+    b.pop();
+    let g = transposed_pack_and(session, a, b).await?;
+    // The MSB of p is needed to compute the MSB of the sum, but it doesn't needed for the carry computation
+    let msb_p = p.pop().expect("No elements here");
+
+    // Compute the carry for the MSB of the sum
+    let mut temp_g = g;
+    let mut temp_p = p;
+
+    // Reduce the above vectors according to the following rule:
+    // (p0, p1, p2, p3,...) -> (p0 AND p1, p2 AND p3,...)
+    // (g0, g1, g2, g3,...) -> (g1 XOR g0 AND p1, g3 XOR g2 AND p3,...)
+    while temp_g.len() != 1 {
+        let (maybe_extra_p, maybe_extra_g) = if temp_p.len() % 2 == 1 {
+            (temp_p.pop(), temp_g.pop())
+        } else {
+            (None, None)
+        };
+
+        // Split the vectors into even and odd indexed elements
+        let (even_p, odd_p): (Vec<_>, Vec<_>) = temp_p
+            .clone()
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| i % 2 == 0);
+        let even_p: Vec<_> = even_p.into_iter().map(|(_, x)| x).collect();
+        let odd_p: Vec<_> = odd_p.into_iter().map(|(_, x)| x).collect();
+        let (even_g, odd_g): (Vec<_>, Vec<_>) = temp_g
+            .clone()
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| i % 2 == 0);
+        let even_g: Vec<_> = even_g.into_iter().map(|(_, x)| x).collect();
+        let odd_g: Vec<_> = odd_g.into_iter().map(|(_, x)| x).collect();
+
+        // Merge even_p and even_g to multiply them by odd_p at once
+        // This corresponds to computing
+        // (p0 AND p1, p2 AND p3,...) and
+        // (g0 AND p1, g2 AND p3,...) as above
+        let mut even_p_with_even_g = even_p;
+        even_p_with_even_g.extend(even_g);
+        let mut odd_p_doubled = odd_p.clone();
+        odd_p_doubled.extend(odd_p);
+
+        let mut tmp = transposed_pack_and(session, even_p_with_even_g, odd_p_doubled).await?;
+
+        // Update p
+        temp_p = tmp.drain(..(tmp.len() / 2)).collect();
+        if let Some(extra_p) = maybe_extra_p {
+            temp_p.push(extra_p);
+        }
+
+        // Finish computing (g1 XOR g0 AND p1, g3 XOR g2 AND p3,...) and update g
+        temp_g = transposed_pack_xor(&tmp, &odd_g);
+        if let Some(extra_g) = maybe_extra_g {
+            temp_g.push(extra_g);
+        }
+    }
+    // a_msb XOR b_msb XOR top carry
+    let msb = temp_g.pop().unwrap() ^ msb_p;
+    Ok(msb)
+}
+
 // Extracts bit at position K
 async fn extract_msb<const K: usize>(
     session: &mut Session,
@@ -602,7 +714,7 @@ async fn extract_msb<const K: usize>(
         x3.push(x3_);
     }
 
-    binary_add_3_get_msb(session, x1, x2, x3).await
+    binary_add_3_get_msb_prefix(session, x1, x2, x3).await
 }
 
 pub async fn extract_msb_u32<const K: usize>(
