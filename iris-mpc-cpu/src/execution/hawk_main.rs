@@ -1067,11 +1067,20 @@ mod tests {
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
             // Same for specific fields of the bucket statistics.
             // TODO: specific assertions for the bucket statistics results
-            all_results[i].anonymized_bucket_statistics_left.party_id = all_results[0].anonymized_bucket_statistics_left.party_id;
-            all_results[i].anonymized_bucket_statistics_right.party_id = all_results[0].anonymized_bucket_statistics_right.party_id;
-            all_results[i].anonymized_bucket_statistics_left.start_time_utc_timestamp = all_results[0].anonymized_bucket_statistics_left.start_time_utc_timestamp;
-            all_results[i].anonymized_bucket_statistics_right.start_time_utc_timestamp = all_results[0].anonymized_bucket_statistics_right.start_time_utc_timestamp;
-
+            all_results[i].anonymized_bucket_statistics_left.party_id =
+                all_results[0].anonymized_bucket_statistics_left.party_id;
+            all_results[i].anonymized_bucket_statistics_right.party_id =
+                all_results[0].anonymized_bucket_statistics_right.party_id;
+            all_results[i]
+                .anonymized_bucket_statistics_left
+                .start_time_utc_timestamp = all_results[0]
+                .anonymized_bucket_statistics_left
+                .start_time_utc_timestamp;
+            all_results[i]
+                .anonymized_bucket_statistics_right
+                .start_time_utc_timestamp = all_results[0]
+                .anonymized_bucket_statistics_right
+                .start_time_utc_timestamp;
         }
 
         assert!(
