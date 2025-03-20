@@ -247,7 +247,7 @@ impl DistanceComparator {
         ignore_db_results: &[bool],
         batch_size: usize,
         streams: &[CudaStream],
-        index_mapping: &[usize],
+        index_mapping: &[u32],
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to

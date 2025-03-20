@@ -575,7 +575,7 @@ impl ShareDB {
         &self,
         db: &SlicedProcessedDatabase,
         buffers: &DBChunkBuffers,
-        indices: &[usize],
+        indices: &[u32],
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
@@ -587,7 +587,8 @@ impl ShareDB {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(
                             *buffers.limb_0[idx].device_ptr() + (offset * self.code_length) as u64,
-                            (db.code_gr.limb_0[idx] as usize + wanted_idx * self.code_length)
+                            (db.code_gr.limb_0[idx] as usize
+                                + *wanted_idx as usize * self.code_length)
                                 as *mut _,
                             self.code_length,
                             streams[idx].stream,
@@ -598,7 +599,8 @@ impl ShareDB {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(
                             *buffers.limb_1[idx].device_ptr() + (offset * self.code_length) as u64,
-                            (db.code_gr.limb_1[idx] as usize + wanted_idx * self.code_length)
+                            (db.code_gr.limb_1[idx] as usize
+                                + *wanted_idx as usize * self.code_length)
                                 as *mut _,
                             self.code_length,
                             streams[idx].stream,
@@ -610,7 +612,7 @@ impl ShareDB {
                             *buffers.sums.limb_0[idx].device_ptr()
                                 + (offset * size_of::<u32>()) as u64,
                             db.code_sums_gr.limb_0[idx].device_ptr()
-                                + (wanted_idx * size_of::<u32>()) as u64,
+                                + (*wanted_idx as usize * size_of::<u32>()) as u64,
                             size_of::<u32>(),
                             streams[idx].stream,
                         )
@@ -621,7 +623,7 @@ impl ShareDB {
                             *buffers.sums.limb_1[idx].device_ptr()
                                 + (offset * size_of::<u32>()) as u64,
                             db.code_sums_gr.limb_1[idx].device_ptr()
-                                + (wanted_idx * size_of::<u32>()) as u64,
+                                + (*wanted_idx as usize * size_of::<u32>()) as u64,
                             size_of::<u32>(),
                             streams[idx].stream,
                         )
