@@ -734,6 +734,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // FETCH PARTIAL LEFT RESULTS
         ///////////////////////////////////////////////////////////////////
+        tracing::info!("Fetching partial left results");
         let partial_matches_left = self.distance_comparator.get_partial_results(
             &self.db_match_list_left,
             &self.current_db_sizes,
@@ -810,6 +811,7 @@ impl ServerActor {
                 &partial_matches_left,
             );
 
+            tracing::info!("Fetching partial right results for subset");
             let partial_matches_right = self.distance_comparator.get_partial_results(
                 &self.db_match_list_right,
                 &self.current_db_sizes,
@@ -830,6 +832,7 @@ impl ServerActor {
                 batch_size,
             );
 
+            tracing::info!("Fetching partial right results for normal");
             let partial_matches_right = self.distance_comparator.get_partial_results(
                 &self.db_match_list_right,
                 &self.current_db_sizes,
