@@ -688,6 +688,8 @@ impl HawkResult {
         let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
 
         let merged_results = self.merged_results();
+        let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
+        let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
         ServerJobResult {
             merged_results,
@@ -705,8 +707,8 @@ impl HawkResult {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![],                                 // TODO.
             matched_batch_request_ids: vec![vec![]; n_requests], // TODO.
-            anonymized_bucket_statistics_left: self.anonymized_bucket_statistics[0].clone(),
-            anonymized_bucket_statistics_right: self.anonymized_bucket_statistics[1].clone(),
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
             successful_reauths: vec![false; n_requests], // TODO.
             reauth_target_indices: Default::default(),   // TODO.
             reauth_or_rule_used: Default::default(),     // TODO.
@@ -1063,7 +1065,15 @@ mod tests {
         for i in 1..all_results.len() {
             all_results[i].left_iris_requests = all_results[0].left_iris_requests.clone();
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
+            // Same for specific fields of the bucket statistics.
+            // TODO: specific assertions for the bucket statistics results
+            all_results[i].anonymized_bucket_statistics_left.party_id = all_results[0].anonymized_bucket_statistics_left.party_id;
+            all_results[i].anonymized_bucket_statistics_right.party_id = all_results[0].anonymized_bucket_statistics_right.party_id;
+            all_results[i].anonymized_bucket_statistics_left.start_time_utc_timestamp = all_results[0].anonymized_bucket_statistics_left.start_time_utc_timestamp;
+            all_results[i].anonymized_bucket_statistics_right.start_time_utc_timestamp = all_results[0].anonymized_bucket_statistics_right.start_time_utc_timestamp;
+
         }
+
         assert!(
             all_results.iter().all_equal(),
             "All parties must agree on the results"
