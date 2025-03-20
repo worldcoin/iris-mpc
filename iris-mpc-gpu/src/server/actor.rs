@@ -91,7 +91,7 @@ impl JobSubmissionHandle for ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 15;
+pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
@@ -729,6 +729,15 @@ impl ServerActor {
             &mut events,
             Eye::Left,
             batch_size,
+        );
+
+        ///////////////////////////////////////////////////////////////////
+        // FETCH PARTIAL LEFT RESULTS
+        ///////////////////////////////////////////////////////////////////
+        let partial_matches_left = self.distance_comparator.get_partial_results(
+            &self.db_match_list_left,
+            &self.current_db_sizes,
+            &self.streams[0],
         );
 
         ///////////////////////////////////////////////////////////////////
@@ -2423,7 +2432,7 @@ fn reset_share<T>(
     }
 }
 
-fn reset_slice<T>(
+pub(crate) fn reset_slice<T>(
     devs: &[Arc<CudaDevice>],
     dst: &[CudaSlice<T>],
     value: u8,
