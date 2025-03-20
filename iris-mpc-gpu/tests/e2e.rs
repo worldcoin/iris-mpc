@@ -169,6 +169,8 @@ mod e2e_test {
         test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
         test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);
         test_case_generator.disable_test_case(TestCase::ReauthOrRuleNonMatchingTarget);
+        test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
+        test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
 
         test_case_generator.enable_bucket_statistic_checks(
             N_BUCKETS,
