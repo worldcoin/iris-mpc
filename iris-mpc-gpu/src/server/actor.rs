@@ -1707,7 +1707,7 @@ impl ServerActor {
                     &ignore_device_results,
                     batch_size,
                     &self.streams[0],
-                    &db_subset_idx,
+                    db_subset_idx,
                 );
                 self.phase2.return_result_buffer(res);
             }
