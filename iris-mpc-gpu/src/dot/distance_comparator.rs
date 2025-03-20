@@ -13,7 +13,6 @@ use cudarc::{
     },
     nvrtc::compile_ptx,
 };
-use rand::seq::index;
 use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");

@@ -582,7 +582,7 @@ impl ShareDB {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            for (offset, wanted_idx) in indices.into_iter().enumerate() {
+            for (offset, wanted_idx) in indices.iter().enumerate() {
                 unsafe {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(

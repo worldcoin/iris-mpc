@@ -299,10 +299,10 @@ impl DeviceCompactSums {
         database_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        code_engine.dot_reduce(&self.code_query, &code_sums_gr, database_sizes, 0, streams);
+        code_engine.dot_reduce(&self.code_query, code_sums_gr, database_sizes, 0, streams);
         mask_engine.dot_reduce_and_multiply(
             &self.mask_query,
-            &mask_sums_gr,
+            mask_sums_gr,
             database_sizes,
             0,
             streams,
