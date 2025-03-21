@@ -65,8 +65,16 @@ pub(crate) async fn validate_iris_store_length(
     }
 
     if store_len > config.max_db_size {
-        tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
-        eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);
+        tracing::error!(
+            "Database size ({}) exceeds maximum allowed size ({})",
+            store_len,
+            config.max_db_size
+        );
+        eyre::bail!(
+            "Database size ({}) exceeds maximum allowed size ({})",
+            store_len,
+            config.max_db_size
+        );
     }
 
     Ok(store_len)

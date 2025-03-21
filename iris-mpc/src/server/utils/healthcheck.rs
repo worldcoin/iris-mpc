@@ -24,6 +24,8 @@ pub(crate) async fn get_healthcheck_future(
     is_ready_flag: Arc<AtomicBool>,
 ) -> impl std::future::Future<Output = Result<()>> + Send {
     let uuid = uuid::Uuid::new_v4().to_string();
+
+    // Set fixed respones.
     let ready_probe_response = ReadyProbeResponse {
         image_name: config.image_name.clone(),
         shutting_down: false,
@@ -40,6 +42,7 @@ pub(crate) async fn get_healthcheck_future(
         .expect("Serialization to JSON to probe response failed");
     tracing::info!("Healthcheck probe response: {}", serialized_response);
 
+    // Spinup server.
     let my_state = sync_state.clone();
     async move {
         // Generate a random UUID for each run.
@@ -81,7 +84,7 @@ pub(crate) async fn get_healthcheck_future(
             config.hawk_server_healthcheck_port
         ))
         .await
-        .wrap_err("healthcheck listener bind error");
+        .wrap_err("Failed to bind to healthcheck listener");
 
         axum::serve(listener.unwrap(), app)
             .await

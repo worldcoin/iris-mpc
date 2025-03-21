@@ -58,14 +58,14 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let aws_clients = AwsClients::new(&config.clone()).await?;
     let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
 
+    tracing::info!("Validating Iris store length");
+    let store_len = utils::validate_iris_store_length(&config, &iris_pg_store).await?;
+
     tracing::info!("Setting shares encryption key");
     let shares_encryption_key_pair =
         utils::fetch_shares_encryption_key_pair(&config, aws_clients.secrets_manager_client)
             .await
             .unwrap();
-
-    tracing::info!("Validating Iris store length");
-    let store_len = utils::validate_iris_store_length(&config, &iris_pg_store).await?;
 
     tracing::info!("Setting task monitor");
     let mut background_tasks = TaskMonitor::new();
@@ -97,76 +97,76 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
     let health_check_port = config.hawk_server_healthcheck_port;
 
-    let g = utils::get_healthcheck_future(
+    let healthcheck_future = utils::get_healthcheck_future(
         config.clone(),
         &my_state,
         Arc::clone(&shutdown_handler),
         Arc::clone(&is_ready_flag),
     );
-    let _health_check_abort = background_tasks.spawn(g.await);
+    let _health_check_abort = background_tasks.spawn(healthcheck_future.await);
 
-    let _health_check_abort = background_tasks.spawn({
-        let uuid = uuid::Uuid::new_v4().to_string();
-        let ready_probe_response = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
-            shutting_down: false,
-            uuid: uuid.clone(),
-        };
-        let ready_probe_response_shutdown = ReadyProbeResponse {
-            image_name: config.image_name.clone(),
-            shutting_down: true,
-            uuid: uuid.clone(),
-        };
-        let serialized_response = serde_json::to_string(&ready_probe_response)
-            .expect("Serialization to JSON to probe response failed");
-        let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
-            .expect("Serialization to JSON to probe response failed");
-        tracing::info!("Healthcheck probe response: {}", serialized_response);
-        let my_state = my_state.clone();
-        async move {
-            // Generate a random UUID for each run.
-            let app = Router::new()
-                .route(
-                    "/health",
-                    get(move || {
-                        let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
-                        async move {
-                            if shutdown_handler_clone.is_shutting_down() {
-                                serialized_response_shutdown.clone()
-                            } else {
-                                serialized_response.clone()
-                            }
-                        }
-                    }),
-                )
-                .route(
-                    "/ready",
-                    get({
-                        // We are only ready once this flag is set to true.
-                        let is_ready_flag = Arc::clone(&is_ready_flag);
-                        move || async move {
-                            if is_ready_flag.load(Ordering::SeqCst) {
-                                "ready".into_response()
-                            } else {
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            }
-                        }
-                    }),
-                )
-                .route(
-                    "/startup-sync",
-                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
-                );
-            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
-                .await
-                .wrap_err("healthcheck listener bind error")?;
-            axum::serve(listener, app)
-                .await
-                .wrap_err("healthcheck listener server launch error")?;
+    // let _health_check_abort = background_tasks.spawn({
+    //     let uuid = uuid::Uuid::new_v4().to_string();
+    //     let ready_probe_response = ReadyProbeResponse {
+    //         image_name: config.image_name.clone(),
+    //         shutting_down: false,
+    //         uuid: uuid.clone(),
+    //     };
+    //     let ready_probe_response_shutdown = ReadyProbeResponse {
+    //         image_name: config.image_name.clone(),
+    //         shutting_down: true,
+    //         uuid: uuid.clone(),
+    //     };
+    //     let serialized_response = serde_json::to_string(&ready_probe_response)
+    //         .expect("Serialization to JSON to probe response failed");
+    //     let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
+    //         .expect("Serialization to JSON to probe response failed");
+    //     tracing::info!("Healthcheck probe response: {}", serialized_response);
+    //     let my_state = my_state.clone();
+    //     async move {
+    //         // Generate a random UUID for each run.
+    //         let app = Router::new()
+    //             .route(
+    //                 "/health",
+    //                 get(move || {
+    //                     let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
+    //                     async move {
+    //                         if shutdown_handler_clone.is_shutting_down() {
+    //                             serialized_response_shutdown.clone()
+    //                         } else {
+    //                             serialized_response.clone()
+    //                         }
+    //                     }
+    //                 }),
+    //             )
+    //             .route(
+    //                 "/ready",
+    //                 get({
+    //                     // We are only ready once this flag is set to true.
+    //                     let is_ready_flag = Arc::clone(&is_ready_flag);
+    //                     move || async move {
+    //                         if is_ready_flag.load(Ordering::SeqCst) {
+    //                             "ready".into_response()
+    //                         } else {
+    //                             StatusCode::SERVICE_UNAVAILABLE.into_response()
+    //                         }
+    //                     }
+    //                 }),
+    //             )
+    //             .route(
+    //                 "/startup-sync",
+    //                 get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+    //             );
+    //         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
+    //             .await
+    //             .wrap_err("healthcheck listener bind error")?;
+    //         axum::serve(listener, app)
+    //             .await
+    //             .wrap_err("healthcheck listener server launch error")?;
 
-            Ok::<(), eyre::Error>(())
-        }
-    });
+    //         Ok::<(), eyre::Error>(())
+    //     }
+    // });
 
     background_tasks.check_tasks();
 
