@@ -20,10 +20,10 @@ impl Default for Prf {
 }
 
 impl Prf {
-    pub fn new(my_key: PrfSeed, next_key: PrfSeed) -> Self {
+    pub fn new(my_key: PrfSeed, prev_key: PrfSeed) -> Self {
         Self {
             my_prf: AesRng::from_seed(my_key),
-            prev_prf: AesRng::from_seed(next_key),
+            prev_prf: AesRng::from_seed(prev_key),
         }
     }
 

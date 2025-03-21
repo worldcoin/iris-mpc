@@ -2385,6 +2385,7 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "kameo",
+ "metrics 0.22.3",
  "num-traits",
  "prost",
  "rand",
