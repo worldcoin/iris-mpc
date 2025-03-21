@@ -1565,8 +1565,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
-                .map(|&idx| {
-                    let serial_id = idx + 1;
+                .map(|&serial_id| {
                     let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity deletion result");
