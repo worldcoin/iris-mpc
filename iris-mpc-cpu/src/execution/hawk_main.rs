@@ -19,6 +19,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
@@ -45,9 +46,11 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+mod intra_batch;
 mod is_match_batch;
 mod matching;
 mod rot;
+mod scheduler;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -625,6 +628,7 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     match_results: matching::BatchStep2,
+    intra_results: Vec<Vec<usize>>,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
@@ -633,12 +637,22 @@ pub struct HawkResult {
 impl HawkResult {
     fn new(
         match_results: matching::BatchStep2,
+        intra_results: Vec<Vec<usize>>,
         anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     ) -> Self {
-        let is_matches = match_results.is_matches();
-        let n_requests = is_matches.len();
+        // Get matches from the graph.
+        let graph_matches = match_results.is_matches();
+        let n_requests = graph_matches.len();
+        assert_eq!(n_requests, intra_results.len());
+
+        // Add duplicate requests within the batch.
+        let is_matches = izip!(graph_matches, &intra_results)
+            .map(|(graph_match, intra_match)| graph_match || !intra_match.is_empty())
+            .collect_vec();
+
         HawkResult {
             match_results,
+            intra_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
             anonymized_bucket_statistics,
@@ -666,8 +680,33 @@ impl HawkResult {
     }
 
     fn match_ids(&self) -> Vec<Vec<u32>> {
-        self.match_results
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()))
+        // Graph matches.
+        let mut match_ids = self
+            .match_results
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+
+        // Intra-batch matches. Find the serial IDs that were just inserted.
+        for (graph_matches, intra_matches) in izip!(match_ids.iter_mut(), &self.intra_results) {
+            for i_request in intra_matches {
+                if let Some(plan) = &self.connect_plans.0[LEFT][*i_request] {
+                    graph_matches.push(plan.inserted_vector.to_serial_id());
+                }
+            }
+        }
+
+        match_ids
+    }
+
+    fn matched_batch_request_ids(&self, request_ids: &[String]) -> Vec<Vec<String>> {
+        self.intra_results
+            .iter()
+            .map(|matching_indexes| {
+                matching_indexes
+                    .iter()
+                    .map(|&i| request_ids[i].clone())
+                    .collect_vec()
+            })
+            .collect_vec()
     }
 
     fn job_result(self, batch: BatchQuery) -> ServerJobResult {
@@ -685,6 +724,8 @@ impl HawkResult {
         let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
 
         let merged_results = self.merged_results();
+        let matched_batch_request_ids = self.matched_batch_request_ids(&batch.request_ids);
+
         let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
@@ -702,8 +743,8 @@ impl HawkResult {
             partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
-            deleted_ids: vec![],                                 // TODO.
-            matched_batch_request_ids: vec![vec![]; n_requests], // TODO.
+            deleted_ids: vec![], // TODO.
+            matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
             successful_reauths: vec![false; n_requests], // TODO.
@@ -762,7 +803,7 @@ impl HawkHandle {
 
     pub async fn new_with_sessions(
         mut hawk_actor: HawkActor,
-        sessions: [Vec<HawkSessionRef>; 2],
+        sessions: BothEyes<Vec<HawkSessionRef>>,
     ) -> Result<Self> {
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -773,6 +814,10 @@ impl HawkHandle {
 
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
+
+                let intra_results = intra_batch_is_match(&sessions, search_queries)
+                    .await
+                    .unwrap();
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
@@ -795,6 +840,7 @@ impl HawkHandle {
 
                 let mut results = HawkResult::new(
                     match_result,
+                    intra_results,
                     hawk_actor.anonymized_bucket_statistics.clone(),
                 );
 
