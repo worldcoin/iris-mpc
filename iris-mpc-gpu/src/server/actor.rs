@@ -741,6 +741,13 @@ impl ServerActor {
             &self.streams[0],
         );
 
+        // also add the OR rule indices to the partial matches
+        let partial_matches_left = partial_matches_left
+            .into_iter()
+            .chain(batch.or_rule_indices.iter().flatten().cloned())
+            .unique()
+            .collect_vec();
+
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
