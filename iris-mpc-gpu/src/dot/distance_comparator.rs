@@ -2,7 +2,7 @@ use super::ROTATIONS;
 use crate::{
     helpers::{
         device_manager::{self, DeviceManager},
-        htod_on_stream_sync, launch_config_from_elements_and_threads,
+        dtoh_on_stream_sync, htod_on_stream_sync, launch_config_from_elements_and_threads,
         DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     server::actor::{reset_slice, DB_CHUNK_SIZE},
@@ -442,17 +442,29 @@ impl DistanceComparator {
             }
         }
 
-        let counters = self.fetch_match_counters(&self.match_counters);
+        let mut counters = vec![];
+        for i in 0..self.device_manager.device_count() {
+            counters.push(
+                dtoh_on_stream_sync(
+                    &self.match_counters[i],
+                    &self.device_manager.device(i),
+                    &streams[i],
+                )
+                .unwrap(),
+            );
+        }
         for counter in &counters {
             tracing::info!("{} of {}", counter[0], DB_CHUNK_SIZE);
         }
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
             results.push(
-                self.device_manager
-                    .device(i)
-                    .dtoh_sync_copy(&self.partial_results[i])
-                    .unwrap(),
+                dtoh_on_stream_sync(
+                    &self.partial_results[i],
+                    &self.device_manager.device(i),
+                    &streams[i],
+                )
+                .unwrap(),
             );
         }
 
