@@ -4,7 +4,7 @@ use crate::{
     execution::{
         local::generate_local_identities,
         player::{Role, RoleAssignment},
-        session::{BootSession, Session, SessionId},
+        session::{NetworkSession, Session, SessionId},
     },
     hawkers::aby3::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
     hnsw::{
@@ -281,24 +281,21 @@ impl HawkActor {
         session_id: SessionId,
     ) -> Result<HawkSession> {
         // TODO: cleanup of dropped sessions.
-        self.networking.create_session(session_id).await?;
+        let grpc_session = self.networking.create_session(session_id).await?;
 
-        // Wait until others ceated their side of the session.
-        self.networking.wait_for_session(session_id).await?;
-
-        let boot_session = BootSession {
+        let mut network_session = NetworkSession {
             session_id,
             role_assignments: self.role_assignments.clone(),
-            networking: Arc::new(self.networking.clone()),
+            networking: Box::new(grpc_session),
             own_identity: self.own_identity.clone(),
         };
 
         let my_session_seed = thread_rng().gen();
-        let prf = setup_replicated_prf(&boot_session, my_session_seed).await?;
+        let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
         let session = Session {
-            boot_session,
-            setup: prf,
+            network_session,
+            prf,
         };
 
         let aby3_store = Aby3Store {
