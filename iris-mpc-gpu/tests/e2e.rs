@@ -166,7 +166,7 @@ mod e2e_test {
         let mut test_case_generator =
             TestCaseGenerator::new_seeded(DB_SIZE, DB_RNG_SEED, INTERNAL_RNG_SEED, false);
 
-        test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
+        // test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
         test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);
         test_case_generator.disable_test_case(TestCase::ReauthOrRuleNonMatchingTarget);
         test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
