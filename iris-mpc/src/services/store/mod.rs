@@ -34,7 +34,7 @@ async fn load_db_records<'a>(
         let iris = iris.unwrap();
 
         actor.load_single_record_from_db(
-            iris.index() - 1,
+            iris.index(),
             iris.left_code(),
             iris.left_mask(),
             iris.right_code(),
@@ -43,7 +43,7 @@ async fn load_db_records<'a>(
 
         // Only increment db size if record has not been loaded via s3 before
         if all_serial_ids.contains(&(iris.index() as i64)) {
-            actor.increment_db_size(iris.index() - 1);
+            actor.increment_db_size(iris.index());
             all_serial_ids.remove(&(iris.index() as i64));
             record_counter += 1;
         }
@@ -143,7 +143,7 @@ pub async fn load_db(
             }
 
             actor.load_single_record_from_s3(
-                iris.index() - 1,
+                iris.index(),
                 iris.left_code_odd(),
                 iris.left_code_even(),
                 iris.right_code_odd(),
@@ -153,7 +153,7 @@ pub async fn load_db(
                 iris.right_mask_odd(),
                 iris.right_mask_even(),
             );
-            actor.increment_db_size(index - 1);
+            actor.increment_db_size(index);
 
             if record_counter % 100_000 == 0 {
                 let elapsed = now.elapsed();

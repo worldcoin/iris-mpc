@@ -2367,12 +2367,13 @@ pub fn generate_luc_records(
 impl InMemoryStore for ServerActor {
     fn load_single_record_from_db(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
         right_mask: &[u16],
     ) {
+        let index = serial_id - 1;
         ShareDB::load_single_record_from_db(
             index,
             &self.left_code_db_slices.code_gr,
@@ -2402,13 +2403,14 @@ impl InMemoryStore for ServerActor {
             MASK_CODE_LENGTH,
         );
     }
-    fn increment_db_size(&mut self, index: usize) {
+    fn increment_db_size(&mut self, serial_id: usize) {
+        let index = serial_id - 1;
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
     fn load_single_record_from_s3(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
@@ -2418,6 +2420,7 @@ impl InMemoryStore for ServerActor {
         right_mask_odd: &[u8],
         right_mask_even: &[u8],
     ) {
+        let index = serial_id - 1;
         ShareDB::load_single_record_from_s3(
             index,
             &self.left_code_db_slices.code_gr,

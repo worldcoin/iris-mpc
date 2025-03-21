@@ -67,7 +67,7 @@ pub struct DbStoredIris {
 }
 
 impl DbStoredIris {
-    /// The index which is contiguous and starts from 0.
+    /// The index which is contiguous and starts from 1.
     pub fn index(&self) -> usize {
         self.id as usize
     }
