@@ -20,6 +20,8 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use intra_batch::intra_batch_is_match;
+use iris_mpc_common::helpers::statistics::BucketStatistics;
+use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
@@ -40,6 +42,7 @@ use tokio::{
     task::JoinSet,
 };
 use tonic::transport::Server;
+
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
@@ -67,6 +70,12 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
+
+    #[clap(long, default_value_t = 64)]
+    pub match_distances_buffer_size: usize,
+
+    #[clap(long, default_value_t = 10)]
+    pub n_buckets: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -84,6 +93,7 @@ pub struct HawkActor {
     db_size: usize,
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
+    anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
     // ---- My network setup ----
     networking: GrpcHandle,
@@ -227,6 +237,18 @@ impl HawkActor {
             .collect::<Result<()>>()?;
 
         let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
+        let bucket_statistics_left = BucketStatistics::new(
+            args.match_distances_buffer_size,
+            args.n_buckets,
+            my_index,
+            Eye::Left,
+        );
+        let bucket_statistics_right = BucketStatistics::new(
+            args.match_distances_buffer_size,
+            args.n_buckets,
+            my_index,
+            Eye::Right,
+        );
 
         Ok(HawkActor {
             args: args.clone(),
@@ -234,6 +256,7 @@ impl HawkActor {
             db_size: 0,
             iris_store,
             graph_store,
+            anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
@@ -611,17 +634,22 @@ pub struct HawkResult {
     intra_results: Vec<Vec<usize>>,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
+    anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 }
 
 impl HawkResult {
-    fn new(match_results: matching::BatchStep2, intra_results: Vec<Vec<usize>>) -> Self {
+    fn new(
+        match_results: matching::BatchStep2,
+        intra_results: Vec<Vec<usize>>,
+        anonymized_bucket_statistics: BothEyes<BucketStatistics>,
+    ) -> Self {
         // Get matches from the graph.
-        let is_matches = match_results.is_matches();
-        let n_requests = is_matches.len();
+        let graph_matches = match_results.is_matches();
+        let n_requests = graph_matches.len();
         assert_eq!(n_requests, intra_results.len());
 
         // Add duplicate requests within the batch.
-        let is_matches = izip!(is_matches, &intra_results)
+        let is_matches = izip!(graph_matches, &intra_results)
             .map(|(graph_match, intra_match)| graph_match || !intra_match.is_empty())
             .collect_vec();
 
@@ -630,6 +658,7 @@ impl HawkResult {
             intra_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
+            anonymized_bucket_statistics,
         }
     }
 
@@ -700,6 +729,9 @@ impl HawkResult {
         let merged_results = self.merged_results();
         let matched_batch_request_ids = self.matched_batch_request_ids(&batch.request_ids);
 
+        let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
+        let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
+
         ServerJobResult {
             merged_results,
             request_ids: batch.request_ids,
@@ -716,11 +748,11 @@ impl HawkResult {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![], // TODO.
             matched_batch_request_ids,
-            anonymized_bucket_statistics_left: Default::default(), // TODO.
-            anonymized_bucket_statistics_right: Default::default(), // TODO.
-            successful_reauths: vec![false; n_requests],           // TODO.
-            reauth_target_indices: Default::default(),             // TODO.
-            reauth_or_rule_used: Default::default(),               // TODO.
+            anonymized_bucket_statistics_left,
+            anonymized_bucket_statistics_right,
+            successful_reauths: vec![false; n_requests], // TODO.
+            reauth_target_indices: Default::default(),   // TODO.
+            reauth_or_rule_used: Default::default(),     // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
         }
@@ -776,7 +808,7 @@ impl HawkHandle {
         mut hawk_actor: HawkActor,
         sessions: BothEyes<Vec<HawkSessionRef>>,
     ) -> Result<Self> {
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<HawkJob>(1);
+        let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
         tokio::spawn(async move {
@@ -809,7 +841,11 @@ impl HawkHandle {
                     step1.step2(&missing_is_match)
                 };
 
-                let mut results = HawkResult::new(match_result, intra_results);
+                let mut results = HawkResult::new(
+                    match_result,
+                    intra_results,
+                    hawk_actor.anonymized_bucket_statistics.clone(),
+                );
 
                 let (insert_indices, search_results) = job
                     .request
@@ -1075,7 +1111,24 @@ mod tests {
         for i in 1..all_results.len() {
             all_results[i].left_iris_requests = all_results[0].left_iris_requests.clone();
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
+            // Same for specific fields of the bucket statistics.
+            // TODO: specific assertions for the bucket statistics results
+            all_results[i].anonymized_bucket_statistics_left.party_id =
+                all_results[0].anonymized_bucket_statistics_left.party_id;
+            all_results[i].anonymized_bucket_statistics_right.party_id =
+                all_results[0].anonymized_bucket_statistics_right.party_id;
+            all_results[i]
+                .anonymized_bucket_statistics_left
+                .start_time_utc_timestamp = all_results[0]
+                .anonymized_bucket_statistics_left
+                .start_time_utc_timestamp;
+            all_results[i]
+                .anonymized_bucket_statistics_right
+                .start_time_utc_timestamp = all_results[0]
+                .anonymized_bucket_statistics_right
+                .start_time_utc_timestamp;
         }
+
         assert!(
             all_results.iter().all_equal(),
             "All parties must agree on the results"
@@ -1174,6 +1227,8 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            match_distances_buffer_size: 64,
+            n_buckets: 10,
             disable_persistence: false,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;

@@ -413,6 +413,13 @@ impl GrpcNetworking {
         party_id: Identity,
         address: &str,
     ) -> eyre::Result<()> {
+        if self.clients.contains_key(&party_id) {
+            return Err(eyre!(
+                "Player {:?} has already connected to player {:?}",
+                self.party_id,
+                party_id
+            ));
+        }
         let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
                 let address = address.to_string();
@@ -932,7 +939,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
@@ -948,15 +955,20 @@ mod tests {
 
         for i in 0..database_size {
             let mut jobs = JoinSet::new();
+
             for (store, graph) in vectors_and_graphs.iter_mut() {
-                let mut store = store.clone();
-                let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.storage.get_vector(&i.into()).await;
+                let q = store.lock().await.storage.get_vector(&i.into()).await;
                 let q = prepare_query((*q).clone());
+                let store = store.clone();
+                let mut graph = graph.clone();
                 jobs.spawn(async move {
-                    let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
-                    searcher.is_match(&mut store, &[secret_neighbors]).await
+                    let mut store_lock = store.lock().await;
+                    let secret_neighbors =
+                        searcher.search(&mut *store_lock, &mut graph, &q, 1).await;
+                    searcher
+                        .is_match(&mut *store_lock, &[secret_neighbors])
+                        .await
                 });
             }
             let res = jobs.join_all().await;
