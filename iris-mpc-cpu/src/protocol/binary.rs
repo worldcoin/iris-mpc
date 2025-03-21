@@ -580,7 +580,8 @@ pub(crate) async fn binary_add_3_get_msb(
     Ok(res)
 }
 
-// MSB related code
+/// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
+/// Input integers are given in binary form.
 pub(crate) async fn binary_add_3_get_msb_prefix(
     session: &mut Session,
     x1: Vec<VecShare<u64>>,
@@ -589,9 +590,10 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
 ) -> Result<VecShare<u64>, Error> {
     let len = x1.len();
     debug_assert!(len == x2.len() && len == x3.len());
+    debug_assert!(len == 32);
 
-    // Let x1, x2, x3 are integers modulo 2^K.
-
+    // Let x1, x2, x3 are integers modulo 2^k.
+    //
     // Full adder where x3 plays the role of an input carry, i.e.,
     // c = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) and
     // s = x1 XOR x2 XOR x3
@@ -599,7 +601,7 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
     let mut x2x3 = x2;
     transposed_pack_xor_assign(&mut x2x3, &x3);
     // x1 XOR x2 XOR x3
-    let s = transposed_pack_xor(&x1, &x2x3);
+    let mut s = transposed_pack_xor(&x1, &x2x3);
 
     // Compute 2 * c mod 2^k
     // x1 XOR x3
@@ -615,14 +617,13 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
     transposed_pack_xor_assign(&mut c, &x3);
 
     // Find the MSB of 2 * c + s using the parallel prefix adder
-    let mut a = s;
     // The LSB of 2 * c is zero, so we can ignore the LSB of s
-    a.remove(0);
+    let mut a = s.drain(1..).collect::<Vec<_>>();
     let mut b = c;
 
     // Compute carry propagates p = a XOR b and carry generates g = a AND b
     let mut p = transposed_pack_xor(&a, &b);
-    // The MSB of g is used to compute the carry of the whole sum, we don't need it as there is reduction modulo 2^k
+    // The MSB of g is used to compute the carry of the whole sum; we don't need it as there is reduction modulo 2^k
     a.pop();
     b.pop();
     let g = transposed_pack_and(session, a, b).await?;
@@ -630,25 +631,29 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
     let msb_p = p.pop().expect("No elements here");
 
     // Compute the carry for the MSB of the sum
-    let mut temp_g = g;
-    let mut temp_p = p;
-
+    //
     // Reduce the above vectors according to the following rule:
-    // (p0, p1, p2, p3,...) -> (p0 AND p1, p2 AND p3,...)
-    // (g0, g1, g2, g3,...) -> (g1 XOR g0 AND p1, g3 XOR g2 AND p3,...)
+    // p = (p0, p1, p2, p3,...) -> (p0 AND p1, p2 AND p3,...)
+    // g = (g0, g1, g2, g3,...) -> (g1 XOR g0 AND p1, g3 XOR g2 AND p3,...)
+    // Note that p0 is not needed to compute g, thus we can omit it as follows
+    // p = (p1, p2, p3,...) -> (p2 AND p3, p4 AND p5...)
+    let mut temp_p = p.drain(1..).collect::<Vec<_>>();
+    let mut temp_g = g;
+
     while temp_g.len() != 1 {
-        let (maybe_extra_p, maybe_extra_g) = if temp_p.len() % 2 == 1 {
+        let (maybe_extra_p, maybe_extra_g) = if temp_g.len() % 2 == 1 {
             (temp_p.pop(), temp_g.pop())
         } else {
             (None, None)
         };
 
         // Split the vectors into even and odd indexed elements
+        // Note that we the starting index of temp_p is 1 due to removal of p0 above
         let (even_p, odd_p): (Vec<_>, Vec<_>) = temp_p
             .clone()
             .into_iter()
             .enumerate()
-            .partition(|(i, _)| i % 2 == 0);
+            .partition(|(i, _)| i % 2 == 1);
         let even_p: Vec<_> = even_p.into_iter().map(|(_, x)| x).collect();
         let odd_p: Vec<_> = odd_p.into_iter().map(|(_, x)| x).collect();
         let (even_g, odd_g): (Vec<_>, Vec<_>) = temp_g
@@ -661,17 +666,19 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
 
         // Merge even_p and even_g to multiply them by odd_p at once
         // This corresponds to computing
-        // (p0 AND p1, p2 AND p3,...) and
-        // (g0 AND p1, g2 AND p3,...) as above
+        //            (p2 AND p3, p4 AND p5,...) and
+        // (g0 AND p1, g2 AND p3, g4 AND p5,...) as above
         let mut even_p_with_even_g = even_p;
+        let new_p_len = even_p_with_even_g.len();
         even_p_with_even_g.extend(even_g);
-        let mut odd_p_doubled = odd_p.clone();
+        // Remove p1 to multiply even_p with odd_p
+        let mut odd_p_doubled = odd_p[1..].to_vec();
         odd_p_doubled.extend(odd_p);
 
         let mut tmp = transposed_pack_and(session, even_p_with_even_g, odd_p_doubled).await?;
 
         // Update p
-        temp_p = tmp.drain(..(tmp.len() / 2)).collect();
+        temp_p = tmp.drain(..new_p_len).collect();
         if let Some(extra_p) = maybe_extra_p {
             temp_p.push(extra_p);
         }
@@ -683,7 +690,7 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
         }
     }
     // a_msb XOR b_msb XOR top carry
-    let msb = temp_g.pop().unwrap() ^ msb_p;
+    let msb = msb_p ^ temp_g.pop().unwrap();
     Ok(msb)
 }
 
