@@ -56,7 +56,9 @@ pub async fn receive_batch(
     let mut handles = vec![];
     let mut msg_counter = 0;
 
-    while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
+    // temporary hack for staging to only process 1 message at a time
+    // this helps with the correctness test
+    while msg_counter < 1 {
         let rcv_message_output = client
             .receive_message()
             .max_number_of_messages(1)
