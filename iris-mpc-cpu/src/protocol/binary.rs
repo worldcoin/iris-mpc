@@ -648,7 +648,7 @@ pub(crate) async fn binary_add_3_get_msb_prefix(
         };
 
         // Split the vectors into even and odd indexed elements
-        // Note that we the starting index of temp_p is 1 due to removal of p0 above
+        // Note that the starting index of temp_p is 1 due to removal of p0 above
         let (even_p, odd_p): (Vec<_>, Vec<_>) = temp_p
             .clone()
             .into_iter()
