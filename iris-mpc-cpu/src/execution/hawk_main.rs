@@ -831,6 +831,11 @@ impl HawkHandle {
                     tracing::info!("Persistence is disabled, not writing to DB");
                 }
                 metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
+                metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+                let left_query_count = search_queries[LEFT].len();
+                let right_query_count = search_queries[RIGHT].len();
+                metrics::gauge!("search_queries_left").set(left_query_count as f64);
+                metrics::gauge!("search_queries_right").set(right_query_count as f64);
 
                 let _ = job.return_channel.send(Ok(results));
             }
