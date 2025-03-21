@@ -35,6 +35,7 @@ use std::{
     ops::{Deref, Not},
     sync::Arc,
     time::Duration,
+    time::Instant,
     vec,
 };
 use tokio::{
@@ -811,6 +812,7 @@ impl HawkHandle {
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 tracing::info!("Processing an Hawk job…");
+                let now = Instant::now();
 
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
@@ -868,7 +870,15 @@ impl HawkHandle {
                             results.set_connect_plan(*i, *side, plan);
                         }
                     }
+                } else {
+                    tracing::info!("Persistence is disabled, not writing to DB");
                 }
+                metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
+                metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+                let left_query_count = search_queries[LEFT].len();
+                let right_query_count = search_queries[RIGHT].len();
+                metrics::gauge!("search_queries_left").set(left_query_count as f64);
+                metrics::gauge!("search_queries_right").set(right_query_count as f64);
 
                 let _ = job.return_channel.send(Ok(results));
             }
