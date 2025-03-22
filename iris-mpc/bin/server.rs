@@ -637,7 +637,7 @@ fn get_iris_shares_parse_task(
         tokio::spawn(async move {
             let _ = semaphore.acquire().await?;
 
-            let (share_b64, hash) =
+            let (encrypted_iris_share_b64, hash) =
                 match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
                     .await
                 {
@@ -648,16 +648,18 @@ fn get_iris_shares_parse_task(
                     }
                 };
 
-            let iris_message_share =
-                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
-                    Ok(iris_data) => iris_data,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                        eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                    }
-                };
+            let iris_share_b64 = match decrypt_iris_share(
+                encrypted_iris_share_b64,
+                shares_encryption_key_pairs.clone(),
+            ) {
+                Ok(iris_data) => iris_data,
+                Err(e) => {
+                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
+                }
+            };
 
-            match validate_iris_share(hash, iris_message_share.clone()) {
+            match validate_iris_share(hash, iris_share_b64.clone()) {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::error!("Failed to validate iris shares: {:?}", e);
@@ -666,13 +668,13 @@ fn get_iris_shares_parse_task(
             }
 
             let (left_code, left_mask) = decode_iris_message_shares(
-                iris_message_share.left_iris_code_shares,
-                iris_message_share.left_mask_code_shares,
+                iris_share_b64.left_iris_code_shares,
+                iris_share_b64.left_mask_code_shares,
             )?;
 
             let (right_code, right_mask) = decode_iris_message_shares(
-                iris_message_share.right_iris_code_shares,
-                iris_message_share.right_mask_code_shares,
+                iris_share_b64.right_iris_code_shares,
+                iris_share_b64.right_mask_code_shares,
             )?;
 
             // Preprocess shares for left eye.
