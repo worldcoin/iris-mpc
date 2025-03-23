@@ -43,6 +43,11 @@ pub struct BatchQuery {
     pub left_iris_interpolated_requests: IrisQueryBatchEntries,
     pub right_iris_interpolated_requests: IrisQueryBatchEntries,
 
+    // Iris queries for the mirrored case of the request with Langrange interpolations. Used for
+    // mirror attack detection.
+    pub left_mirrored_iris_interpolated_requests: IrisQueryBatchEntries,
+    pub right_mirrored_iris_interpolated_requests: IrisQueryBatchEntries,
+
     // array of indexes at which to use OR rule comparison
     pub or_rule_indices: Vec<Vec<u32>>,
     // This is temporary and won't be used once HNSW goes live
@@ -126,6 +131,8 @@ pub struct ServerJobResult<A = ()> {
     pub modifications: HashMap<u32, Modification>,
     /// Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
+    // TODO: For mirror attack check
+    //pub full_face_mirror_attack_detected: Vec<bool>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

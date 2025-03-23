@@ -76,26 +76,32 @@ type GaloisShares = (
     Vec<GaloisRingTrimmedMaskCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingTrimmedMaskCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
 );
 type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(&mask_share)
-            .context("Failed to base64 parse iris mask")?
-            .into();
+    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
+        .context("Failed to base64 parse iris mask")?;
 
     Ok((iris_share, mask_share))
+}
+
+fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
+    mask.into()
 }
 
 fn preprocess_iris_message_shares(
     code_share: GaloisRingIrisCodeShare,
     mask_share: GaloisRingTrimmedMaskCodeShare,
+    code_share_mirrored: GaloisRingIrisCodeShare,
+    mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
@@ -112,6 +118,15 @@ fn preprocess_iris_message_shares(
     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
     GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
+    // Mirrored share and mask.
+    // Only interested in the Lagrange interpolated share and mask for the mirrored case.
+    let mut code_share_mirrored = code_share_mirrored;
+    let mut mask_share_mirrored = mask_share_mirrored;
+
+    // With Lagrange interpolation.
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
+
     Ok((
         store_iris_shares,
         store_mask_shares,
@@ -119,6 +134,8 @@ fn preprocess_iris_message_shares(
         db_mask_shares,
         code_share.all_rotations(),
         mask_share.all_rotations(),
+        code_share_mirrored.all_rotations(),
+        mask_share_mirrored.all_rotations(),
     ))
 }
 
@@ -479,6 +496,8 @@ async fn receive_batch(
                     db_mask_shares_left,
                     iris_shares_left,
                     mask_shares_left,
+                    iris_shares_left_mirrored,
+                    mask_shares_left_mirrored,
                 ),
                 (
                     store_iris_shares_right,
@@ -487,6 +506,8 @@ async fn receive_batch(
                     db_mask_shares_right,
                     iris_shares_right,
                     mask_shares_right,
+                    iris_shares_right_mirrored,
+                    mask_shares_right_mirrored,
                 ),
             ),
             valid_entry,
@@ -545,10 +566,14 @@ async fn receive_batch(
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                         ),
                         (
                             dummy_code_share.clone(),
                             dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
@@ -611,6 +636,22 @@ async fn receive_batch(
             .right_iris_interpolated_requests
             .mask
             .extend(mask_shares_right);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left_mirrored);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right_mirrored);
     }
 
     tracing::info!(
@@ -677,13 +718,33 @@ fn get_iris_shares_parse_task(
                 iris_share_b64.right_mask_code_shares,
             )?;
 
-            // Preprocess shares for left eye.
-            let left_future =
-                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
+            let (left_code_mirrored, left_mask_mirrored) =
+                (left_code.mirrored(), left_mask.mirrored());
+            let (right_code_mirrored, right_mask_mirrored) =
+                (right_code.mirrored(), right_mask.mirrored());
 
-            // Preprocess shares for right eye.
-            let right_future =
-                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
+            let left_mask_trimmed = trim_mask(left_mask);
+            let right_mask_trimmed = trim_mask(right_mask);
+            let left_mask_mirrored_trimmed = trim_mask(left_mask_mirrored);
+            let right_mask_mirrored_trimmed = trim_mask(right_mask_mirrored);
+
+            let left_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    left_code,
+                    left_mask_trimmed,
+                    left_code_mirrored,
+                    left_mask_mirrored_trimmed,
+                )
+            });
+
+            let right_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    right_code,
+                    right_mask_trimmed,
+                    right_code_mirrored,
+                    right_mask_mirrored_trimmed,
+                )
+            });
 
             let (left_result, right_result) = tokio::join!(left_future, right_future);
 
