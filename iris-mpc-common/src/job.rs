@@ -131,8 +131,6 @@ pub struct ServerJobResult<A = ()> {
     pub modifications: HashMap<u32, Modification>,
     /// Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
-    // TODO: For mirror attack check
-    //pub full_face_mirror_attack_detected: Vec<bool>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
