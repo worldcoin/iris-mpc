@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod e2e_test {
     use cudarc::nccl::Id;
     use eyre::Result;
