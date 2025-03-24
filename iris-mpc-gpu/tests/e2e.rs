@@ -4,7 +4,7 @@ mod e2e_test {
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
-        test::{load_test_db, TestCase, TestCaseGenerator},
+        test::{load_test_db, TestCaseGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use std::{env, sync::Arc};
