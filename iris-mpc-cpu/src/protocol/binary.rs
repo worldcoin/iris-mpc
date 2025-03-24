@@ -413,6 +413,138 @@ pub(crate) async fn bit_inject_ot_2round(
     Ok(res)
 }
 
+/// This function splits a bit shared additively over F_2 into three shares that need to be combined using the arithmetic xor function
+/// This is a completely local function, `session` is only used to determine the current party id.
+pub(crate) fn split_for_arithmetic_xor(
+    session: &Session,
+    input: VecShare<Bit>,
+) -> eyre::Result<(VecShare<u32>, VecShare<u32>, VecShare<u32>)> {
+    let mut res0 = VecShare::with_capacity(input.len());
+    let mut res1 = VecShare::with_capacity(input.len());
+    let mut res2 = VecShare::with_capacity(input.len());
+    match session.network_session.own_role()?.index() {
+        0 => {
+            for &Share { a, b } in input.iter() {
+                // We need to convert to u32, since we need to do arithmetic
+                // first convert to bools
+                let (a, b) = (a.convert().convert(), b.convert().convert());
+                // then to RingElement<u32>
+                let (a, b) = (RingElement(u32::from(a)), RingElement(u32::from(b)));
+                res0.push(Share {
+                    a,
+                    b: RingElement::zero(),
+                });
+                res1.push(Share {
+                    a: RingElement::zero(),
+                    b: RingElement::zero(),
+                });
+                res2.push(Share {
+                    a: RingElement::zero(),
+                    b,
+                });
+            }
+        }
+        1 => {
+            for &Share { a, b } in input.iter() {
+                // We need to convert to u32, since we need to do arithmetic
+                // first convert to bools
+                let (a, b) = (a.convert().convert(), b.convert().convert());
+                // then to RingElement<u32>
+                let (a, b) = (RingElement(u32::from(a)), RingElement(u32::from(b)));
+                res0.push(Share {
+                    a: RingElement::zero(),
+                    b,
+                });
+                res1.push(Share {
+                    a,
+                    b: RingElement::zero(),
+                });
+                res2.push(Share {
+                    a: RingElement::zero(),
+                    b: RingElement::zero(),
+                });
+            }
+        }
+        2 => {
+            for &Share { a, b } in input.iter() {
+                // We need to convert to u32, since we need to do arithmetic
+                // first convert to bools
+                let (a, b) = (a.convert().convert(), b.convert().convert());
+                // then to RingElement<u32>
+                let (a, b) = (RingElement(u32::from(a)), RingElement(u32::from(b)));
+                res0.push(Share {
+                    a: RingElement::zero(),
+                    b: RingElement::zero(),
+                });
+                res1.push(Share {
+                    a: RingElement::zero(),
+                    b,
+                });
+                res2.push(Share {
+                    a,
+                    b: RingElement::zero(),
+                });
+            }
+        }
+        _ => {
+            return Err(eyre!(
+                "Cannot deal with roles outside of the set [0, 1, 2] in split_for_arithmetic_xor"
+            ))
+        }
+    }
+    Ok((res0, res1, res2))
+}
+
+/// Calculates the arithmetic xor of two vectors of shares. This implicitly assumes that the two vectors have the same length and consist of binary shares only, i.e. the secret value is either 0 or 1.
+/// This precondition is used to calculate the XOR of a,b as `a + b - 2 * a * b`.
+pub async fn arithmetic_xor_many(
+    session: &mut Session,
+    input1: VecShare<u32>,
+    input2: VecShare<u32>,
+) -> eyre::Result<VecShare<u32>> {
+    let mul_a: Vec<RingElement<u32>> = izip!(input1.iter(), input2.iter())
+        .map(|(x, y)| session.prf.gen_zero_share() + x * y)
+        .collect();
+
+    let network = &mut session.network_session;
+
+    let message = if mul_a.len() == 1 {
+        NetworkValue::RingElement32(mul_a[0]).to_network()
+    } else {
+        NetworkValue::VecRing32(mul_a.clone()).to_network()
+    };
+    network.send_next(message).await?;
+
+    let serialized_reply = network.receive_prev().await;
+    let mul_b = match NetworkValue::from_network(serialized_reply) {
+        Ok(NetworkValue::RingElement32(element)) => vec![element],
+        Ok(NetworkValue::VecRing32(elements)) => elements,
+        _ => return Err(eyre!("Could not deserialize RingElement32")),
+    };
+
+    let res = izip!(
+        mul_a.into_iter(),
+        mul_b.into_iter(),
+        input1.into_iter(),
+        input2.into_iter()
+    )
+    .map(|(a, b, inp1, inp2)| inp1 + inp2 - Share::new(a, b) * RingElement(2u32))
+    .collect_vec();
+    Ok(VecShare::new_vec(res))
+}
+
+/// Bit injects a vector of bits
+pub(crate) async fn bit_inject_arithmetic_xor(
+    session: &mut Session,
+    input: VecShare<Bit>,
+) -> Result<VecShare<u32>, Error> {
+    let (res0, res1, res2) = split_for_arithmetic_xor(session, input)?;
+
+    let res01 = arithmetic_xor_many(session, res0, res1).await?;
+    let res = arithmetic_xor_many(session, res01, res2).await?;
+    Ok(res)
+}
+
 pub(crate) fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32>
 where
     u32: From<u16>,

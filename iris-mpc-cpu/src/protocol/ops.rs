@@ -1,4 +1,7 @@
-use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
+use super::binary::{
+    bit_inject_arithmetic_xor, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    single_extract_msb_u32,
+};
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
@@ -14,7 +17,7 @@ use crate::{
     },
 };
 use eyre::eyre;
-use itertools::izip;
+use itertools::{izip, Itertools};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -68,6 +71,45 @@ pub async fn compare_threshold(
         .collect();
 
     extract_msb_u32_batch(session, &diffs).await
+}
+
+/// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
+pub fn translate_threshold_a(t: f64) -> u32 {
+    assert!(t >= 0. && t <= 1., "Threshold must be in the range [0, 1]");
+    ((1. - 2. * t) * (B as f64)) as u32
+}
+/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
+/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
+pub async fn compare_threshold_buckets(
+    session: &mut Session,
+    threshold_a_terms: &[u32],
+    distances: &[DistanceShare<u32>],
+) -> eyre::Result<Vec<Share<u32>>> {
+    let diffs = threshold_a_terms
+        .iter()
+        .flat_map(|a| {
+            distances.iter().map(|d| {
+                let x = d.mask_dot.clone() * *a;
+                let y = d.code_dot.clone() * B as u32;
+                x - y
+            })
+        })
+        .collect_vec();
+
+    let msbs = extract_msb_u32_batch(session, &diffs).await?;
+    let msbs = VecShare::new_vec(msbs);
+
+    // bit_inject all MSBs into u32 to be able to add them up
+    let sums = bit_inject_arithmetic_xor(session, msbs).await?;
+    // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
+    let buckets = sums
+        .into_iter()
+        .chunks(distances.len())
+        .into_iter()
+        .map(|chunk| chunk.reduce(|a, b| a + b).unwrap_or_default())
+        .collect_vec();
+
+    Ok(buckets)
 }
 
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
