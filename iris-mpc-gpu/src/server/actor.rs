@@ -1641,9 +1641,7 @@ impl ServerActor {
             Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
         };
 
-        // prepare a subset of the database by copying over the chosen indices
-        // Normally this is spread over multiple GPUs, but since we expect this to be a small
-        // subset, we just use the same identical chunk on all GPUs
+        // We copied over a subset of the db, so we match against DB chunks of the given sizes
         let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
         let dot_chunk_size = chunk_size
             .iter()
@@ -1759,12 +1757,8 @@ impl ServerActor {
             Eye::Right => &self.db_match_list_right,
         };
 
-        // we only care about device 0 results, since the rest is just duplicates
-        let ignore_device_results: Vec<bool> = {
-            let mut ignore_device_results = vec![true; self.device_manager.device_count()];
-            ignore_device_results[0] = false;
-            ignore_device_results
-        };
+        // ignore all device results where the chunk size is 0
+        let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
 
         record_stream_time!(
             &self.device_manager,
