@@ -575,14 +575,14 @@ impl ShareDB {
         &self,
         db: &SlicedProcessedDatabase,
         buffers: &DBChunkBuffers,
-        indices: &[u32],
+        indices: &[Vec<u32>],
         streams: &[CudaStream],
     ) {
         for idx in 0..self.device_manager.device_count() {
             let device = self.device_manager.device(idx);
             device.bind_to_thread().unwrap();
 
-            for (offset, wanted_idx) in indices.iter().enumerate() {
+            for (offset, wanted_idx) in indices[idx].iter().enumerate() {
                 unsafe {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(

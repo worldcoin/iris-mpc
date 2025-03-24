@@ -735,18 +735,34 @@ impl ServerActor {
         // FETCH PARTIAL LEFT RESULTS
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Fetching partial left results");
-        let partial_matches_left = self.distance_comparator.get_partial_results(
+        let mut partial_matches_left = self.distance_comparator.get_partial_results(
             &self.db_match_list_left,
             &self.current_db_sizes,
             &self.streams[0],
         );
 
         // also add the OR rule indices to the partial matches
-        let partial_matches_left = partial_matches_left
-            .into_iter()
-            .chain(batch.or_rule_indices.iter().flatten().cloned())
+        let or_indices = batch
+            .or_rule_indices
+            .iter()
+            .flatten()
+            .copied()
             .unique()
             .collect_vec();
+
+        for or_idx in or_indices {
+            let device_idx = or_idx % self.device_manager.device_count() as u32;
+            let db_idx = or_idx / self.device_manager.device_count() as u32;
+            if db_idx as usize >= self.current_db_sizes[device_idx as usize] {
+                tracing::warn!(
+                    "OR rule index {} is out of bounds for device {}",
+                    or_idx,
+                    device_idx
+                );
+                continue;
+            }
+            partial_matches_left[device_idx as usize].push(db_idx);
+        }
 
         ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
@@ -792,7 +808,7 @@ impl ServerActor {
             }
         );
 
-        if partial_matches_left.len() > DB_CHUNK_SIZE {
+        if partial_matches_left.iter().any(|x| x.len() > DB_CHUNK_SIZE) {
             tracing::warn!(
                 "Partial matches left too large, doing full match: {} > {}",
                 partial_matches_left.len(),
@@ -1595,7 +1611,7 @@ impl ServerActor {
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
-        db_subset_idx: &[u32],
+        db_subset_idx: &[Vec<u32>],
     ) {
         assert!(
             eye_db == Eye::Right,
@@ -2317,7 +2333,7 @@ fn open_subset_results(
     ignore_db_results: &[bool],
     batch_size: usize,
     streams: &[CudaStream],
-    index_mapping: &[u32],
+    index_mapping: &[Vec<u32>],
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
