@@ -1,9 +1,8 @@
 use super::ROTATIONS;
 use crate::{
     helpers::{
-        device_manager::{self, DeviceManager},
-        dtoh_on_stream_sync, htod_on_stream_sync, launch_config_from_elements_and_threads,
-        DEFAULT_LAUNCH_CONFIG_THREADS,
+        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
     },
     server::actor::{reset_slice, DB_CHUNK_SIZE},
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
@@ -248,7 +247,7 @@ impl DistanceComparator {
         ignore_db_results: &[bool],
         batch_size: usize,
         streams: &[CudaStream],
-        index_mapping: &[u32],
+        index_mapping: &[Vec<u32>],
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -264,9 +263,12 @@ impl DistanceComparator {
                 &self.device_manager.devices()[i],
             );
             self.device_manager.device(i).bind_to_thread().unwrap();
-            let index_mapping =
-                htod_on_stream_sync(index_mapping, &self.device_manager.device(i), &streams[i])
-                    .unwrap();
+            let index_mapping = htod_on_stream_sync(
+                &index_mapping[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap();
 
             unsafe {
                 self.open_index_mapping_kernels[i]
@@ -409,7 +411,7 @@ impl DistanceComparator {
         matches_bitmap: &[CudaSlice<u64>],
         db_sizes: &[usize],
         streams: &[CudaStream],
-    ) -> Vec<u32> {
+    ) -> Vec<Vec<u32>> {
         for i in 0..self.device_manager.device_count() {
             if db_sizes[i] == 0 {
                 continue;
@@ -453,9 +455,6 @@ impl DistanceComparator {
                 .unwrap(),
             );
         }
-        for counter in &counters {
-            tracing::info!("{} of {}", counter[0], DB_CHUNK_SIZE);
-        }
         let mut results = vec![];
         for i in 0..self.device_manager.device_count() {
             results.push(
@@ -482,22 +481,24 @@ impl DistanceComparator {
         );
 
         let mut matches = vec![];
-        let n_devices = self.device_manager.device_count();
         for i in 0..self.device_manager.device_count() {
             let len = counters[i][0] as usize;
-            let ids = results[i][..min(len, DB_CHUNK_SIZE)]
+            let mut ids = results[i][..min(len, DB_CHUNK_SIZE)]
                 .iter()
-                .map(|&idx| idx * n_devices as u32 + i as u32);
-            matches.extend(ids);
+                .copied()
+                .unique()
+                .collect::<Vec<_>>();
+            ids.sort();
+            matches.push(ids);
         }
 
-        tracing::info!("Partial matches len: {:?}", matches.len());
-        let mut deduped: Vec<u32> = matches.into_iter().unique().collect();
-        deduped.sort();
-        tracing::info!("Unique Partial matches: {:?}", deduped);
-        tracing::info!("Unique partial matches len: {:?}", deduped.len());
+        tracing::info!(
+            "Unique Partial matches len: {:?}",
+            matches.iter().map(|m| m.len()).collect_vec()
+        );
+        tracing::info!("Unique Partial matches: {:?}", matches);
 
-        deduped
+        matches
     }
 
     pub fn join_db_matches(
