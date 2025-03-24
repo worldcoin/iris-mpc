@@ -9,7 +9,7 @@ COLLECTIONS="mpcv2.results mpcv2.results.partial mpcv2.results.deletion mpcv2.re
 
 for COLLECTION in $COLLECTIONS; do
     echo "Deleting collection $COLLECTION from database $DATABASE..."
-    mongosh "$CONNECTION_STRING" --eval "db.getCollection('$COLLECTION').drop()"
+    mongosh "$CONNECTION_STRING" --eval "db.getCollection('$COLLECTION').deleteMany({})"
 done
 
 echo "MPC collections deleted successfully."
