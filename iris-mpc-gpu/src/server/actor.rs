@@ -1631,7 +1631,7 @@ impl ServerActor {
         // ---- END BATCH DEDUP ----
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
-        if db_subset_idx.is_empty() {
+        if db_subset_idx.iter().all(|x| x.is_empty()) {
             return;
         }
 
@@ -1644,8 +1644,7 @@ impl ServerActor {
         // prepare a subset of the database by copying over the chosen indices
         // Normally this is spread over multiple GPUs, but since we expect this to be a small
         // subset, we just use the same identical chunk on all GPUs
-        let db_subset_size = db_subset_idx.len();
-        let chunk_size = vec![db_subset_size; self.device_manager.device_count()];
+        let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
         let dot_chunk_size = chunk_size
             .iter()
             .map(|&s| (s.max(1).div_ceil(64) * 64))
