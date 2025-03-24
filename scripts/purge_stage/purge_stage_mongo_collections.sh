@@ -21,7 +21,7 @@ tsh proxy db --tunnel mongo-atlas-iris-stage -p 60003 --db-user arn:aws:iam::510
 sleep 5
 
 # MongoDB connection string
-MONGO_URI="mongodb://127.0.0.1:60003/iris?serverSelectionTimeoutMS=10000"
+MONGO_URI="mongodb://127.0.0.1:60003/iris?serverSelectionTimeoutMS=1000000"
 
 # Select the appropriate cleanup script based on the cleanup type
 case "$CLEANUP_TYPE" in
