@@ -22,6 +22,16 @@ impl VecShare<u16> {
         }
     }
 
+    fn share32_from_share16s(a: &Share<u16>, b: &Share<u16>) -> Share<u32> {
+        let a_ = (a.a.0 as u32) | ((b.a.0 as u32) << 16);
+        let b_ = (a.b.0 as u32) | ((b.b.0 as u32) << 16);
+
+        Share {
+            a: RingElement(a_),
+            b: RingElement(b_),
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn share128_from_share16s(
         a: &Share<u16>,
@@ -127,8 +137,43 @@ impl VecShare<u16> {
         res
     }
 
+    fn share_transpose16x32(a: &[Share<u16>; 32]) -> [Share<u32>; 16] {
+        let mut j: u32;
+        let mut k: usize;
+        let mut m: u32;
+        let mut t: Share<u32>;
+
+        let mut res = core::array::from_fn(|_| Share::default());
+
+        // pack results into Share64 datatypes
+        for (i, bb) in res.iter_mut().enumerate() {
+            *bb = Self::share32_from_share16s(&a[i], &a[16 + i]);
+        }
+
+        // version of 64x64 transpose that only does the swaps needed for 16 bits
+        m = 0x00ff00ff;
+        j = 8;
+        while j != 0 {
+            k = 0;
+            while k < 16 {
+                t = ((&res[k] >> j) ^ &res[k + j as usize]) & m;
+                res[k + j as usize] ^= &t;
+                res[k] ^= t << j;
+                k = (k + j as usize + 1) & !(j as usize);
+            }
+            j >>= 1;
+            m = m ^ (m << j);
+        }
+
+        res
+    }
+
     pub fn transpose_pack_u64(self) -> Vec<VecShare<u64>> {
         self.transpose_pack_u64_with_len::<{ u16::BITS as usize }>()
+    }
+
+    pub fn transpose_pack_u32(self) -> Vec<VecShare<u32>> {
+        self.transpose_pack_u32_with_len::<{ u16::BITS as usize }>()
     }
 
     pub fn transpose_pack_u64_with_len<const L: usize>(mut self) -> Vec<VecShare<u64>> {
@@ -142,6 +187,25 @@ impl VecShare<u16> {
 
         for (j, x) in self.shares.chunks_exact(64).enumerate() {
             let trans = Self::share_transpose16x64(x.try_into().unwrap());
+            for (src, des) in trans.into_iter().zip(res.iter_mut()) {
+                des.shares[j] = src;
+            }
+        }
+        debug_assert_eq!(res.len(), L);
+        res
+    }
+
+    pub fn transpose_pack_u32_with_len<const L: usize>(mut self) -> Vec<VecShare<u32>> {
+        // Pad to multiple of 32
+        let len = (self.shares.len() + 31) / 32;
+        self.shares.resize(len * 32, Share::default());
+
+        let mut res = (0..L)
+            .map(|_| VecShare::new_vec(vec![Share::default(); len]))
+            .collect::<Vec<_>>();
+
+        for (j, x) in self.shares.chunks_exact(32).enumerate() {
+            let trans = Self::share_transpose16x32(x.try_into().unwrap());
             for (src, des) in trans.into_iter().zip(res.iter_mut()) {
                 des.shares[j] = src;
             }
@@ -268,8 +332,38 @@ impl VecShare<u32> {
         res
     }
 
+    fn share_transpose32x32(a: &[Share<u32>; 32]) -> [Share<u32>; 32] {
+        let mut j: u32;
+        let mut k: usize;
+        let mut m: u32;
+        let mut t: Share<u32>;
+
+        let mut res = a.clone();
+
+        // version of 32x32 transpose that only does the swaps needed for 32 bits
+        m = 0x0000ffff;
+        j = 16;
+        while j != 0 {
+            k = 0;
+            while k < 32 {
+                t = ((&res[k] >> j) ^ &res[k + j as usize]) & m;
+                res[k + j as usize] ^= &t;
+                res[k] ^= t << j;
+                k = (k + j as usize + 1) & !(j as usize);
+            }
+            j >>= 1;
+            m = m ^ (m << j);
+        }
+
+        res
+    }
+
     pub fn transpose_pack_u64(self) -> Vec<VecShare<u64>> {
         self.transpose_pack_u64_with_len::<{ u32::BITS as usize }>()
+    }
+
+    pub fn transpose_pack_u32(self) -> Vec<VecShare<u32>> {
+        self.transpose_pack_u32_with_len::<{ u32::BITS as usize }>()
     }
 
     pub fn transpose_pack_u64_with_len<const L: usize>(mut self) -> Vec<VecShare<u64>> {
@@ -283,6 +377,25 @@ impl VecShare<u32> {
 
         for (j, x) in self.shares.chunks_exact(64).enumerate() {
             let trans = Self::share_transpose32x64(x.try_into().unwrap());
+            for (src, des) in trans.into_iter().zip(res.iter_mut()) {
+                des.shares[j] = src;
+            }
+        }
+        debug_assert_eq!(res.len(), L);
+        res
+    }
+
+    pub fn transpose_pack_u32_with_len<const L: usize>(mut self) -> Vec<VecShare<u32>> {
+        // Pad to multiple of 32
+        let len = (self.shares.len() + 31) / 32;
+        self.shares.resize(len * 32, Share::default());
+
+        let mut res = (0..L)
+            .map(|_| VecShare::new_vec(vec![Share::default(); len]))
+            .collect::<Vec<_>>();
+
+        for (j, x) in self.shares.chunks_exact(32).enumerate() {
+            let trans = Self::share_transpose32x32(x.try_into().unwrap());
             for (src, des) in trans.into_iter().zip(res.iter_mut()) {
                 des.shares[j] = src;
             }

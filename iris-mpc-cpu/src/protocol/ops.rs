@@ -1,4 +1,6 @@
-use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
+use super::binary::{
+    extract_msb_u32_batch, lift_u32, lift_u64, mul_lift_2k, open_bin, single_extract_msb_u32,
+};
 use crate::{
     execution::session::{BootSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
@@ -87,7 +89,8 @@ pub async fn lift_and_compare_threshold(
     mask_dist: Share<u16>,
 ) -> eyre::Result<Share<Bit>> {
     let y = mul_lift_2k::<B_BITS>(&code_dist);
-    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
+    let mut x =
+        lift_u64::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x.pop().expect("Expected a single element in the VecShare");
     x *= A as u32;
     x -= y;
@@ -105,7 +108,11 @@ pub async fn batch_signed_lift(
     for v in pre_lift.iter_mut() {
         v.add_assign_const_role(1_u16 << 15, session.own_role()?);
     }
-    let mut lifted_values = lift::<16>(session, pre_lift).await?;
+    let mut lifted_values = if pre_lift.len() > 32 {
+        lift_u64::<16>(session, pre_lift).await?
+    } else {
+        lift_u32::<16>(session, pre_lift).await?
+    };
     // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
     // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
     // get signed shares over 2^{32}
