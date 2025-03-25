@@ -808,7 +808,10 @@ impl ServerActor {
             }
         );
 
-        if partial_matches_left.iter().any(|x| x.len() > DB_CHUNK_SIZE) {
+        if partial_matches_left
+            .iter()
+            .any(|x| x.len() >= DB_CHUNK_SIZE)
+        {
             tracing::warn!(
                 "Partial matches left too large, doing full match: {} > {}",
                 partial_matches_left.len(),
