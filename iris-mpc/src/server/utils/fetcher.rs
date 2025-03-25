@@ -45,7 +45,7 @@ pub(crate) async fn fetch_sync_state(
             .await
             .wrap_err("Failed to fetch last set of modifications")
             .unwrap(),
-        next_sns_sequence_num: get_next_sns_seq_num(&config, &sqs_client)
+        next_sns_sequence_num: get_next_sns_seq_num(config, sqs_client)
             .await
             .wrap_err("Failed to fetch next SQS sequence number")
             .unwrap(),

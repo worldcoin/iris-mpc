@@ -104,6 +104,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
 
+    utils::do_unreadiness_check(&config).await?;
+
     // Check other nodes and wait until all nodes are ready.
     let all_readiness_addresses = utils::get_check_addresses(&config, "ready");
     let unready_check = tokio::spawn(async move {

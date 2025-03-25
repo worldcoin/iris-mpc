@@ -6,8 +6,8 @@ use std::time::Duration;
 use tokio;
 
 pub(crate) async fn do_unreadiness_check(config: &Config) -> Result<(), Report> {
-    let node_urls = get_check_addresses(&config, "ready");
-    let party_id = config.party_id.clone();
+    let node_urls = get_check_addresses(config, "ready");
+    let party_id = config.party_id;
     let task_handle = async move {
         let node_urls = [
             &node_urls[(party_id + 1) % 3],
@@ -27,7 +27,6 @@ pub(crate) async fn do_unreadiness_check(config: &Config) -> Result<(), Report> 
                 }
                 tokio::time::sleep(Duration::from_secs(1)).await;
             }
-            break;
         }
     };
 

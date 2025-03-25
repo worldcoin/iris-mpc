@@ -1,12 +1,10 @@
 use iris_mpc_common::config::{Config, ModeOfCompute};
 
 pub(crate) fn get_check_addresses(config: &Config, endpoint: &str) -> Vec<String> {
-    let hosts = config.node_hostnames.clone();
-    let ports = config.healthcheck_ports.clone();
-
-    hosts
+    config
+        .node_hostnames
         .iter()
-        .zip(ports.iter())
+        .zip(config.healthcheck_ports.iter())
         .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
         .collect::<Vec<String>>()
 }
