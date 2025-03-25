@@ -807,3 +807,39 @@ pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Res
         .map(|(s, c)| Ok((s.a ^ s.b ^ c).convert()))
         .collect::<eyre::Result<Vec<_>>>()
 }
+
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn open_u32(session: &mut Session, shares: &[Share<u32>]) -> eyre::Result<Vec<u32>> {
+    let network = &mut session.network_session;
+    let message = if shares.len() == 1 {
+        NetworkValue::RingElement32(shares[0].b).to_network()
+    } else {
+        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
+        NetworkValue::VecRing32(shares).to_network()
+    };
+
+    network.send_next(message).await?;
+
+    // receiving from previous party
+    let c = {
+        let serialized_other_shares = network.receive_prev().await;
+        if shares.len() == 1 {
+            match NetworkValue::from_network(serialized_other_shares) {
+                Ok(NetworkValue::RingElement32(message)) => Ok(vec![message]),
+                Err(e) => Err(eyre!("Error in receiving in open_u32 operation: {}", e)),
+                _ => Err(eyre!("Wrong value type is received in open_u32 operation")),
+            }
+        } else {
+            match NetworkValue::from_network(serialized_other_shares) {
+                Ok(NetworkValue::VecRing32(shares)) => Ok(shares),
+                Err(e) => Err(eyre!("Error in receiving in open_u32 operation: {}", e)),
+                _ => Err(eyre!("Wrong value type is received in open_u32 operation")),
+            }
+        }
+    }?;
+
+    // ADD shares with the received shares
+    izip!(shares.iter(), c.iter())
+        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+        .collect::<eyre::Result<Vec<_>>>()
+}

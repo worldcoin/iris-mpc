@@ -311,15 +311,18 @@ mod tests {
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
-        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
+        protocol::{
+            binary::open_u32, ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris,
+        },
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
+    use rand_distr::{Distribution, Standard};
     use rstest::rstest;
-    use std::{collections::HashMap, sync::Arc};
+    use std::{array, collections::HashMap, sync::Arc};
     use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
 
@@ -424,12 +427,15 @@ mod tests {
         );
     }
 
-    fn create_single_sharing<R: RngCore>(
+    fn create_single_sharing<R: RngCore, T: IntRing2k>(
         rng: &mut R,
-        input: u16,
-    ) -> (Share<u16>, Share<u16>, Share<u16>) {
-        let a = RingElement(rng.gen::<u16>());
-        let b = RingElement(rng.gen::<u16>());
+        input: T,
+    ) -> (Share<T>, Share<T>, Share<T>)
+    where
+        Standard: Distribution<T>,
+    {
+        let a = RingElement(rng.gen::<T>());
+        let b = RingElement(rng.gen::<T>());
         let c = RingElement(input) - a - b;
 
         let share1 = Share::new(a, c);
@@ -437,13 +443,19 @@ mod tests {
         let share3 = Share::new(c, b);
         (share1, share2, share3)
     }
-    struct LocalShares1D {
-        p0: Vec<Share<u16>>,
-        p1: Vec<Share<u16>>,
-        p2: Vec<Share<u16>>,
+    struct LocalShares1D<T: IntRing2k> {
+        p0: Vec<Share<T>>,
+        p1: Vec<Share<T>>,
+        p2: Vec<Share<T>>,
     }
 
-    fn create_array_sharing<R: RngCore>(rng: &mut R, input: &Vec<u16>) -> LocalShares1D {
+    fn create_array_sharing<R: RngCore, T: IntRing2k>(
+        rng: &mut R,
+        input: &Vec<T>,
+    ) -> LocalShares1D<T>
+    where
+        Standard: Distribution<T>,
+    {
         let mut player0 = Vec::new();
         let mut player1 = Vec::new();
         let mut player2 = Vec::new();
@@ -529,6 +541,98 @@ mod tests {
         // check first party output is equal to the expected result.
         let t = jobs.join_next().await.unwrap().unwrap();
         assert_eq!(t, RingElement(2));
+    }
+
+    #[tokio::test]
+    async fn test_compare_threshold_buckets() {
+        const NUM_BUCKETS: usize = 100;
+        const NUM_ITEMS: usize = 20;
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let items = (0..NUM_ITEMS)
+            .flat_map(|_| {
+                let mask = rng.gen_range(6000u32..12000);
+                let code = rng.gen_range(-12000i16..12000);
+                [code as u16 as u32, mask]
+            })
+            .collect_vec();
+
+        let shares = create_array_sharing(&mut rng, &items);
+
+        let thresholds: [f64; NUM_BUCKETS] =
+            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
+        let threshold_a_terms = thresholds
+            .iter()
+            .map(|x| translate_threshold_a(*x))
+            .collect_vec();
+
+        let num_parties = 3;
+        let identities = generate_local_identities();
+
+        let share_map = HashMap::from([
+            (identities[0].clone(), shares.p0),
+            (identities[1].clone(), shares.p1),
+            (identities[2].clone(), shares.p2),
+        ]);
+
+        let mut seeds = Vec::new();
+        for i in 0..num_parties {
+            let mut seed = [0_u8; 16];
+            seed[0] = i;
+            seeds.push(seed);
+        }
+        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
+
+        let sessions: Vec<Arc<Mutex<Session>>> = runtime
+            .sessions
+            .into_iter()
+            .map(|s| Arc::new(Mutex::new(s)))
+            .collect();
+
+        let mut jobs = JoinSet::new();
+        for session in sessions {
+            let session_lock = session.lock().await;
+            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
+            let session = session.clone();
+            let threshold_a_terms = threshold_a_terms.clone();
+            jobs.spawn(async move {
+                let mut session = session.lock().await;
+                let distances = shares[..]
+                    .chunks_exact(2)
+                    .map(|x| DistanceShare {
+                        code_dot: x[0].clone(),
+                        mask_dot: x[1].clone(),
+                    })
+                    .collect_vec();
+
+                let bucket_result_shares =
+                    compare_threshold_buckets(&mut session, &threshold_a_terms, &distances)
+                        .await
+                        .unwrap();
+                let bucket_results = open_u32(&mut session, &bucket_result_shares).await.unwrap();
+                bucket_results
+            });
+        }
+        // check first party output is equal to the expected result.
+        let t1 = jobs.join_next().await.unwrap().unwrap();
+        let t2 = jobs.join_next().await.unwrap().unwrap();
+        let t3 = jobs.join_next().await.unwrap().unwrap();
+        let expected = items[..]
+            .chunks_exact(2)
+            .fold([0; NUM_BUCKETS], |mut acc, x| {
+                let code_dist = x[0];
+                let mask_dist = x[1];
+                for (i, &threshold) in thresholds.iter().enumerate() {
+                    let threshold_a = translate_threshold_a(threshold);
+                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
+                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
+                }
+                acc
+            });
+        assert_eq!(t1, expected);
+        assert_eq!(t2, expected);
+        assert_eq!(t3, expected);
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
