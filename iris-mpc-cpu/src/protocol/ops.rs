@@ -75,7 +75,10 @@ pub async fn compare_threshold(
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
 pub fn translate_threshold_a(t: f64) -> u32 {
-    assert!((0. ..=1.).contains(&t), "Threshold must be in the range [0, 1]");
+    assert!(
+        (0. ..=1.).contains(&t),
+        "Threshold must be in the range [0, 1]"
+    );
     ((1. - 2. * t) * (B as f64)) as u32
 }
 /// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
@@ -610,7 +613,7 @@ mod tests {
                     compare_threshold_buckets(&mut session, &threshold_a_terms, &distances)
                         .await
                         .unwrap();
-                
+
                 open_u32(&mut session, &bucket_result_shares).await.unwrap()
             });
         }
