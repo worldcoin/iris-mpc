@@ -251,7 +251,7 @@ impl Store {
         serial_id: i64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
         tracing::info!(
-            "Iris PostgreSQL store: Fetching Iris by serial-id ({})",
+            "PostgreSQL Store: Fetching Iris by serial-id ({})",
             serial_id
         );
 
@@ -263,20 +263,6 @@ impl Store {
                 .await
                 .expect("DB operation failure :: Fetch Iris by ID."),
         )
-    }
-
-    /// Fetches V2 serial identifiers marked as deleted.
-    ///
-    /// # Returns
-    ///
-    /// A set of V2 serial identifiers marked as deleted.
-    ///
-    pub async fn fetch_iris_v2_deletions_by_party_id(&self) -> sqlx::Result<Vec<i64>, sqlx::Error> {
-        tracing::info!("Iris PostgreSQL store: Fetching V2 deletion set");
-
-        // TODO: Implement fetching V2 deletions by party ID.
-
-        Ok(vec![])
     }
 
     /// Stream irises in order.
