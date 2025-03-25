@@ -833,34 +833,6 @@ impl ServerActor {
                 batch_size,
                 &partial_matches_left,
             );
-
-            // tracing::info!("Fetching partial right results for subset");
-            // let partial_matches_right = self.distance_comparator.get_partial_results(
-            //     &self.db_match_list_right,
-            //     &self.current_db_sizes,
-            //     &self.streams[0],
-            // );
-
-            // // reset the partial matches
-            // // Reset the results buffers for reuse
-            // for dst in [&self.db_match_list_right, &self.batch_match_list_right] {
-            //     reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
-            // }
-
-            // self.compare_query_against_db_and_self(
-            //     &compact_device_queries_right,
-            //     &compact_device_sums_right,
-            //     &mut events,
-            //     Eye::Right,
-            //     batch_size,
-            // );
-
-            // tracing::info!("Fetching partial right results for normal");
-            // let partial_matches_right = self.distance_comparator.get_partial_results(
-            //     &self.db_match_list_right,
-            //     &self.current_db_sizes,
-            //     &self.streams[0],
-            // );
         }
 
         ///////////////////////////////////////////////////////////////////

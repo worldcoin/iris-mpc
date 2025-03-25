@@ -496,7 +496,6 @@ impl DistanceComparator {
             "Unique Partial matches len: {:?}",
             matches.iter().map(|m| m.len()).collect_vec()
         );
-        tracing::info!("Unique Partial matches: {:?}", matches);
 
         matches
     }
