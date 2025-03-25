@@ -68,7 +68,7 @@ clean_mpc_database() {
   local NAMESPACE=$5
 
 
-  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$ACCOUNT_ID" ] || [ -z "$CLUSTER_NAME" ] || [-z "$NAMESPACE" ]; then
+  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$ACCOUNT_ID" ] || [ -z "$CLUSTER_NAME" ] || [ -z "$NAMESPACE" ]; then
     echo "Database URL, party ID, account ID, cluster name and namespace are required"
     exit 1
   fi

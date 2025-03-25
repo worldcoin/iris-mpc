@@ -687,7 +687,7 @@ mod tests {
             node_id: 1,
             serial_id: 123,
             success: true,
-            and_rule_matched_serial_ids: vec![123],
+            matched_serial_ids: vec![123],
             or_rule_used: false,
             error: None,
             error_reason: None,

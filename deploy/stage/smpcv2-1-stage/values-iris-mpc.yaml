@@ -72,7 +72,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-1-stage--eun1-az3--x-s3"
@@ -90,7 +90,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "10000"
+    value: "1000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "1300000"
@@ -114,7 +114,7 @@ env:
     value: "50"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "true"
