@@ -5,24 +5,27 @@ use iris_mpc_common::{
     helpers::{shutdown_handler::ShutdownHandler, sync::SyncState},
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+use std::{
+    future::Future,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct ReadyProbeResponse {
-    image_name: String,
-    uuid: String,
-    shutting_down: bool,
+pub(crate) struct ReadyProbeResponse {
+    pub image_name: String,
+    pub uuid: String,
+    pub shutting_down: bool,
 }
 
-pub(crate) async fn get_healthcheck_future(
+pub(crate) async fn get_spinup_web_service_future(
     config: Config,
-    sync_state: &SyncState,
+    sync_state: SyncState,
     shutdown_handler: Arc<ShutdownHandler>,
     is_ready_flag: Arc<AtomicBool>,
-) -> impl std::future::Future<Output = Result<()>> + Send {
+) -> impl Future<Output = Result<()>> + Send {
     let uuid = uuid::Uuid::new_v4().to_string();
 
     // Set fixed respones.
@@ -43,7 +46,7 @@ pub(crate) async fn get_healthcheck_future(
     tracing::info!("Healthcheck probe response: {}", serialized_response);
 
     // Spinup server.
-    let my_state = sync_state.clone();
+    let sync_state = sync_state.clone();
     async move {
         // Generate a random UUID for each run.
         let app = Router::new()
@@ -76,7 +79,7 @@ pub(crate) async fn get_healthcheck_future(
             )
             .route(
                 "/startup-sync",
-                get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                get(move || async move { serde_json::to_string(&sync_state).unwrap() }),
             );
 
         let listener = tokio::net::TcpListener::bind(format!(

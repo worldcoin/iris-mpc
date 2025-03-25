@@ -1,4 +1,3 @@
-use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
 use crate::services::init::initialize_chacha_seeds;
 use crate::services::processors::batch::receive_batch;
@@ -808,4 +807,12 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     Ok(())
+}
+
+fn get_check_addresses(hostnames: Vec<String>, ports: Vec<String>, endpoint: &str) -> Vec<String> {
+    hostnames
+        .iter()
+        .zip(ports.iter())
+        .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
+        .collect::<Vec<String>>()
 }

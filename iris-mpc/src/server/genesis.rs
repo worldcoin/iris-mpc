@@ -4,16 +4,13 @@ use crate::services::processors::batch::receive_batch;
 use crate::services::processors::process_identity_deletions;
 use crate::services::store::load_db;
 use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::routing::get;
-use axum::Router;
-use eyre::{eyre, WrapErr};
+use eyre::eyre;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
-use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::helpers::sqs::delete_messages_until_sequence_num;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
@@ -22,7 +19,6 @@ use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
 use iris_mpc_store::{S3Store, Store};
-use serde::{Deserialize, Serialize};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -39,34 +35,36 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    // Escape if config is invalid.
+    // Validate config - escape if invalid.
     tracing::info!("Validating config");
     utils::validate_config(&config);
 
-    // Load batch_size config
+    // Set batch size config settings.
     tracing::info!("Initialising processing batch size");
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("   batch size -> {}", config.max_batch_size);
 
+    // Set backend service pointers.
     tracing::info!("Setting store pointers");
     let iris_pg_store = Store::new_from_config(&config).await?;
     let graph_pg_store = GraphStore::from_iris_store(&iris_pg_store);
-
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
-    let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
 
-    tracing::info!("Validating Iris store length");
-    let store_len = utils::validate_iris_store_length(&config, &iris_pg_store).await?;
+    // Validate length of iris store - escape if invalid.
+    tracing::info!("Validating Iris store consistency");
+    let store_len = utils::validate_iris_store_consistency(&config, &iris_pg_store).await?;
 
+    // Set shares.
     tracing::info!("Setting shares encryption key");
     let shares_encryption_key_pair =
         utils::fetch_shares_encryption_key_pair(&config, aws_clients.secrets_manager_client)
             .await
             .unwrap();
 
+    // Set background task monitor.
     tracing::info!("Setting task monitor");
     let mut background_tasks = TaskMonitor::new();
 
@@ -78,111 +76,36 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
-    let my_state = SyncState {
-        db_len: store_len as u64,
-        deleted_request_ids: iris_pg_store
-            .last_deleted_requests(max_sync_lookback)
-            .await?,
-        modifications: iris_pg_store.last_modifications(max_sync_lookback).await?,
-        next_sns_sequence_num: next_sns_seq_number_future.await?,
-    };
+    let sync_state = utils::fetch_sync_state(
+        &config,
+        &iris_pg_store,
+        &aws_clients.sqs_client,
+        store_len,
+        max_sync_lookback,
+    )
+    .await
+    .unwrap();
 
-    #[derive(Debug, Serialize, Deserialize, Clone)]
-    struct ReadyProbeResponse {
-        image_name: String,
-        uuid: String,
-        shutting_down: bool,
-    }
-
-    let health_shutdown_handler = Arc::clone(&shutdown_handler);
-    let health_check_port = config.hawk_server_healthcheck_port;
-
-    let healthcheck_future = utils::get_healthcheck_future(
-        config.clone(),
-        &my_state,
-        Arc::clone(&shutdown_handler),
-        Arc::clone(&is_ready_flag),
+    // On a background thread spawn the node's ops web service.
+    background_tasks.spawn(
+        utils::get_spinup_web_service_future(
+            config.clone(),
+            sync_state.clone(),
+            Arc::clone(&shutdown_handler),
+            Arc::clone(&is_ready_flag),
+        )
+        .await,
     );
-    let _health_check_abort = background_tasks.spawn(healthcheck_future.await);
-
-    // let _health_check_abort = background_tasks.spawn({
-    //     let uuid = uuid::Uuid::new_v4().to_string();
-    //     let ready_probe_response = ReadyProbeResponse {
-    //         image_name: config.image_name.clone(),
-    //         shutting_down: false,
-    //         uuid: uuid.clone(),
-    //     };
-    //     let ready_probe_response_shutdown = ReadyProbeResponse {
-    //         image_name: config.image_name.clone(),
-    //         shutting_down: true,
-    //         uuid: uuid.clone(),
-    //     };
-    //     let serialized_response = serde_json::to_string(&ready_probe_response)
-    //         .expect("Serialization to JSON to probe response failed");
-    //     let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
-    //         .expect("Serialization to JSON to probe response failed");
-    //     tracing::info!("Healthcheck probe response: {}", serialized_response);
-    //     let my_state = my_state.clone();
-    //     async move {
-    //         // Generate a random UUID for each run.
-    //         let app = Router::new()
-    //             .route(
-    //                 "/health",
-    //                 get(move || {
-    //                     let shutdown_handler_clone = Arc::clone(&health_shutdown_handler);
-    //                     async move {
-    //                         if shutdown_handler_clone.is_shutting_down() {
-    //                             serialized_response_shutdown.clone()
-    //                         } else {
-    //                             serialized_response.clone()
-    //                         }
-    //                     }
-    //                 }),
-    //             )
-    //             .route(
-    //                 "/ready",
-    //                 get({
-    //                     // We are only ready once this flag is set to true.
-    //                     let is_ready_flag = Arc::clone(&is_ready_flag);
-    //                     move || async move {
-    //                         if is_ready_flag.load(Ordering::SeqCst) {
-    //                             "ready".into_response()
-    //                         } else {
-    //                             StatusCode::SERVICE_UNAVAILABLE.into_response()
-    //                         }
-    //                     }
-    //                 }),
-    //             )
-    //             .route(
-    //                 "/startup-sync",
-    //                 get(move || async move { serde_json::to_string(&my_state).unwrap() }),
-    //             );
-    //         let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
-    //             .await
-    //             .wrap_err("healthcheck listener bind error")?;
-    //         axum::serve(listener, app)
-    //             .await
-    //             .wrap_err("healthcheck listener server launch error")?;
-
-    //         Ok::<(), eyre::Error>(())
-    //     }
-    // });
-
     background_tasks.check_tasks();
-
     tracing::info!(
         "Healthcheck and Readiness server running on port {}.",
-        health_check_port.clone()
+        config.hawk_server_healthcheck_port
     );
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-    // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = utils::get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "ready",
-    );
 
+    // Check other nodes and wait until all nodes are ready.
+    let all_readiness_addresses = utils::get_check_addresses(&config, "ready");
     let unready_check = tokio::spawn(async move {
         let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
         let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
@@ -225,12 +148,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
 
-    let all_health_addresses = utils::get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "health",
-    );
-
+    let all_health_addresses = utils::get_check_addresses(&config, "health");
     let image_name = config.image_name.clone();
     let heartbeat_shutdown_handler = Arc::clone(&shutdown_handler);
     let _heartbeat = background_tasks.spawn(async move {
@@ -282,7 +200,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
                 let probe_response = res
                     .unwrap()
-                    .json::<ReadyProbeResponse>()
+                    .json::<utils::ReadyProbeResponse>()
                     .await
                     .expect("Deserialization of probe response failed");
                 if probe_response.image_name != image_name {
@@ -358,17 +276,12 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
-    let all_startup_sync_addresses = utils::get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "startup-sync",
-    );
-
+    let all_startup_sync_addresses = utils::get_check_addresses(&config, "startup-sync");
     let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
     let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
 
     tracing::info!("Database store length is: {}", store_len);
-    let mut states = vec![my_state.clone()];
+    let mut states = vec![sync_state.clone()];
     for host in [next_node, prev_node].iter() {
         let res = reqwest::get(host.as_str()).await;
         match res {
@@ -394,7 +307,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             }
         }
     }
-    let sync_result = SyncResult::new(my_state.clone(), states);
+    let sync_result = SyncResult::new(sync_state.clone(), states);
 
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
@@ -402,7 +315,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         delete_messages_until_sequence_num(
             &config,
             &aws_clients.sqs_client,
-            my_state.next_sns_sequence_num,
+            sync_state.next_sns_sequence_num,
             max_sqs_sequence_num,
         )
         .await?;
@@ -529,12 +442,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     is_ready_flag_cloned.store(true, Ordering::SeqCst);
 
     // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = utils::get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "ready",
-    );
-
+    let all_readiness_addresses = utils::get_check_addresses(&config, "ready");
     let ready_check = tokio::spawn(async move {
         let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
         let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
