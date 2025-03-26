@@ -92,7 +92,7 @@ pub async fn get_owner_index(store: &Aby3StoreRef) -> eyre::Result<usize> {
     let store = store.lock().await;
     store
         .session
-        .boot_session
+        .network_session
         .own_role()
         .map(|role| role.index())
 }

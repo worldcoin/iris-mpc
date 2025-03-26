@@ -1,17 +1,18 @@
 use crate::{
     execution::{
         player::*,
-        session::{BootSession, Session, SessionId},
+        session::{NetworkSession, Session, SessionId},
     },
     network::{grpc::setup_local_grpc_networking, local::LocalNetworkingStore, NetworkType},
     protocol::{ops::setup_replicated_prf, prf::PrfSeed},
 };
 use futures::future::join_all;
+use itertools::izip;
 use std::{
     collections::HashSet,
     sync::{Arc, LazyLock},
 };
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::sync::Mutex;
 
 pub fn generate_local_identities() -> Vec<Identity> {
     vec![
@@ -80,56 +81,57 @@ impl LocalRuntime {
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
         let sess_id = SessionId::from(0_u64);
-        let boot_sessions = match network_type {
+        let network_sessions = match network_type {
             NetworkType::LocalChannel => {
                 let network = LocalNetworkingStore::from_host_ids(&identities);
-                let boot_sessions: Vec<BootSession> = (0..seeds.len())
+                let network_sessions: Vec<NetworkSession> = (0..seeds.len())
                     .map(|i| {
                         let identity = identities[i].clone();
-                        BootSession {
+                        NetworkSession {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking: Arc::new(network.get_local_network(identity.clone())),
+                            networking: Box::new(network.get_local_network(identity.clone())),
                             own_identity: identity,
                         }
                     })
                     .collect();
-                boot_sessions
+                network_sessions
             }
             NetworkType::GrpcChannel => {
                 let networks = setup_local_grpc_networking(identities.clone()).await?;
-                let mut jobs = JoinSet::new();
+                let mut jobs = vec![];
                 for player in networks.iter() {
                     let player = player.clone();
-                    jobs.spawn(async move {
-                        player.create_session(sess_id).await.unwrap();
-                        player.wait_for_session(sess_id).await.unwrap();
-                    });
+                    let task =
+                        tokio::spawn(async move { player.create_session(sess_id).await.unwrap() });
+                    jobs.push(task);
                 }
-                jobs.join_all().await;
-                let boot_sessions: Vec<BootSession> = (0..seeds.len())
-                    .map(|i| {
-                        let identity = identities[i].clone();
-                        BootSession {
+                let grpc_sessions = join_all(jobs)
+                    .await
+                    .into_iter()
+                    .map(|r| r.map_err(eyre::Report::new))
+                    .collect::<eyre::Result<Vec<_>>>()?;
+                let network_sessions: Vec<NetworkSession> =
+                    izip!(identities.into_iter(), grpc_sessions.into_iter())
+                        .map(|(id, session)| NetworkSession {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking: Arc::new(networks[i].clone()),
-                            own_identity: identity,
-                        }
-                    })
-                    .collect();
-                boot_sessions
+                            networking: Box::new(session),
+                            own_identity: id,
+                        })
+                        .collect();
+                network_sessions
             }
         };
 
         let mut jobs = vec![];
-        for (player_id, boot_session) in boot_sessions.into_iter().enumerate() {
+        for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id];
             let task = tokio::spawn(async move {
-                let prf = setup_replicated_prf(&boot_session, player_seed)
+                let prf = setup_replicated_prf(&mut network_session, player_seed)
                     .await
                     .unwrap();
-                (boot_session, prf)
+                (network_session, prf)
             });
             jobs.push(task);
         }
@@ -137,10 +139,10 @@ impl LocalRuntime {
             .await
             .into_iter()
             .map(|t| {
-                let (boot_session, setup) = t?;
+                let (network_session, prf) = t?;
                 Ok(Session {
-                    boot_session,
-                    setup,
+                    network_session,
+                    prf,
                 })
             })
             .collect::<eyre::Result<Vec<_>>>()?;
@@ -175,6 +177,8 @@ impl LocalRuntime {
 
 #[cfg(test)]
 mod tests {
+    use tokio::task::JoinSet;
+
     use super::*;
 
     #[tokio::test]

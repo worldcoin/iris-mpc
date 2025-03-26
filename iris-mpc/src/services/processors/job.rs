@@ -13,7 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
@@ -55,6 +55,7 @@ pub async fn process_job_result(
         modifications,
         actor_data: hawk_mutation,
     } = job_result;
+    let now = Instant::now();
 
     let _modifications = modifications;
 
@@ -287,6 +288,7 @@ pub async fn process_job_result(
         )
         .await?;
     }
+    metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     shutdown_handler.decrement_batches_pending_completion();
 

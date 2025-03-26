@@ -1,4 +1,4 @@
-use crate::shares::{bit::Bit, ring_impl::RingElement};
+use crate::shares::{bit::Bit, ring_impl::RingElement, IntRing2k};
 use eyre::eyre;
 
 /// Size of a PRF key in bytes
@@ -18,6 +18,25 @@ pub enum NetworkValue {
 }
 
 impl NetworkValue {
+    pub fn new_value_from<T: IntRing2k>(value: RingElement<T>) -> Self {
+        match T::K {
+            1 => NetworkValue::RingElementBit(value.cast_to::<Bit>()),
+            16 => NetworkValue::RingElement16(value.cast_to::<u16>()),
+            32 => NetworkValue::RingElement32(value.cast_to::<u32>()),
+            64 => NetworkValue::RingElement64(value.cast_to::<u64>()),
+            _ => panic!("Unsupported ring size"),
+        }
+    }
+
+    pub fn new_vec_from<T: IntRing2k>(values: Vec<RingElement<T>>) -> Self {
+        match T::K {
+            16 => NetworkValue::VecRing16(values.into_iter().map(|x| x.cast_to::<u16>()).collect()),
+            32 => NetworkValue::VecRing32(values.into_iter().map(|x| x.cast_to::<u32>()).collect()),
+            64 => NetworkValue::VecRing64(values.into_iter().map(|x| x.cast_to::<u64>()).collect()),
+            _ => panic!("Unsupported ring size"),
+        }
+    }
+
     fn get_descriptor_byte(&self) -> u8 {
         match self {
             NetworkValue::PrfKey(_) => 0x01,
