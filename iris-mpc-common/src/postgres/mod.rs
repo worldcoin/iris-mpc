@@ -40,7 +40,7 @@ impl PostgresClient {
                 let connect_sql = connect_sql.clone();
                 Box::pin(async move {
                     conn.execute(connect_sql.as_ref()).await.inspect_err(|e| {
-                        eprintln!("error in after_connect: {:?}", e);
+                        tracing::error!("error in after_connect: {:?}", e);
                     })?;
                     Ok(())
                 })
