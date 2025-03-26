@@ -658,11 +658,14 @@ pub mod tests {
         sync::ModificationStatus,
     };
 
+    const MAX_CONNECTIONS: u32 = 100;
+
     #[tokio::test]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
@@ -733,14 +736,15 @@ pub mod tests {
         }
 
         // Clean up on success.
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut tx = store.tx().await?;
         store.insert_results(&mut tx, &[]).await?;
@@ -748,7 +752,7 @@ pub mod tests {
         tx.commit().await?;
         store.mark_requests_deleted(&[]).await?;
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -757,7 +761,8 @@ pub mod tests {
         let count: usize = 1 << 3;
 
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut codes_and_masks = vec![];
 
@@ -809,14 +814,15 @@ pub mod tests {
         let got = store.last_results(count).await?;
         assert_eq!(got, result_events);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_init_db_with_random_shares() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let expected_generated_irises_num = 10;
         store
@@ -826,13 +832,14 @@ pub mod tests {
         let generated_irises_count = store.count_irises().await?;
         assert_eq!(generated_irises_count, expected_generated_irises_num);
 
-        cleanup(&store, &schema_name).await
+        cleanup(&postgres_client, &schema_name).await
     }
 
     #[tokio::test]
     async fn test_rollback() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut irises = vec![];
         for i in 0..10 {
@@ -855,14 +862,15 @@ pub mod tests {
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_results() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         let result_events = vec!["event1".to_string(), "event2".to_string()];
         let mut tx = store.tx().await?;
@@ -873,14 +881,15 @@ pub mod tests {
         let got = store.last_results(2).await?;
         assert_eq!(got, vec!["event1", "event2"]);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
 
@@ -894,14 +903,15 @@ pub mod tests {
             assert_eq!(got, request_ids);
         }
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         // insert two irises into db
         let iris1 = StoredIrisRef {
@@ -1004,14 +1014,15 @@ pub mod tests {
         );
         assert_eq!(got_second_update[0].version_id(), 1);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_insert_modification() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         // 1. Insert a new modification
         let inserted = store
@@ -1048,14 +1059,15 @@ pub mod tests {
         );
 
         // 5. Clean up
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_last_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert a few modifications
         for serial_id in 11..=15 {
@@ -1092,7 +1104,7 @@ pub mod tests {
             None,
         );
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -1119,7 +1131,8 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications
         let mut m1 = store
@@ -1178,7 +1191,7 @@ pub mod tests {
             Some("m1".to_string()),
         );
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -1186,7 +1199,8 @@ pub mod tests {
     async fn test_delete_modifications() -> Result<()> {
         // Set up a temporary schema and a new store.
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications.
         let mut m1 = store
@@ -1223,7 +1237,7 @@ pub mod tests {
         assert_eq!(remaining[0].id, m1.id);
 
         // Clean up the temporary schema.
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
