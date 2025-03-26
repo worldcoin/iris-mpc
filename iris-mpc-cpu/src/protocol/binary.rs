@@ -76,57 +76,65 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
-pub(crate) async fn and_many_send(
+pub(crate) async fn and_many_send<T: IntRing2k>(
     session: &mut Session,
-    a: SliceShare<'_, u64>,
-    b: SliceShare<'_, u64>,
-) -> Result<Vec<RingElement<u64>>, Error>
+    a: SliceShare<'_, T>,
+    b: SliceShare<'_, T>,
+) -> Result<Vec<RingElement<T>>, Error>
 where
-    Standard: Distribution<u64>,
+    Standard: Distribution<T>,
 {
+    if ![16,32,64].contains(&T::K) {
+        return Err(eyre!("Invalid bit size in and_many_send"));
+    }
     if a.len() != b.len() {
         return Err(eyre!("InvalidSize in and_many_send"));
     }
     let mut shares_a = Vec::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
-        let rand = session.prf.gen_binary_zero_share::<u64>();
+        let rand = session.prf.gen_binary_zero_share::<T>();
         let mut c = a_ & b_;
         c ^= rand;
         shares_a.push(c);
     }
 
     let network = &mut session.network_session;
-    let message = shares_a.clone();
-    let message = if message.len() == 1 {
-        NetworkValue::RingElement64(message[0])
+    let messages = shares_a.clone();
+    let message = if messages.len() == 1 {
+        NetworkValue::new_value_from(messages[0])
     } else {
-        NetworkValue::VecRing64(message)
+        NetworkValue::new_vec_from(messages)
     };
     network.send_next(message.to_network()).await?;
     Ok(shares_a)
 }
 
-pub(crate) async fn and_many_receive(
+pub(crate) async fn and_many_receive<T: IntRing2k>(
     session: &mut Session,
-) -> Result<Vec<RingElement<u64>>, Error> {
+) -> Result<Vec<RingElement<T>>, Error> {
     let shares_b = {
         let serialized_other_share = session.network_session.receive_prev().await;
         match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::RingElement64(message)) => Ok(vec![message]),
-            Ok(NetworkValue::VecRing64(message)) => Ok(message),
-            _ => Err(eyre!("Error in receiving in and_many operation")),
+            Ok(NetworkValue::RingElement64(message)) => Ok(vec![message.cast_to::<T>()]),
+            Ok(NetworkValue::VecRing64(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Ok(NetworkValue::RingElement32(message)) => Ok(vec![message.cast_to::<T>()]),
+            Ok(NetworkValue::VecRing32(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Ok(NetworkValue::RingElement16(message)) => Ok(vec![message.cast_to::<T>()]),
+            Ok(NetworkValue::VecRing16(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Err(e) => Err(eyre!("Error in and_many_receive: {e}")),
+            _ => Err(eyre!("Incorrect NetworkValue received")),
         }
     }?;
     Ok(shares_b)
 }
 
-pub(crate) async fn and_many(
+pub(crate) async fn and_many<T: IntRing2k>(
     session: &mut Session,
-    a: SliceShare<'_, u64>,
-    b: SliceShare<'_, u64>,
-) -> Result<VecShare<u64>, Error>
+    a: SliceShare<'_, T>,
+    b: SliceShare<'_, T>,
+) -> Result<VecShare<T>, Error>
 where
-    Standard: Distribution<u64>,
+    Standard: Distribution<T>,
 {
     let shares_a = and_many_send(session, a, b).await?;
     let shares_b = and_many_receive(session).await?;
@@ -135,11 +143,15 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
-pub(crate) async fn transposed_pack_and(
+pub(crate) async fn transposed_pack_and<T: IntRing2k>(
     session: &mut Session,
-    x1: Vec<VecShare<u64>>,
-    x2: Vec<VecShare<u64>>,
-) -> Result<Vec<VecShare<u64>>, Error> {
+    x1: Vec<VecShare<T>>,
+    x2: Vec<VecShare<T>>,
+)
+ -> Result<Vec<VecShare<T>>, Error> 
+ where
+    Standard: Distribution<T>,
+    {
     if x1.len() != x2.len() {
         return Err(eyre!("Inputs have different length"));
     }
@@ -164,15 +176,15 @@ pub(crate) async fn transposed_pack_and(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn binary_add_3_get_two_carries(
+async fn binary_add_3_get_two_carries<T: IntRing2k>(
     session: &mut Session,
-    x1: Vec<VecShare<u64>>,
-    x2: Vec<VecShare<u64>>,
-    x3: Vec<VecShare<u64>>,
+    x1: Vec<VecShare<T>>,
+    x2: Vec<VecShare<T>>,
+    x3: Vec<VecShare<T>>,
     truncate_len: usize,
 ) -> Result<(VecShare<Bit>, VecShare<Bit>), Error>
 where
-    Standard: Distribution<u64>,
+    Standard: Distribution<T>,
 {
     let len = x1.len();
     debug_assert!(len == x2.len() && len == x3.len());
@@ -490,12 +502,15 @@ pub(crate) async fn lift<const K: usize>(
 }
 
 // MSB related code
-pub(crate) async fn binary_add_3_get_msb(
+pub(crate) async fn binary_add_3_get_msb<T: IntRing2k>(
     session: &mut Session,
-    x1: Vec<VecShare<u64>>,
-    x2: Vec<VecShare<u64>>,
-    mut x3: Vec<VecShare<u64>>,
-) -> Result<VecShare<u64>, Error> {
+    x1: Vec<VecShare<T>>,
+    x2: Vec<VecShare<T>>,
+    mut x3: Vec<VecShare<T>>,
+) -> Result<VecShare<T>, Error> 
+where
+    Standard: Distribution<T>,
+{
     let len = x1.len();
     debug_assert!(len == x2.len() && len == x3.len());
 
@@ -548,11 +563,13 @@ pub(crate) async fn binary_add_3_get_msb(
     Ok(res)
 }
 
-// Extracts bit at position K
-async fn extract_msb<const K: usize>(
+async fn extract_msb<T: IntRing2k>(
     session: &mut Session,
-    x: Vec<VecShare<u64>>,
-) -> Result<VecShare<u64>, Error> {
+    x: Vec<VecShare<T>>,
+) -> Result<VecShare<T>, Error> 
+where
+    Standard: Distribution<T>,
+{
     let len = x.len();
 
     let mut x1 = Vec::with_capacity(len);
@@ -583,7 +600,7 @@ pub async fn extract_msb_u32<const K: usize>(
     x_: VecShare<u32>,
 ) -> Result<VecShare<u64>, Error> {
     let x = x_.transpose_pack_u64_with_len::<K>();
-    extract_msb::<K>(session, x).await
+    extract_msb::<u64>(session, x).await
 }
 
 // TODO a dedicated bitextraction for just one element would be more
