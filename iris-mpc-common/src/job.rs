@@ -133,7 +133,7 @@ pub struct ServerJobResult<A = ()> {
     pub actor_data: A,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Eye {
     #[default]
     Left,
