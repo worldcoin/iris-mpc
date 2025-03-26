@@ -6,7 +6,7 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::config::ModeOfDeployment;
+use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -18,25 +18,11 @@ pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
 use sqlx::{
-    migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
+    migrate::Migrator, PgPool, Postgres, Row, Transaction,
 };
 use std::ops::DerefMut;
 
-const APP_NAME: &str = "SMPC";
-const MAX_CONNECTIONS: u32 = 100;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
-
-fn sql_switch_schema(schema_name: &str) -> Result<String> {
-    sanitize_identifier(schema_name)?;
-    Ok(format!(
-        "
-        CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET search_path TO \"{}\";
-        ",
-        schema_name, schema_name
-    ))
-}
+static MIGRATOR: Migrator = sqlx::migrate!("./../migrations");
 
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
@@ -178,50 +164,18 @@ pub struct Store {
 }
 
 impl Store {
-    /// Connect to a database based on Config URL, environment, and party_id.
-    pub async fn new_from_config(config: &Config) -> Result<Self> {
-        // if running shadow mode in isolation, we should not read from the iris-mpc shares and instead create a new version
-        let db_config = if config.mode_of_deployment == ModeOfDeployment::ShadowIsolation {
-            config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?
-        } else {
-            config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?
-        };
-
-        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-        Self::new(&db_config.url, &schema_name).await
-    }
-
-    pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        tracing::info!("Connecting to V2 database with, schema: {}", schema_name);
-        let connect_sql = sql_switch_schema(schema_name)?;
-
-        let pool = PgPoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .after_connect(move |conn, _meta| {
-                // Switch to the given schema in every connection.
-                let connect_sql = connect_sql.clone();
-                Box::pin(async move {
-                    conn.execute(connect_sql.as_ref()).await.inspect_err(|e| {
-                        eprintln!("error in after_connect: {:?}", e);
-                    })?;
-                    Ok(())
-                })
-            })
-            .connect(url)
-            .await?;
+    pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
+        tracing::info!(
+            "Created and iris-mpc-store with schema: {}",
+            postgres_client.schema_name
+        );
 
         // Create the schema on the first startup.
-        MIGRATOR.run(&pool).await?;
+        MIGRATOR.run(&postgres_client.pool).await?;
 
         Ok(Store {
-            pool,
-            schema_name: schema_name.to_string(),
+            pool: postgres_client.pool.clone(),
+            schema_name: postgres_client.schema_name.to_string(),
         })
     }
 
@@ -684,14 +638,6 @@ WHERE id = $1;
             self.count_irises().await?
         );
         Ok(())
-    }
-}
-
-fn sanitize_identifier(input: &str) -> Result<()> {
-    if input.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        Ok(())
-    } else {
-        Err(eyre!("Invalid SQL identifier"))
     }
 }
 
@@ -1295,8 +1241,9 @@ pub mod tests {
 
 pub mod test_utils {
     use super::*;
+    const APP_NAME: &str = "SMPC";
     const DOTENV_TEST: &str = ".env.test";
-
+    
     pub fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
         Ok(Config::load_config(APP_NAME)?
@@ -1309,10 +1256,10 @@ pub mod test_utils {
         format!("SMPC_test{}_0", rand::random::<u32>())
     }
 
-    pub async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
+    pub async fn cleanup(postgres_client: &PostgresClient, schema_name: &str) -> Result<()> {
         assert!(schema_name.starts_with("SMPC_test"));
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
-            .execute(&store.pool)
+            .execute(&postgres_client.pool)
             .await?;
         Ok(())
     }

@@ -1,7 +1,7 @@
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::Config;
+use iris_mpc_common::config::{Config, ModeOfDeployment};
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -152,14 +152,16 @@ pub async fn process_job_result(
         })
         .collect::<eyre::Result<Vec<_>>>()?;
 
-    let mut tx = store.tx().await?;
+    let mut iris_tx = store.tx().await?;
 
-    store.insert_results(&mut tx, &uniqueness_results).await?;
+    store
+        .insert_results(&mut iris_tx, &uniqueness_results)
+        .await?;
 
     // TODO: update modifications table to store reauth and deletion results
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
-        let db_serial_ids = store.insert_irises(&mut tx, &codes_and_masks).await?;
+        let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
 
         // Check if the serial_ids match between memory and db.
         if memory_serial_ids != db_serial_ids {
@@ -189,7 +191,7 @@ pub async fn process_job_result(
             );
             store
                 .update_iris(
-                    Some(&mut tx),
+                    Some(&mut iris_tx),
                     serial_id as i64,
                     &left_iris_requests.code[i],
                     &left_iris_requests.mask[i],
@@ -200,15 +202,26 @@ pub async fn process_job_result(
         }
     }
 
-    // Graph mutation.
-    let mut graph_tx = graph_store.tx_wrap(tx);
-    if !config.disable_persistence {
-        hawk_mutation.persist(&mut graph_tx).await?;
-    }
-    let tx = graph_tx.tx;
+    // The way we are reusing the transaction between the stores is bound to fail in a multi-DB environment
+    // During the ShadowModeReadOnly we will perform two separate transactions
+    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
+        iris_tx.commit().await?;
+        let mut graph_tx = graph_store.tx().await?;
+        if !config.disable_persistence {
+            hawk_mutation.persist(&mut graph_tx).await?;
+        }
+        graph_tx.tx.commit().await?;
+    } else {
+        let mut graph_tx = graph_store.tx_wrap(iris_tx);
 
-    tx.commit().await?;
+        if !config.disable_persistence {
+            hawk_mutation.persist(&mut graph_tx).await?;
+        }
 
+        // Because this transaction was built on top of the irises transaction, commiting it persists both tables
+        graph_tx.tx.commit().await?;
+    };
+    
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id);
         metrics::gauge!("results_inserted.latest_serial_id").set(memory_serial_id as f64);

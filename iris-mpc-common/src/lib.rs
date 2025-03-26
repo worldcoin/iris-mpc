@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+pub mod postgres;
 pub mod config;
 pub mod error;
 pub mod galois;

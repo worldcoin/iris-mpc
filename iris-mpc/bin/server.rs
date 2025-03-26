@@ -13,6 +13,7 @@ use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
+use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
@@ -893,8 +894,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
+    let schema_name = format!("{}_{}_{}", config.app_name, config.environment, config.party_id);
+    let db_config = config.database.as_ref().ok_or(eyre!("Missing database config"))?;
+    
+    tracing::info!("Creating new iris storage from: {:?} with schema {}", db_config, schema_name);
+    let postgres_client = PostgresClient::new(&db_config.url, schema_name.as_str()).await?;
+    let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -1680,7 +1685,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // convert from memory index (0-based) to db index (1-based)
                     let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     tracing::info!(
-                        "Persisting successful reauth update {} into postgres on serial id {} ",
+                        "Persisting successful reauth update {} into postgres.rs on serial id {} ",
                         reauth_id,
                         serial_id
                     );
@@ -2032,8 +2037,8 @@ async fn process_identity_deletions(
             "Started processing deletion request",
         );
 
-        // overwrite postgres db with dummy values.
-        // note that both serial_id and postgres db are 1-indexed.
+        // overwrite postgres.rs db with dummy values.
+        // note that both serial_id and postgres.rs db are 1-indexed.
         store
             .update_iris(
                 None,

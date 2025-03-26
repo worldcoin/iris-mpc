@@ -12,8 +12,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::{Config, ModeOfCompute};
+use eyre::{eyre, Report, WrapErr};
+use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::config::{Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -30,6 +31,8 @@ use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
+use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
+use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
 use std::mem;
@@ -40,7 +43,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 const RNG_SEED_INIT_DB: u64 = 42;
-
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 pub static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
@@ -68,10 +70,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
-    // TODO: In future, make the Graph store use only the HNSW DB cluster
-    let graph_store = GraphStore::from_iris_store(&store);
+    let (store, graph_store) = prepare_stores(&config).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -810,4 +809,90 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     Ok(())
+}
+
+async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
+    let schema_name = format!("{}_{}_{}", config.app_name, config.environment, config.party_id);
+
+    // Always need the "GPU" database config
+    let gpu_db_config = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing GPU database config"))?;
+
+    let gpu_postgres_client = PostgresClient::new(&gpu_db_config.url, &schema_name).await?;
+
+    match config.mode_of_deployment {
+        ModeOfDeployment::ShadowIsolation => {
+            // This mode uses only CPU DB
+            let cpu_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
+            let cpu_postgres_client = PostgresClient::new(&cpu_db_config.url, &schema_name).await?;
+
+            // Store -> CPU
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                cpu_db_config,
+                config.mode_of_deployment
+            );
+            let store = Store::new(&cpu_postgres_client).await?;
+
+            // Graph -> CPU
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                cpu_db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&cpu_postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+
+        ModeOfDeployment::ShadowReadOnly => {
+            // Store -> GPU
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                gpu_db_config,
+                config.mode_of_deployment
+            );
+            let store = Store::new(&gpu_postgres_client).await?;
+
+            // Graph -> CPU
+            let cpu_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
+            let cpu_postgres_client = PostgresClient::new(&cpu_db_config.url, &schema_name).await?;
+
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                cpu_db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&cpu_postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+
+        // All other modes: we only need/use the GPU DB
+        _ => {
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                gpu_db_config,
+                config.mode_of_deployment
+            );
+            let store = Store::new(&gpu_postgres_client).await?;
+
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                gpu_db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&gpu_postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+    }
 }
