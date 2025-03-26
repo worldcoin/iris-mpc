@@ -12,8 +12,8 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
 use sqlx::{
-    migrate::Migrator,
     error::BoxDynError,
+    migrate::Migrator,
     postgres::PgRow,
     types::{Json, Text},
     PgConnection, Postgres, Row, Transaction,

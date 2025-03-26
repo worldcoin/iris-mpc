@@ -17,9 +17,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{
-    migrate::Migrator, PgPool, Postgres, Row, Transaction,
-};
+use sqlx::{migrate::Migrator, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 static MIGRATOR: Migrator = sqlx::migrate!("./../migrations");
@@ -1243,7 +1241,7 @@ pub mod test_utils {
     use super::*;
     const APP_NAME: &str = "SMPC";
     const DOTENV_TEST: &str = ".env.test";
-    
+
     pub fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
         Ok(Config::load_config(APP_NAME)?

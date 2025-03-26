@@ -221,7 +221,7 @@ pub async fn process_job_result(
         // Because this transaction was built on top of the irises transaction, commiting it persists both tables
         graph_tx.tx.commit().await?;
     };
-    
+
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id);
         metrics::gauge!("results_inserted.latest_serial_id").set(memory_serial_id as f64);

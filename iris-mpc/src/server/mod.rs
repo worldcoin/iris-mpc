@@ -13,7 +13,6 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use eyre::{eyre, Report, WrapErr};
-use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::config::{Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
@@ -28,6 +27,7 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
+use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
@@ -812,7 +812,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 }
 
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let schema_name = format!("{}_{}_{}", config.app_name, config.environment, config.party_id);
+    let schema_name = format!(
+        "{}_{}_{}",
+        config.app_name, config.environment, config.party_id
+    );
 
     // Always need the "GPU" database config
     let gpu_db_config = config

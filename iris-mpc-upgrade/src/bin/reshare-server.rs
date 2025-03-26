@@ -1,6 +1,6 @@
 use clap::Parser;
-use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
+use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
