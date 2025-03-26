@@ -1695,7 +1695,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     // convert from memory index (0-based) to db index (1-based)
                     let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     tracing::info!(
-                        "Persisting successful reauth update {} into postgres.rs on serial id {} ",
+                        "Persisting successful reauth update {} into postgres on serial id {} ",
                         reauth_id,
                         serial_id
                     );
@@ -2047,8 +2047,8 @@ async fn process_identity_deletions(
             "Started processing deletion request",
         );
 
-        // overwrite postgres.rs db with dummy values.
-        // note that both serial_id and postgres.rs db are 1-indexed.
+        // overwrite postgres db with dummy values.
+        // note that both serial_id and postgres db are 1-indexed.
         store
             .update_iris(
                 None,
