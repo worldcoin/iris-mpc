@@ -2276,6 +2276,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytemuck",
+ "chrono",
  "clap",
  "criterion",
  "dotenvy",
@@ -2336,10 +2337,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "sodiumoxide",
+ "sqlx",
  "thiserror",
  "time",
  "tokio",
- "tokio-retry",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -4764,17 +4765,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-retry"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f57eb36ecbe0fc510036adff84824dd3c24bb781e21bfa67b69d556aa85214f"
-dependencies = [
- "pin-project",
- "rand",
  "tokio",
 ]
 

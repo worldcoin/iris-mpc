@@ -41,6 +41,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+sqlx.workspace = true
 
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
@@ -49,7 +50,6 @@ hmac = "0.12"
 http = "1.1.0"
 percent-encoding = "2"
 sha2 = "0.10"
-tokio-retry = "0.3"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
 url = "2"
 hex.workspace = true

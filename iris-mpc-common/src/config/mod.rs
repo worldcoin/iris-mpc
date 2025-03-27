@@ -19,6 +19,9 @@ pub struct Opt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+
     #[serde(default)]
     pub environment: String,
 
@@ -264,6 +267,10 @@ fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
 
 fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
+}
+
+fn default_app_name() -> String {
+    "SMPC".to_string()
 }
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
