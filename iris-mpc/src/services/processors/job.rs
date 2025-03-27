@@ -201,11 +201,9 @@ pub async fn process_job_result(
                 .await?;
         }
     }
-
-    // The way we are reusing the transaction between the stores is bound to fail in a multi-DB environment
-    // During the ShadowModeReadOnly we will perform two separate transactions
+    
     if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
-        iris_tx.commit().await?;
+        // In the ShadowReadOnly mode, we do not want to commit anything to iris-db, we will not be able to either.
         let mut graph_tx = graph_store.tx().await?;
         if !config.disable_persistence {
             hawk_mutation.persist(&mut graph_tx).await?;
