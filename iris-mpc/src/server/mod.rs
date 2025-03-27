@@ -816,7 +816,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
         "{}_{}_{}",
         config.app_name, config.environment, config.party_id
     );
-    
+
     match config.mode_of_deployment {
         ModeOfDeployment::ShadowIsolation => {
             // This mode uses only CPU DB
@@ -853,7 +853,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .ok_or(eyre!("Missing GPU database config"))?;
 
             let gpu_postgres_client = PostgresClient::new(&gpu_db_config.url, &schema_name).await?;
-            
+
             // Store -> GPU
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
@@ -888,7 +888,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .ok_or(eyre!("Missing GPU database config"))?;
 
             let gpu_postgres_client = PostgresClient::new(&gpu_db_config.url, &schema_name).await?;
-            
+
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
                 gpu_db_config,

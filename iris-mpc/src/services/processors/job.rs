@@ -201,7 +201,7 @@ pub async fn process_job_result(
                 .await?;
         }
     }
-    
+
     if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
         // In the ShadowReadOnly mode, we do not want to commit anything to iris-db, we will not be able to either.
         let mut graph_tx = graph_store.tx().await?;
