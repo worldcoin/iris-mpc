@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2339/add-iris-share-versions-to-mpc"
+      - "chore/leonidas/build-image-with-recent-migration"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
