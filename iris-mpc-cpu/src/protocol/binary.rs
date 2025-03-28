@@ -84,7 +84,7 @@ pub(crate) async fn and_many_send<T: IntRing2k>(
 where
     Standard: Distribution<T>,
 {
-    if ![16,32,64].contains(&T::K) {
+    if ![16, 32, 64].contains(&T::K) {
         return Err(eyre!("Invalid bit size in and_many_send"));
     }
     if a.len() != b.len() {
@@ -116,11 +116,17 @@ pub(crate) async fn and_many_receive<T: IntRing2k>(
         let serialized_other_share = session.network_session.receive_prev().await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::RingElement64(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing64(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Ok(NetworkValue::VecRing64(messages)) => {
+                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
+            }
             Ok(NetworkValue::RingElement32(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing32(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Ok(NetworkValue::VecRing32(messages)) => {
+                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
+            }
             Ok(NetworkValue::RingElement16(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing16(messages)) => Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect()),
+            Ok(NetworkValue::VecRing16(messages)) => {
+                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
+            }
             Err(e) => Err(eyre!("Error in and_many_receive: {e}")),
             _ => Err(eyre!("Incorrect NetworkValue received")),
         }
@@ -147,11 +153,10 @@ pub(crate) async fn transposed_pack_and<T: IntRing2k>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
-)
- -> Result<Vec<VecShare<T>>, Error> 
- where
+) -> Result<Vec<VecShare<T>>, Error>
+where
     Standard: Distribution<T>,
-    {
+{
     if x1.len() != x2.len() {
         return Err(eyre!(
             "Inputs have different length {} {}",
@@ -512,7 +517,7 @@ pub(crate) async fn binary_add_3_get_msb<T: IntRing2k>(
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
     mut x3: Vec<VecShare<T>>,
-) -> Result<VecShare<T>, Error> 
+) -> Result<VecShare<T>, Error>
 where
     Standard: Distribution<T>,
 {
@@ -575,7 +580,7 @@ pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k>(
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
     mut x3: Vec<VecShare<T>>,
-) -> Result<VecShare<T>, Error> 
+) -> Result<VecShare<T>, Error>
 where
     Standard: Distribution<T>,
 {
@@ -689,7 +694,7 @@ where
 async fn extract_msb<T: IntRing2k>(
     session: &mut Session,
     x: Vec<VecShare<T>>,
-) -> Result<VecShare<T>, Error> 
+) -> Result<VecShare<T>, Error>
 where
     Standard: Distribution<T>,
 {
