@@ -10,6 +10,7 @@ use crate::{
         iris::{IrisCode, IrisCodeArray},
     },
     job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
+    vector_id::VectorId,
     IRIS_CODE_LENGTH,
 };
 use eyre::Result;
@@ -1172,7 +1173,14 @@ pub fn load_test_db(
 ) -> Result<()> {
     let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
     for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
-        loader.load_single_record_from_db(idx, &code.coefs, &mask.coefs, &code.coefs, &mask.coefs);
+        loader.load_single_record_from_db(
+            idx,
+            VectorId::from(idx),
+            &code.coefs,
+            &mask.coefs,
+            &code.coefs,
+            &mask.coefs,
+        );
         loader.increment_db_size(idx);
     }
 

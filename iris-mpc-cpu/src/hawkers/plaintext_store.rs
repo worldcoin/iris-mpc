@@ -18,6 +18,8 @@ use std::{
 };
 use tracing::debug;
 
+use super::aby3::aby3_store::VectorId;
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
 
@@ -104,6 +106,12 @@ impl From<usize> for PointId {
 impl From<u32> for PointId {
     fn from(value: u32) -> Self {
         PointId(value)
+    }
+}
+
+impl From<PointId> for VectorId {
+    fn from(id: PointId) -> Self {
+        VectorId::from(id.0)
     }
 }
 
