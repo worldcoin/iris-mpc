@@ -91,7 +91,10 @@ impl IntRing2k for Bit {
     const BYTES: usize = 1;
 
     fn from_u128(value: u128) -> Self {
-        Bit::new(value & 1 == 1)
+        if value > 1 {
+            panic!("Value out of range for Bit");
+        }
+        Bit::new(value == 1)
     }
 }
 
@@ -101,6 +104,9 @@ impl IntRing2k for u8 {
     const BYTES: usize = Self::K / 8;
 
     fn from_u128(value: u128) -> Self {
+        if value >= (1 << 8) {
+            panic!("Value out of range for u8");
+        }
         value as u8
     }
 }
@@ -111,6 +117,9 @@ impl IntRing2k for u16 {
     const BYTES: usize = Self::K / 8;
 
     fn from_u128(value: u128) -> Self {
+        if value >= (1 << 16) {
+            panic!("Value out of range for u16");
+        }
         value as u16
     }
 }
@@ -121,6 +130,9 @@ impl IntRing2k for u32 {
     const BYTES: usize = Self::K / 8;
 
     fn from_u128(value: u128) -> Self {
+        if value >= (1 << 32) {
+            panic!("Value out of range for u32");
+        }
         value as u32
     }
 }
@@ -131,6 +143,9 @@ impl IntRing2k for u64 {
     const BYTES: usize = Self::K / 8;
 
     fn from_u128(value: u128) -> Self {
+        if value >= (1 << 64) {
+            panic!("Value out of range for u64");
+        }
         value as u64
     }
 }
