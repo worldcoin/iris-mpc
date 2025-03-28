@@ -97,6 +97,46 @@ impl DbStoredIris {
     }
 }
 
+#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
+pub struct DbStoredIrisWithVersion {
+    #[allow(dead_code)]
+    id: i64, // BIGSERIAL
+    left_code: Vec<u8>,  // BYTEA
+    left_mask: Vec<u8>,  // BYTEA
+    right_code: Vec<u8>, // BYTEA
+    right_mask: Vec<u8>, // BYTEA
+    version_id: i16,     // SMALLINT
+}
+
+impl DbStoredIrisWithVersion {
+    /// The index which is contiguous and starts from 0.
+    pub fn index(&self) -> usize {
+        self.id as usize
+    }
+
+    pub fn left_code(&self) -> &[u16] {
+        cast_u8_to_u16(&self.left_code)
+    }
+
+    pub fn left_mask(&self) -> &[u16] {
+        cast_u8_to_u16(&self.left_mask)
+    }
+
+    pub fn right_code(&self) -> &[u16] {
+        cast_u8_to_u16(&self.right_code)
+    }
+
+    pub fn right_mask(&self) -> &[u16] {
+        cast_u8_to_u16(&self.right_mask)
+    }
+    pub fn id(&self) -> i64 {
+        self.id
+    }
+    pub fn version_id(&self) -> i16 {
+        self.version_id
+    }
+}
+
 #[derive(Clone)]
 pub struct StoredIrisRef<'a> {
     pub id: i64,
@@ -119,6 +159,7 @@ pub struct StoredModification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub result_message_body: Option<String>,
 }
 
 impl From<StoredModification> for Modification {
@@ -130,6 +171,7 @@ impl From<StoredModification> for Modification {
             s3_url: stored.s3_url,
             status: stored.status,
             persisted: stored.persisted,
+            result_message_body: stored.result_message_body,
         }
     }
 }
@@ -199,12 +241,22 @@ impl Store {
         Ok(count.0 as usize)
     }
 
-    /// Stream irises in order.
+    /// (only for testing) Stream irises in order.
     pub async fn stream_irises(
         &self,
     ) -> impl Stream<Item = Result<DbStoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id >= 1 ORDER BY id")
             .fetch(&self.pool)
+    }
+
+    /// (only for testing) Stream irises including version in order.
+    pub async fn stream_irises_with_version(
+        &self,
+    ) -> impl Stream<Item = Result<DbStoredIrisWithVersion, sqlx::Error>> + '_ {
+        sqlx::query_as::<_, DbStoredIrisWithVersion>(
+            "SELECT * FROM irises WHERE id >= 1 ORDER BY id",
+        )
+        .fetch(&self.pool)
     }
 
     pub fn stream_irises_in_range(
@@ -364,56 +416,6 @@ WHERE id = $1;
         Ok(())
     }
 
-    pub async fn insert_or_update_left_iris(
-        &self,
-        id: i64,
-        left_code: &[u16],
-        left_mask: &[u16],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        let query = sqlx::query(
-            r#"
-INSERT INTO irises (id, left_code, left_mask)
-VALUES ( $1, $2, $3 )
-ON CONFLICT (id)
-DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
-"#,
-        )
-        .bind(id)
-        .bind(cast_slice::<u16, u8>(left_code))
-        .bind(cast_slice::<u16, u8>(left_mask));
-
-        query.execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn insert_or_update_right_iris(
-        &self,
-        id: i64,
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        let query = sqlx::query(
-            r#"
-INSERT INTO irises (id, right_code, right_mask)
-VALUES ( $1, $2, $3 )
-ON CONFLICT (id)
-DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
-"#,
-        )
-        .bind(id)
-        .bind(cast_slice::<u16, u8>(right_code))
-        .bind(cast_slice::<u16, u8>(right_mask));
-
-        query.execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
@@ -498,7 +500,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                result_message_body
             "#,
         )
         .bind(serial_id)
@@ -521,7 +524,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
                 request_type,
                 s3_url,
                 status,
-                persisted
+                persisted,
+                result_message_body
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -535,8 +539,8 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         Ok(modifications)
     }
 
-    /// Update the status and persisted flag of the modifications based on their
-    /// id.
+    /// Update the status, persisted flag, and result_message_body of the
+    /// modifications based on their id.
     pub async fn update_modifications(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -549,17 +553,23 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
         let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
+        let result_message_bodies: Vec<Option<String>> = modifications
+            .iter()
+            .map(|m| m.result_message_body.clone())
+            .collect();
 
         sqlx::query(
             r#"
             UPDATE modifications
             SET status = data.status,
-                persisted = data.persisted
+                persisted = data.persisted,
+                result_message_body = data.result_message_body
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
-                    unnest($3::bool[])    as persisted
+                    unnest($3::bool[])    as persisted,
+                    unnest($4::text[])    as result_message_body
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -567,6 +577,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .bind(&ids)
         .bind(&statuses)
         .bind(&persisteds)
+        .bind(&result_message_bodies)
         .execute(tx.deref_mut())
         .await?;
 
@@ -585,7 +596,7 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
 
         // Extract the IDs from the modifications.
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
-        tracing::info!(
+        tracing::warn!(
             "Deleting modifications {:?} with IDs: {:?}",
             modifications,
             ids
@@ -602,49 +613,6 @@ DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask
         .execute(tx.deref_mut())
         .await?;
 
-        Ok(())
-    }
-
-    pub async fn reset_modifications_sequence(&self) -> Result<()> {
-        // Query the current maximum id from modifications
-        let max_id: Option<i64> = sqlx::query_scalar("SELECT MAX(id) FROM modifications")
-            .fetch_one(&self.pool)
-            .await?;
-
-        match max_id {
-            Some(max) => {
-                tracing::info!("Resetting modifications sequence to {}", max);
-                // Table is not empty: set sequence to max with is_called=true so that nextval()
-                // returns max+1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        $1,
-                        true
-                    )
-                    "#,
-                )
-                .bind(max)
-                .execute(&self.pool)
-                .await?;
-            }
-            None => {
-                // Table is empty: set sequence to 1 with is_called=false so that nextval()
-                // returns 1.
-                sqlx::query(
-                    r#"
-                    SELECT setval(
-                        pg_get_serial_sequence('modifications', 'id'),
-                        1,
-                        false
-                    )
-                    "#,
-                )
-                .execute(&self.pool)
-                .await?;
-            }
-        }
         Ok(())
     }
 
@@ -808,13 +776,21 @@ pub mod tests {
         assert_eq!(got, got_par);
 
         assert_eq!(got_len, 3);
+        assert_eq!(got_par.len(), 3);
         assert_eq!(got.len(), 3);
+
+        let got_versions: Vec<DbStoredIrisWithVersion> = store
+            .stream_irises_with_version()
+            .await
+            .try_collect()
+            .await?;
         for i in 0..3 {
-            assert_eq!(got[i].id, (i + 1) as i64);
-            assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
-            assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
-            assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
-            assert_eq!(got[i].right_mask(), codes_and_masks[i].right_mask);
+            assert_eq!(got_versions[i].id, (i + 1) as i64);
+            assert_eq!(got_versions[i].left_code(), codes_and_masks[i].left_code);
+            assert_eq!(got_versions[i].left_mask(), codes_and_masks[i].left_mask);
+            assert_eq!(got_versions[i].right_code(), codes_and_masks[i].right_code);
+            assert_eq!(got_versions[i].right_mask(), codes_and_masks[i].right_mask);
+            assert_eq!(got_versions[i].version_id(), 0);
         }
 
         // Clean up on success.
@@ -984,71 +960,6 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_left_right() -> Result<()> {
-        let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
-
-        for i in 0..10u16 {
-            if i % 2 == 0 {
-                store
-                    .insert_or_update_left_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
-                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
-                    )
-                    .await?;
-                store
-                    .insert_or_update_right_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
-                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
-                    )
-                    .await?;
-            } else {
-                store
-                    .insert_or_update_right_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
-                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
-                    )
-                    .await?;
-                store
-                    .insert_or_update_left_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
-                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
-                    )
-                    .await?;
-            }
-        }
-
-        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
-
-        for i in 0..10u16 {
-            assert_eq!(got[i as usize].id, (i + 1) as i64);
-            assert_eq!(
-                got[i as usize].left_code(),
-                &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4]
-            );
-            assert_eq!(
-                got[i as usize].left_mask(),
-                &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8]
-            );
-            assert_eq!(
-                got[i as usize].right_code(),
-                &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12]
-            );
-            assert_eq!(
-                got[i as usize].right_mask(),
-                &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16]
-            );
-        }
-
-        cleanup(&store, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -1099,18 +1010,60 @@ pub mod tests {
             .await?;
 
         // assert iris updated in db with new values
-        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
+        let got: Vec<DbStoredIrisWithVersion> = store
+            .stream_irises_with_version()
+            .await
+            .try_collect()
+            .await?;
         assert_eq!(got.len(), 2);
         assert_eq!(cast_u8_to_u16(&got[0].left_code), updated_left_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].right_code), updated_right_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].right_mask), updated_right_mask.coefs);
+        assert_eq!(got[0].version_id(), 1);
 
         // assert the other iris in db is not updated
         assert_eq!(cast_u8_to_u16(&got[1].left_code), iris2.left_code);
         assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris2.left_mask);
         assert_eq!(cast_u8_to_u16(&got[1].right_code), iris2.right_code);
         assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris2.right_mask);
+        assert_eq!(got[1].version_id(), 0);
+
+        // update with the same values and expect the version not to change
+        store
+            .update_iris(
+                None,
+                1,
+                &updated_left_code,
+                &updated_left_mask,
+                &updated_right_code,
+                &updated_right_mask,
+            )
+            .await?;
+
+        let got_second_update: Vec<DbStoredIrisWithVersion> = store
+            .stream_irises_with_version()
+            .await
+            .try_collect()
+            .await?;
+        assert_eq!(got_second_update.len(), 2);
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].left_code),
+            updated_left_code.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].left_mask),
+            updated_left_mask.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].right_code),
+            updated_right_code.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].right_mask),
+            updated_right_mask.coefs
+        );
+        assert_eq!(got_second_update[0].version_id(), 1);
 
         cleanup(&store, &schema_name).await?;
         Ok(())
@@ -1135,6 +1088,7 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         // 3. Insert another modification
@@ -1151,6 +1105,7 @@ pub mod tests {
             Some("https://example.com".to_string()),
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         // 5. Clean up
@@ -1185,6 +1140,7 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         assert_modification(
             second_last,
@@ -1194,12 +1150,14 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
 
         cleanup(&store, &schema_name).await?;
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn assert_modification(
         actual: &Modification,
         expected_id: i64,
@@ -1208,6 +1166,7 @@ pub mod tests {
         expected_s3_url: Option<String>,
         expected_status: ModificationStatus,
         expected_persisted: bool,
+        expected_result_body: Option<String>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1215,6 +1174,7 @@ pub mod tests {
         assert_eq!(actual.s3_url, expected_s3_url);
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
+        assert_eq!(actual.result_message_body, expected_result_body);
     }
 
     #[tokio::test]
@@ -1235,8 +1195,8 @@ pub mod tests {
 
         // Update the status & persisted fields for first two in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true);
-        m2.mark_completed(false);
+        m1.mark_completed(true, "m1");
+        m2.mark_completed(false, "m2");
 
         let modifications_to_update = vec![&m1, &m2];
         store
@@ -1256,6 +1216,7 @@ pub mod tests {
             Some("http://example.com/150".to_string()),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         assert_modification(
             &last_three[1],
@@ -1265,6 +1226,7 @@ pub mod tests {
             Some("http://example.com/50".to_string()),
             ModificationStatus::Completed,
             false,
+            Some("m2".to_string()),
         );
         assert_modification(
             &last_three[2],
@@ -1274,6 +1236,7 @@ pub mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some("m1".to_string()),
         );
 
         cleanup(&store, &schema_name).await?;
@@ -1298,7 +1261,7 @@ pub mod tests {
             .await?;
 
         // mark m1 as completed
-        m1.mark_completed(true);
+        m1.mark_completed(true, "m1");
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&m1]).await?;
         tx.commit().await?;
@@ -1320,34 +1283,7 @@ pub mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, m1.id);
 
-        // Reset the modifications sequence after deletion and insert a new one.
-        store.reset_modifications_sequence().await?;
-        let m4 = store
-            .insert_modification(15, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        // The new modification should have id 2 after sequence reset.
-        assert_eq!(m4.id, 2);
-
         // Clean up the temporary schema.
-        cleanup(&store, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_reset_modifications_sequence() -> Result<()> {
-        let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
-
-        // Reset the sequence when the table is empty.
-        store.reset_modifications_sequence().await?;
-
-        // Expect the sequence to start at 1.
-        let m1 = store
-            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
-            .await?;
-        assert_eq!(m1.id, 1);
-
-        // Clean up
         cleanup(&store, &schema_name).await?;
         Ok(())
     }

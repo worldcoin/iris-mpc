@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 // Helper function to load Aurora db records from the stream into memory
+#[allow(clippy::needless_lifetimes)]
 async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,

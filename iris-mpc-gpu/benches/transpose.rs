@@ -5,6 +5,7 @@ use cudarc::{
 };
 use std::sync::Arc;
 
+#[allow(clippy::manual_div_ceil)]
 fn lauch_config(num_threads: u32, num_total: u32) -> LaunchConfig {
     let num_blocks = (num_total + num_threads - 1) / num_threads;
     LaunchConfig {

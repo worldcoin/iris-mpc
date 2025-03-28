@@ -528,7 +528,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        connection_parallelism: config.hawk_connection_parallelism,
         disable_persistence: config.disable_persistence,
+        match_distances_buffer_size: config.match_distances_buffer_size,
+        n_buckets: config.n_buckets,
     };
 
     tracing::info!(

@@ -88,6 +88,7 @@ mod test_threshold_and_or_tree_test {
         result
     }
 
+    #[allow(clippy::precedence)]
     fn real_result_msb_reduce(code_input: Vec<u16>, mask_input: Vec<u16>) -> bool {
         assert_eq!(code_input.len(), mask_input.len());
         let mod_ = 1u64 << (16 + B_BITS);

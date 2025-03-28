@@ -1022,14 +1022,8 @@ impl ServerActor {
                     return false;
                 }
                 let reauth_id = batch.request_ids[idx].clone();
-                if *batch.reauth_use_or_rule.get(&reauth_id).unwrap() {
-                    // OR rule used. Expect a match with target reauth index
-                    matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
-                } else {
-                    // AND rule used. Expect exactly one match to the target reauth index
-                    matches.len() == 1
-                        && matches[0] == *batch.reauth_target_indices.get(&reauth_id).unwrap()
-                }
+                // Expect a match with target reauth index
+                matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
             })
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];

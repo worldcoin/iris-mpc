@@ -4,7 +4,7 @@ on:
   push:
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
@@ -17,9 +17,9 @@ jobs:
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@v1
       - name: Install Rust
-        run: rustup toolchain install 1.81.0
+        run: rustup toolchain install 1.85.0
       - name: Set Rust as default
-        run: rustup default 1.81.0
+        run: rustup default 1.85.0
       - name: Install Rustfmt for formatting
         run: rustup component add rustfmt
       - name: Run Rustfmt

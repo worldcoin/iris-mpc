@@ -101,16 +101,17 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let runtime = LocalRuntime::mock_setup_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
 
             let mut jobs = JoinSet::new();
-            for (index, player) in runtime.get_identities().iter().enumerate() {
+            for (index, player_session) in sessions.into_iter().enumerate() {
                 let d1i = d1[index].clone();
                 let d2i = d2[index].clone();
                 let t1i = t1[index].clone();
                 let t2i = t2[index].clone();
-                let mut player_session = runtime.sessions.get(player).unwrap().clone();
+                let player_session = player_session.clone();
                 jobs.spawn(async move {
+                    let mut player_session = player_session.lock().await;
                     let ds_and_ts = batch_signed_lift_vec(
                         &mut player_session,
                         vec![d1i.clone(), d2i.clone(), t1i.clone(), t2i.clone()],
@@ -140,7 +141,7 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let runtime = LocalRuntime::mock_setup_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
@@ -150,15 +151,16 @@ fn bench_gr_primitives(c: &mut Criterion) {
             let y2 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[3].clone());
 
             let mut jobs = JoinSet::new();
-            for (index, player) in runtime.get_identities().iter().enumerate() {
+            for (index, player_session) in sessions.iter().enumerate() {
                 let x1 = x1[index].clone();
                 let mut y1 = y1[index].clone();
 
                 let x2 = x2[index].clone();
                 let mut y2 = y2[index].clone();
 
-                let mut player_session = runtime.sessions.get(player).unwrap().clone();
+                let player_session = player_session.clone();
                 jobs.spawn(async move {
+                    let mut player_session = player_session.lock().await;
                     y1.code.preprocess_iris_code_query_share();
                     y1.mask.preprocess_mask_code_query_share();
                     y2.code.preprocess_iris_code_query_share();
@@ -239,16 +241,17 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let mut jobs = JoinSet::new();
 
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
-                            let mut vector_store = vector_store;
-                            let mut graph_store = graph_store;
-
-                            let player_index = get_owner_index(&vector_store).unwrap();
+                            let player_index = get_owner_index(&vector_store).await.unwrap();
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
+
+                            let vector_store = vector_store.clone();
+                            let mut graph_store = graph_store;
                             jobs.spawn(async move {
+                                let mut vector_store = vector_store.lock().await;
                                 searcher
-                                    .insert(&mut vector_store, &mut graph_store, &query, &mut rng)
+                                    .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
                                     .await;
                             });
                         }
@@ -275,16 +278,17 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
                         let mut jobs = JoinSet::new();
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
-                            let mut vector_store = vector_store;
-                            let mut graph_store = graph_store;
-                            let player_index = get_owner_index(&vector_store).unwrap();
+                            let player_index = get_owner_index(&vector_store).await.unwrap();
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
+                            let vector_store = vector_store.clone();
+                            let mut graph_store = graph_store;
                             jobs.spawn(async move {
+                                let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search(&mut vector_store, &mut graph_store, &query, 1)
+                                    .search(&mut *vector_store, &mut graph_store, &query, 1)
                                     .await;
-                                searcher.is_match(&mut vector_store, &[neighbors]).await;
+                                searcher.is_match(&mut *vector_store, &[neighbors]).await;
                             });
                         }
                         jobs.join_all().await;

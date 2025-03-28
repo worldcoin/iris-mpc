@@ -175,6 +175,9 @@ pub struct Config {
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
+    #[serde(default = "default_hawk_connection_parallelism")]
+    pub hawk_connection_parallelism: usize,
+
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
 
@@ -193,10 +196,19 @@ pub struct Config {
     pub enable_modifications_sync: bool,
 
     #[serde(default)]
+    pub enable_modifications_replay: bool,
+
+    #[serde(default)]
     pub enable_sync_queues_on_sns_sequence_number: bool,
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
+
+    #[serde(default = "default_hawk_server_deletions_enabled")]
+    pub hawk_server_deletions_enabled: bool,
+
+    #[serde(default = "default_hawk_server_reauths_enabled")]
+    pub hawk_server_reauths_enabled: bool,
 }
 
 /// Enumeration over set of compute modes.
@@ -287,6 +299,10 @@ fn default_hawk_request_parallelism() -> usize {
     10
 }
 
+fn default_hawk_connection_parallelism() -> usize {
+    10
+}
+
 fn default_hawk_server_healthcheck_port() -> usize {
     300
 }
@@ -305,6 +321,14 @@ fn default_max_deletions_per_batch() -> usize {
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
     10
+}
+
+fn default_hawk_server_reauths_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_deletions_enabled() -> bool {
+    false
 }
 
 impl Config {

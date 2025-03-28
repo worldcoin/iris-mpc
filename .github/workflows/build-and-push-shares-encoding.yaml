@@ -1,4 +1,4 @@
-name: Build and push base docker image for shares encoding binary
+name: Build and push base docker image for shares encoding binary [nocuda]
 
 on:
   push:

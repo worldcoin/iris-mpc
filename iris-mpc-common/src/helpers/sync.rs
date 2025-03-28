@@ -50,12 +50,44 @@ pub struct Modification {
     pub s3_url: Option<String>,
     pub status: String,
     pub persisted: bool,
+    pub result_message_body: Option<String>,
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool) {
+    pub fn mark_completed(&mut self, persisted: bool, result_message_body: &str) {
         self.status = ModificationStatus::Completed.to_string();
+        self.result_message_body = Some(result_message_body.to_string());
         self.persisted = persisted;
+    }
+
+    /// Updates the node_id field in the SNS message JSON to specified one
+    pub fn update_result_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+        if let Some(message) = &self.result_message_body {
+            // Parse the JSON message
+            match serde_json::from_str::<serde_json::Value>(message) {
+                Ok(mut json_value) => {
+                    // Update the node_id field if it exists
+                    if let Some(obj) = json_value.as_object_mut() {
+                        // Try to update node_id in the main object
+                        if obj.contains_key("node_id") {
+                            obj.insert(
+                                "node_id".to_string(),
+                                serde_json::Value::Number(serde_json::Number::from(party_id)),
+                            );
+                            self.result_message_body = Some(serde_json::to_string(&json_value)?);
+                        } else {
+                            return Err(eyre::eyre!("Message body does not contain node_id"));
+                        }
+                    }
+                }
+                Err(_) => {
+                    return Err(eyre::eyre!("Invalid JSON message"));
+                }
+            }
+        } else {
+            return Err(eyre::eyre!("Result message body is None"));
+        }
+        Ok(())
     }
 }
 
@@ -95,7 +127,7 @@ impl SyncResult {
             .expect("can get max u128 value")
     }
 
-    /// Compare local `modifications` (my_state) to all other parties’
+    /// Compare local `modifications` (my_state) to all other parties'
     /// modifications (all_states), grouping by `id`. Returns: (to_update,
     /// to_delete)
     /// - `to_update`: modifications the local node should add (e.g., mark
@@ -131,31 +163,37 @@ impl SyncResult {
                 .all(|m| m.status == ModificationStatus::InProgress.to_string());
             let any_persisted = group_mods.iter().any(|m| m.persisted);
 
-            // If they're all in-progress => ignore the modification by deleting it
             if all_in_progress {
+                // If they're all in-progress => ignore the modification by deleting it
                 if let Some(local_m) = local_copy {
                     to_delete.push(local_m.clone());
                 }
-            }
-            // If any node completed => unify to COMPLETED
-            else if any_completed {
+            } else if any_completed {
+                // If any node completed => unify to COMPLETED
+                let first_completed = group_mods
+                    .iter()
+                    .find(|m| m.status == ModificationStatus::Completed.to_string())
+                    .expect("At least one completed modification");
                 match local_copy {
                     None => {
                         // If an item is completed for a party, it should at least exist in the
                         // local state because it should have been added during receive_batch.
-                        // So, this case should not happen.
-                        panic!(
-                            "Completed modification could not be found in local state: {:?}",
-                            group_mods
+                        // This can only happen when other party misses an in_progress mod.
+                        // Local party will fetch until modification id X while the other party will
+                        // fetch until mod id X-1. In this case, local party won't find X-1.
+                        // We log and skip updating to avoid rolling back to an older share in local.
+                        tracing::info!(
+                            "Skip missing completed modification: {:?}",
+                            first_completed
                         );
                     }
                     Some(local_m) => {
-                        // If local is not "completed" or doesn't match the final persisted
                         if local_m.status != ModificationStatus::Completed.to_string()
                             || local_m.persisted != any_persisted
                         {
+                            // If local is not "completed" or doesn't match the final persisted
                             // We'll roll forward local_m
-                            let mut roll_forward = local_m.clone();
+                            let mut roll_forward = first_completed.clone();
                             roll_forward.status = ModificationStatus::Completed.to_string();
                             roll_forward.persisted = any_persisted;
                             tracing::warn!(
@@ -197,7 +235,10 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE};
+    use crate::helpers::{
+        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+        smpc_response::{IdentityDeletionResult, ReAuthResult},
+    };
 
     #[test]
     fn test_compare_states_sync() {
@@ -261,6 +302,7 @@ mod tests {
             s3_url: s3_url.map(|s| s.to_string()),
             status: status.to_string(),
             persisted,
+            result_message_body: None,
         }
     }
 
@@ -472,6 +514,65 @@ mod tests {
     }
 
     #[test]
+    fn test_compare_modifications_update_outside_lookback_modification() {
+        // Suppose that we have a lookback window of 2 modifications.
+        // If latest modification is IN_PROGRESS in local party and completely missing in other
+        // party (not fetched from SQS yet), the other party will return modification outside the
+        // lookback window. In this case, local party should skip outside-window modification and
+        // delete the latest in progress one.
+        let mod2_local = create_modification(
+            2,
+            200,
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/200"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod3_local = create_modification(
+            3,
+            300,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::InProgress,
+            false,
+        );
+        let my_state = create_sync_state(vec![mod2_local.clone(), mod3_local.clone()]);
+
+        let mut mod1_other = create_modification(
+            1,
+            100,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+        );
+        mod1_other.result_message_body = Some(
+            serde_json::to_string(&IdentityDeletionResult {
+                node_id: 1,
+                serial_id: 100,
+                success: true,
+            })
+            .unwrap(),
+        );
+        let mod2_other = mod2_local;
+        let other_state = create_sync_state(vec![mod1_other.clone(), mod2_other]);
+        let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        // Compare modifications across nodes.
+        let (to_update, to_delete) = sync_result.compare_modifications();
+
+        assert_eq!(to_update.len(), 0, "Expected no modification to update");
+        assert_eq!(to_delete.len(), 1, "Expected one modificatio to delete");
+
+        // Expectation: Local party should delete mod3.
+        assert_eq!(to_delete[0], mod3_local);
+    }
+
+    #[test]
     fn test_compare_modifications_remove_in_progress() {
         // Create local modifications with some in-progress.
         let mod1_local = create_modification(
@@ -576,6 +677,98 @@ mod tests {
 
         let sync_result_none = SyncResult::new(state_with_none_sequence_num, all_states);
         assert_eq!(sync_result_none.max_sns_sequence_num(), None);
+    }
+
+    #[test]
+    fn test_update_sns_message_node_id() {
+        // Test 1: ReauthResult
+        let original_reauth_result = ReAuthResult {
+            reauth_id: "test-reauth-123".to_string(),
+            node_id: 1,
+            serial_id: 123,
+            success: true,
+            matched_serial_ids: vec![123],
+            or_rule_used: false,
+            error: None,
+            error_reason: None,
+        };
+
+        // Serialize the original result
+        let serialized_reauth = serde_json::to_string(&original_reauth_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 1,
+            serial_id: 123,
+            request_type: REAUTH_MESSAGE_TYPE.to_string(),
+            s3_url: "http://example.com/123".to_string().into(),
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            result_message_body: Some(serialized_reauth),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 2;
+        modification
+            .update_result_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_reauth_result: ReAuthResult =
+            serde_json::from_str(&modification.result_message_body.unwrap()).unwrap();
+        assert_eq!(updated_reauth_result.node_id, new_party_id);
+        assert_eq!(
+            updated_reauth_result.reauth_id,
+            original_reauth_result.reauth_id
+        );
+        assert_eq!(
+            updated_reauth_result.serial_id,
+            original_reauth_result.serial_id
+        );
+        assert_eq!(
+            updated_reauth_result.success,
+            original_reauth_result.success
+        );
+
+        // Test 2: IdentityDeletionResult
+        let original_deletion_result = IdentityDeletionResult {
+            node_id: 2,
+            serial_id: 456,
+            success: true,
+        };
+
+        // Serialize the original result
+        let serialized_deletion = serde_json::to_string(&original_deletion_result).unwrap();
+
+        // Create a modification with the serialized result
+        let mut modification = Modification {
+            id: 2,
+            serial_id: 456,
+            request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
+            s3_url: None,
+            status: ModificationStatus::Completed.to_string(),
+            persisted: true,
+            result_message_body: Some(serialized_deletion),
+        };
+
+        // Update the node_id in the serialized message
+        let new_party_id = 0;
+        modification
+            .update_result_message_node_id(new_party_id)
+            .unwrap();
+
+        // Deserialize and check if node_id was updated
+        let updated_deletion_result: IdentityDeletionResult =
+            serde_json::from_str(&modification.result_message_body.unwrap()).unwrap();
+        assert_eq!(updated_deletion_result.node_id, new_party_id);
+        assert_eq!(
+            updated_deletion_result.serial_id,
+            original_deletion_result.serial_id
+        );
+        assert_eq!(
+            updated_deletion_result.success,
+            original_deletion_result.success
+        );
     }
 
     fn some_state() -> SyncState {

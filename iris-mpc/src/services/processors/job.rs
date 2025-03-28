@@ -13,7 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
@@ -55,6 +55,7 @@ pub async fn process_job_result(
         modifications,
         actor_data: hawk_mutation,
     } = job_result;
+    let now = Instant::now();
 
     let _modifications = modifications;
 
@@ -139,13 +140,6 @@ pub async fn process_job_result(
         .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
         .map(|(i, _)| {
             let reauth_id = request_ids[i].clone();
-            let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
-            let or_rule_matched = if *or_rule_used {
-                // if or rule was used and reauth was successful, then or rule was matched
-                Some(successful_reauths[i])
-            } else {
-                None
-            };
             let result_event = ReAuthResult::new(
                 reauth_id.clone(),
                 party_id,
@@ -153,7 +147,6 @@ pub async fn process_job_result(
                 successful_reauths[i],
                 match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                 *reauth_or_rule_used.get(&reauth_id).unwrap(),
-                or_rule_matched,
             );
             serde_json::to_string(&result_event).wrap_err("failed to serialize reauth result")
         })
@@ -295,6 +288,7 @@ pub async fn process_job_result(
         )
         .await?;
     }
+    metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     shutdown_handler.decrement_batches_pending_completion();
 

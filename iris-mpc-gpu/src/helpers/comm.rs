@@ -31,10 +31,11 @@ impl NcclComm {
     /// Primitive to create new communication link on each process (threads are
     /// possible but not recommended).
     ///
-    /// WARNING: If using threads, uou are likely to get limited throughput
+    /// WARNING: If using threads, you are likely to get limited throughput
     /// using a single core to control multiple GPUs. Cuda drivers
     /// effectively use a global mutex thrashing performance on multi
-    /// threaded multi GPU. ```
+    /// threaded multi GPU.
+    /// ```no_run
     /// # use cudarc::driver::safe::{CudaDevice};
     /// # use cudarc::nccl::safe::{Comm, Id, ReduceOp};
     /// let n = 2;
@@ -51,9 +52,9 @@ impl NcclComm {
     /// let mut slice_receive = dev.alloc_zeros::<f32>(n).unwrap();
     /// comm.all_reduce(&slice, &mut slice_receive, &ReduceOp::Sum)
     ///     .unwrap();
-
+    ///
     /// let out = dev.dtoh_sync_copy(&slice_receive).unwrap();
-
+    ///
     /// assert_eq!(out, vec![(n_devices * (n_devices + 1)) as f32 / 2.0; n]);
     /// ```
     pub fn from_rank(

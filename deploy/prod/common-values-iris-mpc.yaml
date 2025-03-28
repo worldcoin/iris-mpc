@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.14.11"
+image: "ghcr.io/worldcoin/iris-mpc:v0.14.19"
 
 environment: prod
 replicaCount: 1
@@ -13,9 +13,6 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
-#  - containerPort: 4000
-#    name: nccl
-#    protocol: TCP
 
 livenessProbe:
   httpGet:

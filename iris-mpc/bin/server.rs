@@ -26,8 +26,7 @@ use iris_mpc_common::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
             SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -77,26 +76,32 @@ type GaloisShares = (
     Vec<GaloisRingTrimmedMaskCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingTrimmedMaskCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
 );
 type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(&mask_share)
-            .context("Failed to base64 parse iris mask")?
-            .into();
+    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
+        .context("Failed to base64 parse iris mask")?;
 
     Ok((iris_share, mask_share))
+}
+
+fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
+    mask.into()
 }
 
 fn preprocess_iris_message_shares(
     code_share: GaloisRingIrisCodeShare,
     mask_share: GaloisRingTrimmedMaskCodeShare,
+    code_share_mirrored: GaloisRingIrisCodeShare,
+    mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
@@ -113,6 +118,15 @@ fn preprocess_iris_message_shares(
     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
     GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
+    // Mirrored share and mask.
+    // Only interested in the Lagrange interpolated share and mask for the mirrored case.
+    let mut code_share_mirrored = code_share_mirrored;
+    let mut mask_share_mirrored = mask_share_mirrored;
+
+    // With Lagrange interpolation.
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
+
     Ok((
         store_iris_shares,
         store_mask_shares,
@@ -120,6 +134,8 @@ fn preprocess_iris_message_shares(
         db_mask_shares,
         code_share.all_rotations(),
         mask_share.all_rotations(),
+        code_share_mirrored.all_rotations(),
+        mask_share_mirrored.all_rotations(),
     ))
 }
 
@@ -187,32 +203,6 @@ async fn receive_batch(
                     .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
                 match request_type {
-                    CIRCUIT_BREAKER_MESSAGE_TYPE => {
-                        let circuit_breaker_request: CircuitBreakerRequest =
-                            serde_json::from_str(&message.message).map_err(|e| {
-                                ReceiveRequestError::json_parse_error("circuit_breaker_request", e)
-                            })?;
-                        metrics::counter!("request.received", "type" => "circuit_breaker")
-                            .increment(1);
-                        client
-                            .delete_message()
-                            .queue_url(queue_url)
-                            .receipt_handle(sqs_message.receipt_handle.unwrap())
-                            .send()
-                            .await
-                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-                        if let Some(batch_size) = circuit_breaker_request.batch_size {
-                            // Updating the batch size to ensure we process the messages in the next
-                            // loop
-                            *CURRENT_BATCH_SIZE.lock().unwrap() =
-                                batch_size.clamp(1, max_batch_size);
-                            tracing::info!(
-                                "Updating batch size to {} due to circuit breaker message",
-                                batch_size
-                            );
-                        }
-                    }
-
                     IDENTITY_DELETION_MESSAGE_TYPE => {
                         // If it's a deletion request, we just store the serial_id and continue.
                         // Deletion will take place when batch process starts.
@@ -506,6 +496,8 @@ async fn receive_batch(
                     db_mask_shares_left,
                     iris_shares_left,
                     mask_shares_left,
+                    iris_shares_left_mirrored,
+                    mask_shares_left_mirrored,
                 ),
                 (
                     store_iris_shares_right,
@@ -514,6 +506,8 @@ async fn receive_batch(
                     db_mask_shares_right,
                     iris_shares_right,
                     mask_shares_right,
+                    iris_shares_right_mirrored,
+                    mask_shares_right_mirrored,
                 ),
             ),
             valid_entry,
@@ -572,10 +566,14 @@ async fn receive_batch(
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                         ),
                         (
                             dummy_code_share.clone(),
                             dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
@@ -638,6 +636,22 @@ async fn receive_batch(
             .right_iris_interpolated_requests
             .mask
             .extend(mask_shares_right);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left_mirrored);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right_mirrored);
     }
 
     tracing::info!(
@@ -664,7 +678,7 @@ fn get_iris_shares_parse_task(
         tokio::spawn(async move {
             let _ = semaphore.acquire().await?;
 
-            let (share_b64, hash) =
+            let (encrypted_iris_share_b64, hash) =
                 match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
                     .await
                 {
@@ -675,16 +689,18 @@ fn get_iris_shares_parse_task(
                     }
                 };
 
-            let iris_message_share =
-                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
-                    Ok(iris_data) => iris_data,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                        eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                    }
-                };
+            let iris_share_b64 = match decrypt_iris_share(
+                encrypted_iris_share_b64,
+                shares_encryption_key_pairs.clone(),
+            ) {
+                Ok(iris_data) => iris_data,
+                Err(e) => {
+                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
+                }
+            };
 
-            match validate_iris_share(hash, iris_message_share.clone()) {
+            match validate_iris_share(hash, iris_share_b64.clone()) {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::error!("Failed to validate iris shares: {:?}", e);
@@ -693,22 +709,42 @@ fn get_iris_shares_parse_task(
             }
 
             let (left_code, left_mask) = decode_iris_message_shares(
-                iris_message_share.left_iris_code_shares,
-                iris_message_share.left_mask_code_shares,
+                iris_share_b64.left_iris_code_shares,
+                iris_share_b64.left_mask_code_shares,
             )?;
 
             let (right_code, right_mask) = decode_iris_message_shares(
-                iris_message_share.right_iris_code_shares,
-                iris_message_share.right_mask_code_shares,
+                iris_share_b64.right_iris_code_shares,
+                iris_share_b64.right_mask_code_shares,
             )?;
 
-            // Preprocess shares for left eye.
-            let left_future =
-                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
+            let (left_code_mirrored, left_mask_mirrored) =
+                (left_code.mirrored(), left_mask.mirrored());
+            let (right_code_mirrored, right_mask_mirrored) =
+                (right_code.mirrored(), right_mask.mirrored());
 
-            // Preprocess shares for right eye.
-            let right_future =
-                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
+            let left_mask_trimmed = trim_mask(left_mask);
+            let right_mask_trimmed = trim_mask(right_mask);
+            let left_mask_mirrored_trimmed = trim_mask(left_mask_mirrored);
+            let right_mask_mirrored_trimmed = trim_mask(right_mask_mirrored);
+
+            let left_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    left_code,
+                    left_mask_trimmed,
+                    left_code_mirrored,
+                    left_mask_mirrored_trimmed,
+                )
+            });
+
+            let right_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    right_code,
+                    right_mask_trimmed,
+                    right_code_mirrored,
+                    right_mask_mirrored_trimmed,
+                )
+            });
 
             let (left_result, right_result) = tokio::join!(left_future, right_future);
 
@@ -718,6 +754,88 @@ fn get_iris_shares_parse_task(
             ))
         });
     Ok(handle)
+}
+
+async fn send_last_modifications_to_sns(
+    store: &Store,
+    sns_client: &SNSClient,
+    config: &Config,
+    reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
+    deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
+    lookback: usize,
+) -> eyre::Result<()> {
+    // Fetch the last modifications from the database
+    let last_modifications = store.last_modifications(lookback).await?;
+    tracing::info!(
+        "Replaying last {} modification results to SNS",
+        last_modifications.len()
+    );
+
+    if last_modifications.is_empty() {
+        tracing::info!("No last modifications found to send to SNS");
+        return Ok(());
+    }
+
+    // Collect messages by type
+    let mut deletion_messages = Vec::new();
+    let mut reauth_messages = Vec::new();
+    for modification in &last_modifications {
+        if modification.result_message_body.is_none() {
+            tracing::error!("Missing modification result message body");
+            continue;
+        }
+
+        let body = modification
+            .result_message_body
+            .as_ref()
+            .expect("Missing SNS message body")
+            .clone();
+
+        match modification.request_type.as_str() {
+            IDENTITY_DELETION_MESSAGE_TYPE => {
+                deletion_messages.push(body);
+            }
+            REAUTH_MESSAGE_TYPE => {
+                reauth_messages.push(body);
+            }
+            other => {
+                tracing::error!("Unknown message type: {}", other);
+            }
+        }
+    }
+
+    tracing::info!(
+        "Sending {} last modifications to SNS. {} deletion, {} reauth",
+        last_modifications.len(),
+        deletion_messages.len(),
+        reauth_messages.len(),
+    );
+
+    if !deletion_messages.is_empty() {
+        send_results_to_sns(
+            deletion_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            deletion_message_attributes,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reauth_messages.is_empty() {
+        send_results_to_sns(
+            reauth_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            reauth_message_attributes,
+            REAUTH_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -1198,13 +1316,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Handle modifications sync (reauth & deletions)
     if config.enable_modifications_sync {
-        let (to_update, to_delete) = sync_result.compare_modifications();
+        let (mut to_update, to_delete) = sync_result.compare_modifications();
         tracing::info!(
             "Modifications to update: {:?}, to delete: {:?}",
             to_update,
             to_delete
         );
-        let to_update: Vec<&Modification> = to_update.iter().collect();
+        // Update node_id in each modification because they are coming from another more advanced node
+        let to_update: Vec<&Modification> = to_update
+            .iter_mut()
+            .map(|modification| {
+                if config.enable_modifications_replay {
+                    modification
+                        .update_result_message_node_id(party_id)
+                        .map_err(|e| {
+                            tracing::error!("Failed to update modification node_id: {:?}", e)
+                        });
+                }
+                &*modification
+            })
+            .collect();
+
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &to_update).await?;
         store.delete_modifications(&mut tx, &to_delete).await?;
@@ -1219,7 +1351,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 );
                 continue;
             }
-            tracing::info!("Applying modification to local node: {:?}", modification);
+            tracing::warn!("Applying modification to local node: {:?}", modification);
             metrics::counter!("db.modifications.rollforward").increment(1);
             let (lc, lm, rc, rm) = match modification.request_type.as_str() {
                 IDENTITY_DELETION_MESSAGE_TYPE => (
@@ -1250,9 +1382,20 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .await?;
         }
         tx.commit().await?;
+    }
 
-        // reset modifications table's postgres sequence in case we deleted some rows
-        store.reset_modifications_sequence().await?;
+    if config.enable_modifications_replay {
+        // replay last `max_modification_lookback` modifications to SNS
+        send_last_modifications_to_sns(
+            &store,
+            &aws_clients.sns_client,
+            &config,
+            &reauth_result_attributes,
+            &identity_deletion_result_attributes,
+            max_modification_lookback,
+        )
+        .await
+        .map_err(|e| tracing::error!("Failed to replay last modifications: {:?}", e));
     }
 
     if download_shutdown_handler.is_shutting_down() {
@@ -1462,18 +1605,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .map(|(i, _)| {
                     let reauth_id = request_ids[i].clone();
                     let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
-                    let or_rule_matched = if *or_rule_used {
-                        // if or rule was used and reauth was successful, then or rule was matched
-                        Some(successful_reauths[i])
-                    } else {
-                        None
-                    };
                     let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     let success = successful_reauths[i];
-                    modifications
-                        .get_mut(&serial_id)
-                        .unwrap()
-                        .mark_completed(success);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
@@ -1481,27 +1614,32 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         success,
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
-                        or_rule_matched,
                     );
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize reauth result")
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reauth result");
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(success, &result_string);
+                    result_string
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
                 .map(|&idx| {
                     let serial_id = idx + 1;
+                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize identity deletion result");
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .mark_completed(true);
-                    let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
-                    serde_json::to_string(&result_event)
-                        .wrap_err("failed to serialize identity deletion result")
+                        .mark_completed(true, &result_string);
+                    result_string
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             let mut tx = store_bg.tx().await?;
 
@@ -1513,6 +1651,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())
                 .await?;
 
+            // persist uniqueness results into db
             if !codes_and_masks.is_empty() && !config_bg.disable_persistence {
                 let db_serial_ids = store_bg.insert_irises(&mut tx, &codes_and_masks).await?;
 
@@ -1529,7 +1668,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         db_serial_ids
                     ));
                 }
+            }
 
+            // persist reauth results into db
+            if !config_bg.disable_persistence {
                 for (i, success) in successful_reauths.iter().enumerate() {
                     if !success {
                         continue;
@@ -1820,6 +1962,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 }
 
 // Helper function to load Aurora db records from the stream into memory
+#[allow(clippy::needless_lifetimes)]
 async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,

@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2268/sync-queues-based-on-sns-sequence-number"
+      - "POP-2339/add-iris-share-versions-to-mpc"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
