@@ -81,66 +81,40 @@ pub trait IntRing2k:
     fn wrapping_shr_assign(&mut self, rhs: u32) {
         *self = self.wrapping_shr(rhs);
     }
-
-    fn from_u128(value: u128) -> Self;
 }
 
 impl IntRing2k for Bit {
     type Signed = Bit;
     const K: usize = 1;
     const BYTES: usize = 1;
-
-    fn from_u128(value: u128) -> Self {
-        Bit::new(value & 1 == 1)
-    }
 }
 
 impl IntRing2k for u8 {
     type Signed = i8;
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
-
-    fn from_u128(value: u128) -> Self {
-        value as u8
-    }
 }
 
 impl IntRing2k for u16 {
     type Signed = i16;
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
-
-    fn from_u128(value: u128) -> Self {
-        value as u16
-    }
 }
 
 impl IntRing2k for u32 {
     type Signed = i32;
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
-
-    fn from_u128(value: u128) -> Self {
-        value as u32
-    }
 }
 
 impl IntRing2k for u64 {
     type Signed = i64;
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
-
-    fn from_u128(value: u128) -> Self {
-        value as u64
-    }
 }
 
 impl IntRing2k for u128 {
     type Signed = i128;
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
-
-    fn from_u128(value: u128) -> Self {
-        value
-    }
 }

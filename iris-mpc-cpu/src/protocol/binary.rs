@@ -1,6 +1,6 @@
 use crate::{
     execution::session::{Session, SessionHandles},
-    network::value::NetworkValue,
+    network::value::{NetworkInt, NetworkValue},
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
@@ -81,7 +81,7 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
-pub(crate) async fn and_many_send<T: IntRing2k>(
+pub(crate) async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -89,9 +89,6 @@ pub(crate) async fn and_many_send<T: IntRing2k>(
 where
     Standard: Distribution<T>,
 {
-    if ![16, 32, 64].contains(&T::K) {
-        return Err(eyre!("Invalid bit size in and_many_send"));
-    }
     if a.len() != b.len() {
         return Err(eyre!("InvalidSize in and_many_send"));
     }
@@ -106,40 +103,35 @@ where
     let network = &mut session.network_session;
     let messages = shares_a.clone();
     let message = if messages.len() == 1 {
-        NetworkValue::new_value_from(messages[0])
+        T::new_network_element(messages[0])
     } else {
-        NetworkValue::new_vec_from(messages)
+        T::new_network_vec(messages)
     };
     network.send_next(message.to_network()).await?;
     Ok(shares_a)
 }
 
-pub(crate) async fn and_many_receive<T: IntRing2k>(
+pub(crate) async fn and_many_receive<T: IntRing2k + NetworkInt>(
     session: &mut Session,
 ) -> Result<Vec<RingElement<T>>, Error> {
     let shares_b = {
         let serialized_other_share = session.network_session.receive_prev().await;
+
         match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::RingElement64(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing64(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
-            }
-            Ok(NetworkValue::RingElement32(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing32(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
-            }
-            Ok(NetworkValue::RingElement16(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing16(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
+            Ok(v) => {
+                if v.is_vector() {
+                    T::into_vec(v)
+                } else {
+                    Ok(vec![T::into_element(v)?])
+                }
             }
             Err(e) => Err(eyre!("Error in and_many_receive: {e}")),
-            _ => Err(eyre!("Incorrect NetworkValue received")),
         }
     }?;
     Ok(shares_b)
 }
 
-pub(crate) async fn and_many<T: IntRing2k>(
+pub(crate) async fn and_many<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -154,7 +146,7 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
-pub(crate) async fn transposed_pack_and<T: IntRing2k>(
+pub(crate) async fn transposed_pack_and<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -189,41 +181,8 @@ where
     Ok(res)
 }
 
-#[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
-pub(crate) async fn transposed_pack_and_u32(
-    session: &mut Session,
-    x1: Vec<VecShare<u32>>,
-    x2: Vec<VecShare<u32>>,
-) -> Result<Vec<VecShare<u32>>, Error> {
-    if x1.len() != x2.len() {
-        return Err(eyre!(
-            "Inputs have different length {} {}",
-            x1.len(),
-            x2.len()
-        ));
-    }
-    let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
-    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
-    if chunk_sizes != chunk_sizes2 {
-        return Err(eyre!("VecShare lengths are not equal"));
-    }
-
-    let x1 = VecShare::flatten(x1);
-    let x2 = VecShare::flatten(x2);
-    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
-    let mut shares_b = and_many_receive(session).await?;
-
-    let mut res = Vec::with_capacity(chunk_sizes.len());
-    for l in chunk_sizes {
-        let a = shares_a.drain(..l).collect();
-        let b = shares_b.drain(..l).collect();
-        res.push(VecShare::from_ab(a, b));
-    }
-    Ok(res)
-}
-
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn binary_add_3_get_two_carries<T: IntRing2k>(
+async fn binary_add_3_get_two_carries<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -287,12 +246,12 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_helper(
+async fn bit_inject_ot_2round_helper<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error>
+) -> Result<VecShare<T>, Error>
 where
-    Standard: Distribution<u16>,
+    Standard: Distribution<T>,
 {
     let len = input.len();
     let mut wc = Vec::with_capacity(len);
@@ -301,12 +260,12 @@ where
 
     for inp in input.into_iter() {
         // new share
-        let c3 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let c3 = prf.get_prev_prf().gen::<RingElement<T>>();
         shares.push(Share::new(RingElement::zero(), c3));
 
         // mask of the ot
-        let w0 = prf.get_prev_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let w0 = prf.get_prev_prf().gen::<RingElement<T>>();
+        let w1 = prf.get_prev_prf().gen::<RingElement<T>>();
 
         let choice = inp.get_a().convert().convert();
         if choice {
@@ -319,14 +278,14 @@ where
     let network = &mut session.network_session;
     trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
     network
-        .send_next(NetworkValue::VecRing16(wc).to_network())
+        .send_next(T::new_network_vec(wc).to_network())
         .await?;
 
     let c1 = {
         let reply = network.receive_next().await;
         match NetworkValue::from_network(reply) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+            Ok(v) => T::into_vec(v),
+            Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         }
     }?;
 
@@ -338,10 +297,13 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_receiver(
+async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let prev_id = session.prev_identity()?;
     let network = &mut session.network_session;
 
@@ -354,20 +316,13 @@ async fn bit_inject_ot_2round_receiver(
         );
         let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
 
-        let m0 = match m0 {
-            NetworkValue::VecRing16(val) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
-        };
-
-        let m1 = match m1 {
-            NetworkValue::VecRing16(val) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
-        };
+        let m0 = T::into_vec(m0);
+        let m1 = T::into_vec(m1);
 
         let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+            Ok(v) => T::into_vec(v),
+            Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         };
         (m0, m1, wc)
     };
@@ -384,7 +339,7 @@ async fn bit_inject_ot_2round_receiver(
         .zip(m0.into_iter().zip(m1.into_iter()))
     {
         // new share
-        let c2 = session.prf.get_my_prf().gen::<RingElement<u16>>();
+        let c2 = session.prf.get_my_prf().gen::<RingElement<T>>();
 
         let choice = inp.get_b().convert().convert();
         let xor = if choice { wc ^ m1 } else { wc ^ m0 };
@@ -396,17 +351,20 @@ async fn bit_inject_ot_2round_receiver(
     // Reshare to Helper
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     network
-        .send_prev(NetworkValue::VecRing16(send).to_network())
+        .send_prev(T::new_network_vec(send).to_network())
         .await?;
 
     Ok(shares)
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_sender(
+async fn bit_inject_ot_2round_sender<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let len = input.len();
     let mut m0 = Vec::with_capacity(len);
     let mut m1 = Vec::with_capacity(len);
@@ -416,14 +374,14 @@ async fn bit_inject_ot_2round_sender(
     for inp in input.into_iter() {
         let (a, b) = inp.get_ab();
         // new shares
-        let (c3, c2) = prf.gen_rands::<RingElement<u16>>();
+        let (c3, c2) = prf.gen_rands::<RingElement<T>>();
         // mask of the ot
-        let w0 = prf.get_my_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_my_prf().gen::<RingElement<u16>>();
+        let w0 = prf.get_my_prf().gen::<RingElement<T>>();
+        let w1 = prf.get_my_prf().gen::<RingElement<T>>();
 
         shares.push(Share::new(c3, c2));
         let c = c3 + c2;
-        let xor = RingElement(u16::from((a ^ b).convert().convert()));
+        let xor = RingElement(T::from((a ^ b).convert().convert()));
         let m0_ = xor - c;
         let m1_ = (xor ^ RingElement::one()) - c;
         m0.push(m0_ ^ w0);
@@ -433,7 +391,7 @@ async fn bit_inject_ot_2round_sender(
     let prev_id = session.prev_identity()?;
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
-        .map(NetworkValue::VecRing16)
+        .map(T::new_network_vec)
         .collect::<Vec<_>>();
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     // Reshare to Helper
@@ -446,22 +404,25 @@ async fn bit_inject_ot_2round_sender(
 
 // TODO this is unbalanced, so a real implementation should actually rotate
 // parties around
-pub(crate) async fn bit_inject_ot_2round(
+pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let res = match session.own_role()?.index() {
         0 => {
             // OT Helper
-            bit_inject_ot_2round_helper(session, input).await?
+            bit_inject_ot_2round_helper::<T>(session, input).await?
         }
         1 => {
             // OT Receiver
-            bit_inject_ot_2round_receiver(session, input).await?
+            bit_inject_ot_2round_receiver::<T>(session, input).await?
         }
         2 => {
             // OT Sender
-            bit_inject_ot_2round_sender(session, input).await?
+            bit_inject_ot_2round_sender::<T>(session, input).await?
         }
         _ => {
             return Err(eyre!(
@@ -613,7 +574,7 @@ pub(crate) async fn lift_u32<const K: usize>(
 
 // MSB related code
 #[allow(dead_code)]
-pub(crate) async fn binary_add_3_get_msb<T: IntRing2k>(
+pub(crate) async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -676,7 +637,7 @@ where
 
 /// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
 /// Input integers are given in binary form.
-pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k>(
+pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -792,7 +753,7 @@ where
 }
 
 // Extracts bit at position K
-async fn extract_transposed_msb<T: IntRing2k>(
+async fn extract_transposed_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x: Vec<VecShare<T>>,
 ) -> Result<VecShare<T>, Error>
