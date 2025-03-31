@@ -111,7 +111,7 @@ impl From<u32> for PointId {
 
 impl From<PointId> for VectorId {
     fn from(id: PointId) -> Self {
-        VectorId::from(id.0)
+        VectorId::from_0_index(id.0)
     }
 }
 

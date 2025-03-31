@@ -11,7 +11,7 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
@@ -39,8 +39,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for (vector_id, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from_serial_id(vector_id as u32);
+    for (i, iris) in plain_store.points.iter().enumerate() {
+        let vector_id = VectorId::from(PointId::from(i));
         let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
