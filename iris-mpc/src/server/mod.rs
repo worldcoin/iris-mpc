@@ -821,7 +821,8 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let hawk_postgres_client = PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
+            let hawk_postgres_client =
+                PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
 
             // Store -> CPU
             tracing::info!(
@@ -850,19 +851,20 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .ok_or(eyre!("Missing database config"))?;
 
             let postgres_client = PostgresClient::new(&db_config.url, &schema_name).await?;
-            
+
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
                 db_config,
                 config.mode_of_deployment
             );
             let store = Store::new(&postgres_client).await?;
-            
+
             let hawk_db_config = config
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let hawk_postgres_client = PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
+            let hawk_postgres_client =
+                PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
