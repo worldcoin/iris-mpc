@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for an immutable pair of iris codes.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
-    pub id: u32,
+    id: u32,
 }
 
 impl Display for VectorId {
@@ -21,18 +21,6 @@ impl FromStr for VectorId {
         Ok(VectorId {
             id: FromStr::from_str(s)?,
         })
-    }
-}
-
-impl From<usize> for VectorId {
-    fn from(id: usize) -> Self {
-        VectorId { id: id as u32 }
-    }
-}
-
-impl From<u32> for VectorId {
-    fn from(id: u32) -> Self {
-        VectorId { id }
     }
 }
 
