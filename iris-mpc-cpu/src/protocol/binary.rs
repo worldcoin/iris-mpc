@@ -1,6 +1,6 @@
 use crate::{
     execution::session::{Session, SessionHandles},
-    network::value::NetworkValue,
+    network::value::{NetworkInt, NetworkValue},
     shares::{
         bit::Bit,
         int_ring::IntRing2k,
@@ -76,7 +76,7 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
-pub(crate) async fn and_many_send<T: IntRing2k>(
+pub(crate) async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -84,9 +84,6 @@ pub(crate) async fn and_many_send<T: IntRing2k>(
 where
     Standard: Distribution<T>,
 {
-    if ![16, 32, 64].contains(&T::K) {
-        return Err(eyre!("Invalid bit size in and_many_send"));
-    }
     if a.len() != b.len() {
         return Err(eyre!("InvalidSize in and_many_send"));
     }
@@ -101,40 +98,35 @@ where
     let network = &mut session.network_session;
     let messages = shares_a.clone();
     let message = if messages.len() == 1 {
-        NetworkValue::new_value_from(messages[0])
+        T::new_network_element(messages[0])
     } else {
-        NetworkValue::new_vec_from(messages)
+        T::new_network_vec(messages)
     };
     network.send_next(message.to_network()).await?;
     Ok(shares_a)
 }
 
-pub(crate) async fn and_many_receive<T: IntRing2k>(
+pub(crate) async fn and_many_receive<T: IntRing2k + NetworkInt>(
     session: &mut Session,
 ) -> Result<Vec<RingElement<T>>, Error> {
     let shares_b = {
         let serialized_other_share = session.network_session.receive_prev().await;
+
         match NetworkValue::from_network(serialized_other_share) {
-            Ok(NetworkValue::RingElement64(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing64(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
-            }
-            Ok(NetworkValue::RingElement32(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing32(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
-            }
-            Ok(NetworkValue::RingElement16(message)) => Ok(vec![message.cast_to::<T>()]),
-            Ok(NetworkValue::VecRing16(messages)) => {
-                Ok(messages.into_iter().map(|x| x.cast_to::<T>()).collect())
+            Ok(v) => {
+                if v.is_vector() {
+                    T::into_vec(v)
+                } else {
+                    Ok(vec![T::into_element(v)?])
+                }
             }
             Err(e) => Err(eyre!("Error in and_many_receive: {e}")),
-            _ => Err(eyre!("Incorrect NetworkValue received")),
         }
     }?;
     Ok(shares_b)
 }
 
-pub(crate) async fn and_many<T: IntRing2k>(
+pub(crate) async fn and_many<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -149,7 +141,7 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
-pub(crate) async fn transposed_pack_and<T: IntRing2k>(
+pub(crate) async fn transposed_pack_and<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -185,7 +177,7 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn binary_add_3_get_two_carries<T: IntRing2k>(
+async fn binary_add_3_get_two_carries<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -512,7 +504,7 @@ pub(crate) async fn lift<const K: usize>(
 
 // MSB related code
 #[allow(dead_code)]
-pub(crate) async fn binary_add_3_get_msb<T: IntRing2k>(
+pub(crate) async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -575,7 +567,7 @@ where
 
 /// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
 /// Input integers are given in binary form.
-pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k>(
+pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -691,7 +683,7 @@ where
 }
 
 // Extracts bit at position K
-async fn extract_msb<T: IntRing2k>(
+async fn extract_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x: Vec<VecShare<T>>,
 ) -> Result<VecShare<T>, Error>

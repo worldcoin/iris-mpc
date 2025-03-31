@@ -93,18 +93,6 @@ impl<T: IntRing2k> RingElement<T> {
         let bit = ((self.0 >> index) & T::one()) == T::one();
         RingElement(Bit(bit as u8))
     }
-
-    pub fn upgrade_to_128(self) -> RingElement<u128> {
-        RingElement(self.0.into())
-    }
-
-    pub fn cast_to<U: IntRing2k>(self) -> RingElement<U> {
-        if T::K < U::K {
-            panic!("Cannot cast from {} bits to {} bits", T::K, U::K);
-        }
-        let res = self.upgrade_to_128();
-        RingElement(U::from_u128(res.0))
-    }
 }
 
 impl<T: IntRing2k + std::fmt::Display> std::fmt::Display for RingElement<T> {

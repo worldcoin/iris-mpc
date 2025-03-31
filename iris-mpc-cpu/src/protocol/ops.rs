@@ -269,6 +269,7 @@ mod tests {
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
+        network::value::NetworkInt,
         protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
@@ -297,23 +298,21 @@ mod tests {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
     where
-        T: IntRing2k,
-        NetworkValue: From<Vec<RingElement<T>>>,
-        Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
+        T: IntRing2k + NetworkInt,
     {
         let network = &mut session.network_session;
 
         let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
         let message = shares_b;
         network
-            .send_next(NetworkValue::from(message).to_network())
+            .send_next(T::new_network_vec(message).to_network())
             .await?;
 
         // receiving from previous party
         let shares_c = {
             let serialized_other_share = network.receive_prev().await;
             let net_message = NetworkValue::from_network(serialized_other_share)?;
-            Vec::<RingElement<T>>::try_from(net_message)
+            T::into_vec(net_message)
         }?;
 
         let res = shares
