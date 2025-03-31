@@ -3,7 +3,6 @@ use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch;
 use crate::services::processors::process_identity_deletions;
 use crate::services::store::load_db;
-use axum::http::StatusCode;
 use eyre::eyre;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -103,48 +102,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     );
 
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-
     utils::do_unreadiness_check(&config).await?;
-
-    // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = utils::get_check_addresses(&config, "ready");
-    let unready_check = tokio::spawn(async move {
-        let next_node = &all_readiness_addresses[(config.party_id + 1) % 3];
-        let prev_node = &all_readiness_addresses[(config.party_id + 2) % 3];
-        let mut connected_but_unready = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host.as_str()).await;
-
-                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
-                    connected_but_unready[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected_but_unready.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
-        unready_check,
-    )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
-        }
-    };
     tracing::info!("All nodes are starting up.");
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();

@@ -106,7 +106,17 @@ pub(crate) async fn fetch_iris_deletions(
     let _ = S3_CLient::from_conf(s3_cfg);
 
     // Set AWS S3 response.
-    // TODO: test once resource has been deployed
+    // Response will be a simple json file with a single field:
+    //  name: deleted_serial_ids
+    //  type: Vec<IrisSerialId>
+    // Response parser will:
+    //  - attempt to simply deserialise the response body into Json.Value
+    //  - map `deleted_serial_ids` field from Vec<String> -> Vec<IrisSerialId>.
+    //  - return mapped Vec<IrisSerialId>
+    // Errors:
+    //  - AWS S3 bucket fetch error
+    //  - JSON parsing error
+    //  - Mapping error
 
     // TODO: remove temporary code that returns a random set of identifiers.
     let mut rng = rand::thread_rng();

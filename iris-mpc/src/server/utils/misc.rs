@@ -1,5 +1,16 @@
 use iris_mpc_common::config::{Config, ModeOfCompute};
 
+/// Gets set of MPC node IP addresses for a particular endpoint.
+///
+/// # Arguments
+///
+/// * `config` - System configuration.
+/// * `endpoint` - Endpoint being invoked.
+///
+/// # Returns
+///
+/// Set of MPC node IP addresses.
+///
 pub(crate) fn get_check_addresses(config: &Config, endpoint: &str) -> Vec<String> {
     config
         .node_hostnames
@@ -9,6 +20,12 @@ pub(crate) fn get_check_addresses(config: &Config, endpoint: &str) -> Vec<String
         .collect::<Vec<String>>()
 }
 
+/// Validates system configuration.
+///
+/// # Arguments
+///
+/// * `config` - System configuration being validated.
+///
 pub(crate) fn validate_config(config: &Config) {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {

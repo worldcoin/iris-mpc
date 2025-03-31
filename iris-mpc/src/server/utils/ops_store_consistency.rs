@@ -4,6 +4,17 @@ use iris_mpc_store::Store as IrisPgresStore;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 
+/// Validates that the PostgreSQL iris store is in a consistent state.
+///
+/// # Arguments
+///
+/// * `config` - System configuration.
+/// * `iris_pg_store` - Postgres client.
+///
+/// # Returns
+///
+/// Last iris serial identifier.
+///
 pub(crate) async fn validate_iris_store_consistency(
     config: &Config,
     iris_pg_store: &IrisPgresStore,
@@ -32,7 +43,6 @@ pub(crate) async fn validate_iris_store_consistency(
 
     // Fetch again in case we've just initialized the DB
     let store_len = iris_pg_store.count_irises().await?;
-
     tracing::info!("Size of the database after init: {}", store_len);
 
     // Check if the sequence id is consistent with the number of irises
