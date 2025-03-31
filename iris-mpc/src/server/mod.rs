@@ -90,8 +90,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     };
 
     let party_id = config.party_id;
-    tracing::info!("Deriving shared secrets");
-
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
@@ -816,90 +814,88 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
     );
 
     match config.mode_of_deployment {
+        // use the hawk db for both stores
         ModeOfDeployment::ShadowIsolation => {
-            // This mode uses only CPU DB
-            let cpu_db_config = config
+            // This mode uses only Hawk DB
+            let hawk_db_config = config
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let cpu_postgres_client = PostgresClient::new(&cpu_db_config.url, &schema_name).await?;
+            let hawk_postgres_client = PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
 
             // Store -> CPU
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
-                cpu_db_config,
+                hawk_db_config,
                 config.mode_of_deployment
             );
-            let store = Store::new(&cpu_postgres_client).await?;
+            let store = Store::new(&hawk_postgres_client).await?;
 
             // Graph -> CPU
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
-                cpu_db_config,
+                hawk_db_config,
                 config.mode_of_deployment
             );
-            let graph_store = GraphStore::new(&cpu_postgres_client).await?;
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
             Ok((store, graph_store))
         }
 
+        // use base db for iris store and hawk db for graph store
         ModeOfDeployment::ShadowReadOnly => {
-            // Always need the "GPU" database config
-            let gpu_db_config = config
+            let db_config = config
                 .database
                 .as_ref()
-                .ok_or(eyre!("Missing GPU database config"))?;
+                .ok_or(eyre!("Missing database config"))?;
 
-            let gpu_postgres_client = PostgresClient::new(&gpu_db_config.url, &schema_name).await?;
-
-            // Store -> GPU
+            let postgres_client = PostgresClient::new(&db_config.url, &schema_name).await?;
+            
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
-                gpu_db_config,
+                db_config,
                 config.mode_of_deployment
             );
-            let store = Store::new(&gpu_postgres_client).await?;
-
-            // Graph -> CPU
-            let cpu_db_config = config
+            let store = Store::new(&postgres_client).await?;
+            
+            let hawk_db_config = config
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let cpu_postgres_client = PostgresClient::new(&cpu_db_config.url, &schema_name).await?;
+            let hawk_postgres_client = PostgresClient::new(&hawk_db_config.url, &schema_name).await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
-                cpu_db_config,
+                hawk_db_config,
                 config.mode_of_deployment
             );
-            let graph_store = GraphStore::new(&cpu_postgres_client).await?;
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
             Ok((store, graph_store))
         }
 
-        // All other modes: we only need/use the GPU DB
+        // use the base db for both stores
         _ => {
-            // Always need the "GPU" database config
-            let gpu_db_config = config
+            let db_config = config
                 .database
                 .as_ref()
-                .ok_or(eyre!("Missing GPU database config"))?;
+                .ok_or(eyre!("Missing database config"))?;
 
-            let gpu_postgres_client = PostgresClient::new(&gpu_db_config.url, &schema_name).await?;
+            let postgres_client = PostgresClient::new(&db_config.url, &schema_name).await?;
 
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
-                gpu_db_config,
+                db_config,
                 config.mode_of_deployment
             );
-            let store = Store::new(&gpu_postgres_client).await?;
+            let store = Store::new(&postgres_client).await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
-                gpu_db_config,
+                db_config,
                 config.mode_of_deployment
             );
-            let graph_store = GraphStore::new(&gpu_postgres_client).await?;
+            let graph_store = GraphStore::new(&postgres_client).await?;
 
             Ok((store, graph_store))
         }
