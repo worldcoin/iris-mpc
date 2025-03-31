@@ -37,12 +37,23 @@ impl From<u32> for VectorId {
 }
 
 impl VectorId {
+    /// From Serial ID (1-indexed).
     pub fn from_serial_id(id: u32) -> Self {
         VectorId { id }
     }
 
-    /// Returns the ID of a vector as a number.
-    pub fn to_serial_id(&self) -> u32 {
+    /// To Serial ID (1-indexed).
+    pub fn serial_id(&self) -> u32 {
         self.id
+    }
+
+    /// From index (0-indexed).
+    pub fn from_0_index(index: u32) -> Self {
+        VectorId { id: index + 1 }
+    }
+
+    /// To index (0-indexed).
+    pub fn index(&self) -> u32 {
+        self.id - 1
     }
 }

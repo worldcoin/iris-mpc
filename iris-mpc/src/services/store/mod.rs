@@ -34,7 +34,7 @@ async fn load_db_records<'a>(
         let iris = iris.unwrap();
 
         actor.load_single_record_from_db(
-            iris.index() - 1,
+            iris.serial_id() - 1,
             iris.vector_id(),
             iris.left_code(),
             iris.left_mask(),
@@ -43,9 +43,9 @@ async fn load_db_records<'a>(
         );
 
         // Only increment db size if record has not been loaded via s3 before
-        if all_serial_ids.contains(&(iris.index() as i64)) {
-            actor.increment_db_size(iris.index() - 1);
-            all_serial_ids.remove(&(iris.index() as i64));
+        if all_serial_ids.contains(&(iris.serial_id() as i64)) {
+            actor.increment_db_size(iris.serial_id() - 1);
+            all_serial_ids.remove(&(iris.serial_id() as i64));
             record_counter += 1;
         }
 
@@ -126,7 +126,7 @@ pub async fn load_db(
         while let Some(iris) = rx.recv().await {
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
-            let index = iris.index();
+            let index = iris.serial_id();
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
@@ -144,7 +144,7 @@ pub async fn load_db(
             }
 
             actor.load_single_record_from_s3(
-                iris.index() - 1,
+                iris.serial_id() - 1,
                 iris.vector_id(),
                 iris.left_code_odd(),
                 iris.left_code_even(),

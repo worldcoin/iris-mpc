@@ -1175,7 +1175,7 @@ pub fn load_test_db(
     for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
         loader.load_single_record_from_db(
             idx,
-            VectorId::from(idx),
+            VectorId::from_0_index(idx as u32),
             &code.coefs,
             &mask.coefs,
             &code.coefs,
