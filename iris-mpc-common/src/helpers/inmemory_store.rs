@@ -3,7 +3,7 @@
 pub trait InMemoryStore {
     /// Adds a single record to the in-memory store.
     /// The position of the record in the in-memory store is identified by the
-    /// given index, which is 0-based. This method does not directly increase
+    /// given serial_id, which is 1-based. This method does not directly increase
     /// the size of the in-memory store, since it can also be used to override
     /// existing records. To increase the size of the in-memory store, the
     /// `increment_db_size` method should be called, first ensuring that the
@@ -14,7 +14,7 @@ pub trait InMemoryStore {
     /// The implementation is allowed to panic if this not the case.
     fn load_single_record_from_db(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
@@ -23,11 +23,11 @@ pub trait InMemoryStore {
     /// Increments the internal size of the in-memory store by 1.
     ///
     /// # Arguments
-    /// Index - The index of the record in the in-memory store that was just
+    /// serial_id - The ID of the record in the in-memory store that was just
     /// added and the reason for the size increase. This can be used internally
     /// to increase the size of a specific part of the in-memory store, if
     /// required.
-    fn increment_db_size(&mut self, index: usize);
+    fn increment_db_size(&mut self, serial_id: usize);
 
     /// Reserves capacity for at least `additional` more elements to be
     /// inserted, like Vec::reserve.
@@ -35,7 +35,7 @@ pub trait InMemoryStore {
 
     /// Adds a single record to the in-memory store.
     /// The position of the record in the in-memory store is identified by the
-    /// given index, which is 0-based. This method does not directly increase
+    /// given serial_id, which is 1-based. This method does not directly increase
     /// the size of the in-memory store, since it can also be used to override
     /// existing records. To increase the size of the in-memory store, the
     /// `increment_db_size` method should be called, first ensuring that the
@@ -51,7 +51,7 @@ pub trait InMemoryStore {
     #[allow(clippy::too_many_arguments)]
     fn load_single_record_from_s3(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
@@ -90,7 +90,13 @@ pub trait InMemoryStore {
             .zip(right_mask_even.iter())
             .map(|(odd, even)| map_back_to_u16(*odd, *even))
             .collect::<Vec<_>>();
-        self.load_single_record_from_db(index, &left_code, &left_mask, &right_code, &right_mask);
+        self.load_single_record_from_db(
+            serial_id,
+            &left_code,
+            &left_mask,
+            &right_code,
+            &right_mask,
+        );
     }
 
     /// Executes any necessary preprocessing steps on the in-memory store.

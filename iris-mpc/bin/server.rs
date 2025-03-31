@@ -1628,8 +1628,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
-                .map(|&idx| {
-                    let serial_id = idx + 1;
+                .map(|&serial_id| {
                     let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity deletion result");
@@ -1981,7 +1980,7 @@ async fn load_db_records<'a>(
         let iris = iris.unwrap();
 
         actor.load_single_record_from_db(
-            iris.index() - 1,
+            iris.serial_id(),
             iris.left_code(),
             iris.left_mask(),
             iris.right_code(),
@@ -1989,9 +1988,9 @@ async fn load_db_records<'a>(
         );
 
         // Only increment db size if record has not been loaded via s3 before
-        if all_serial_ids.contains(&(iris.index() as i64)) {
-            actor.increment_db_size(iris.index() - 1);
-            all_serial_ids.remove(&(iris.index() as i64));
+        if all_serial_ids.contains(&(iris.serial_id() as i64)) {
+            actor.increment_db_size(iris.serial_id());
+            all_serial_ids.remove(&(iris.serial_id() as i64));
             record_counter += 1;
         }
 
@@ -2120,7 +2119,7 @@ async fn load_db(
         while let Some(iris) = rx.recv().await {
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
-            let index = iris.index();
+            let index = iris.serial_id();
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
@@ -2138,7 +2137,7 @@ async fn load_db(
             }
 
             actor.load_single_record_from_s3(
-                iris.index() - 1,
+                iris.serial_id(),
                 iris.left_code_odd(),
                 iris.left_code_even(),
                 iris.right_code_odd(),
@@ -2148,7 +2147,7 @@ async fn load_db(
                 iris.right_mask_odd(),
                 iris.right_mask_even(),
             );
-            actor.increment_db_size(index - 1);
+            actor.increment_db_size(index);
 
             if record_counter % 100_000 == 0 {
                 let elapsed = now.elapsed();

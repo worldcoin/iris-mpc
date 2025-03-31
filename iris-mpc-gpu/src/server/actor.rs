@@ -1133,7 +1133,7 @@ impl ServerActor {
 
         // Pass to internal sender thread
         return_channel
-            .send(ServerJobResult {
+            .send(to_serial_id_results(ServerJobResult {
                 merged_results,
                 request_ids: batch.request_ids,
                 request_types: batch.request_types,
@@ -1156,7 +1156,7 @@ impl ServerActor {
                 reauth_or_rule_used: batch.reauth_use_or_rule,
                 modifications: batch.modifications,
                 actor_data: (),
-            })
+            }))
             .unwrap();
 
         self.anonymized_bucket_statistics_left.buckets.clear();
@@ -2183,6 +2183,49 @@ fn calculate_insertion_indices(
     }
 }
 
+fn to_serial_id_results(res: ServerJobResult) -> ServerJobResult {
+    ServerJobResult {
+        merged_results: to_serial_id_vec(res.merged_results),
+        request_ids: res.request_ids,
+        request_types: res.request_types,
+        metadata: res.metadata,
+        matches: res.matches,
+        matches_with_skip_persistence: res.matches_with_skip_persistence,
+        match_ids: to_serial_id_vec2d(res.match_ids),
+        partial_match_ids_left: to_serial_id_vec2d(res.partial_match_ids_left),
+        partial_match_ids_right: to_serial_id_vec2d(res.partial_match_ids_right),
+        partial_match_counters_left: res.partial_match_counters_left,
+        partial_match_counters_right: res.partial_match_counters_right,
+        left_iris_requests: res.left_iris_requests,
+        right_iris_requests: res.right_iris_requests,
+        deleted_ids: to_serial_id_vec(res.deleted_ids),
+        matched_batch_request_ids: res.matched_batch_request_ids,
+        anonymized_bucket_statistics_left: res.anonymized_bucket_statistics_left,
+        anonymized_bucket_statistics_right: res.anonymized_bucket_statistics_right,
+        successful_reauths: res.successful_reauths,
+        reauth_target_indices: todo!("convert or not?"),
+        reauth_or_rule_used: res.reauth_or_rule_used,
+        modifications: todo!("convert or not?"),
+        actor_data: res.actor_data,
+    }
+}
+
+fn to_serial_id_vec(mut indexes: Vec<u32>) -> Vec<u32> {
+    for i in indexes.iter_mut() {
+        *i += 1;
+    }
+    indexes
+}
+
+fn to_serial_id_vec2d(mut indexes: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
+    for inner in indexes.iter_mut() {
+        for i in inner.iter_mut() {
+            *i += 1;
+        }
+    }
+    indexes
+}
+
 #[allow(clippy::too_many_arguments)]
 fn write_db_at_index(
     left_code_db_slices: &SlicedProcessedDatabase,
@@ -2367,12 +2410,13 @@ pub fn generate_luc_records(
 impl InMemoryStore for ServerActor {
     fn load_single_record_from_db(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
         right_mask: &[u16],
     ) {
+        let index = serial_id - 1;
         ShareDB::load_single_record_from_db(
             index,
             &self.left_code_db_slices.code_gr,
@@ -2402,13 +2446,14 @@ impl InMemoryStore for ServerActor {
             MASK_CODE_LENGTH,
         );
     }
-    fn increment_db_size(&mut self, index: usize) {
+    fn increment_db_size(&mut self, serial_id: usize) {
+        let index = serial_id - 1;
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
     }
 
     fn load_single_record_from_s3(
         &mut self,
-        index: usize,
+        serial_id: usize,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
@@ -2418,6 +2463,7 @@ impl InMemoryStore for ServerActor {
         right_mask_odd: &[u8],
         right_mask_even: &[u8],
     ) {
+        let index = serial_id - 1;
         ShareDB::load_single_record_from_s3(
             index,
             &self.left_code_db_slices.code_gr,

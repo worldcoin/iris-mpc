@@ -48,10 +48,10 @@ pub enum StoredIris {
 
 impl StoredIris {
     /// Returns the `id` from either variant.
-    pub fn index(&self) -> usize {
+    pub fn serial_id(&self) -> usize {
         match self {
-            StoredIris::DB(db) => db.index(),
-            StoredIris::S3(s3) => s3.index(),
+            StoredIris::DB(db) => db.serial_id(),
+            StoredIris::S3(s3) => s3.serial_id(),
         }
     }
 }
@@ -67,8 +67,8 @@ pub struct DbStoredIris {
 }
 
 impl DbStoredIris {
-    /// The index which is contiguous and starts from 0.
-    pub fn index(&self) -> usize {
+    /// The index which is contiguous and starts from 1.
+    pub fn serial_id(&self) -> usize {
         self.id as usize
     }
 
