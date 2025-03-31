@@ -70,7 +70,7 @@ impl S3StoredIris {
         })
     }
 
-    pub fn index(&self) -> usize {
+    pub fn serial_id(&self) -> usize {
         self.id as usize
     }
 
@@ -517,7 +517,7 @@ mod tests {
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = rx.recv().await {
-            ids.remove(&(chunk.index()));
+            ids.remove(&(chunk.serial_id()));
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);
@@ -578,7 +578,7 @@ mod tests {
         let mut count = 0;
         let mut ids: HashSet<usize> = (1..=MOCK_ENTRIES).collect();
         while let Some(chunk) = rx.recv().await {
-            ids.remove(&chunk.index());
+            ids.remove(&chunk.serial_id());
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);
