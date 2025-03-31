@@ -517,10 +517,16 @@ pub async fn arithmetic_xor_many(
 
     let serialized_reply = network.receive_prev().await;
     let mul_b = match NetworkValue::from_network(serialized_reply) {
-        Ok(NetworkValue::RingElement32(element)) => vec![element],
-        Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => return Err(eyre!("Could not deserialize RingElement32")),
-    };
+        Ok(NetworkValue::RingElement32(element)) => Ok(vec![element]),
+        Ok(NetworkValue::VecRing32(elements)) => Ok(elements),
+        Err(e) => Err(eyre!(
+            "Error in receiving in arithmetic_xor_many operation: {}",
+            e
+        )),
+        _ => Err(eyre!(
+            "Wrong value type is received in arithmetic_xor_many operation"
+        )),
+    }?;
 
     let res = izip!(
         mul_a.into_iter(),
