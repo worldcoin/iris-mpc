@@ -126,20 +126,20 @@ pub async fn load_db(
         while let Some(iris) = rx.recv().await {
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
-            let index = iris.serial_id();
+            let serial_id = iris.serial_id();
 
-            if index == 0 {
-                tracing::error!("Invalid iris index {}", index);
-                return Err(eyre!("Invalid iris index {}", index));
-            } else if index > store_len {
+            if serial_id == 0 {
+                tracing::error!("Invalid iris serial_id {}", serial_id);
+                return Err(eyre!("Invalid iris serial_id {}", serial_id));
+            } else if serial_id > store_len {
                 tracing::warn!(
-                    "Skip loading rolled back item: index {} > store_len {}",
-                    index,
+                    "Skip loading rolled back item: serial_id {} > store_len {}",
+                    serial_id,
                     store_len
                 );
                 continue;
-            } else if !all_serial_ids.contains(&(index as i64)) {
-                tracing::warn!("Skip loading s3 retried item: index {}", index);
+            } else if !all_serial_ids.contains(&(serial_id as i64)) {
+                tracing::warn!("Skip loading s3 retried item: serial_id {}", serial_id);
                 continue;
             }
 
@@ -155,7 +155,7 @@ pub async fn load_db(
                 iris.right_mask_odd(),
                 iris.right_mask_even(),
             );
-            actor.increment_db_size(index - 1);
+            actor.increment_db_size(serial_id - 1);
 
             if record_counter % 100_000 == 0 {
                 let elapsed = now.elapsed();
@@ -174,7 +174,7 @@ pub async fn load_db(
             time_loading_into_memory += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
 
-            all_serial_ids.remove(&(index as i64));
+            all_serial_ids.remove(&(serial_id as i64));
             record_counter += 1;
         }
         tracing::info!(
