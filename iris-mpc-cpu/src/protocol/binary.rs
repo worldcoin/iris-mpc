@@ -241,12 +241,12 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_helper(
+async fn bit_inject_ot_2round_helper<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error>
+) -> Result<VecShare<T>, Error>
 where
-    Standard: Distribution<u16>,
+    Standard: Distribution<T>,
 {
     let len = input.len();
     let mut wc = Vec::with_capacity(len);
@@ -255,12 +255,12 @@ where
 
     for inp in input.into_iter() {
         // new share
-        let c3 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let c3 = prf.get_prev_prf().gen::<RingElement<T>>();
         shares.push(Share::new(RingElement::zero(), c3));
 
         // mask of the ot
-        let w0 = prf.get_prev_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_prev_prf().gen::<RingElement<u16>>();
+        let w0 = prf.get_prev_prf().gen::<RingElement<T>>();
+        let w1 = prf.get_prev_prf().gen::<RingElement<T>>();
 
         let choice = inp.get_a().convert().convert();
         if choice {
@@ -273,14 +273,14 @@ where
     let network = &mut session.network_session;
     trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
     network
-        .send_next(NetworkValue::VecRing16(wc).to_network())
+        .send_next(T::new_network_vec(wc).to_network())
         .await?;
 
     let c1 = {
         let reply = network.receive_next().await;
         match NetworkValue::from_network(reply) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+            Ok(v) => T::into_vec(v),
+            Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         }
     }?;
 
@@ -292,10 +292,13 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_receiver(
+async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let prev_id = session.prev_identity()?;
     let network = &mut session.network_session;
 
@@ -308,20 +311,13 @@ async fn bit_inject_ot_2round_receiver(
         );
         let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
 
-        let m0 = match m0 {
-            NetworkValue::VecRing16(val) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
-        };
-
-        let m1 = match m1 {
-            NetworkValue::VecRing16(val) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
-        };
+        let m0 = T::into_vec(m0);
+        let m1 = T::into_vec(m1);
 
         let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
-            Ok(NetworkValue::VecRing16(val)) => Ok(val),
-            _ => Err(eyre!("Could not deserialize properly in bit inject")),
+            Ok(v) => T::into_vec(v),
+            Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         };
         (m0, m1, wc)
     };
@@ -338,7 +334,7 @@ async fn bit_inject_ot_2round_receiver(
         .zip(m0.into_iter().zip(m1.into_iter()))
     {
         // new share
-        let c2 = session.prf.get_my_prf().gen::<RingElement<u16>>();
+        let c2 = session.prf.get_my_prf().gen::<RingElement<T>>();
 
         let choice = inp.get_b().convert().convert();
         let xor = if choice { wc ^ m1 } else { wc ^ m0 };
@@ -350,17 +346,20 @@ async fn bit_inject_ot_2round_receiver(
     // Reshare to Helper
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     network
-        .send_prev(NetworkValue::VecRing16(send).to_network())
+        .send_prev(T::new_network_vec(send).to_network())
         .await?;
 
     Ok(shares)
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn bit_inject_ot_2round_sender(
+async fn bit_inject_ot_2round_sender<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let len = input.len();
     let mut m0 = Vec::with_capacity(len);
     let mut m1 = Vec::with_capacity(len);
@@ -370,14 +369,14 @@ async fn bit_inject_ot_2round_sender(
     for inp in input.into_iter() {
         let (a, b) = inp.get_ab();
         // new shares
-        let (c3, c2) = prf.gen_rands::<RingElement<u16>>();
+        let (c3, c2) = prf.gen_rands::<RingElement<T>>();
         // mask of the ot
-        let w0 = prf.get_my_prf().gen::<RingElement<u16>>();
-        let w1 = prf.get_my_prf().gen::<RingElement<u16>>();
+        let w0 = prf.get_my_prf().gen::<RingElement<T>>();
+        let w1 = prf.get_my_prf().gen::<RingElement<T>>();
 
         shares.push(Share::new(c3, c2));
         let c = c3 + c2;
-        let xor = RingElement(u16::from((a ^ b).convert().convert()));
+        let xor = RingElement(T::from((a ^ b).convert().convert()));
         let m0_ = xor - c;
         let m1_ = (xor ^ RingElement::one()) - c;
         m0.push(m0_ ^ w0);
@@ -387,7 +386,7 @@ async fn bit_inject_ot_2round_sender(
     let prev_id = session.prev_identity()?;
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
-        .map(NetworkValue::VecRing16)
+        .map(T::new_network_vec)
         .collect::<Vec<_>>();
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
     // Reshare to Helper
@@ -400,22 +399,25 @@ async fn bit_inject_ot_2round_sender(
 
 // TODO this is unbalanced, so a real implementation should actually rotate
 // parties around
-pub(crate) async fn bit_inject_ot_2round(
+pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<u16>, Error> {
+) -> Result<VecShare<T>, Error>
+where
+    Standard: Distribution<T>,
+{
     let res = match session.own_role()?.index() {
         0 => {
             // OT Helper
-            bit_inject_ot_2round_helper(session, input).await?
+            bit_inject_ot_2round_helper::<T>(session, input).await?
         }
         1 => {
             // OT Receiver
-            bit_inject_ot_2round_receiver(session, input).await?
+            bit_inject_ot_2round_receiver::<T>(session, input).await?
         }
         2 => {
             // OT Sender
-            bit_inject_ot_2round_sender(session, input).await?
+            bit_inject_ot_2round_sender::<T>(session, input).await?
         }
         _ => {
             return Err(eyre!(
