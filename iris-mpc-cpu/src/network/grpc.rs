@@ -30,6 +30,7 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status, Streaming,
 };
+use tracing::trace;
 
 type TonicResult<T> = Result<T, Status>;
 
@@ -58,6 +59,7 @@ impl Networking for GrpcSession {
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
         ))?;
+        trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
         let request = SendRequest { data: value };
         outgoing_stream
             .send(request)

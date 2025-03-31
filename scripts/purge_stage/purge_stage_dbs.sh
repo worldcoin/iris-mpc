@@ -74,7 +74,7 @@ clean_mpc_database() {
   fi
 
   CLUSTER="arn:aws:eks:eu-north-1:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
-  echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER_NAME"
+  echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER"
   
   # Switch to the appropriate Kubernetes context
   kubectx $CLUSTER
