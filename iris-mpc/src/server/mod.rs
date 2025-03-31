@@ -2,7 +2,6 @@ mod utils;
 
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
-use crate::services::init::initialize_chacha_seeds;
 use crate::services::processors::batch::receive_batch;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
@@ -92,7 +91,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     let party_id = config.party_id;
     tracing::info!("Deriving shared secrets");
-    let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
