@@ -98,7 +98,6 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: GrpcHandle,
-    own_identity: Identity,
     party_id: usize,
 }
 
@@ -261,7 +260,6 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
-            own_identity: my_identity.clone(),
             party_id: my_index,
         })
     }
@@ -291,7 +289,7 @@ impl HawkActor {
             session_id,
             role_assignments: self.role_assignments.clone(),
             networking: Box::new(grpc_session),
-            own_identity: self.own_identity.clone(),
+            own_role: Role::new(self.party_id),
         };
 
         let my_session_seed = thread_rng().gen();
@@ -305,7 +303,6 @@ impl HawkActor {
         let aby3_store = Aby3Store {
             session,
             storage: self.iris_store(store_id),
-            owner: self.own_identity.clone(),
         };
 
         // TODO: Use a better seed?
