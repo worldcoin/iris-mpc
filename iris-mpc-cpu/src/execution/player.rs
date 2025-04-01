@@ -30,7 +30,7 @@ impl From<String> for Identity {
 }
 
 /// Struct that keeps the player id (role), zero indexed;
-#[derive(Debug, Eq, Hash, PartialEq, Clone)]
+#[derive(Debug, Eq, Hash, PartialEq, Copy, Clone)]
 pub struct Role(u8);
 
 impl Role {

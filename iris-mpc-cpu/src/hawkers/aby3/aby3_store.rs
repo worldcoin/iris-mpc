@@ -1,5 +1,5 @@
 use crate::{
-    execution::{player::Identity, session::Session},
+    execution::session::Session,
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -153,8 +153,6 @@ impl SharedIrisesRef {
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
 pub struct Aby3Store {
-    /// Identity of the party performing computations in this store
-    pub owner: Identity,
     /// Reference to the shared irises
     pub storage: SharedIrisesRef,
     /// Session for the SMPC operations
