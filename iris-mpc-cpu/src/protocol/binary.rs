@@ -113,13 +113,7 @@ pub(crate) async fn and_many_receive<T: IntRing2k + NetworkInt>(
         let serialized_other_share = session.network_session.receive_prev().await;
 
         match NetworkValue::from_network(serialized_other_share) {
-            Ok(v) => {
-                if v.is_vector() {
-                    T::into_vec(v)
-                } else {
-                    Ok(vec![T::into_element(v)?])
-                }
-            }
+            Ok(v) => T::into_vec(v),
             Err(e) => Err(eyre!("Error in and_many_receive: {e}")),
         }
     }?;
@@ -305,14 +299,17 @@ where
     let (m0, m1, wc) = {
         let reply_m0_and_m1 = network.receive_next().await;
         let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
-        assert!(
-            m0_and_m1.len() == 2,
-            "Deserialized vec in bit inject is wrong length"
-        );
-        let (m0, m1) = m0_and_m1.into_iter().collect_tuple().unwrap();
-
-        let m0 = T::into_vec(m0);
-        let m1 = T::into_vec(m1);
+        if m0_and_m1.len() == 2 {
+            return Err(eyre!(
+                "Deserialized vec in bit inject is wrong length: {}",
+                m0_and_m1.len()
+            ));
+        }
+        let (m0, m1) = m0_and_m1
+            .into_iter()
+            .map(T::into_vec)
+            .collect_tuple()
+            .unwrap();
 
         let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
@@ -684,7 +681,12 @@ where
     Ok(msb)
 }
 
-// Extracts bit at position K
+/// Extracts the MSBs of given bit-sliced arithmetic shares.
+/// The input is supposed to be given in a transposed form such that the i-th `VecShare<T>` contains the i-th bits of the given arithmetic shares.
+/// This function follow the arithmetic-to-binary (A2B) conversion protocol from the ABY3 framework.
+/// The only difference is that the binary circuit returns only the MSB of the sum.
+///
+/// The generic T type is only used to batch bits and has no relation to the underlying type of the input arithmetic shares.  
 async fn extract_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x: Vec<VecShare<T>>,
@@ -717,11 +719,12 @@ where
     binary_add_3_get_msb_prefix(session, x1, x2, x3).await
 }
 
-pub async fn extract_msb_u32<const K: usize>(
+/// Extracts the MSB of the secret shared input values as an arithmetic u64 share.
+pub async fn extract_msb_u32(
     session: &mut Session,
     x_: VecShare<u32>,
 ) -> Result<VecShare<u64>, Error> {
-    let x = x_.transpose_pack_u64_with_len::<K>();
+    let x = x_.transpose_pack_u64();
     extract_msb::<u64>(session, x).await
 }
 
@@ -732,7 +735,7 @@ pub async fn single_extract_msb_u32<const K: usize>(
     session: &mut Session,
     x: Share<u32>,
 ) -> Result<Share<Bit>, Error> {
-    let (a, b) = extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(vec![x]))
+    let (a, b) = extract_msb_u32(session, VecShare::new_vec(vec![x]))
         .await?
         .get_at(0)
         .get_ab();
@@ -748,8 +751,7 @@ pub async fn extract_msb_u32_batch(
     let res_len = x.len();
     let mut res = Vec::with_capacity(res_len);
 
-    let packed_bits =
-        extract_msb_u32::<{ u32::BITS as usize }>(session, VecShare::new_vec(x.to_vec())).await?;
+    let packed_bits = extract_msb_u32(session, VecShare::new_vec(x.to_vec())).await?;
     let mut packed_bits_iter = packed_bits.into_iter();
 
     while res.len() < res_len {
