@@ -290,6 +290,9 @@ impl VecShare<u32> {
         res
     }
 
+    /// Transposes `u32` shares into slices of bits and packs them into `u128` shares.
+    /// The result is a vector of `VecShare<u128>` with 32 elements corresponding to each bit.
+    /// The length of each `VecShare<u128>` is ceil(length of self / 128).
     pub fn transpose_pack_u128(mut self) -> Vec<VecShare<u128>> {
         // Pad to multiple of 128
         let len = (self.shares.len() + 127) / 128;

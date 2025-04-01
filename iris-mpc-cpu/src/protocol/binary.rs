@@ -728,8 +728,6 @@ pub async fn extract_msb_u32(
     extract_msb::<u64>(session, x).await
 }
 
-// TODO a dedicated bitextraction for just one element would be more
-// efficient
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn single_extract_msb_u32<const K: usize>(
     session: &mut Session,
