@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
             aby3_store::{Aby3Store, SharedIrisesRef},
             test_utils::get_trivial_share,
         },
-        plaintext_store::PlaintextStore,
+        plaintext_store::{PlaintextStore, PointId},
     },
     hnsw::{graph::layered_graph::migrate, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
@@ -60,7 +60,7 @@ async fn create_graph_from_plain_db(
     let mut shared_irises = HashMap::new();
 
     for (vector_id, iris) in store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_serial_id(vector_id as u32);
+        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
         let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }

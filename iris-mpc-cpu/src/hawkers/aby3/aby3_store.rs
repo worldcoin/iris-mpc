@@ -1,6 +1,5 @@
 use crate::{
     execution::{player::Identity, session::Session},
-    hawkers::plaintext_store::PointId,
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -13,70 +12,14 @@ use crate::{
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    num::ParseIntError,
-    str::FromStr,
-    sync::Arc,
-    vec,
-};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::instrument;
 
+pub use iris_mpc_common::vector_id::VectorId;
+
 /// Reference to an iris in the Shamir secret shared form over a Galois ring.
 pub type IrisRef = Arc<GaloisRingSharedIris>;
-
-/// Unique identifier for an iris inserted into the store.
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct VectorId {
-    pub(crate) id: PointId,
-}
-
-impl Display for VectorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.id, f)
-    }
-}
-
-impl FromStr for VectorId {
-    type Err = ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(VectorId {
-            id: FromStr::from_str(s)?,
-        })
-    }
-}
-
-impl From<PointId> for VectorId {
-    fn from(id: PointId) -> Self {
-        VectorId { id }
-    }
-}
-
-impl From<&PointId> for VectorId {
-    fn from(id: &PointId) -> Self {
-        VectorId { id: *id }
-    }
-}
-
-impl From<usize> for VectorId {
-    fn from(id: usize) -> Self {
-        VectorId { id: id.into() }
-    }
-}
-
-impl VectorId {
-    pub fn from_serial_id(id: u32) -> Self {
-        VectorId { id: id.into() }
-    }
-
-    /// Returns the ID of a vector as a number.
-    pub fn to_serial_id(&self) -> u32 {
-        self.id.0
-    }
-}
 
 /// Iris to be searcher or inserted into the store.
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
@@ -126,13 +69,11 @@ pub struct SharedIrises {
 impl SharedIrises {
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
         self.points.insert(vector_id, iris);
-        self.next_id = self.next_id.max(vector_id.to_serial_id() + 1);
+        self.next_id = self.next_id.max(vector_id.serial_id() + 1);
     }
 
     fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId {
-            id: PointId(self.next_id),
-        };
+        let new_id = VectorId::from_serial_id(self.next_id);
         self.next_id += 1;
         new_id
     }
@@ -171,11 +112,7 @@ impl Default for SharedIrisesRef {
 // Constructor.
 impl SharedIrisesRef {
     pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let next_id = points
-            .keys()
-            .map(|v| v.to_serial_id() + 1)
-            .max()
-            .unwrap_or(0);
+        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
         let body = SharedIrises {
             points,
             next_id,
@@ -463,6 +400,7 @@ mod tests {
         let hawk_searcher = HnswSearcher::default();
 
         for i in 0..database_size {
+            let vector_id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
                 .await;
@@ -477,7 +415,7 @@ mod tests {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
                 let mut g = g.clone();
-                let q = v_lock.storage.get_vector(&i.into()).await;
+                let q = v_lock.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let v = v.clone();
                 jobs.spawn(async move {
@@ -498,7 +436,7 @@ mod tests {
                 let mut g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let query = v_lock.storage.get_vector(&i.into()).await;
+                    let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
                     let secret_neighbors =
                         hawk_searcher.search(&mut *v_lock, &mut g, &query, 1).await;
@@ -707,11 +645,12 @@ mod tests {
                 .unwrap();
 
         for i in 0..database_size {
+            let vector_id = VectorId::from_0_index(i as u32);
             let mut jobs = JoinSet::new();
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.lock().await.storage.get_vector(&i.into()).await;
+                let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 jobs.spawn(async move {
