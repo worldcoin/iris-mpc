@@ -31,7 +31,7 @@ pub(crate) fn a2b_pre<T: IntRing2k>(
     let mut x2 = Share::zero();
     let mut x3 = Share::zero();
 
-    match session.own_role()?.index() {
+    match session.own_role().index() {
         0 => {
             x1.a = a;
             x3.b = b;
@@ -299,7 +299,7 @@ where
     let (m0, m1, wc) = {
         let reply_m0_and_m1 = network.receive_next().await;
         let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
-        if m0_and_m1.len() == 2 {
+        if m0_and_m1.len() != 2 {
             return Err(eyre!(
                 "Deserialized vec in bit inject is wrong length: {}",
                 m0_and_m1.len()
@@ -403,7 +403,7 @@ pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let res = match session.own_role()?.index() {
+    let res = match session.own_role().index() {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper::<T>(session, input).await?

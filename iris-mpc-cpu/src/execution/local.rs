@@ -7,7 +7,6 @@ use crate::{
     protocol::{ops::setup_replicated_prf, prf::PrfSeed},
 };
 use futures::future::join_all;
-use itertools::izip;
 use std::{
     collections::HashSet,
     sync::{Arc, LazyLock},
@@ -91,7 +90,7 @@ impl LocalRuntime {
                             session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
                             networking: Box::new(network.get_local_network(identity.clone())),
-                            own_identity: identity,
+                            own_role: Role::new(i),
                         }
                     })
                     .collect();
@@ -111,15 +110,16 @@ impl LocalRuntime {
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new))
                     .collect::<eyre::Result<Vec<_>>>()?;
-                let network_sessions: Vec<NetworkSession> =
-                    izip!(identities.into_iter(), grpc_sessions.into_iter())
-                        .map(|(id, session)| NetworkSession {
-                            session_id: sess_id,
-                            role_assignments: Arc::new(role_assignments.clone()),
-                            networking: Box::new(session),
-                            own_identity: id,
-                        })
-                        .collect();
+                let network_sessions: Vec<NetworkSession> = grpc_sessions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, session)| NetworkSession {
+                        session_id: sess_id,
+                        role_assignments: Arc::new(role_assignments.clone()),
+                        networking: Box::new(session),
+                        own_role: Role::new(id),
+                    })
+                    .collect();
                 network_sessions
             }
         };
