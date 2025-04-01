@@ -79,3 +79,7 @@ path = "bin/hawk_main.rs"
 [[bin]]
 name = "hnsw_network_stats_example"
 path = "bin/hnsw_network_stats_example.rs"
+
+[[bin]]
+name = "init_test_dbs"
+path = "bin/init_test_dbs.rs"
