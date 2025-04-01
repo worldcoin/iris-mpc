@@ -2,14 +2,14 @@
 /// over a partially sorted list.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PartialQuickSort {
-    /// Index of left endpoint of sorted region of sort interval, inclusive
+    /// Index of left endpoint of sort interval, inclusive
     pub left: usize,
-
-    /// Index of left endpoint of unsorted region of sort interval, inclusive
-    pub left_u: usize,
 
     /// Index of right endpoint of sort interval, exclusive
     pub right: usize,
+
+    /// Length of sort interval prefix which is assumed to be pre-sorted
+    pub sorted_len: usize,
 }
 
 impl PartialQuickSort {
@@ -20,7 +20,12 @@ impl PartialQuickSort {
     /// update a list during sorting and continue to the next level of recursion.
     pub fn next_cmps(&self) -> Vec<(usize, usize)> {
         let pivot_idx = self.pivot_idx();
-        ((self.left_u)..(self.right))
+
+        // Start index of the unsorted part of the sort interval, inclusive.
+        // If fully unsorted, then the first element by itself is sorted.
+        let left_u = self.left + self.sorted_len.max(1);
+
+        (left_u..(self.right))
             .map(|x| (x, pivot_idx))
             .collect()
     }
@@ -61,30 +66,34 @@ impl PartialQuickSort {
 
         // Count elements going to left and right subintervals
 
-        let n_sorted_left = pivot_idx - self.left;
-        let n_sorted_right = self.left_u - pivot_idx - 1;
+        // Start index of the unsorted part of the sort interval, inclusive.
+        // If fully unsorted, then the first element by itself is sorted.
+        let unsorted_start = self.left + self.sorted_len.max(1);
+
+        let sorted_len_left = pivot_idx - self.left;
+        let sorted_len_right = unsorted_start - pivot_idx - 1;
 
         let n_lt = cmp_results.iter().filter(|b| **b).count();
         let n_geq = cmp_results.len() - n_lt;
 
         // Move pivot element to sorted index in `target`
 
-        let pivot_target = self.left + n_sorted_left + n_lt;
+        let pivot_target = self.left + sorted_len_left + n_lt;
         target[pivot_target] = lst[pivot_idx].clone();
 
         // Copy sorted subintervals into `target`
 
         target[(self.left)..pivot_idx].clone_from_slice(&lst[(self.left)..pivot_idx]);
-        target[(pivot_target + 1)..(pivot_target + 1 + n_sorted_right)]
-            .clone_from_slice(&lst[(pivot_idx + 1)..self.left_u]);
+        target[(pivot_target + 1)..(pivot_target + 1 + sorted_len_right)]
+            .clone_from_slice(&lst[(pivot_idx + 1)..unsorted_start]);
 
         // Step through unsorted interval and copy elements into left and right sides
         // of `target` depending on the outcomes in `cmp_results`
 
         let mut l_idx = pivot_idx;
-        let mut r_idx = pivot_target + 1 + n_sorted_right;
+        let mut r_idx = pivot_target + 1 + sorted_len_right;
 
-        lst[(self.left_u)..(self.right)]
+        lst[unsorted_start..(self.right)]
             .iter()
             .zip(cmp_results)
             .for_each(|(val, cmp)| {
@@ -99,27 +108,24 @@ impl PartialQuickSort {
 
         // Update `self` to left recursive sort
 
-        self.left_u = pivot_idx;
         self.right = pivot_target;
+        self.sorted_len = sorted_len_left;
 
         // Return right recursive sort
 
         Self {
             left: pivot_target + 1,
-            left_u: pivot_target + 1 + n_sorted_right,
-            right: pivot_target + 1 + n_sorted_right + n_geq,
+            right: pivot_target + 1 + sorted_len_right + n_geq,
+            sorted_len: sorted_len_right,
         }
     }
 
     /// Return whether the quicksort block represented by this struct is finished.
     ///
     /// This is the case either if the full block has length 0 or 1, or if the
-    /// unsorted portion of the block has length 0.
+    /// full sort interval is covered by the sorted prefix.
     pub fn is_finished(&self) -> bool {
-        match self.right - self.left {
-            0 | 1 => true,
-            _ => self.left_u == self.right,
-        }
+        self.right - self.left <= self.sorted_len.max(1)
     }
 
     /// Returns the pivot index for this sort step, set to the midpoint of the
@@ -131,7 +137,7 @@ impl PartialQuickSort {
     /// part, and the unsorted part consists of items with relatively uniform
     /// ordering.
     pub fn pivot_idx(&self) -> usize {
-        (self.left + self.left_u) / 2
+        self.left + self.sorted_len / 2
     }
 }
 
@@ -155,8 +161,8 @@ mod tests {
 
         let mut qs_step = PartialQuickSort {
             left: 2,
-            left_u: 5,
             right: 7,
+            sorted_len: 3,
         };
 
         let mut lst2 = vec![(0u32, 0u32); lst.len()];
@@ -184,8 +190,8 @@ mod tests {
             qs_step,
             PartialQuickSort {
                 left: 2,
-                left_u: 3,
-                right: 4
+                right: 4,
+                sorted_len: 1,
             }
         );
 
@@ -194,8 +200,52 @@ mod tests {
             next_qs_step,
             PartialQuickSort {
                 left: 5,
-                left_u: 6,
-                right: 7
+                right: 7,
+                sorted_len: 1,
+            }
+        );
+
+        assert_eq!(lst2, lst2_after);
+    }
+
+    #[test]
+    fn test_qs_step_unsorted() {
+        let lst = vec![4u32, 1, 3, 7, 5, 6, 2];
+
+        let mut qs_step = PartialQuickSort {
+            left: 0,
+            right: 7,
+            sorted_len: 0,
+        };
+
+        let mut lst2 = vec![0u32; lst.len()];
+        let lst2_after = vec![1, 3, 2, 4u32, 7, 5, 6];
+
+        let cmp_pairs = qs_step.next_cmps();
+        let cmp_results: Vec<_> = cmp_pairs
+            .iter()
+            .map(|(idx1, idx2)| lst[*idx1] < lst[*idx2])
+            .collect();
+
+        let next_qs_step = qs_step.step(&cmp_results, &lst, &mut lst2);
+
+        // [ 1 3 2 ]
+        assert_eq!(
+            qs_step,
+            PartialQuickSort {
+                left: 0,
+                right: 3,
+                sorted_len: 0,
+            }
+        );
+
+        // [ 7 5 6 ]
+        assert_eq!(
+            next_qs_step,
+            PartialQuickSort {
+                left: 4,
+                right: 7,
+                sorted_len: 0,
             }
         );
 
