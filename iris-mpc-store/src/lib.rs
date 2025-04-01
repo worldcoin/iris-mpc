@@ -7,12 +7,12 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
 };
 use iris_mpc_common::{
-    postgres::{PostgresClient},
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
-    vector_id::VectorId
+    postgres::PostgresClient,
+    vector_id::VectorId,
 };
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -657,12 +657,12 @@ pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
     use iris_mpc_common::{
-        postgres::AccessMode,
         helpers::{
             smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
             smpc_response::UniquenessResult,
             sync::ModificationStatus,
-        }
+        },
+        postgres::AccessMode,
     };
 
     const MAX_CONNECTIONS: u32 = 100;
