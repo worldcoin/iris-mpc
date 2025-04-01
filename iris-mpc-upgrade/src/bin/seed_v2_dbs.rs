@@ -42,12 +42,24 @@ struct Args {
 async fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
-    let party_1_pg_client =
-        PostgresClient::new(&args.db_url_party1, &args.schema_name_party1, AccessMode::ReadWrite).await?;
-    let party_2_pg_client =
-        PostgresClient::new(&args.db_url_party2, &args.schema_name_party1, AccessMode::ReadWrite).await?;
-    let party_3_pg_client =
-        PostgresClient::new(&args.db_url_party3, &args.schema_name_party1, AccessMode::ReadWrite).await?;
+    let party_1_pg_client = PostgresClient::new(
+        &args.db_url_party1,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+    let party_2_pg_client = PostgresClient::new(
+        &args.db_url_party2,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+    let party_3_pg_client = PostgresClient::new(
+        &args.db_url_party3,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
 
     let store1 = Store::new(&party_1_pg_client).await?;
     let store2 = Store::new(&party_2_pg_client).await?;

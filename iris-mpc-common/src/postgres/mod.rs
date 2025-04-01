@@ -28,10 +28,7 @@ fn sql_switch_schema(schema_name: &str, access_mode: AccessMode) -> Result<Strin
     sanitize_identifier(schema_name)?;
 
     if access_mode == AccessMode::ReadOnly {
-        Ok(format!(
-            "SET search_path TO \"{}\";",
-            schema_name
-        ))
+        Ok(format!("SET search_path TO \"{}\";", schema_name))
     } else {
         Ok(format!(
             "
@@ -72,12 +69,12 @@ impl PostgresClient {
 
     pub async fn migrate(&self) -> () {
         tracing::info!("Running migrations...");
-        
+
         if self.access_mode == AccessMode::ReadOnly {
             tracing::info!("Not migrating client in read-only mode");
-            return 
+            return;
         }
-        
+
         sqlx::migrate!("./../migrations")
             .run(&self.pool)
             .await

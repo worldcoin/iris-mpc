@@ -32,7 +32,6 @@ pub struct GraphPg<V: VectorStore> {
     phantom: PhantomData<V>,
 }
 
-
 impl<V: VectorStore> GraphPg<V> {
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
         tracing::info!(
@@ -263,7 +262,8 @@ pub mod test_utils {
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let postgres_client = PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            let postgres_client =
+                PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
             let graph = GraphPg::new(&postgres_client).await?;
             Ok(TestGraphPg {
                 postgres_client,

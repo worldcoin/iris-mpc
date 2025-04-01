@@ -56,7 +56,8 @@ async fn main() -> eyre::Result<()> {
     let common_seed = derive_common_seed(&config).await?;
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-    let postgres_client = PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
     let iris_stream = store.stream_irises_in_range(config.db_start..config.db_end);

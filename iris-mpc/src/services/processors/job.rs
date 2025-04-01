@@ -1,5 +1,4 @@
 use crate::services::processors::result_message::send_results_to_sns;
-use sqlx::{Postgres, Transaction};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{eyre, WrapErr};
 use iris_mpc_common::config::{Config, ModeOfDeployment};
@@ -14,6 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
+use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
@@ -314,26 +314,26 @@ async fn persist(
     // In normal (non‐ShadowReadOnly) mode, handle each exclusive persistence setting:
     match (config.cpu_disable_persistence, config.disable_persistence) {
         // If *both* are disabled, do nothing with either DB:
-        (true, true) => {},
+        (true, true) => {}
 
         // If only CPU persistence is disabled => we commit iris changes only:
         (true, false) => {
             iris_tx.commit().await?;
-        },
+        }
 
         // If only “base” (iris) persistence is disabled => we commit the graph:
         (false, true) => {
             let mut graph_tx = graph_store.tx().await?;
             hawk_mutation.persist(&mut graph_tx).await?;
             graph_tx.tx.commit().await?;
-        },
+        }
 
         // If *both* are enabled => wrap iris_tx so commits go to both DBs:
         (false, false) => {
             let mut graph_tx = graph_store.tx_wrap(iris_tx);
             hawk_mutation.persist(&mut graph_tx).await?;
             graph_tx.tx.commit().await?;
-        },
+        }
     }
 
     Ok(())

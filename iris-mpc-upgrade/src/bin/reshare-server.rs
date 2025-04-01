@@ -37,7 +37,8 @@ async fn main() -> eyre::Result<()> {
     );
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-    let postgres_client = PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
     let receiver_helper = IrisCodeReshareReceiverHelper::new(

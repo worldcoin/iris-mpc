@@ -14,7 +14,7 @@ use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
-use iris_mpc_common::postgres::{PostgresClient, AccessMode};
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -908,7 +908,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         db_config,
         schema_name
     );
-    let postgres_client = PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
+    let postgres_client =
+        PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");
