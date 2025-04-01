@@ -13,7 +13,6 @@ use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
-    migrate::Migrator,
     postgres::PgRow,
     types::{Json, Text},
     PgConnection, Postgres, Row, Transaction,
@@ -33,7 +32,6 @@ pub struct GraphPg<V: VectorStore> {
     phantom: PhantomData<V>,
 }
 
-static MIGRATOR: Migrator = sqlx::migrate!("./../migrations");
 
 impl<V: VectorStore> GraphPg<V> {
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
@@ -42,8 +40,7 @@ impl<V: VectorStore> GraphPg<V> {
             postgres_client.schema_name,
         );
 
-        // Create the schema on the first startup.
-        MIGRATOR.run(&postgres_client.pool).await?;
+        postgres_client.migrate().await;
 
         Ok(Self {
             pool: postgres_client.pool.clone(),
@@ -250,7 +247,7 @@ where
 
 pub mod test_utils {
     use super::*;
-    use iris_mpc_common::postgres::PostgresClient;
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
     use std::ops::{Deref, DerefMut};
 
@@ -266,7 +263,7 @@ pub mod test_utils {
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let postgres_client = PostgresClient::new(&test_db_url()?, &schema_name).await?;
+            let postgres_client = PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
             let graph = GraphPg::new(&postgres_client).await?;
             Ok(TestGraphPg {
                 postgres_client,

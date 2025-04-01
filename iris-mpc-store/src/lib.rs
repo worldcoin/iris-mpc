@@ -6,7 +6,7 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::postgres::{PostgresClient};
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -17,10 +17,8 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{migrate::Migrator, PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./../migrations");
 
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
@@ -168,8 +166,7 @@ impl Store {
             postgres_client.schema_name
         );
 
-        // Create the schema on the first startup.
-        MIGRATOR.run(&postgres_client.pool).await?;
+        postgres_client.migrate().await;
 
         Ok(Store {
             pool: postgres_client.pool.clone(),
@@ -664,7 +661,7 @@ pub mod tests {
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
@@ -743,7 +740,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut tx = store.tx().await?;
@@ -761,7 +758,7 @@ pub mod tests {
         let count: usize = 1 << 3;
 
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut codes_and_masks = vec![];
@@ -821,7 +818,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_init_db_with_random_shares() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let expected_generated_irises_num = 10;
@@ -838,7 +835,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_rollback() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut irises = vec![];
@@ -869,7 +866,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_results() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         let result_events = vec!["event1".to_string(), "event2".to_string()];
@@ -888,7 +885,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
@@ -910,7 +907,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         // insert two irises into db
@@ -1021,7 +1018,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_insert_modification() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         // 1. Insert a new modification
@@ -1066,7 +1063,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_last_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert a few modifications
@@ -1131,7 +1128,7 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications
@@ -1199,7 +1196,7 @@ pub mod tests {
     async fn test_delete_modifications() -> Result<()> {
         // Set up a temporary schema and a new store.
         let schema_name = temporary_name();
-        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name).await?;
+        let postgres_client = PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications.

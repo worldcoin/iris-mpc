@@ -8,7 +8,7 @@ services:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
     volumes:
-      - ./scripts/init-db-pgres.sql:/docker-entrypoint-initdb.d/init-db-pgres.sql
+      - ./scripts/tools/init-db-pgres.sql:/docker-entrypoint-initdb.d/init-db-pgres.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
       interval: 10s
@@ -25,7 +25,7 @@ services:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
     volumes:
-      - ./scripts/init-db-pgres.sql:/docker-entrypoint-initdb.d/init-db-pgres.sql
+      - ./scripts/tools/init-db-pgres.sql:/docker-entrypoint-initdb.d/init-db-pgres.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready", "-d", "db_prod"]
       interval: 10s
@@ -57,4 +57,4 @@ services:
       retries: 10
 
     volumes:
-      - ./scripts/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
+      - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh

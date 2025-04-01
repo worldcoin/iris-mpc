@@ -1,4 +1,5 @@
 use crate::services::processors::result_message::send_results_to_sns;
+use sqlx::{Postgres, Transaction};
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{eyre, WrapErr};
 use iris_mpc_common::config::{Config, ModeOfDeployment};
@@ -202,23 +203,7 @@ pub async fn process_job_result(
         }
     }
 
-    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
-        // In the ShadowReadOnly mode, we do not want to commit anything to iris-db, we will not be able to either.
-        let mut graph_tx = graph_store.tx().await?;
-        if !config.disable_persistence {
-            hawk_mutation.persist(&mut graph_tx).await?;
-        }
-        graph_tx.tx.commit().await?;
-    } else {
-        let mut graph_tx = graph_store.tx_wrap(iris_tx);
-
-        if !config.disable_persistence {
-            hawk_mutation.persist(&mut graph_tx).await?;
-        }
-
-        // Because this transaction was built on top of the irises transaction, commiting it persists both tables
-        graph_tx.tx.commit().await?;
-    };
+    persist(iris_tx, graph_store, hawk_mutation, config).await?;
 
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id);
@@ -302,6 +287,54 @@ pub async fn process_job_result(
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     shutdown_handler.decrement_batches_pending_completion();
+
+    Ok(())
+}
+
+async fn persist(
+    iris_tx: Transaction<'_, Postgres>,
+    graph_store: &GraphStore,
+    hawk_mutation: HawkMutation,
+    config: &Config,
+) -> eyre::Result<()> {
+    // If we're in ShadowReadOnly mode, never commit to iris-db, but possibly commit graph.
+    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
+        if !config.cpu_disable_persistence {
+            let mut graph_tx = graph_store.tx().await?;
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        } else {
+            tracing::info!(
+                "Not persisting graph changes due to ShadowReadOnly + cpu_disable_persistence=true"
+            );
+        }
+        return Ok(());
+    }
+
+    // In normal (non‐ShadowReadOnly) mode, handle each exclusive persistence setting:
+    match (config.cpu_disable_persistence, config.disable_persistence) {
+        // If *both* are disabled, do nothing with either DB:
+        (true, true) => {},
+
+        // If only CPU persistence is disabled => we commit iris changes only:
+        (true, false) => {
+            iris_tx.commit().await?;
+        },
+
+        // If only “base” (iris) persistence is disabled => we commit the graph:
+        (false, true) => {
+            let mut graph_tx = graph_store.tx().await?;
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        },
+
+        // If *both* are enabled => wrap iris_tx so commits go to both DBs:
+        (false, false) => {
+            let mut graph_tx = graph_store.tx_wrap(iris_tx);
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        },
+    }
 
     Ok(())
 }

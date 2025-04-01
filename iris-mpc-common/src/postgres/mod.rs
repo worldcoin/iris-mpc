@@ -7,6 +7,13 @@ const MAX_CONNECTIONS: u32 = 100;
 pub struct PostgresClient {
     pub pool: PgPool,
     pub schema_name: String,
+    pub access_mode: AccessMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessMode {
+    ReadOnly,
+    ReadWrite,
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
@@ -17,21 +24,29 @@ fn sanitize_identifier(input: &str) -> Result<()> {
     }
 }
 
-fn sql_switch_schema(schema_name: &str) -> Result<String> {
+fn sql_switch_schema(schema_name: &str, access_mode: AccessMode) -> Result<String> {
     sanitize_identifier(schema_name)?;
-    Ok(format!(
-        "
-        CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET search_path TO \"{}\";
-        ",
-        schema_name, schema_name
-    ))
+
+    if access_mode == AccessMode::ReadOnly {
+        Ok(format!(
+            "SET search_path TO \"{}\";",
+            schema_name
+        ))
+    } else {
+        Ok(format!(
+            "
+            CREATE SCHEMA IF NOT EXISTS \"{}\";
+            SET search_path TO \"{}\", public;
+            ",
+            schema_name, schema_name
+        ))
+    }
 }
 
 impl PostgresClient {
-    pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
+    pub async fn new(url: &str, schema_name: &str, access_mode: AccessMode) -> Result<Self> {
         tracing::info!("Connecting to V2 database with, schema: {}", schema_name);
-        let connect_sql = sql_switch_schema(schema_name)?;
+        let connect_sql = sql_switch_schema(schema_name, access_mode)?;
 
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
@@ -50,7 +65,22 @@ impl PostgresClient {
 
         Ok(PostgresClient {
             pool,
+            access_mode,
             schema_name: schema_name.to_string(),
         })
+    }
+
+    pub async fn migrate(&self) -> () {
+        tracing::info!("Running migrations...");
+        
+        if self.access_mode == AccessMode::ReadOnly {
+            tracing::info!("Not migrating client in read-only mode");
+            return 
+        }
+        
+        sqlx::migrate!("./../migrations")
+            .run(&self.pool)
+            .await
+            .expect("Failed to run migrations");
     }
 }

@@ -89,6 +89,9 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
+    pub cpu_disable_persistence: bool,
+
+    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
