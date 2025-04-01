@@ -1,9 +1,10 @@
 use super::ROTATIONS;
 use crate::{
     helpers::{
-        device_manager::DeviceManager, launch_config_from_elements_and_threads,
-        DEFAULT_LAUNCH_CONFIG_THREADS,
+        device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
+        launch_config_from_elements_and_threads, DEFAULT_LAUNCH_CONFIG_THREADS,
     },
+    server::actor::{reset_slice, DB_CHUNK_SIZE},
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
 };
 use cudarc::{
@@ -13,11 +14,14 @@ use cudarc::{
     },
     nvrtc::compile_ptx,
 };
+use itertools::Itertools;
 use std::{cmp::min, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
 const OPEN_RESULTS_BATCH_FUNCTION: &str = "openResultsBatch";
+const OPEN_RESULTS_INDEX_FUNCTION: &str = "openResultsWithIndexMapping";
+const PARTIAL_DB_RESULTS_FUNCTION: &str = "partialDbResults";
 const MERGE_DB_RESULTS_FUNCTION: &str = "mergeDbResults";
 const MERGE_BATCH_RESULTS_FUNCTION: &str = "mergeBatchResults";
 const MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION: &str = "mergeDbResultsWithOrPolicyBitmap";
@@ -27,6 +31,8 @@ pub struct DistanceComparator {
     pub device_manager: Arc<DeviceManager>,
     pub open_kernels: Vec<CudaFunction>,
     pub open_batch_kernels: Vec<CudaFunction>,
+    pub open_index_mapping_kernels: Vec<CudaFunction>,
+    pub partial_db_results_kernels: Vec<CudaFunction>,
     pub merge_db_kernels: Vec<CudaFunction>,
     pub merge_batch_kernels: Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
@@ -39,6 +45,7 @@ pub struct DistanceComparator {
     pub all_matches: Vec<CudaSlice<u32>>,
     pub match_counters_left: Vec<CudaSlice<u32>>,
     pub match_counters_right: Vec<CudaSlice<u32>>,
+    pub partial_results: Vec<CudaSlice<u32>>,
     pub partial_results_left: Vec<CudaSlice<u32>>,
     pub partial_results_right: Vec<CudaSlice<u32>>,
 }
@@ -48,6 +55,8 @@ impl DistanceComparator {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut open_batch_kernels: Vec<CudaFunction> = Vec::new();
+        let mut open_index_mapping_kernels: Vec<CudaFunction> = Vec::new();
+        let mut partial_db_results_kernels = Vec::new();
         let mut merge_db_kernels = Vec::new();
         let mut merge_batch_kernels = Vec::new();
         let mut merge_batch_with_bitmap_kernels: Vec<CudaFunction> = Vec::new();
@@ -57,6 +66,7 @@ impl DistanceComparator {
         let mut match_counters_left = vec![];
         let mut match_counters_right = vec![];
         let mut all_matches = vec![];
+        let mut partial_results = vec![];
         let mut partial_results_left = vec![];
         let mut partial_results_right = vec![];
 
@@ -74,9 +84,11 @@ impl DistanceComparator {
                     &[
                         OPEN_RESULTS_FUNCTION,
                         OPEN_RESULTS_BATCH_FUNCTION,
+                        OPEN_RESULTS_INDEX_FUNCTION,
                         MERGE_DB_RESULTS_FUNCTION,
                         MERGE_BATCH_RESULTS_FUNCTION,
                         MERGE_BATCH_RESULTS_WITH_OR_POLICY_BITMAP_FUNCTION,
+                        PARTIAL_DB_RESULTS_FUNCTION,
                     ],
                 )
                 .unwrap();
@@ -84,6 +96,10 @@ impl DistanceComparator {
             let open_results_function = device.get_func("", OPEN_RESULTS_FUNCTION).unwrap();
             let open_results_batch_function =
                 device.get_func("", OPEN_RESULTS_BATCH_FUNCTION).unwrap();
+            let open_results_index_function =
+                device.get_func("", OPEN_RESULTS_INDEX_FUNCTION).unwrap();
+            let partial_db_results_function =
+                device.get_func("", PARTIAL_DB_RESULTS_FUNCTION).unwrap();
             let merge_db_results_function = device.get_func("", MERGE_DB_RESULTS_FUNCTION).unwrap();
             let merge_batch_results_function =
                 device.get_func("", MERGE_BATCH_RESULTS_FUNCTION).unwrap();
@@ -101,6 +117,7 @@ impl DistanceComparator {
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
             );
+            partial_results.push(device.alloc_zeros(DB_CHUNK_SIZE).unwrap());
             partial_results_left.push(
                 device
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
@@ -114,6 +131,8 @@ impl DistanceComparator {
 
             open_kernels.push(open_results_function);
             open_batch_kernels.push(open_results_batch_function);
+            open_index_mapping_kernels.push(open_results_index_function);
+            partial_db_results_kernels.push(partial_db_results_function);
             merge_db_kernels.push(merge_db_results_function);
             merge_batch_kernels.push(merge_batch_results_function);
             merge_batch_with_bitmap_kernels.push(merge_batch_results_with_bitmap_function);
@@ -123,6 +142,8 @@ impl DistanceComparator {
             device_manager,
             open_kernels,
             open_batch_kernels,
+            open_index_mapping_kernels,
+            partial_db_results_kernels,
             merge_db_kernels,
             merge_batch_kernels,
             merge_batch_with_bitmap_kernels,
@@ -135,6 +156,7 @@ impl DistanceComparator {
             match_counters_left,
             match_counters_right,
             all_matches,
+            partial_results,
             partial_results_left,
             partial_results_right,
         }
@@ -205,6 +227,66 @@ impl DistanceComparator {
                             &mask_dots[i].a,
                             &mask_dots[i].b,
                             max_bucket_distances,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_results_with_index_mapping(
+        &self,
+        results1: &[CudaView<u64>],
+        results2: &[CudaView<u64>],
+        results3: &[CudaView<u64>],
+        matches_bitmap: &[CudaSlice<u64>],
+        db_sizes: &[usize],
+        real_db_sizes: &[usize],
+        total_db_sizes: &[usize],
+        ignore_db_results: &[bool],
+        batch_size: usize,
+        streams: &[CudaStream],
+        index_mapping: &[Vec<u32>],
+    ) {
+        for i in 0..self.device_manager.device_count() {
+            // Those correspond to 0 length dbs, which were just artificially increased to
+            // length 1 to avoid division by zero in the kernel
+            if ignore_db_results[i] {
+                continue;
+            }
+            let num_elements = (db_sizes[i] * self.query_length).div_ceil(64);
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+            self.device_manager.device(i).bind_to_thread().unwrap();
+            let index_mapping = htod_on_stream_sync(
+                &index_mapping[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap();
+
+            unsafe {
+                self.open_index_mapping_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &results1[i],
+                            &results2[i],
+                            &results3[i],
+                            &matches_bitmap[i],
+                            db_sizes[i],
+                            (batch_size * ROTATIONS) as u64,
+                            num_elements,
+                            real_db_sizes[i],
+                            total_db_sizes[i],
+                            &index_mapping,
                         ),
                     )
                     .unwrap();
@@ -322,6 +404,100 @@ impl DistanceComparator {
                     .unwrap();
             }
         }
+    }
+
+    pub fn get_partial_results(
+        &self,
+        matches_bitmap: &[CudaSlice<u64>],
+        db_sizes: &[usize],
+        streams: &[CudaStream],
+    ) -> Vec<Vec<u32>> {
+        for i in 0..self.device_manager.device_count() {
+            if db_sizes[i] == 0 {
+                continue;
+            }
+            let num_elements = (db_sizes[i] * self.query_length / ROTATIONS).div_ceil(64);
+            let threads_per_block = DEFAULT_LAUNCH_CONFIG_THREADS; // ON CHANGE: sync with kernel
+            let cfg = launch_config_from_elements_and_threads(
+                num_elements as u32,
+                threads_per_block,
+                &self.device_manager.devices()[i],
+            );
+
+            unsafe {
+                self.partial_db_results_kernels[i]
+                    .clone()
+                    .launch_on_stream(
+                        &streams[i],
+                        cfg,
+                        (
+                            &matches_bitmap[i],
+                            &self.partial_results[i],
+                            (self.query_length / ROTATIONS) as u64,
+                            db_sizes[i] as u64,
+                            num_elements as u64,
+                            &self.match_counters[i],
+                            DB_CHUNK_SIZE as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+
+        let mut counters = vec![];
+        for i in 0..self.device_manager.device_count() {
+            counters.push(
+                dtoh_on_stream_sync(
+                    &self.match_counters[i],
+                    &self.device_manager.device(i),
+                    &streams[i],
+                )
+                .unwrap(),
+            );
+        }
+        let mut results = vec![];
+        for i in 0..self.device_manager.device_count() {
+            results.push(
+                dtoh_on_stream_sync(
+                    &self.partial_results[i],
+                    &self.device_manager.device(i),
+                    &streams[i],
+                )
+                .unwrap(),
+            );
+        }
+
+        reset_slice(
+            self.device_manager.devices(),
+            &self.match_counters,
+            0,
+            streams,
+        );
+        reset_slice(
+            self.device_manager.devices(),
+            &self.partial_results,
+            0,
+            streams,
+        );
+
+        let mut matches = vec![];
+        for i in 0..self.device_manager.device_count() {
+            let len = counters[i][0] as usize;
+            let mut ids = results[i][..min(len, DB_CHUNK_SIZE)]
+                .iter()
+                .copied()
+                .unique()
+                .collect::<Vec<_>>();
+            ids.sort();
+            matches.push(ids);
+        }
+
+        tracing::info!(
+            "Unique Partial matches len: {:?}",
+            matches.iter().map(|m| m.len()).collect_vec()
+        );
+
+        matches
     }
 
     pub fn join_db_matches(
