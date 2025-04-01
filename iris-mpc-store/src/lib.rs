@@ -6,14 +6,15 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::{
+    postgres::{PostgresClient},
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
+    vector_id::VectorId
 };
-use iris_mpc_common::{config::ModeOfDeployment, vector_id::VectorId};
+
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -655,10 +656,13 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::{
-        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
-        smpc_response::UniquenessResult,
-        sync::ModificationStatus,
+    use iris_mpc_common::{
+        postgres::AccessMode,
+        helpers::{
+            smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+            smpc_response::UniquenessResult,
+            sync::ModificationStatus,
+        }
     };
 
     const MAX_CONNECTIONS: u32 = 100;

@@ -67,7 +67,7 @@ impl PostgresClient {
         })
     }
 
-    pub async fn migrate(&self) -> () {
+    pub async fn migrate(&self) {
         tracing::info!("Running migrations...");
 
         if self.access_mode == AccessMode::ReadOnly {
