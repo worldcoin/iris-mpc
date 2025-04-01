@@ -11,7 +11,7 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
@@ -39,8 +39,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for (vector_id, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from_serial_id(vector_id as u32);
+    for (i, iris) in plain_store.points.iter().enumerate() {
+        let vector_id = VectorId::from(PointId::from(i));
         let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
@@ -138,7 +138,7 @@ async fn graph_from_plain(
     recompute_distances: bool,
 ) -> GraphMem<Aby3Store> {
     let ep = graph_store.get_entry_point().await;
-    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId { id: vector_ref }, layer_count));
+    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId::from(vector_ref), layer_count));
 
     let layers = graph_store.get_layers();
 
@@ -150,10 +150,10 @@ async fn graph_from_plain(
         let links = layer.get_links_map();
         let mut shared_links = HashMap::new();
         for (source_v, queue) in links {
-            let source_v = source_v.into();
+            let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
             for (target_v, dist) in queue.as_vec_ref() {
-                let target_v = target_v.into();
+                let target_v = VectorId::from(*target_v);
                 let distance = if recompute_distances {
                     // recompute distances of graph edges from scratch
                     eval_vector_distance(&mut vectore_store_lock, &source_v, &target_v).await
