@@ -28,7 +28,7 @@ pub struct NetworkSession {
     pub session_id: SessionId,
     pub role_assignments: Arc<HashMap<Role, Identity>>,
     pub networking: NetworkingImpl,
-    pub own_identity: Identity,
+    pub own_role: Role,
 }
 
 impl NetworkSession {
@@ -67,14 +67,14 @@ impl Debug for NetworkSession {
         f.debug_struct("NetworkSession")
             .field("session_id", &self.session_id)
             .field("role_assignments", &self.role_assignments)
-            .field("own_identity", &self.own_identity)
+            .field("own_identity", &self.own_identity())
             .finish()
     }
 }
 
 pub trait SessionHandles {
     fn session_id(&self) -> SessionId;
-    fn own_role(&self) -> eyre::Result<Role>;
+    fn own_role(&self) -> Role;
     fn own_identity(&self) -> Identity;
     fn identity(&self, role: &Role) -> eyre::Result<&Identity>;
     fn next_identity(&self) -> eyre::Result<Identity>;
@@ -86,29 +86,12 @@ impl SessionHandles for NetworkSession {
         self.session_id
     }
 
-    fn own_role(&self) -> eyre::Result<Role> {
-        let role: Vec<&Role> = self
-            .role_assignments
-            .iter()
-            .filter_map(|(role, identity)| {
-                if identity == &self.own_identity {
-                    Some(role)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if role.len() != 1 {
-            Err(eyre!(
-                "Couldn't find exact match in role assignment hashmap to retrieve own role"
-            ))
-        } else {
-            Ok((*role[0]).clone())
-        }
+    fn own_role(&self) -> Role {
+        self.own_role
     }
 
     fn own_identity(&self) -> Identity {
-        self.own_identity.clone()
+        self.role_assignments.get(&self.own_role()).unwrap().clone()
     }
 
     fn identity(&self, role: &Role) -> eyre::Result<&Identity> {
@@ -119,7 +102,7 @@ impl SessionHandles for NetworkSession {
     }
 
     fn prev_identity(&self) -> eyre::Result<Identity> {
-        let prev_role = self.own_role()?.prev(self.role_assignments.len() as u8);
+        let prev_role = self.own_role().prev(self.role_assignments.len() as u8);
         match self.role_assignments.get(&prev_role) {
             Some(id) => Ok(id.clone()),
             None => Err(eyre!(
@@ -129,7 +112,7 @@ impl SessionHandles for NetworkSession {
     }
 
     fn next_identity(&self) -> eyre::Result<Identity> {
-        let next_role = self.own_role()?.next(self.role_assignments.len() as u8);
+        let next_role = self.own_role().next(self.role_assignments.len() as u8);
         match self.role_assignments.get(&next_role) {
             Some(id) => Ok(id.clone()),
             None => Err(eyre!(
@@ -149,7 +132,7 @@ impl SessionHandles for Session {
     fn own_identity(&self) -> Identity {
         self.network_session.own_identity()
     }
-    fn own_role(&self) -> eyre::Result<Role> {
+    fn own_role(&self) -> Role {
         self.network_session.own_role()
     }
     fn prev_identity(&self) -> eyre::Result<Identity> {

@@ -57,14 +57,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .sessions
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(session, storage)| {
-            let owner = session.own_identity();
-            Ok(Arc::new(Mutex::new(Aby3Store {
-                session,
-                storage,
-                owner,
-            })))
-        })
+        .map(|(session, storage)| Ok(Arc::new(Mutex::new(Aby3Store { session, storage }))))
         .collect()
 }
 
@@ -76,11 +69,9 @@ pub async fn setup_local_store_aby3_players(
         .sessions
         .into_iter()
         .map(|session| {
-            let identity = session.own_identity();
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
                 storage: SharedIrisesRef::default(),
-                owner: identity,
             })))
         })
         .collect()
@@ -90,11 +81,7 @@ pub async fn setup_local_store_aby3_players(
 /// The index must be in the range [0, 2] and unique per party.
 pub async fn get_owner_index(store: &Aby3StoreRef) -> eyre::Result<usize> {
     let store = store.lock().await;
-    store
-        .session
-        .network_session
-        .own_role()
-        .map(|role| role.index())
+    Ok(store.session.network_session.own_role().index())
 }
 
 /// Returns a trivial share of a distance.
