@@ -7,7 +7,6 @@ version = 2
 ignore = [
     { id = "RUSTSEC-2021-0137", reason = "we will switch to alkali eventually" },
     # https://github.com/mehcode/config-rs/issues/563
-    { id = "RUSTSEC-2024-0384", reason = "waiting for `web-time` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0402", reason = "waiting for `index-map` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0421", reason = "waiting for `mongodb` crate to remove the dependency" },
     { id = "RUSTSEC-2024-0436", reason = "deep subdependency from several aws and sqlx crates" },
