@@ -1203,14 +1203,7 @@ mod tests_db {
                             vectors[side],
                             distance.clone(),
                         )]),
-                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
-                            *vector,
-                            distance.clone(),
-                        )])],
-                        nb_links2: vec![SortedNeighborhood::from_ascending_vec(vec![(
-                            *vector,
-                            (),
-                        )])],
+                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(*vector, ())])],
                     }],
                     set_ep: i == side,
                 })

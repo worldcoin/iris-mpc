@@ -205,9 +205,7 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub neighbors: SortedNeighborhood<Vector, Distance>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<SortedNeighborhood<Vector, Distance>>,
-    pub nb_links2: Vec<SortedEdgeIds<Vector>>,
-    // TODO: replace with a single `nb_links` field.
+    pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
 impl Default for HnswSearcher {
@@ -964,20 +962,7 @@ impl HnswSearcher {
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
                 neighbors: l_links,
-                nb_links: l_neighbors
-                    .iter()
-                    .map(|n| {
-                        // TODO: Remove this fake conversion with fake distances.
-                        let fake_dist = &n.nb_dist;
-                        SortedNeighborhood::from_ascending_vec(
-                            n.nb_links
-                                .iter()
-                                .map(|(nb, _)| (nb.clone(), fake_dist.clone()))
-                                .collect_vec(),
-                        )
-                    })
-                    .collect_vec(),
-                nb_links2: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
+                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
             })
             .collect();
 
