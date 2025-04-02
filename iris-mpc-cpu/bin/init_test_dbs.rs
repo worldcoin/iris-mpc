@@ -21,10 +21,15 @@ struct Args {
     #[clap(short = 'n')]
     database_size: Option<usize>,
 
+    // TODO replace with support for serial ranges so external driver script can
+    // handle checkpoints
     #[clap(long("checkpoints"), value_delimiter = ',')]
     checkpoints: Vec<usize>,
 
+    // TODO database parameters
+
     // HNSW algorithm parameters
+    // TODO pick appropriate defaults for 2-sided search
     #[clap(short, default_value = "384")]
     M: usize,
 
@@ -36,6 +41,13 @@ struct Args {
 
     #[clap(short('p'))]
     layer_probability: Option<f64>,
+
+    // PRNG seeds
+    #[clap(default_value = "0")]
+    hnsw_prng_seed: u64,
+
+    #[clap(default_value = "1")]
+    aby3_prng_seed: u64,
 }
 
 #[allow(non_snake_case)]
@@ -59,7 +71,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
     let searcher = HnswSearcher { params };
 
-    let mut rng = AesRng::seed_from_u64(42_u64);
+    let mut hnsw_rng = AesRng::seed_from_u64(args.hnsw_prng_seed);
+    let mut aby3_rng = AesRng::seed_from_u64(args.aby3_prng_seed);
+
+    // TODO establish connections with databases
+
+    // TODO read existing graph and vector stores from database
     let mut vector = PlaintextStore::new();
     let mut graph = GraphMem::new();
 
@@ -82,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let raw_query = (&json_pt.unwrap()).into();
         let query = vector.prepare_query(raw_query);
         searcher
-            .insert(&mut vector, &mut graph, &query, &mut rng)
+            .insert(&mut vector, &mut graph, &query, &mut hnsw_rng)
             .await;
 
         counter += 1;
@@ -96,7 +113,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 counter
             );
 
+            // Postgres backup -- eg_backup, pg_restore, call from shell
+            // Call backups from CLI
             persist_graph_db(&graph);
+
+            // existing graph is read from database
+            // index range for build -- from, to
+            // test: 0 to 100k
         }
     }
 
@@ -106,6 +129,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     persist_graph_db(&graph);
+
+    info!("Dropping HNSW graph to conserve system memory");
+    drop(graph);
 
     info!("Converting plaintext iris codes locally into secret shares");
 
@@ -117,7 +143,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for iris in vector.points.iter() {
         let all_shares =
-            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
+            GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, iris.data.0.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].push(share);
         }
@@ -134,6 +160,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn persist_graph_db(_graph: &GraphMem<PlaintextStore>) {}
+fn persist_graph_db(_graph: &GraphMem<PlaintextStore>) {
+    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphPg.from_iris_store
 
-fn persist_vector_shares(_shares: &[GaloisRingSharedIris]) {}
+    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphOps.set_links
+    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphOps.set_entry_point
+}
+
+fn persist_vector_shares(_shares: &[GaloisRingSharedIris]) {
+    // See: iris_mpc_store::lib::new
+    // With url and schema name, can produce new Store struct using `new`
+
+    // See: iris_mpc_store::lib::insert_irises
+}
