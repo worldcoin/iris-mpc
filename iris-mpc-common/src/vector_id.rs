@@ -38,6 +38,13 @@ impl FromStr for VectorId {
 }
 
 impl VectorId {
+    pub fn new(serial_id: u32, version: i16) -> Self {
+        VectorId {
+            id: serial_id,
+            version,
+        }
+    }
+
     /// From Serial ID (1-indexed).
     pub fn from_serial_id(id: u32) -> Self {
         VectorId { id, version: 0 }
