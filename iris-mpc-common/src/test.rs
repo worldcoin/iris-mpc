@@ -36,14 +36,27 @@ pub struct E2ETemplate {
 }
 impl E2ETemplate {
     fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
-        let (left_shared_code, left_shared_mask) = get_shared_template(is_valid, &self.left, rng);
-        let (right_shared_code, right_shared_mask) =
-            get_shared_template(is_valid, &self.right, rng);
+        let (
+            left_shared_code,
+            left_shared_mask,
+            left_mirrored_shared_code,
+            left_mirrored_shared_mask,
+        ) = get_shared_template(is_valid, &self.left, rng);
+        let (
+            right_shared_code,
+            right_shared_mask,
+            right_mirrored_shared_code,
+            right_mirrored_shared_mask,
+        ) = get_shared_template(is_valid, &self.right, rng);
         E2ESharedTemplate {
             left_shared_code,
             left_shared_mask,
             right_shared_code,
             right_shared_mask,
+            left_mirrored_shared_code,
+            left_mirrored_shared_mask,
+            right_mirrored_shared_code,
+            right_mirrored_shared_mask,
         }
     }
 }
@@ -55,22 +68,55 @@ fn get_shared_template(
 ) -> (
     [GaloisRingIrisCodeShare; 3],
     [GaloisRingTrimmedMaskCodeShare; 3],
+    [GaloisRingIrisCodeShare; 3],
+    [GaloisRingTrimmedMaskCodeShare; 3],
 ) {
     let mut shared_code =
         GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, rng);
 
     let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
+
+    // Create mirrored versions of the shares (before trimming for masks)
+    let mut mirrored_shared_code = [
+        shared_code[0].mirrored(),
+        shared_code[1].mirrored(),
+        shared_code[2].mirrored(),
+    ];
+
+    let mirrored_shared_mask = [
+        shared_mask[0].mirrored(),
+        shared_mask[1].mirrored(),
+        shared_mask[2].mirrored(),
+    ];
+
+    // Now trim the masks
     let shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> =
         shared_mask.iter().map(|x| x.clone().into()).collect();
+
+    let mirrored_shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> = mirrored_shared_mask
+        .iter()
+        .map(|x| x.clone().into())
+        .collect();
 
     let mut shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
         shared_mask_vector.try_into().unwrap();
 
+    let mut mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
+        mirrored_shared_mask_vector.try_into().unwrap();
+
     if !is_valid {
         shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
-        shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
+        shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1);
+        mirrored_shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
+        mirrored_shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1);
     }
-    (shared_code, shared_mask)
+
+    (
+        shared_code,
+        shared_mask,
+        mirrored_shared_code,
+        mirrored_shared_mask,
+    )
 }
 
 type OrRuleSerialIds = Vec<u32>;
@@ -81,6 +127,10 @@ pub struct E2ESharedTemplate {
     pub left_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
     pub right_shared_code: [GaloisRingIrisCodeShare; 3],
     pub right_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
+    pub left_mirrored_shared_code: [GaloisRingIrisCodeShare; 3],
+    pub left_mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
+    pub right_mirrored_shared_code: [GaloisRingIrisCodeShare; 3],
+    pub right_mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1298,6 +1348,38 @@ fn prepare_batch(
         .right_iris_interpolated_requests
         .mask
         .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
+
+    // Also preprocess the mirrored codes and masks
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+        &mut e2e_shared_template.left_mirrored_shared_code[batch_idx],
+    );
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+        &mut e2e_shared_template.left_mirrored_shared_mask[batch_idx],
+    );
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+        &mut e2e_shared_template.right_mirrored_shared_code[batch_idx],
+    );
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+        &mut e2e_shared_template.right_mirrored_shared_mask[batch_idx],
+    );
+
+    // Add the mirrored iris data
+    batch
+        .left_mirrored_iris_interpolated_requests
+        .code
+        .extend(e2e_shared_template.left_mirrored_shared_code[batch_idx].all_rotations());
+    batch
+        .left_mirrored_iris_interpolated_requests
+        .mask
+        .extend(e2e_shared_template.left_mirrored_shared_mask[batch_idx].all_rotations());
+    batch
+        .right_mirrored_iris_interpolated_requests
+        .code
+        .extend(e2e_shared_template.right_mirrored_shared_code[batch_idx].all_rotations());
+    batch
+        .right_mirrored_iris_interpolated_requests
+        .mask
+        .extend(e2e_shared_template.right_mirrored_shared_mask[batch_idx].all_rotations());
 
     Ok(())
 }
