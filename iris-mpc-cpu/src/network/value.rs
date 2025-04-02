@@ -1,4 +1,4 @@
-use crate::shares::{bit::Bit, ring_impl::RingElement};
+use crate::shares::{bit::Bit, ring_impl::RingElement, IntRing2k};
 use eyre::eyre;
 
 /// Size of a PRF key in bytes
@@ -265,20 +265,63 @@ impl NetworkValue {
     }
 }
 
-impl From<Vec<RingElement<u16>>> for NetworkValue {
-    fn from(value: Vec<RingElement<u16>>) -> Self {
-        NetworkValue::VecRing16(value)
-    }
+pub trait NetworkInt
+where
+    Self: IntRing2k,
+{
+    fn new_network_element(element: RingElement<Self>) -> NetworkValue;
+    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue;
+    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>>;
 }
 
-impl TryFrom<NetworkValue> for Vec<RingElement<u16>> {
-    type Error = eyre::Error;
-    fn try_from(value: NetworkValue) -> eyre::Result<Self> {
+impl NetworkInt for u16 {
+    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
+        NetworkValue::RingElement16(element)
+    }
+
+    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
+        NetworkValue::VecRing16(elements)
+    }
+
+    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
         match value {
             NetworkValue::VecRing16(x) => Ok(x),
-            _ => Err(eyre!(
-                "Could not convert Network Value into Vec<RingElement<u16>>"
-            )),
+            NetworkValue::RingElement16(x) => Ok(vec![x]),
+            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u16>>")),
+        }
+    }
+}
+impl NetworkInt for u32 {
+    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
+        NetworkValue::RingElement32(element)
+    }
+
+    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
+        NetworkValue::VecRing32(elements)
+    }
+
+    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
+        match value {
+            NetworkValue::VecRing32(x) => Ok(x),
+            NetworkValue::RingElement32(x) => Ok(vec![x]),
+            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u32>>")),
+        }
+    }
+}
+impl NetworkInt for u64 {
+    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
+        NetworkValue::RingElement64(element)
+    }
+
+    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
+        NetworkValue::VecRing64(elements)
+    }
+
+    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
+        match value {
+            NetworkValue::VecRing64(x) => Ok(x),
+            NetworkValue::RingElement64(x) => Ok(vec![x]),
+            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u64>>")),
         }
     }
 }
