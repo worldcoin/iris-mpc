@@ -179,20 +179,17 @@ pub async fn receive_batch(
                             continue;
                         }
 
-                        // Updating the batch size instantly makes it a bit unpredictable, since if we're already above the
-                        // new limit, we'll still process the current batch at the higher limit. On the other hand,
-                        // updating it after the batch is processed would not let us "unblock" the protocol if we're stuck
-                        // with low throughput.
-                        // Here, we update the batch size based on SQS queue depth instead of request message
-                        update_batch_size_from_queue_depth(client, queue_url, max_batch_size)
-                            .await
-                            .unwrap_or_else(|e| {
-                                tracing::error!(
-                                    "Failed to update batch size from queue depth: {}",
-                                    e
-                                )
-                            });
-
+                        if let Some(batch_size) = uniqueness_request.batch_size {
+                            // Updating the batch size instantly makes it a bit unpredictable, since
+                            // if we're already above the new limit, we'll still process the current
+                            // batch at the higher limit. On the other
+                            // hand, updating it after the batch is
+                            // processed would not let us "unblock" the protocol if we're stuck with
+                            // low throughput.
+                            *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                batch_size.clamp(1, max_batch_size);
+                            tracing::info!("Updating batch size to {}", batch_size);
+                        }
                         if config.luc_enabled {
                             if config.luc_lookback_records > 0 {
                                 batch_query.luc_lookback_records = config.luc_lookback_records;
@@ -271,23 +268,19 @@ pub async fn receive_batch(
 
                             if config.enable_reauth {
                                 msg_counter += 1;
-                                // Updating the batch size instantly makes it a bit unpredictable, since if we're already above the
-                                // new limit, we'll still process the current batch at the higher limit. On the other hand,
-                                // updating it after the batch is processed would not let us "unblock" the protocol if we're stuck
-                                // with low throughput.
-                                // Here, we update the batch size based on SQS queue depth instead of request message
-                                update_batch_size_from_queue_depth(
-                                    client,
-                                    queue_url,
-                                    max_batch_size,
-                                )
-                                .await
-                                .unwrap_or_else(|e| {
-                                    tracing::error!(
-                                        "Failed to update batch size from queue depth: {}",
-                                        e
-                                    )
-                                });
+
+                                if let Some(batch_size) = reauth_request.batch_size {
+                                    // Updating the batch size instantly makes it a bit unpredictable,
+                                    // since if we're already above the
+                                    // new limit, we'll still process the current
+                                    // batch at the higher limit. On the other
+                                    // hand, updating it after the batch is
+                                    // processed would not let us "unblock" the protocol if we're stuck
+                                    // with low throughput.
+                                    *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                        batch_size.clamp(1, max_batch_size);
+                                    tracing::info!("Updating batch size to {}", batch_size);
+                                }
 
                                 batch_query
                                     .request_ids
@@ -460,44 +453,4 @@ pub async fn receive_batch(
     );
 
     Ok(Some(batch_query))
-}
-
-async fn update_batch_size_from_queue_depth(
-    client: &Client,
-    queue_url: &str,
-    max_batch_size: usize,
-) -> eyre::Result<()> {
-    let current_size = *CURRENT_BATCH_SIZE.lock().unwrap();
-    if current_size == max_batch_size {
-        return Ok(());
-    }
-    // Query for the queue attributes to get approximate message count
-    let attributes_result = client
-        .get_queue_attributes()
-        .queue_url(queue_url)
-        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
-        .send()
-        .await?;
-
-    if let Some(attributes) = attributes_result.attributes() {
-        if let Some(count_str) =
-            attributes.get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
-        {
-            if let Ok(message_count) = count_str.parse::<usize>() {
-                // Calculate a new batch size proportional to queue depth
-                // with minimum of 1 and maximum of max_batch_size
-                let new_batch_size = message_count.clamp(1, max_batch_size);
-                if current_size != new_batch_size {
-                    *CURRENT_BATCH_SIZE.lock().unwrap() = new_batch_size;
-                    tracing::info!(
-                        "Updated batch size to {} based on queue depth of {}",
-                        new_batch_size,
-                        message_count
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(())
 }

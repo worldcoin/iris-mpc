@@ -1,6 +1,3 @@
-mod utils;
-
-use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
 use crate::services::init::initialize_chacha_seeds;
 use crate::services::processors::batch::receive_batch;
@@ -14,6 +11,7 @@ use axum::routing::get;
 use axum::Router;
 use eyre::{eyre, WrapErr};
 use iris_mpc_common::config::{Config, ModeOfCompute};
+use iris_mpc_common::helpers::batch_sync::get_own_batch_sync_state;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -25,6 +23,7 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
+use iris_mpc_common::helpers::utils::get_check_addresses;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_cpu::execution::hawk_main::{
@@ -34,7 +33,7 @@ use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -43,7 +42,6 @@ const RNG_SEED_INIT_DB: u64 = 42;
 
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
-pub static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 pub async fn server_main(config: Config) -> eyre::Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
@@ -63,7 +61,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     }
 
     // Load batch_size config
-    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
@@ -206,6 +203,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
         let my_state = my_state.clone();
+        let sqs_client = aws_clients.sqs_client.clone();
+        let config = config.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -239,7 +238,17 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
                 .route(
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                )
+                .route(
+                    "/batch-sync-state",
+                    get(move || async move {
+                        let batch_sync_state = get_own_batch_sync_state(&config, &sqs_client)
+                            .await
+                            .unwrap();
+                        serde_json::to_string(&batch_sync_state).unwrap()
+                    }),
                 );
+
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
                 .wrap_err("healthcheck listener bind error")?;
