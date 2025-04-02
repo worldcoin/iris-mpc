@@ -141,7 +141,7 @@ impl VectorStore for PlaintextStore {
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (u16, u16);
 
-    async fn into_query_batch(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         vectors
     }
 

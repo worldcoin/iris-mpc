@@ -60,7 +60,7 @@ pub trait VectorStore: Debug {
 
     /// Prepare queries from vectors. The query form may include some precomputation
     /// to help comparison to other vectors.
-    async fn into_query_batch(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
 
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.

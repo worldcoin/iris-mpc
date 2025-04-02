@@ -214,7 +214,7 @@ impl VectorStore for Aby3Store {
     /// Distance represented as a pair of u32 shares.
     type DistanceRef = DistanceShare<u32>;
 
-    async fn into_query_batch(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         self.storage
             .iter_vectors(&vectors)
             .await

@@ -880,7 +880,7 @@ impl HnswSearcher {
         for (lc, l_links) in links.iter().enumerate() {
             let nb_queries = {
                 let ids = l_links.iter().map(|(nb, _)| nb.clone()).collect_vec();
-                store.into_query_batch(ids).await
+                store.vectors_as_queries(ids).await
             };
 
             let mut l_neighbors = Vec::with_capacity(l_links.len());
