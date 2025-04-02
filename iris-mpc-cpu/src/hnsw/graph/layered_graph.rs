@@ -282,6 +282,10 @@ mod tests {
         type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
+        async fn into_query_batch(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+            vectors
+        }
+
         async fn eval_distance(
             &mut self,
             query: &Self::QueryRef,

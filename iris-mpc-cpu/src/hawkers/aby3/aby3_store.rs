@@ -208,6 +208,14 @@ impl VectorStore for Aby3Store {
     /// Distance represented as a pair of u32 shares.
     type DistanceRef = DistanceShare<u32>;
 
+    async fn into_query_batch(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+        let vectors = self.storage.iter_vectors(&vectors).await;
+        vectors
+            .into_iter()
+            .map(|v| prepare_query((*v).clone()))
+            .collect()
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -219,6 +227,8 @@ impl VectorStore for Aby3Store {
         let dist = self.eval_pairwise_distances(pairs).await;
         self.lift_distances(dist).await.unwrap()[0].clone()
     }
+
+    // TODO: implement eval_distance_pairs
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
     async fn eval_distance_batch(
