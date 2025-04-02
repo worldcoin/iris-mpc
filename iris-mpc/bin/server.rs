@@ -1592,8 +1592,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reauth_or_rule_used,
             mut modifications,
             actor_data: _,
+            full_face_mirror_attack_detected,
         }) = rx.recv().await
         {
+            // TODO: mirror attack handling
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
