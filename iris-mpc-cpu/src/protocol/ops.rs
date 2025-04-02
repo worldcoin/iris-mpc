@@ -316,7 +316,7 @@ mod tests {
         hawkers::plaintext_store::PlaintextIris,
         network::value::NetworkInt,
         protocol::{
-            binary::open_u32, ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris,
+            binary::open_ring, ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris,
         },
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
@@ -613,7 +613,9 @@ mod tests {
                         .await
                         .unwrap();
 
-                open_u32(&mut session, &bucket_result_shares).await.unwrap()
+                open_ring(&mut session, &bucket_result_shares)
+                    .await
+                    .unwrap()
             });
         }
         // check first party output is equal to the expected result.

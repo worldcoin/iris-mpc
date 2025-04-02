@@ -816,34 +816,25 @@ pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Res
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_u32(session: &mut Session, shares: &[Share<u32>]) -> eyre::Result<Vec<u32>> {
+pub async fn open_ring<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    shares: &[Share<T>],
+) -> eyre::Result<Vec<T>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
-        NetworkValue::RingElement32(shares[0].b).to_network()
+        T::new_network_element(shares[0].b)
     } else {
         let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        NetworkValue::VecRing32(shares).to_network()
+        T::new_network_vec(shares)
     };
 
-    network.send_next(message).await?;
+    network.send_next(message.to_network()).await?;
 
     // receiving from previous party
-    let c = {
-        let serialized_other_shares = network.receive_prev().await;
-        if shares.len() == 1 {
-            match NetworkValue::from_network(serialized_other_shares) {
-                Ok(NetworkValue::RingElement32(message)) => Ok(vec![message]),
-                Err(e) => Err(eyre!("Error in receiving in open_u32 operation: {}", e)),
-                _ => Err(eyre!("Wrong value type is received in open_u32 operation")),
-            }
-        } else {
-            match NetworkValue::from_network(serialized_other_shares) {
-                Ok(NetworkValue::VecRing32(shares)) => Ok(shares),
-                Err(e) => Err(eyre!("Error in receiving in open_u32 operation: {}", e)),
-                _ => Err(eyre!("Wrong value type is received in open_u32 operation")),
-            }
-        }
-    }?;
+    let serialized_other_shares = network.receive_prev().await;
+    let c = NetworkValue::from_network(serialized_other_shares)
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
 
     // ADD shares with the received shares
     izip!(shares.iter(), c.iter())
