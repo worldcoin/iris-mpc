@@ -61,6 +61,7 @@ pub async fn process_job_result(
     let now = Instant::now();
 
     let _modifications = modifications;
+    let _full_face_mirror_attack_detected = full_face_mirror_attack_detected;
 
     // returned serial_ids are 0 indexed, but we want them to be 1 indexed
     let uniqueness_results = merged_results
