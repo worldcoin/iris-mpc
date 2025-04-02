@@ -407,7 +407,7 @@ mod tests {
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
         let (mut cleartext_data, secret_data) =
-            lazy_random_setup(&mut rng, database_size, network_t.clone(), true).await?;
+            lazy_random_setup(&mut rng, database_size, network_t.clone()).await?;
 
         let mut rng = AesRng::seed_from_u64(0_u64);
         let mut vector_graph_stores =

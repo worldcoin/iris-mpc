@@ -16,7 +16,7 @@ use crate::{
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
-    shares::{share::DistanceShare, RingElement, Share},
+    shares::{RingElement, Share},
 };
 
 use super::aby3_store::{prepare_query, Aby3Store, IrisRef, SharedIrisesRef, VectorId};
@@ -99,7 +99,7 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Share<u32> {
 }
 
 /// Returns the distance between two vectors inserted into Aby3Store.
-pub(crate) async fn eval_vector_distance(
+pub async fn eval_vector_distance(
     store: &mut Aby3Store,
     vector1: &<Aby3Store as VectorStore>::VectorRef,
     vector2: &<Aby3Store as VectorStore>::VectorRef,
@@ -119,18 +119,11 @@ pub(crate) async fn eval_vector_distance(
 /// SMPC. Otherwise, distances are naively converted from plaintext ones
 /// via trivial shares,
 /// i.e., the sharing of a value x is a triple (x, 0, 0).
-async fn graph_from_plain(
-    vector_store: &Aby3StoreRef,
-    graph_store: &GraphMem<PlaintextStore>,
-    recompute_distances: bool,
-) -> GraphMem<Aby3Store> {
+async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Aby3Store> {
     let ep = graph_store.get_entry_point().await;
     let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId::from(vector_ref), layer_count));
 
     let layers = graph_store.get_layers();
-
-    let owner_index = get_owner_index(vector_store).await.unwrap();
-    let mut vectore_store_lock = vector_store.lock().await;
 
     let mut shared_layers = vec![];
     for layer in layers {
@@ -165,7 +158,6 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-    recompute_distances: bool,
 ) -> eyre::Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
@@ -190,7 +182,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         let task = tokio::spawn(async move {
             (
                 store.clone(),
-                graph_from_plain(&store, &plaintext_graph_store, recompute_distances).await,
+                graph_from_plain(&plaintext_graph_store).await,
             )
         });
         jobs.push(task);
@@ -212,7 +204,6 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
     plaingraph_file: &str,
     rng: &mut R,
     database_size: usize,
-    recompute_distances: bool,
 ) -> eyre::Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
@@ -223,7 +214,6 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
         rng,
         database_size,
         NetworkType::GrpcChannel,
-        recompute_distances,
     )
     .await
 }
@@ -238,7 +228,6 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-    recompute_distances: bool,
 ) -> eyre::Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
@@ -257,7 +246,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
         let task = tokio::spawn(async move {
             (
                 store.clone(),
-                graph_from_plain(&store, &plaintext_graph_store, recompute_distances).await,
+                graph_from_plain(&plaintext_graph_store).await,
             )
         });
         jobs.push(task);
@@ -277,18 +266,11 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
 pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-    recompute_distances: bool,
 ) -> eyre::Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(
-        rng,
-        database_size,
-        NetworkType::LocalChannel,
-        recompute_distances,
-    )
-    .await
+    lazy_random_setup(rng, database_size, NetworkType::LocalChannel).await
 }
 
 /// Generates 3 pairs of vector stores and graphs from a random plaintext
@@ -297,18 +279,11 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
 pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-    recompute_distances: bool,
 ) -> eyre::Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(
-        rng,
-        database_size,
-        NetworkType::GrpcChannel,
-        recompute_distances,
-    )
-    .await
+    lazy_random_setup(rng, database_size, NetworkType::GrpcChannel).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each

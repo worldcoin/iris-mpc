@@ -6,15 +6,11 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
-        aby3::{
-            aby3_store::{Aby3Store, SharedIrisesRef},
-            test_utils::get_trivial_share,
-        },
+        aby3::aby3_store::{Aby3Store, SharedIrisesRef},
         plaintext_store::{PlaintextStore, PointId},
     },
     hnsw::{graph::layered_graph::migrate, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
-    shares::share::DistanceShare,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -46,16 +42,7 @@ async fn create_graph_from_plain_db(
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
 
-    let mpc_graph: GraphMem<Aby3Store> = migrate(
-        graph,
-        |v| v.into(),
-        |(c, m)| {
-            DistanceShare::new(
-                get_trivial_share(c, player_index),
-                get_trivial_share(m, player_index),
-            )
-        },
-    );
+    let mpc_graph: GraphMem<Aby3Store> = migrate(graph, |v| v.into());
 
     let mut shared_irises = HashMap::new();
 

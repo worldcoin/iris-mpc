@@ -100,7 +100,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         }
     }
 
-    // TODO: Remove.
     pub fn edge_ids(&self) -> SortedEdgeIds<Vector> {
         SortedEdgeIds {
             edges: self

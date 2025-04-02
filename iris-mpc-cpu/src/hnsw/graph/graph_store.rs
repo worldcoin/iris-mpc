@@ -2,7 +2,6 @@ use super::{layered_graph::EntryPoint, neighborhood::SortedEdgeIds};
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV,
         searcher::{ConnectPlanLayerV, ConnectPlanV},
         GraphMem, VectorStore,
     },

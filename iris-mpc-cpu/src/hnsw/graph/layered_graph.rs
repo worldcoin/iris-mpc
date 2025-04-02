@@ -3,12 +3,12 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::{SortedEdgeIds, SortedNeighborhoodV};
+use super::neighborhood::SortedEdgeIds;
 use crate::hnsw::{
     searcher::{ConnectPlanLayerV, ConnectPlanV},
     SortedNeighborhood, VectorStore,
 };
-use itertools::{izip, Itertools};
+use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -135,7 +135,6 @@ impl<V: VectorStore> GraphMem<V> {
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    // TODO: Switch to SortedEdgeIds.
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
@@ -158,7 +157,6 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    // TODO: Switch to SortedEdgeIds.
     links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
 }
 
@@ -194,26 +192,19 @@ impl<V: VectorStore> Layer<V> {
     }
 }
 
-/// Convert a `GraphMem` data structure via a direct mapping of vector and
-/// distance references, leaving the edge sets associated with the mapped
+/// Convert a `GraphMem` data structure via a direct mapping of vector
+/// references, leaving the edge sets associated with the mapped
 /// vertices unchanged.
 ///
 /// This could be useful for cases where the representation of the graph
 /// vertices or distances is changed, but not the underlying values. For
 /// example:
-/// - plaintext distances are converted to MPC secret shares
-/// - the preprocessing done on secret shared distances is changed
 /// - vector ids are re-mapped to remove blank entries left by deletions
-pub fn migrate<U, V, VecMap, DistMap>(
-    graph: GraphMem<U>,
-    vector_map: VecMap,
-    distance_map: DistMap,
-) -> GraphMem<V>
+pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
     U: VectorStore,
     V: VectorStore,
     VecMap: Fn(U::VectorRef) -> V::VectorRef + Copy,
-    DistMap: Fn(U::DistanceRef) -> V::DistanceRef + Copy,
 {
     let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
         point: vector_map(ep.point),
@@ -349,12 +340,11 @@ mod tests {
                 .await;
         }
 
-        let equal_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| v, |d| d);
+        let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
         assert_eq!(graph_store, equal_graph_store);
 
         let different_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| PointId(v.0 * 2), |d| d);
+            migrate(graph_store.clone(), |v| PointId(v.0 * 2));
         assert_ne!(graph_store, different_graph_store);
     }
 
@@ -367,10 +357,6 @@ mod tests {
 
         let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
             HashMap::new();
-        fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
-            let (num, denom) = d;
-            (num as u32) * (1 << 16) / (denom as u32)
-        }
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = vector_store.prepare_query(raw_query);
@@ -393,7 +379,7 @@ mod tests {
         }
 
         let new_graph_store: GraphMem<TestStore> =
-            migrate(graph_store.clone(), |v| point_ids_map[&v], distance_map);
+            migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
         let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_entry_point().await.unwrap();

@@ -866,7 +866,7 @@ impl HnswSearcher {
         struct NeighborUpdate<Query, Vector, Distance> {
             /// The distance between the vector being inserted to a base vector.
             nb_dist: Distance,
-            /// The base vector that we connect to.
+            /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
             nb_query: Query,
             /// The neighborhood of the base vector.
             nb_links: SortedEdgeIds<Vector>,
