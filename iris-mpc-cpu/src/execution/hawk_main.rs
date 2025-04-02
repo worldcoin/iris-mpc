@@ -408,7 +408,6 @@ impl HawkActor {
         }
     }
 
-    // TODO: Implement actual parallelism.
     pub async fn insert(
         &mut self,
         sessions: &[HawkSessionRef],
@@ -417,7 +416,7 @@ impl HawkActor {
         let insert_plans = join_plans(plans);
         let mut connect_plans = vec![];
         for plan in insert_plans {
-            // TODO: Parallel insertions are not supported, so only one session is needed.
+            // Parallel insertions are not supported, so only one session is needed.
             let mut session = sessions[0].write().await;
             let cp = self.insert_one(&mut session, plan).await?;
             connect_plans.push(cp);
@@ -425,7 +424,6 @@ impl HawkActor {
         Ok(connect_plans)
     }
 
-    // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn insert_one(
         &mut self,
         session: &mut HawkSession,

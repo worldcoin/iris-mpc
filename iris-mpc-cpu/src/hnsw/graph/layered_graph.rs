@@ -121,6 +121,7 @@ impl<V: VectorStore> GraphMem<V> {
         self.entry_point = Some(EntryPoint { point, layer });
     }
 
+    // TODO: Return only IDs without distances.
     pub async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,

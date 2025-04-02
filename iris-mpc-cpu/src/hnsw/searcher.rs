@@ -10,6 +10,7 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
+use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -859,9 +860,14 @@ impl HnswSearcher {
             set_ep,
         };
 
-        struct NeighborUpdate<Vector, Distance> {
+        struct NeighborUpdate<Query, Vector, Distance> {
+            /// The distance between the vector being inserted to a base vector.
             nb_dist: Distance,
+            /// The base vector that we connect to.
+            nb_query: Query,
+            /// The neighborhood of the base vector.
             nb_links: SortedNeighborhood<Vector, Distance>,
+            /// The current state of the search.
             search: BinarySearch,
         }
 
@@ -869,15 +875,22 @@ impl HnswSearcher {
         // initialize binary search
         let mut neighbors = Vec::new();
         for (lc, l_links) in links.iter().enumerate() {
+            let nb_queries = {
+                let ids = l_links.iter().map(|(nb, _)| nb.clone()).collect_vec();
+                store.into_query_batch(ids).await
+            };
+
             let mut l_neighbors = Vec::with_capacity(l_links.len());
-            for (nb, nb_dist) in l_links.iter().cloned() {
-                let nb_links = graph.get_links(&nb, lc).await;
+            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
+                // TODO: Switch to ID only.
+                let nb_links: SortedNeighborhoodV<V> = graph.get_links(nb, lc).await;
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
                 };
                 let neighbor = NeighborUpdate {
-                    nb_dist,
+                    nb_dist: nb_dist.clone(),
+                    nb_query,
                     nb_links,
                     search,
                 };
@@ -894,15 +907,27 @@ impl HnswSearcher {
             .collect();
 
         while !searches_ongoing.is_empty() {
-            let lt_queries: Vec<_> = searches_ongoing
+            // Find the next batch of distances to evaluate.
+            // This is each base neighbor versus the next search position in its neighborhood.
+            let dist_batch = searches_ongoing
                 .iter()
                 .map(|n| {
                     let cmp_idx = n.search.next().unwrap();
-                    (n.nb_dist.clone(), n.nb_links[cmp_idx].1.clone())
+                    (n.nb_query.clone(), n.nb_links[cmp_idx].0.clone())
                 })
-                .collect();
+                .collect_vec();
 
-            let results = store.less_than_batch(&lt_queries).await;
+            // Compute the distances.
+            let link_distances = store.eval_distance_pairs(&dist_batch).await;
+
+            // Prepare a batch of less_than.
+            // This is |inserted--base| versus |base--neighborhood|.
+            let lt_batch = izip!(&searches_ongoing, link_distances)
+                .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
+                .collect_vec();
+
+            // Compute the less_than.
+            let results = store.less_than_batch(&lt_batch).await;
 
             searches_ongoing
                 .iter_mut()
