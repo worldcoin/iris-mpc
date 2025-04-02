@@ -29,6 +29,37 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
 
+#[allow(clippy::too_many_arguments)]
+pub async fn receive_batch(
+    party_id: usize,
+    client: &Client,
+    sns_client: &SNSClient,
+    s3_client: &S3Client,
+    config: &Config,
+    store: &Store,
+    skip_request_ids: &[String],
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    shutdown_handler: &ShutdownHandler,
+    uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    let mut processor = BatchProcessor::new(
+        party_id,
+        client,
+        sns_client,
+        s3_client,
+        config,
+        store,
+        skip_request_ids,
+        shares_encryption_key_pairs,
+        shutdown_handler,
+        uniqueness_error_result_attributes,
+        reauth_error_result_attributes,
+    );
+
+    processor.receive_batch().await
+}
+
 pub struct BatchProcessor<'a> {
     party_id: usize,
     client: &'a Client,
