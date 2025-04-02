@@ -1,5 +1,5 @@
 use super::binary::{
-    bit_inject_arithmetic_xor, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
     single_extract_msb_u32,
 };
 use crate::{
@@ -103,7 +103,7 @@ pub async fn compare_threshold_buckets(
     let msbs = VecShare::new_vec(msbs);
 
     // bit_inject all MSBs into u32 to be able to add them up
-    let sums = bit_inject_arithmetic_xor(session, msbs).await?;
+    let sums = bit_inject_ot_2round(session, msbs).await?;
     // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
     let buckets = sums
         .into_iter()
