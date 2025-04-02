@@ -1732,6 +1732,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reset_update_shares,
             mut modifications,
             actor_data: _,
+            full_face_mirror_attack_detected,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
