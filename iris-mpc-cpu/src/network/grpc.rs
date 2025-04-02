@@ -30,6 +30,7 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status, Streaming,
 };
+use tracing::trace;
 
 type TonicResult<T> = Result<T, Status>;
 
@@ -58,6 +59,7 @@ impl Networking for GrpcSession {
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
         ))?;
+        trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
         let request = SendRequest { data: value };
         outgoing_stream
             .send(request)
@@ -568,6 +570,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use futures::future::join_all;
+    use iris_mpc_common::vector_id::VectorId;
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -842,11 +845,12 @@ mod tests {
         .unwrap();
 
         for i in 0..database_size {
+            let vector_id = VectorId::from_0_index(i as u32);
             let mut jobs = JoinSet::new();
 
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let searcher = searcher.clone();
-                let q = store.lock().await.storage.get_vector(&i.into()).await;
+                let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 let mut graph = graph.clone();

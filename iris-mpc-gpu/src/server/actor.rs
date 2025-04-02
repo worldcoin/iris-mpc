@@ -36,6 +36,7 @@ use iris_mpc_common::{
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     job::{Eye, JobSubmissionHandle, ServerJobResult},
+    vector_id::VectorId,
 };
 use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
@@ -2368,6 +2369,7 @@ impl InMemoryStore for ServerActor {
     fn load_single_record_from_db(
         &mut self,
         index: usize,
+        _vector_id: VectorId,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
@@ -2409,6 +2411,7 @@ impl InMemoryStore for ServerActor {
     fn load_single_record_from_s3(
         &mut self,
         index: usize,
+        _vector_id: VectorId,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],

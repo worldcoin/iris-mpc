@@ -98,7 +98,6 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: GrpcHandle,
-    own_identity: Identity,
     party_id: usize,
 }
 
@@ -261,7 +260,6 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
-            own_identity: my_identity.clone(),
             party_id: my_index,
         })
     }
@@ -291,7 +289,7 @@ impl HawkActor {
             session_id,
             role_assignments: self.role_assignments.clone(),
             networking: Box::new(grpc_session),
-            own_identity: self.own_identity.clone(),
+            own_role: Role::new(self.party_id),
         };
 
         let my_session_seed = thread_rng().gen();
@@ -305,7 +303,6 @@ impl HawkActor {
         let aby3_store = Aby3Store {
             session,
             storage: self.iris_store(store_id),
-            owner: self.own_identity.clone(),
         };
 
         // TODO: Use a better seed?
@@ -482,13 +479,13 @@ pub struct IrisLoader<'a> {
 impl<'a> InMemoryStore for IrisLoader<'a> {
     fn load_single_record_from_db(
         &mut self,
-        index: usize,
+        _index: usize, // TODO: Map.
+        vector_id: VectorId,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        let vector_id = VectorId::from_serial_id(index as u32);
         for (side, code, mask) in izip!(
             &mut self.irises,
             [left_code, right_code],
@@ -674,7 +671,7 @@ impl HawkResult {
             .iter()
             .enumerate()
             .map(|(idx, plan)| match plan {
-                Some(plan) => plan.inserted_vector.to_serial_id(),
+                Some(plan) => plan.inserted_vector.index(),
                 None => match_ids[idx][0],
             })
             .collect()
@@ -684,13 +681,13 @@ impl HawkResult {
         // Graph matches.
         let mut match_ids = self
             .match_results
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.to_serial_id()));
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.index()));
 
         // Intra-batch matches. Find the serial IDs that were just inserted.
         for (graph_matches, intra_matches) in izip!(match_ids.iter_mut(), &self.intra_results) {
             for i_request in intra_matches {
                 if let Some(plan) = &self.connect_plans.0[LEFT][*i_request] {
-                    graph_matches.push(plan.inserted_vector.to_serial_id());
+                    graph_matches.push(plan.inserted_vector.index());
                 }
             }
         }
@@ -717,10 +714,10 @@ impl HawkResult {
 
         let partial_match_ids_left = self
             .match_results
-            .filter_map(|(id, [l, _r])| l.then_some(id.to_serial_id()));
+            .filter_map(|(id, [l, _r])| l.then_some(id.index()));
         let partial_match_ids_right = self
             .match_results
-            .filter_map(|(id, [_l, r])| r.then_some(id.to_serial_id()));
+            .filter_map(|(id, [_l, r])| r.then_some(id.index()));
         let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
         let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
 
@@ -1192,7 +1189,7 @@ mod tests_db {
     #[tokio::test]
     async fn test_graph_load() -> Result<()> {
         // The test data is a sequence of mutations on the graph.
-        let vectors = (0..5).map(VectorId::from).collect_vec();
+        let vectors = (0..5).map(VectorId::from_0_index).collect_vec();
         let distance = DistanceShare::new(Default::default(), Default::default());
 
         let make_plans = |side| {

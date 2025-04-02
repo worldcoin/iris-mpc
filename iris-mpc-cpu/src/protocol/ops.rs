@@ -29,7 +29,7 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
-#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_identity), skip_all)]
+#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_role), skip_all)]
 pub async fn setup_replicated_prf(
     session: &mut NetworkSession,
     my_seed: PrfSeed,
@@ -141,14 +141,14 @@ pub async fn batch_signed_lift(
 ) -> eyre::Result<VecShare<u32>> {
     // Compute (v + 2^{15}) % 2^{16}, to make values positive.
     for v in pre_lift.iter_mut() {
-        v.add_assign_const_role(1_u16 << 15, session.own_role()?);
+        v.add_assign_const_role(1_u16 << 15, session.own_role());
     }
     let mut lifted_values = lift::<16>(session, pre_lift).await?;
     // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
     // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
     // get signed shares over 2^{32}
     for v in lifted_values.iter_mut() {
-        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role()?);
+        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role());
     }
     Ok(lifted_values)
 }
@@ -314,6 +314,7 @@ mod tests {
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
+        network::value::NetworkInt,
         protocol::{
             binary::open_u32, ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris,
         },
@@ -345,23 +346,21 @@ mod tests {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
     where
-        T: IntRing2k,
-        NetworkValue: From<Vec<RingElement<T>>>,
-        Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
+        T: IntRing2k + NetworkInt,
     {
         let network = &mut session.network_session;
 
         let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
         let message = shares_b;
         network
-            .send_next(NetworkValue::from(message).to_network())
+            .send_next(T::new_network_vec(message).to_network())
             .await?;
 
         // receiving from previous party
         let shares_c = {
             let serialized_other_share = network.receive_prev().await;
             let net_message = NetworkValue::from_network(serialized_other_share)?;
-            Vec::<RingElement<T>>::try_from(net_message)
+            T::into_vec(net_message)
         }?;
 
         let res = shares

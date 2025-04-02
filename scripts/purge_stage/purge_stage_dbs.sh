@@ -68,13 +68,13 @@ clean_mpc_database() {
   local NAMESPACE=$5
 
 
-  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$ACCOUNT_ID" ] || [ -z "$CLUSTER_NAME" ] || [-z "$NAMESPACE" ]; then
+  if [ -z "$DATABASE_URL" ] || [ -z "$PARTY_ID" ] || [ -z "$ACCOUNT_ID" ] || [ -z "$CLUSTER_NAME" ] || [ -z "$NAMESPACE" ]; then
     echo "Database URL, party ID, account ID, cluster name and namespace are required"
     exit 1
   fi
 
   CLUSTER="arn:aws:eks:eu-north-1:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
-  echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER_NAME"
+  echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER"
   
   # Switch to the appropriate Kubernetes context
   kubectx $CLUSTER

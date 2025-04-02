@@ -31,10 +31,11 @@ impl NcclComm {
     /// Primitive to create new communication link on each process (threads are
     /// possible but not recommended).
     ///
-    /// WARNING: If using threads, uou are likely to get limited throughput
+    /// WARNING: If using threads, you are likely to get limited throughput
     /// using a single core to control multiple GPUs. Cuda drivers
     /// effectively use a global mutex thrashing performance on multi
-    /// threaded multi GPU. ```
+    /// threaded multi GPU.
+    /// ```no_run
     /// # use cudarc::driver::safe::{CudaDevice};
     /// # use cudarc::nccl::safe::{Comm, Id, ReduceOp};
     /// let n = 2;

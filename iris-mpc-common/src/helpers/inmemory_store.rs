@@ -1,3 +1,5 @@
+use crate::vector_id::VectorId;
+
 /// A helper trait encapsulating the functionality to add iris codes to some
 /// form of in-memory store.
 pub trait InMemoryStore {
@@ -15,6 +17,7 @@ pub trait InMemoryStore {
     fn load_single_record_from_db(
         &mut self,
         index: usize,
+        vector_id: VectorId,
         left_code: &[u16],
         left_mask: &[u16],
         right_code: &[u16],
@@ -52,6 +55,7 @@ pub trait InMemoryStore {
     fn load_single_record_from_s3(
         &mut self,
         index: usize,
+        vector_id: VectorId,
         left_code_odd: &[u8],
         left_code_even: &[u8],
         right_code_odd: &[u8],
@@ -90,7 +94,14 @@ pub trait InMemoryStore {
             .zip(right_mask_even.iter())
             .map(|(odd, even)| map_back_to_u16(*odd, *even))
             .collect::<Vec<_>>();
-        self.load_single_record_from_db(index, &left_code, &left_mask, &right_code, &right_mask);
+        self.load_single_record_from_db(
+            index,
+            vector_id,
+            &left_code,
+            &left_mask,
+            &right_code,
+            &right_mask,
+        );
     }
 
     /// Executes any necessary preprocessing steps on the in-memory store.

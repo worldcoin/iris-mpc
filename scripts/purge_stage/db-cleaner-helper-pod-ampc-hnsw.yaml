@@ -13,6 +13,7 @@ spec:
       image: postgres
       imagePullPolicy: Always
       command: [ "/bin/bash" ]
+      args: [ "-c", "while true; do ping localhost; sleep 60; done" ]
       resources:
         limits:
           cpu: 1
