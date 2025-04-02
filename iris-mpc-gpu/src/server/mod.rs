@@ -94,6 +94,8 @@ pub struct PreprocessedBatchQuery {
     pub right_iris_rotated_requests: IrisQueryBatchEntries,
     pub left_iris_interpolated_requests: IrisQueryBatchEntries,
     pub right_iris_interpolated_requests: IrisQueryBatchEntries,
+    pub left_mirrored_iris_interpolated_requests: IrisQueryBatchEntries,
+    pub right_mirrored_iris_interpolated_requests: IrisQueryBatchEntries,
 
     pub or_rule_indices: Vec<Vec<u32>>,
     pub luc_lookback_records: usize,
@@ -121,6 +123,8 @@ pub struct PreprocessedBatchQuery {
     pub right_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
     pub left_iris_rotated_requests_preprocessed: BatchQueryEntriesPreprocessed,
     pub right_iris_rotated_requests_preprocessed: BatchQueryEntriesPreprocessed,
+    pub left_mirrored_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
+    pub right_mirrored_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<u32, Modification>,
@@ -171,6 +175,9 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
         let mut right_iris_interpolated_requests_preprocessed = None;
         let mut left_iris_rotated_requests_preprocessed = None;
         let mut right_iris_rotated_requests_preprocessed = None;
+        let mut left_mirrored_iris_interpolated_requests_preprocessed = None;
+        let mut right_mirrored_iris_interpolated_requests_preprocessed = None;
+
         rayon::scope(|s| {
             s.spawn(|_| {
                 left_iris_interpolated_requests_preprocessed =
@@ -194,6 +201,18 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
                     BatchQueryEntriesPreprocessed::from(value.right_iris_rotated_requests.clone()),
                 );
             });
+            s.spawn(|_| {
+                left_mirrored_iris_interpolated_requests_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(
+                        value.left_mirrored_iris_interpolated_requests.clone(),
+                    ));
+            });
+            s.spawn(|_| {
+                right_mirrored_iris_interpolated_requests_preprocessed =
+                    Some(BatchQueryEntriesPreprocessed::from(
+                        value.right_mirrored_iris_interpolated_requests.clone(),
+                    ));
+            });
         });
 
         Self {
@@ -206,6 +225,10 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             right_iris_rotated_requests: value.right_iris_rotated_requests,
             left_iris_interpolated_requests: value.left_iris_interpolated_requests,
             right_iris_interpolated_requests: value.right_iris_interpolated_requests,
+            left_mirrored_iris_interpolated_requests: value
+                .left_mirrored_iris_interpolated_requests,
+            right_mirrored_iris_interpolated_requests: value
+                .right_mirrored_iris_interpolated_requests,
             or_rule_indices: value.or_rule_indices,
             luc_lookback_records: value.luc_lookback_records,
             valid_entries: value.valid_entries,
@@ -224,6 +247,10 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
                 right_iris_interpolated_requests_preprocessed.unwrap(),
             right_iris_rotated_requests_preprocessed: right_iris_rotated_requests_preprocessed
                 .unwrap(),
+            left_mirrored_iris_interpolated_requests_preprocessed:
+                left_mirrored_iris_interpolated_requests_preprocessed.unwrap(),
+            right_mirrored_iris_interpolated_requests_preprocessed:
+                right_mirrored_iris_interpolated_requests_preprocessed.unwrap(),
             modifications: value.modifications,
             sns_message_ids: value.sns_message_ids,
             skip_persistence: value.skip_persistence,
@@ -251,6 +278,23 @@ impl PreprocessedBatchQuery {
         filter_by_indices_with_rotations!(self.right_iris_interpolated_requests.mask, indices_set);
         filter_by_indices_with_rotations!(self.right_iris_rotated_requests.code, indices_set);
         filter_by_indices_with_rotations!(self.right_iris_rotated_requests.mask, indices_set);
+        filter_by_indices_with_rotations!(
+            self.left_mirrored_iris_interpolated_requests.code,
+            indices_set
+        );
+        filter_by_indices_with_rotations!(
+            self.left_mirrored_iris_interpolated_requests.mask,
+            indices_set
+        );
+        filter_by_indices_with_rotations!(
+            self.right_mirrored_iris_interpolated_requests.code,
+            indices_set
+        );
+        filter_by_indices_with_rotations!(
+            self.right_mirrored_iris_interpolated_requests.mask,
+            indices_set
+        );
+
         Self::filter_preprocessed_entry(
             &mut self.left_iris_interpolated_requests_preprocessed,
             &indices_set,
@@ -265,6 +309,14 @@ impl PreprocessedBatchQuery {
         );
         Self::filter_preprocessed_entry(
             &mut self.right_iris_rotated_requests_preprocessed,
+            &indices_set,
+        );
+        Self::filter_preprocessed_entry(
+            &mut self.left_mirrored_iris_interpolated_requests_preprocessed,
+            &indices_set,
+        );
+        Self::filter_preprocessed_entry(
+            &mut self.right_mirrored_iris_interpolated_requests_preprocessed,
             &indices_set,
         );
         filter_by_indices!(self.valid_entries, indices_set);
