@@ -10,6 +10,7 @@ use crate::hnsw::{
     },
     VectorStore,
 };
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use tracing::{debug, instrument};
@@ -96,6 +97,17 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
             for (e, eq) in vals.iter() {
                 self.insert(store, e.clone(), eq.clone()).await;
             }
+        }
+    }
+
+    // TODO: Remove.
+    pub fn edge_ids(&self) -> SortedEdgeIds<Vector> {
+        SortedEdgeIds {
+            edges: self
+                .edges
+                .iter()
+                .map(|(v, _)| (v.clone(), ()))
+                .collect_vec(),
         }
     }
 

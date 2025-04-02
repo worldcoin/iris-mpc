@@ -139,19 +139,9 @@ async fn graph_from_plain(
         for (source_v, queue) in links {
             let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
-            for (target_v, dist) in queue.as_vec_ref() {
+            for (target_v, _) in queue.as_vec_ref() {
                 let target_v = VectorId::from(*target_v);
-                let distance = if recompute_distances {
-                    // recompute distances of graph edges from scratch
-                    eval_vector_distance(&mut vectore_store_lock, &source_v, &target_v).await
-                } else {
-                    // convert plaintext distances to trivial shares, i.e., d -> (d, 0, 0)
-                    DistanceShare::new(
-                        get_trivial_share(dist.0, owner_index),
-                        get_trivial_share(dist.1, owner_index),
-                    )
-                };
-                shared_queue.push((target_v, distance.clone()));
+                shared_queue.push((target_v, ()));
             }
             shared_links.insert(
                 source_v,

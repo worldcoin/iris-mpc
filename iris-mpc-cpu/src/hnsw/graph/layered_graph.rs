@@ -90,12 +90,12 @@ impl<V: VectorStore> GraphMem<V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
+        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links2) {
             self.set_links(n.clone(), links, lc).await;
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await;
+        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
     }
 }
 
@@ -139,7 +139,7 @@ impl<V: VectorStore> GraphMem<V> {
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
-        links: SortedNeighborhoodV<V>,
+        links: SortedEdgeIds<V::VectorRef>,
         lc: usize,
     ) {
         if self.layers.len() < lc + 1 {
@@ -159,7 +159,7 @@ pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     // TODO: Switch to SortedEdgeIds.
-    links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
+    links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
 }
 
 impl<V: VectorStore> Clone for Layer<V> {
@@ -177,21 +177,19 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn from_links(links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>) -> Self {
+    pub fn from_links(links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>) -> Self {
         Layer { links }
     }
 
     fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
-        self.links.get(from).map(|l| {
-            SortedEdgeIds::from_ascending_vec(l.iter().map(|(v, _d)| (v.clone(), ())).collect_vec())
-        })
+        self.links.get(from).cloned()
     }
 
-    fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhoodV<V>) {
+    fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
         self.links.insert(from, links);
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedNeighborhoodV<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>> {
         &self.links
     }
 }
@@ -232,13 +230,12 @@ where
                 .map(|(v, nbhd)| {
                     (
                         vector_map(v),
-                        SortedNeighborhoodV::<V> {
-                            edges: nbhd
-                                .edges
+                        SortedEdgeIds::from_ascending_vec(
+                            nbhd.edges
                                 .into_iter()
-                                .map(|(w, d)| (vector_map(w), distance_map(d)))
+                                .map(|(w, _)| (vector_map(w), ()))
                                 .collect(),
-                        },
+                        ),
                     )
                 })
                 .collect();
@@ -416,11 +413,9 @@ mod tests {
                 let new_point_id = point_ids_map[point_id];
                 let new_queue_vec = new_links[&new_point_id].to_vec();
                 let queue_vec = queue.to_vec();
-                for ((neighbor_id, distance), (new_neighbor_id, new_distance)) in
-                    queue_vec.iter().zip(new_queue_vec)
+                for ((neighbor_id, _), (new_neighbor_id, _)) in queue_vec.iter().zip(new_queue_vec)
                 {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
-                    assert_eq!(distance_map(*distance), new_distance);
                 }
             }
         }

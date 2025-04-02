@@ -22,6 +22,7 @@ use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
+    // TODO: SortedEdgeIds.
     links: Json<SortedNeighborhoodV<V>>,
     layer: i32,
 }
@@ -229,7 +230,7 @@ where
         while let Some(row) = irises.next().await {
             let row = row?;
             graph_mem
-                .set_links(row.source_ref.0, row.links.0, row.layer as usize)
+                .set_links(row.source_ref.0, row.links.0.edge_ids(), row.layer as usize)
                 .await;
         }
 
