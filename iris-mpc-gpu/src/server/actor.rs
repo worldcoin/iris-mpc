@@ -523,7 +523,18 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, return_channel);
+
+            // Call process_batch_query with mirrored_flow = false, get the results
+            // and send them to the return_channel
+            match self.process_batch_query(batch, false) {
+                Ok(result) => {
+                    // Send the result to the return channel
+                    let _ = return_channel.send(result);
+                }
+                Err(e) => {
+                    tracing::error!("Error processing batch query: {:?}", e);
+                }
+            }
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -559,8 +570,8 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
-        return_channel: oneshot::Sender<ServerJobResult>,
-    ) -> eyre::Result<()> {
+        _mirrored_flow: bool, // Will be used in future mirror attack prevention implementation
+    ) -> eyre::Result<ServerJobResult> {
         let now = Instant::now();
 
         let batch = PreprocessedBatchQuery::from(batch);
@@ -599,6 +610,14 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.code.len()
                 && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS
+                    == batch.left_mirrored_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS
+                    == batch.left_mirrored_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS
+                    == batch.right_mirrored_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS
+                    == batch.right_mirrored_iris_interpolated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.code.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests.code.len()
@@ -609,6 +628,14 @@ impl ServerActor {
                     == batch.right_iris_interpolated_requests_preprocessed.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests_preprocessed.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests_preprocessed.len()
+                && batch_size * ROTATIONS
+                    == batch
+                        .left_mirrored_iris_interpolated_requests_preprocessed
+                        .len()
+                && batch_size * ROTATIONS
+                    == batch
+                        .right_mirrored_iris_interpolated_requests_preprocessed
+                        .len()
                 && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
@@ -1216,6 +1243,8 @@ impl ServerActor {
             eyre::bail!("DB size exceeded");
         }
 
+        // TODO: if we are in the mirror case we have to disable the storing
+        // TODO: we do the mirror case first so we can avoid the storing
         if self.disable_persistence {
             tracing::info!("Persistence is disabled, not writing to DB");
         } else {
@@ -1316,36 +1345,36 @@ impl ServerActor {
             );
         }
 
-        // Pass to internal sender thread
-        return_channel
-            .send(ServerJobResult {
-                merged_results,
-                request_ids: batch.request_ids,
-                request_types: batch.request_types,
-                metadata: batch.metadata,
-                matches,
-                matches_with_skip_persistence,
-                match_ids: match_ids_filtered,
-                partial_match_ids_left,
-                partial_match_ids_right,
-                partial_match_counters_left,
-                partial_match_counters_right,
-                left_iris_requests: batch.left_iris_requests,
-                right_iris_requests: batch.right_iris_requests,
-                deleted_ids: batch.deletion_requests_indices,
-                matched_batch_request_ids,
-                anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
-                anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
-                successful_reauths,
-                reauth_target_indices: batch.reauth_target_indices,
-                reauth_or_rule_used: batch.reauth_use_or_rule,
-                reset_update_indices: batch.reset_update_indices,
-                reset_update_request_ids: batch.reset_update_request_ids,
-                reset_update_shares: batch.reset_update_shares,
-                modifications: batch.modifications,
-                actor_data: (),
-            })
-            .unwrap();
+        let request_count = batch.request_ids.len();
+        // Instead of sending to return_channel, we'll return this at the end
+        let result = ServerJobResult {
+            merged_results,
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
+            matches,
+            matches_with_skip_persistence,
+            match_ids: match_ids_filtered,
+            partial_match_ids_left,
+            partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
+            deleted_ids: batch.deletion_requests_indices,
+            matched_batch_request_ids,
+            anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
+            anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+            successful_reauths,
+            reauth_target_indices: batch.reauth_target_indices,
+            reauth_or_rule_used: batch.reauth_use_or_rule,
+            reset_update_indices: batch.reset_update_indices,
+            reset_update_request_ids: batch.reset_update_request_ids,
+            reset_update_shares: batch.reset_update_shares,
+            modifications: batch.modifications,
+            actor_data: (),
+            full_face_mirror_attack_detected: vec![false; request_count],
+        };
 
         self.anonymized_bucket_statistics_left.buckets.clear();
         self.anonymized_bucket_statistics_right.buckets.clear();
@@ -1419,7 +1448,7 @@ impl ServerActor {
         metrics::gauge!("gpu_memory_free_sum").set(sum_free as f64);
         metrics::gauge!("gpu_memory_total_sum").set(sum_total as f64);
 
-        Ok(())
+        Ok(result)
     }
 
     fn try_calculate_bucket_stats(&mut self, eye_db: Eye) {
@@ -1898,10 +1927,13 @@ impl ServerActor {
         batch_size: usize,
     ) {
         // we try to calculate the bucket stats here if we have collected enough of them
+        // TODO: design decision on how to handle bucket stats in the mirrored case
         self.try_calculate_bucket_stats(eye_db);
 
         // ---- START BATCH DEDUP ----
+        // TODO: needs modification to be able to check mirrored against the normal in the batch
         self.compare_query_against_self(
+            // TODO: refactor to be able to add mirrored query to check against
             compact_device_queries,
             compact_device_sums,
             events,
@@ -2018,6 +2050,7 @@ impl ServerActor {
                 .await_event(request_streams, &self.phase1_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 1 ----
+            // Dot product = hamming distance against the database(chunk)
             record_stream_time!(
                 &self.device_manager,
                 request_streams,
