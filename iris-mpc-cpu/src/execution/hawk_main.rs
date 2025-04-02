@@ -757,6 +757,7 @@ impl HawkResult {
             reset_update_shares: vec![],                 // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
+            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
         }
     }
 }
