@@ -3,7 +3,7 @@ mod utils;
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
 use crate::services::init::initialize_chacha_seeds;
-use crate::services::processors::batch::receive_batch;
+use crate::services::processors::batch::BatchProcessor;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
@@ -705,7 +705,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut next_batch = receive_batch(
+
+        let mut processor = BatchProcessor::new(
             party_id,
             &aws_clients.sqs_client,
             &aws_clients.sns_client,
@@ -718,6 +719,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
         );
+
+        let mut next_batch = processor.receive_batch();
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
@@ -760,19 +763,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
             let result_future = hawk_handle.submit_batch_query(batch.clone());
 
-            next_batch = receive_batch(
-                party_id,
-                &aws_clients.sqs_client,
-                &aws_clients.sns_client,
-                &aws_clients.s3_client,
-                &config,
-                &store,
-                &skip_request_ids,
-                shares_encryption_key_pair.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attribute,
-                &reauth_error_result_attribute,
-            );
+            next_batch = processor.receive_batch();
 
             // await the result
             let result = timeout(processing_timeout, result_future.await)
