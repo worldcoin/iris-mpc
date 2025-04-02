@@ -1247,8 +1247,8 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.deref(),
-                &[(expected_ep, distance.clone())],
+                links.vectors_cloned(),
+                vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
         }

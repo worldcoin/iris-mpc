@@ -9,7 +9,10 @@ use super::{
     sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
-use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
+    SortedNeighborhood, VectorStore,
+};
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -866,7 +869,7 @@ impl HnswSearcher {
             /// The base vector that we connect to.
             nb_query: Query,
             /// The neighborhood of the base vector.
-            nb_links: SortedNeighborhood<Vector, Distance>,
+            nb_links: SortedEdgeIds<Vector>,
             /// The current state of the search.
             search: BinarySearch,
         }
@@ -882,8 +885,7 @@ impl HnswSearcher {
 
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
-                // TODO: Switch to ID only.
-                let nb_links: SortedNeighborhoodV<V> = graph.get_links(nb, lc).await;
+                let nb_links = graph.get_links(nb, lc).await;
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
@@ -949,7 +951,7 @@ impl HnswSearcher {
                     let insertion_idx = n.search.result().unwrap();
                     n.nb_links
                         .edges
-                        .insert(insertion_idx, (inserted_vector.clone(), n.nb_dist.clone()));
+                        .insert(insertion_idx, (inserted_vector.clone(), ()));
                     n.nb_links.trim_to_k_nearest(max_links);
                 });
             });
@@ -960,7 +962,19 @@ impl HnswSearcher {
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
                 neighbors: l_links,
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect(),
+                nb_links: l_neighbors
+                    .into_iter()
+                    .map(|n| {
+                        // TODO: Remove this fake conversion with fake distances.
+                        let fake_dist = &n.nb_dist;
+                        SortedNeighborhood::from_ascending_vec(
+                            n.nb_links
+                                .iter()
+                                .map(|(nb, _)| (nb.clone(), fake_dist.clone()))
+                                .collect_vec(),
+                        )
+                    })
+                    .collect_vec(),
             })
             .collect();
 

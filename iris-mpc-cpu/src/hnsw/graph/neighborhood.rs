@@ -14,6 +14,9 @@ use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 use tracing::{debug, instrument};
 
+/// A sorted list of edge IDs (without distances).
+pub type SortedEdgeIds<Vector> = SortedNeighborhood<Vector, ()>;
+
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
 

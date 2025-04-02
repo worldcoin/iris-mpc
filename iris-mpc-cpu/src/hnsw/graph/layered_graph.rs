@@ -3,12 +3,12 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::SortedNeighborhoodV;
+use super::neighborhood::{SortedEdgeIds, SortedNeighborhoodV};
 use crate::hnsw::{
     searcher::{ConnectPlanLayerV, ConnectPlanV},
     SortedNeighborhood, VectorStore,
 };
-use itertools::izip;
+use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -121,21 +121,21 @@ impl<V: VectorStore> GraphMem<V> {
         self.entry_point = Some(EntryPoint { point, layer });
     }
 
-    // TODO: Return only IDs without distances.
     pub async fn get_links(
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedNeighborhoodV<V> {
+    ) -> SortedEdgeIds<V::VectorRef> {
         let layer = &self.layers[lc];
         if let Some(links) = layer.get_links(base) {
-            links.clone()
+            links
         } else {
             SortedNeighborhood::new()
         }
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
+    // TODO: Switch to SortedEdgeIds.
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
@@ -158,6 +158,7 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
+    // TODO: Switch to SortedEdgeIds.
     links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
 }
 
@@ -180,8 +181,10 @@ impl<V: VectorStore> Layer<V> {
         Layer { links }
     }
 
-    fn get_links(&self, from: &V::VectorRef) -> Option<&SortedNeighborhoodV<V>> {
-        self.links.get(from)
+    fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
+        self.links.get(from).map(|l| {
+            SortedEdgeIds::from_ascending_vec(l.iter().map(|(v, _d)| (v.clone(), ())).collect_vec())
+        })
     }
 
     fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhoodV<V>) {
