@@ -3,7 +3,7 @@ mod utils;
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
 use crate::services::init::initialize_chacha_seeds;
-use crate::services::processors::batch::{receive_batch, BatchProcessor};
+use crate::services::processors::batch::receive_batch;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
