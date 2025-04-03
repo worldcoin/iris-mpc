@@ -1177,7 +1177,8 @@ mod tests_db {
     use crate::{
         hawkers::aby3::aby3_store::VectorId,
         hnsw::{
-            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
+            searcher::ConnectPlanLayerV,
             SortedNeighborhood,
         },
         shares::share::DistanceShare,
@@ -1203,7 +1204,7 @@ mod tests_db {
                             vectors[side],
                             distance.clone(),
                         )]),
-                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(*vector, ())])],
+                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
                     set_ep: i == side,
                 })
@@ -1244,7 +1245,7 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.vectors_cloned(),
+                links.0,
                 vec![expected_ep],
                 "vec_2 connects to the entry point"
             );

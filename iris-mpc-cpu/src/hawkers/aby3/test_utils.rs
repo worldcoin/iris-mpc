@@ -12,7 +12,10 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::plaintext_store::{PlaintextStore, PointId},
-    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
+    hnsw::{
+        graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
+        GraphMem, HnswSearcher, VectorStore,
+    },
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},
@@ -132,14 +135,11 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Ab
         for (source_v, queue) in links {
             let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
-            for (target_v, _) in queue.as_vec_ref() {
+            for target_v in queue.iter() {
                 let target_v = VectorId::from(*target_v);
-                shared_queue.push((target_v, ()));
+                shared_queue.push(target_v);
             }
-            shared_links.insert(
-                source_v,
-                SortedNeighborhood::from_ascending_vec(shared_queue.clone()),
-            );
+            shared_links.insert(source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
         }
         shared_layers.push(Layer::from_links(shared_links));
     }

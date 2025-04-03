@@ -172,7 +172,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
             let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
             x.as_ref().clone()
         })
-        .unwrap_or_else(SortedEdgeIds::new)
+        .unwrap_or_else(SortedEdgeIds::default)
     }
 
     async fn set_links(

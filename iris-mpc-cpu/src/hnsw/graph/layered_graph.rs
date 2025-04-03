@@ -6,7 +6,7 @@
 use super::neighborhood::SortedEdgeIds;
 use crate::hnsw::{
     searcher::{ConnectPlanLayerV, ConnectPlanV},
-    SortedNeighborhood, VectorStore,
+    VectorStore,
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
@@ -127,11 +127,7 @@ impl<V: VectorStore> GraphMem<V> {
         lc: usize,
     ) -> SortedEdgeIds<V::VectorRef> {
         let layer = &self.layers[lc];
-        if let Some(links) = layer.get_links(base) {
-            links
-        } else {
-            SortedNeighborhood::new()
-        }
+        layer.get_links(base).unwrap_or_default()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
@@ -222,10 +218,7 @@ where
                     (
                         vector_map(v),
                         SortedEdgeIds::from_ascending_vec(
-                            nbhd.edges
-                                .into_iter()
-                                .map(|(w, _)| (vector_map(w), ()))
-                                .collect(),
+                            nbhd.0.into_iter().map(vector_map).collect(),
                         ),
                     )
                 })
@@ -401,9 +394,7 @@ mod tests {
             for (point_id, queue) in links.iter() {
                 let new_point_id = point_ids_map[point_id];
                 let new_queue_vec = new_links[&new_point_id].to_vec();
-                let queue_vec = queue.to_vec();
-                for ((neighbor_id, _), (new_neighbor_id, _)) in queue_vec.iter().zip(new_queue_vec)
-                {
+                for (neighbor_id, new_neighbor_id) in queue.iter().zip(new_queue_vec) {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
                 }
             }

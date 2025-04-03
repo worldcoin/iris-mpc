@@ -717,7 +717,7 @@ impl HnswSearcher {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
-            .vectors_cloned()
+            .0
             .into_iter()
             .filter(|e| visited.insert(e.clone()))
             .collect();
@@ -878,10 +878,7 @@ impl HnswSearcher {
         // initialize binary search
         let mut neighbors = Vec::new();
         for (lc, l_links) in links.iter().enumerate() {
-            let nb_queries = {
-                let ids = l_links.iter().map(|(nb, _)| nb.clone()).collect_vec();
-                store.vectors_as_queries(ids).await
-            };
+            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
 
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
@@ -915,7 +912,7 @@ impl HnswSearcher {
                 .iter()
                 .map(|n| {
                     let cmp_idx = n.search.next().unwrap();
-                    (n.nb_query.clone(), n.nb_links[cmp_idx].0.clone())
+                    (n.nb_query.clone(), n.nb_links[cmp_idx].clone())
                 })
                 .collect_vec();
 
@@ -949,9 +946,7 @@ impl HnswSearcher {
                 let max_links = self.params.get_M_max(lc);
                 l_neighbors.iter_mut().for_each(|n| {
                     let insertion_idx = n.search.result().unwrap();
-                    n.nb_links
-                        .edges
-                        .insert(insertion_idx, (inserted_vector.clone(), ()));
+                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
                     n.nb_links.trim_to_k_nearest(max_links);
                 });
             });
