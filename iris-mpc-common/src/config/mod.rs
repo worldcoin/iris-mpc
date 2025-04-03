@@ -1,7 +1,6 @@
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Deserializer, Serialize};
-use sha2::Digest;
 use std::fmt;
 
 pub mod json_wrapper;
@@ -429,7 +428,7 @@ where
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,
     results_topic_arn: String,
@@ -573,17 +572,5 @@ impl From<Config> for CommonConfig {
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
         }
-    }
-}
-
-impl CommonConfig {
-    /// Produce a hash of the config using SHA256.
-    /// The implementation uses bincode to serialize the struct and then hashes it.
-    pub fn hash(&self) -> eyre::Result<String> {
-        let mut hasher = sha2::Sha256::default();
-
-        hasher.update(bincode::serialize(&self)?);
-
-        Ok(hex::encode(hasher.finalize()))
     }
 }

@@ -2,13 +2,15 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
+use crate::config::CommonConfig;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
     pub db_len: u64,
     pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
-    pub common_config_hash: String,
+    pub common_config: CommonConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,11 +112,17 @@ impl SyncResult {
         }
     }
 
-    pub fn check_common_config_hash(&self) -> eyre::Result<()> {
-        let first_hash = self.all_states[0].common_config_hash.clone();
+    pub fn check_common_config(&self) -> eyre::Result<()> {
+        let config = self.my_state.common_config.clone();
         for state in &self.all_states {
-            if state.common_config_hash != first_hash {
-                return Err(eyre::eyre!("Inconsistent common config hash"));
+            if state.common_config != config {
+                return Err(eyre::eyre!(
+                    "Inconsistent common config!\n
+                have: {:?}\n
+                got: {:?}",
+                    config,
+                    state.common_config
+                ));
             }
         }
         Ok(())
@@ -246,9 +254,12 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::helpers::{
-        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
-        smpc_response::{IdentityDeletionResult, ReAuthResult},
+    use crate::{
+        config::Config,
+        helpers::{
+            smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+            smpc_response::{IdentityDeletionResult, ReAuthResult},
+        },
     };
 
     #[test]
@@ -268,21 +279,21 @@ mod tests {
                 deleted_request_ids: vec!["most late".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 456,
                 deleted_request_ids: vec!["x".to_string(), "y".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 789,
                 deleted_request_ids: vec!["most ahead".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
         ];
         let deleted_request_ids = vec![
@@ -327,7 +338,7 @@ mod tests {
             deleted_request_ids: vec![],
             modifications,
             next_sns_sequence_num: None,
-            common_config_hash: "config".to_string(),
+            common_config: CommonConfig::default(),
         }
     }
 
@@ -659,21 +670,21 @@ mod tests {
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 20,
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 30,
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: None,
-                common_config_hash: "config".to_string(),
+                common_config: CommonConfig::default(),
             },
         ];
 
@@ -686,7 +697,7 @@ mod tests {
             deleted_request_ids: vec![],
             modifications: vec![],
             next_sns_sequence_num: None,
-            common_config_hash: "config".to_string(),
+            common_config: CommonConfig::default(),
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -796,7 +807,46 @@ mod tests {
             deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
             modifications: vec![],
             next_sns_sequence_num: None,
-            common_config_hash: "config".to_string(),
+            common_config: CommonConfig::default(),
         }
+    }
+
+    #[test]
+    fn test_common_config_sync() {
+        // load a dummy config with default values
+        let config = Config::load_config("dummy").unwrap();
+        let mut config1 = config;
+        config1.luc_enabled = false;
+        let config2 = config1.clone();
+        let mut config3 = config1.clone();
+        config3.luc_enabled = true;
+
+        // 1. Test with mixed configs
+        let states = vec![
+            SyncState {
+                db_len: 20,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: Some(100),
+                common_config: CommonConfig::from(config1),
+            },
+            SyncState {
+                db_len: 20,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: Some(100),
+                common_config: CommonConfig::from(config2),
+            },
+            SyncState {
+                db_len: 20,
+                deleted_request_ids: vec![],
+                modifications: vec![],
+                next_sns_sequence_num: Some(100),
+                common_config: CommonConfig::from(config3),
+            },
+        ];
+
+        let sync_result = SyncResult::new(states[0].clone(), states);
+        assert!(sync_result.check_common_config().is_err());
     }
 }
