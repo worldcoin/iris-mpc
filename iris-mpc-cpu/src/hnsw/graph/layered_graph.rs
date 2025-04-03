@@ -4,9 +4,12 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use super::neighborhood::SortedEdgeIds;
-use crate::hnsw::{
-    searcher::{ConnectPlanLayerV, ConnectPlanV},
-    VectorStore,
+use crate::{
+    execution::hawk_main::state_check::SetHash,
+    hnsw::{
+        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        VectorStore,
+    },
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
@@ -15,7 +18,7 @@ use std::collections::HashMap;
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
 /// search begins.
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct EntryPoint<VectorRef> {
     /// The vector reference of the entry point
     pub point: VectorRef,
@@ -96,6 +99,17 @@ impl<V: VectorStore> GraphMem<V> {
 
         // Connect q -> all n.
         self.set_links(q, plan.neighbors.edge_ids(), lc).await;
+    }
+
+    pub fn digest_slow(&self) -> u64 {
+        let mut set_hash = SetHash::default();
+        set_hash.add_unordered(&self.entry_point);
+        for (lc, layer) in self.layers.iter().enumerate() {
+            for (v, links) in layer.get_links_map() {
+                set_hash.add_unordered((lc as u8, v, links));
+            }
+        }
+        set_hash.digest()
     }
 }
 

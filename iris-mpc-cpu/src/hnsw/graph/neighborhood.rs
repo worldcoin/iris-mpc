@@ -15,7 +15,7 @@ use std::ops::{Deref, DerefMut};
 use tracing::{debug, instrument};
 
 /// A sorted list of edge IDs (without distances).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct SortedEdgeIds<V>(pub Vec<V>);
 
 impl<V> SortedEdgeIds<V> {

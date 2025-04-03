@@ -73,7 +73,7 @@ impl SharedIrises {
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
         if was_there.is_none() {
-            self.set_hash.add(&vector_id);
+            self.set_hash.add_unordered(vector_id);
         }
     }
 

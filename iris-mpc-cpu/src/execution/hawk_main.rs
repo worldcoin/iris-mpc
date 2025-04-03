@@ -799,8 +799,8 @@ impl HawkHandle {
 
         // Validate the common state before starting.
         try_join!(
-            HawkSession::sync(&sessions[LEFT][0]),
-            HawkSession::sync(&sessions[RIGHT][0]),
+            HawkSession::state_check(&sessions[LEFT][0]),
+            HawkSession::state_check(&sessions[RIGHT][0]),
         )?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);

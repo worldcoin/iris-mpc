@@ -1,4 +1,5 @@
 use eyre::{eyre, Result};
+use itertools::{chain, Itertools};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
@@ -11,11 +12,11 @@ pub struct SetHash {
 }
 
 impl SetHash {
-    pub fn add(&mut self, value: &impl Hash) {
+    pub fn add_unordered(&mut self, value: impl Hash) {
         let mut hasher = SipHasher13::default();
         value.hash(&mut hasher);
-
-        self.hash ^= hasher.finish();
+        let h = hasher.finish();
+        self.hash = self.hash.wrapping_add(h);
     }
 
     pub fn digest(&self) -> u64 {
@@ -24,16 +25,10 @@ impl SetHash {
 }
 
 impl HawkSession {
-    pub async fn sync(session: &HawkSessionRef) -> Result<()> {
+    pub async fn state_check(session: &HawkSessionRef) -> Result<()> {
         let mut session = session.write().await;
 
-        let my_state = session
-            .aby3_store
-            .storage
-            .digest()
-            .await
-            .to_le_bytes()
-            .to_vec();
+        let my_state = session.digest().await;
 
         let net = &mut session.aby3_store.session.network_session;
         net.send_prev(my_state.clone()).await?;
@@ -47,5 +42,13 @@ impl HawkSession {
             ));
         }
         Ok(())
+    }
+
+    async fn digest(&self) -> Vec<u8> {
+        let iris_digest = self.aby3_store.storage.digest().await;
+
+        let graph_digest = self.graph_store.read().await.digest_slow();
+
+        chain(iris_digest.to_le_bytes(), graph_digest.to_le_bytes()).collect_vec()
     }
 }
