@@ -91,6 +91,9 @@ impl NetworkValue {
 
     pub fn from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Self> {
         let serialized = serialized?;
+        if serialized.is_empty() {
+            return Err(eyre!("Empty serialized data"));
+        }
         let descriptor = serialized[0];
         match descriptor {
             0x01 => {
@@ -341,6 +344,14 @@ mod tests {
         let result_vec = NetworkValue::vec_from_network(Ok(serialized))?;
         assert_eq!(network_values, result_vec);
 
+        Ok(())
+    }
+
+    /// Test from_network with empty data
+    #[test]
+    fn test_from_network_empty() -> eyre::Result<()> {
+        let result = NetworkValue::from_network(Ok(vec![]));
+        assert_eq!(result.unwrap_err().to_string(), "Empty serialized data");
         Ok(())
     }
 }
