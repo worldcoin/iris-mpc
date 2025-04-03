@@ -136,6 +136,8 @@ async fn e2e_test() -> Result<()> {
     test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleNonMatchingTarget);
+    test_case_generator.disable_test_case(TestCase::ResetCheckMatch);
+    test_case_generator.disable_test_case(TestCase::ResetCheckNonMatch);
 
     // TODO: enable this once supported
     // test_case_generator.enable_bucket_statistic_checks(

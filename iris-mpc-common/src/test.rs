@@ -2,7 +2,7 @@ use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         inmemory_store::InMemoryStore,
-        smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
     iris_db::{
@@ -119,6 +119,12 @@ pub enum TestCase {
     /// Send a reauth request with OR rule not matching any sides of target
     /// serial id's iris code (failed reauth)
     ReauthOrRuleNonMatchingTarget,
+    /// Send a reset check request with an iris code known to be in the database
+    /// Similar to MatchSkipPersistence, but using RESET_CHECK_MESSAGE_TYPE
+    ResetCheckMatch,
+    /// Send a reset check request with an iris code known not to match any in the database
+    /// Similar to NonMatchSkipPersistence, but using RESET_CHECK_MESSAGE_TYPE
+    ResetCheckNonMatch,
 }
 
 impl TestCase {
@@ -139,6 +145,8 @@ impl TestCase {
             TestCase::ReauthMatchingTarget,
             TestCase::ReauthOrRuleNonMatchingTarget,
             TestCase::ReauthOrRuleMatchingTarget,
+            TestCase::ResetCheckMatch,
+            TestCase::ResetCheckNonMatch,
         ]
     }
 }
@@ -167,6 +175,8 @@ pub struct ExpectedResult {
     /// Populated only if the request type is REAUTH.
     /// Indicates whether the expected reauth result is successful.
     is_reauth_successful: Option<bool>,
+    /// Whether this is a RESET_CHECK_MESSAGE_TYPE request
+    is_reset_check: bool,
 }
 
 struct BucketStatisticParameters {
@@ -261,12 +271,7 @@ impl TestCaseGenerator {
         let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
         Self::new_with_db(&mut db, internal_rng_seed, is_cpu)
     }
-    pub fn enable_test_case(&mut self, test_case: TestCase) {
-        if self.enabled_test_cases.contains(&test_case) {
-            return;
-        }
-        self.enabled_test_cases.push(test_case);
-    }
+
     pub fn disable_test_case(&mut self, test_case: TestCase) {
         self.enabled_test_cases.retain(|x| x != &test_case);
     }
@@ -302,7 +307,7 @@ impl TestCaseGenerator {
         self.or_rule_matches.clear();
 
         for idx in 0..batch_size {
-            let (request_id, e2e_template, or_rule_indices, skip_persistence) =
+            let (request_id, e2e_template, or_rule_indices, skip_persistence, message_type) =
                 self.generate_query(idx);
 
             // Invalidate 10% of the queries, but ignore the batch duplicates
@@ -324,6 +329,7 @@ impl TestCaseGenerator {
                 or_rule_indices.clone(),
                 maybe_reauth_target_index,
                 skip_persistence,
+                message_type.clone(),
             )?;
 
             prepare_batch(
@@ -335,6 +341,7 @@ impl TestCaseGenerator {
                 or_rule_indices.clone(),
                 maybe_reauth_target_index,
                 skip_persistence,
+                message_type.clone(),
             )?;
 
             prepare_batch(
@@ -346,6 +353,7 @@ impl TestCaseGenerator {
                 or_rule_indices.clone(),
                 maybe_reauth_target_index,
                 skip_persistence,
+                message_type,
             )?;
         }
 
@@ -405,9 +413,10 @@ impl TestCaseGenerator {
     fn generate_query(
         &mut self,
         internal_batch_idx: usize,
-    ) -> (Uuid, E2ETemplate, OrRuleSerialIds, bool) {
+    ) -> (Uuid, E2ETemplate, OrRuleSerialIds, bool, String) {
         let request_id = Uuid::new_v4();
         let mut skip_persistence = false;
+        let mut message_type = UNIQUENESS_MESSAGE_TYPE.to_string();
         // Automatic random tests
         let mut options = vec![
             TestCase::Match,
@@ -420,6 +429,8 @@ impl TestCaseGenerator {
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::MatchSkipPersistence,
             TestCase::NonMatchSkipPersistence,
+            TestCase::ResetCheckMatch,
+            TestCase::ResetCheckNonMatch,
         ];
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
@@ -447,6 +458,7 @@ impl TestCaseGenerator {
                     is_batch_match: true,
                     is_reauth_successful: None,
                     is_skip_persistence_request: false,
+                    is_reset_check: false,
                 },
             );
             self.batch_duplicates
@@ -472,6 +484,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     let template = IrisCode::random_rng(&mut self.rng);
@@ -496,6 +509,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: true,
+                            is_reset_check: false,
                         },
                     );
                     let template = IrisCode::random_rng(&mut self.rng);
@@ -515,6 +529,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     E2ETemplate {
@@ -535,6 +550,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: true,
+                            is_reset_check: false,
                         },
                     );
                     E2ETemplate {
@@ -559,6 +575,7 @@ impl TestCaseGenerator {
                                 is_batch_match: false,
                                 is_reauth_successful: None,
                                 is_skip_persistence_request: false,
+                                is_reset_check: false,
                             }
                         } else {
                             // we flip less or equal to than the threshold so this should
@@ -568,6 +585,7 @@ impl TestCaseGenerator {
                                 is_batch_match: false,
                                 is_reauth_successful: None,
                                 is_skip_persistence_request: false,
+                                is_reset_check: false,
                             }
                         },
                     );
@@ -594,6 +612,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     self.db_indices_used_in_current_batch.insert(*idx as usize);
@@ -615,6 +634,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: None,
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     E2ETemplate {
@@ -671,6 +691,7 @@ impl TestCaseGenerator {
                                 is_batch_match: false,
                                 is_reauth_successful: None,
                                 is_skip_persistence_request: false,
+                                is_reset_check: false,
                             },
                         );
                     } else {
@@ -684,6 +705,7 @@ impl TestCaseGenerator {
                                 is_batch_match: false,
                                 is_reauth_successful: None,
                                 is_skip_persistence_request: false,
+                                is_reset_check: false,
                             },
                         );
                     }
@@ -693,6 +715,7 @@ impl TestCaseGenerator {
                     tracing::info!(
                         "Sending reauth request with AND rule matching the target index"
                     );
+                    message_type = REAUTH_MESSAGE_TYPE.to_string();
                     let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.reauth_target_indices
@@ -704,6 +727,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: Some(true),
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     E2ETemplate {
@@ -715,6 +739,7 @@ impl TestCaseGenerator {
                     tracing::info!(
                         "Sending reauth request with AND rule non-matching the target index"
                     );
+                    message_type = REAUTH_MESSAGE_TYPE.to_string();
                     let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.disallowed_queries.push(db_index as u32);
@@ -734,12 +759,14 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: Some(false),
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     template
                 }
                 TestCase::ReauthOrRuleMatchingTarget => {
                     tracing::info!("Sending reauth request with OR rule matching the target index");
+                    message_type = REAUTH_MESSAGE_TYPE.to_string();
                     let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.disallowed_queries.push(db_index as u32);
@@ -757,6 +784,7 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: Some(true),
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     template
@@ -765,6 +793,7 @@ impl TestCaseGenerator {
                     tracing::info!(
                         "Sending reauth request with OR rule non-matching the target index"
                     );
+                    message_type = REAUTH_MESSAGE_TYPE.to_string();
                     let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::FullMaskOnly);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.reauth_target_indices
@@ -779,13 +808,59 @@ impl TestCaseGenerator {
                             is_batch_match: false,
                             is_reauth_successful: Some(false),
                             is_skip_persistence_request: false,
+                            is_reset_check: false,
                         },
                     );
                     template
                 }
+                TestCase::ResetCheckMatch => {
+                    tracing::info!("Sending reset check request with a known iris code");
+                    let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    self.db_indices_used_in_current_batch.insert(db_index);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult {
+                            db_index: Some(db_index as u32),
+                            is_batch_match: false,
+                            is_reauth_successful: None,
+                            is_skip_persistence_request: false,
+                            is_reset_check: true,
+                        },
+                    );
+                    message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
+                }
+                TestCase::ResetCheckNonMatch => {
+                    tracing::info!("Sending reset check request with a known non-iris code");
+                    let template = IrisCode::random_rng(&mut self.rng);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult {
+                            db_index: None,
+                            is_batch_match: false,
+                            is_reauth_successful: None,
+                            is_skip_persistence_request: false,
+                            is_reset_check: true,
+                        },
+                    );
+                    message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
+                }
             }
         };
-        (request_id, e2e_template, or_rule_indices, skip_persistence)
+        (
+            request_id,
+            e2e_template,
+            or_rule_indices,
+            skip_persistence,
+            message_type,
+        )
     }
 
     /// Returns a template with flipped bits of given `db_index`.
@@ -858,6 +933,7 @@ impl TestCaseGenerator {
             is_batch_match,
             is_reauth_successful,
             is_skip_persistence_request,
+            is_reset_check,
         } = self
             .expected_results
             .get(req_id)
@@ -880,7 +956,7 @@ impl TestCaseGenerator {
             }
         } else {
             assert!(!was_skip_persistence_match);
-            if is_skip_persistence_request {
+            if is_skip_persistence_request || is_reset_check {
                 assert!(was_match);
             } else {
                 assert!(!was_match);
@@ -1014,28 +1090,23 @@ fn prepare_batch(
     or_rule_indices: Vec<u32>,
     maybe_reauth_target_index: Option<&u32>,
     skip_persistence: bool,
+    message_type: String,
 ) -> Result<()> {
     batch.metadata.push(Default::default());
     batch.valid_entries.push(is_valid);
     batch.skip_persistence.push(skip_persistence);
     batch.request_ids.push(request_id.clone());
-    match maybe_reauth_target_index {
-        Some(target_index) => {
-            batch.request_types.push(REAUTH_MESSAGE_TYPE.to_string());
-            batch
-                .reauth_use_or_rule
-                .insert(request_id.clone(), !or_rule_indices.is_empty());
-            batch
-                .reauth_target_indices
-                .insert(request_id.clone(), *target_index);
-        }
-        None => {
-            batch
-                .request_types
-                .push(UNIQUENESS_MESSAGE_TYPE.to_string());
-        }
+    if message_type == REAUTH_MESSAGE_TYPE {
+        let target_index = maybe_reauth_target_index.unwrap();
+        batch
+            .reauth_use_or_rule
+            .insert(request_id.clone(), !or_rule_indices.is_empty());
+        batch
+            .reauth_target_indices
+            .insert(request_id.clone(), *target_index);
     }
 
+    batch.request_types.push(message_type);
     batch.or_rule_indices.push(or_rule_indices);
 
     batch

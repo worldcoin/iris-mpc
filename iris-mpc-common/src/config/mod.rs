@@ -172,6 +172,9 @@ pub struct Config {
     #[serde(default)]
     pub enable_reauth: bool,
 
+    #[serde(default)]
+    pub enable_reset: bool,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
@@ -209,6 +212,9 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
+
+    #[serde(default = "default_hawk_server_resets_enabled")]
+    pub hawk_server_resets_enabled: bool,
 }
 
 /// Enumeration over set of compute modes.
@@ -324,6 +330,10 @@ fn default_sqs_sync_long_poll_seconds() -> i32 {
 }
 
 fn default_hawk_server_reauths_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_resets_enabled() -> bool {
     false
 }
 
