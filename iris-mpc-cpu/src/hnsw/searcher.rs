@@ -854,7 +854,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhoodV<V>>,
+        mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
     ) -> ConnectPlanV<V> {
         let mut plan = ConnectPlan {
@@ -862,6 +862,12 @@ impl HnswSearcher {
             layers: vec![],
             set_ep,
         };
+
+        // Truncate search results to size M before insertion
+        for (lc, l_links) in links.iter_mut().enumerate() {
+            let M = self.params.get_M(lc);
+            l_links.trim_to_k_nearest(M);
+        }
 
         struct NeighborUpdate<Query, Vector, Distance> {
             /// The distance between the vector being inserted to a base vector.
