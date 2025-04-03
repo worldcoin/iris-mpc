@@ -1,9 +1,10 @@
-use crate::server::{CURRENT_BATCH_SIZE, MAX_CONCURRENT_REQUESTS, SQS_POLLING_INTERVAL};
+use crate::server::{MAX_CONCURRENT_REQUESTS, SQS_POLLING_INTERVAL};
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sqs::types::MessageSystemAttributeName;
 use aws_sdk_sqs::Client;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
@@ -12,6 +13,7 @@ use iris_mpc_common::galois_engine::degree4::{
 use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
+use iris_mpc_common::helpers::batch_sync::{get_batch_sync_states, BatchSyncResult};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
@@ -137,13 +139,57 @@ impl<'a> BatchProcessor<'a> {
     }
 
     async fn poll_messages(&mut self) -> Result<(), ReceiveRequestError> {
-        // let max_batch_size = self.config.max_batch_size;
+        let max_batch_size = self.config.max_batch_size;
         let queue_url = &self.config.requests_queue_url;
+        let polling_timeout =
+            tokio::time::Duration::from_secs(self.config.batch_polling_timeout_secs);
 
-        // Poll until we have enough messages
-        // temporary hack for staging to only process 1 message at a time
-        // this helps with the correctness test
-        while self.msg_counter < 1 {
+        // Try to fill the batch with a timeout
+        match tokio::time::timeout(
+            polling_timeout,
+            self.poll_until_batch_size(max_batch_size, queue_url),
+        )
+        .await
+        {
+            // If we collected enough messages before timeout
+            Ok(result) => result?,
+
+            // If timeout was reached before collecting enough messages
+            Err(_) => {
+                tracing::info!("Batch polling timeout reached, checking other nodes' sync states");
+
+                // Get batch sync states from all nodes
+                let states = get_batch_sync_states(self.config, self.client).await;
+                let batch_sync_result = BatchSyncResult::new(states[0].clone(), states);
+
+                // Get maximum and own sequence number across all nodes
+                let max_sequence_num = batch_sync_result.max_sns_sequence_num();
+                let own_sequence_num = batch_sync_result.my_state.next_sns_sequence_num;
+
+                tracing::info!(
+                    "Max sequence number across nodes: {}, own sequence number: {}",
+                    max_sequence_num,
+                    own_sequence_num
+                );
+
+                if own_sequence_num >= max_sequence_num {
+                    tracing::info!("Own sequence number is greater than or equal to max sequence number. No need to poll further.");
+                    return Ok(());
+                }
+                // Continue polling until we reach this sequence number
+                self.poll_until_sequence_num(max_sequence_num, queue_url)
+                    .await?;
+            }
+        }
+
+        Ok(())
+    }
+    async fn poll_until_batch_size(
+        &mut self,
+        max_batch_size: usize,
+        queue_url: &str,
+    ) -> Result<(), ReceiveRequestError> {
+        while self.msg_counter < max_batch_size {
             let rcv_message_output = self
                 .client
                 .receive_message()
@@ -154,10 +200,76 @@ impl<'a> BatchProcessor<'a> {
                 .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
 
             if let Some(messages) = rcv_message_output.messages {
+                if messages.is_empty() {
+                    // No more messages in the queue
+                    tracing::info!("No more messages in the queue");
+                    break;
+                }
+
                 for sqs_message in messages {
                     self.process_message(sqs_message).await?;
+
+                    // Check if we've reached the target batch size
+                    if self.msg_counter >= max_batch_size {
+                        break;
+                    }
                 }
             } else {
+                // No messages received
+                tokio::time::sleep(SQS_POLLING_INTERVAL).await;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn poll_until_sequence_num(
+        &mut self,
+        target_sequence_num: u128,
+        queue_url: &str,
+    ) -> Result<(), ReceiveRequestError> {
+        let mut current_sequence_num = 0;
+
+        while current_sequence_num < target_sequence_num {
+            let rcv_message_output = self
+                .client
+                .receive_message()
+                .max_number_of_messages(1)
+                .queue_url(queue_url)
+                .send()
+                .await
+                .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+
+            if let Some(messages) = rcv_message_output.messages {
+                if messages.is_empty() {
+                    // No more messages in the queue even though we haven't reached target sequence
+                    tracing::warn!("No more messages in queue but target sequence not reached: current={}, target={}",
+                                  current_sequence_num, target_sequence_num);
+                    break;
+                }
+
+                for sqs_message in messages {
+                    // Extract sequence number from message attributes if available
+                    if let Some(attributes) = &sqs_message.attributes {
+                        if let Some(sequence_num_str) =
+                            attributes.get(&MessageSystemAttributeName::SequenceNumber)
+                        {
+                            if let Ok(seq_num) = sequence_num_str.parse::<u128>() {
+                                current_sequence_num = seq_num;
+                            }
+                        }
+                    }
+
+                    // Process the message regardless of sequence number
+                    self.process_message(sqs_message).await?;
+
+                    // If we've reached or exceeded the target sequence number, we're done
+                    if current_sequence_num >= target_sequence_num {
+                        break;
+                    }
+                }
+            } else {
+                // No messages received
                 tokio::time::sleep(SQS_POLLING_INTERVAL).await;
             }
         }
@@ -284,7 +396,6 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        self.update_batch_size_if_needed(&uniqueness_request);
         self.update_luc_config_if_needed(&uniqueness_request);
 
         self.batch_query
@@ -334,7 +445,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.msg_counter += 1;
-        self.update_batch_size_if_needed_from_reauth(&reauth_request);
 
         self.batch_query
             .request_ids
@@ -473,22 +583,6 @@ impl<'a> BatchProcessor<'a> {
             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
         tracing::debug!("Deleted message: {:?}", sqs_message.message_id);
         Ok(())
-    }
-
-    fn update_batch_size_if_needed(&self, uniqueness_request: &UniquenessRequest) {
-        if let Some(batch_size) = uniqueness_request.batch_size {
-            let max_batch_size = self.config.max_batch_size;
-            *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, max_batch_size);
-            tracing::info!("Updating batch size to {}", batch_size);
-        }
-    }
-
-    fn update_batch_size_if_needed_from_reauth(&self, reauth_request: &ReAuthRequest) {
-        if let Some(batch_size) = reauth_request.batch_size {
-            let max_batch_size = self.config.max_batch_size;
-            *CURRENT_BATCH_SIZE.lock().unwrap() = batch_size.clamp(1, max_batch_size);
-            tracing::info!("Updating batch size to {} from reauth", batch_size);
-        }
     }
 
     fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) {

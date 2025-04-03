@@ -209,6 +209,9 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
+
+    #[serde(default = "default_batch_polling_timeout_secs")]
+    pub batch_polling_timeout_secs: u64,
 }
 
 /// Enumeration over set of compute modes.
@@ -329,6 +332,10 @@ fn default_hawk_server_reauths_enabled() -> bool {
 
 fn default_hawk_server_deletions_enabled() -> bool {
     false
+}
+
+fn default_batch_polling_timeout_secs() -> u64 {
+    10
 }
 
 impl Config {

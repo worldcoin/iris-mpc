@@ -10,8 +10,8 @@ pub struct BatchSyncState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchSyncResult {
-    my_state: BatchSyncState,
-    all_states: Vec<BatchSyncState>,
+    pub my_state: BatchSyncState,
+    pub all_states: Vec<BatchSyncState>,
 }
 
 impl BatchSyncResult {
