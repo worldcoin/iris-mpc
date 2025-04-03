@@ -93,10 +93,6 @@ impl<T: IntRing2k> RingElement<T> {
         let bit = ((self.0 >> index) & T::one()) == T::one();
         RingElement(Bit(bit as u8))
     }
-
-    pub fn upgrade_to_128(self) -> RingElement<u128> {
-        RingElement(self.0.into())
-    }
 }
 
 impl<T: IntRing2k + std::fmt::Display> std::fmt::Display for RingElement<T> {
