@@ -507,8 +507,8 @@ async fn receive_batch(
                             batch_query.metadata.push(batch_metadata);
                             batch_query.sns_message_ids.push(sns_message_id);
 
-                            // Always skip persistence for reset check requests
-                            batch_query.skip_persistence.push(true);
+                            // skip_persistence is only used for uniqueness requests
+                            batch_query.skip_persistence.push(false);
 
                             // We don't need OR rule for reset check
                             batch_query.or_rule_indices.push(vec![]);

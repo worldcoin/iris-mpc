@@ -834,7 +834,7 @@ impl TestCaseGenerator {
                     }
                 }
                 TestCase::ResetCheckNonMatch => {
-                    tracing::info!("Sending reset check request with a known non-iris code");
+                    tracing::info!("Sending reset check request with an unknown iris code");
                     let template = IrisCode::random_rng(&mut self.rng);
                     self.expected_results.insert(
                         request_id.to_string(),
@@ -921,12 +921,13 @@ impl TestCaseGenerator {
     ) {
         tracing::info!(
             "Checking result for request_id: {}, idx: {}, was_match: {}, matched_batch_req_ids: \
-             {:?}, was_reauth_success: {}",
+             {:?}, was_reauth_success: {}, was_skip_persistence_match: {}",
             req_id,
             idx,
             was_match,
             matched_batch_req_ids,
-            was_reauth_success
+            was_reauth_success,
+            was_skip_persistence_match
         );
         let &ExpectedResult {
             db_index: expected_idx,
@@ -938,6 +939,18 @@ impl TestCaseGenerator {
             .expected_results
             .get(req_id)
             .expect("request id not found");
+
+        if is_reset_check {
+            assert!(!was_match);
+            assert!(!was_skip_persistence_match);
+            assert!(!was_reauth_success);
+            if expected_idx.is_some() {
+                assert_eq!(idx, expected_idx.unwrap());
+            } else {
+                assert_eq!(idx, u32::MAX);
+            }
+            return;
+        }
 
         // if the request is a reauth, we only check the reauth success
         if let Some(is_reauth_successful) = is_reauth_successful {
@@ -956,7 +969,7 @@ impl TestCaseGenerator {
             }
         } else {
             assert!(!was_skip_persistence_match);
-            if is_skip_persistence_request || is_reset_check {
+            if is_skip_persistence_request {
                 assert!(was_match);
             } else {
                 assert!(!was_match);

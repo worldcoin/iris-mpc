@@ -960,13 +960,12 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        // sync the results across nodes, since these are the onse which the insertions are based upon
+        // sync the results across nodes, since these are the ones which the insertions are based upon
         self.sync_match_results(self.max_batch_size, &merged_results)?;
 
-        // List the indices of the uniqueness requests that did not match, the
-        // skipped requests that did not match, and all reset_check messages. We do not insert the skipped
-        // requests or reset_check messages into the DB.
-
+        // List the indices of the uniqueness requests that did not match as well as the
+        // skipped requests that did not match We do not insert the skipped
+        // requests into the DB
         let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
             merged_results
                 .iter()
@@ -978,10 +977,7 @@ impl ServerActor {
                         && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
                 })
                 .map(|(idx, _num)| idx)
-                .partition(|&idx| {
-                    !batch.skip_persistence[idx]
-                        && batch.request_types[idx] != RESET_CHECK_MESSAGE_TYPE
-                });
+                .partition(|&idx| !batch.skip_persistence[idx]);
 
         // Spread the insertions across devices.
         let uniqueness_insertion_list =
@@ -995,21 +991,14 @@ impl ServerActor {
             batch_size,
         );
 
-        // create a seperate matches list that includes the matches for skip persistence and reset_check requests
+        // create a seperate matches list that includes the matches for skip persistence
         let mut matches_with_skip_persistence = matches.clone();
         skipped_unique_insertions.iter().for_each(|&idx| {
             matches_with_skip_persistence[idx] = false;
-            if batch.request_types[idx] == RESET_CHECK_MESSAGE_TYPE {
-                tracing::info!(
-                    "Reset Check request ID {} skipped from persistence",
-                    batch.request_ids[idx],
-                );
-            } else {
-                tracing::info!(
-                    "Matches with skip insertion request ID {}",
-                    batch.request_ids[idx],
-                );
-            }
+            tracing::info!(
+                "Matches with skip insertion request ID {}",
+                batch.request_ids[idx],
+            );
         });
 
         // Check for batch matches
