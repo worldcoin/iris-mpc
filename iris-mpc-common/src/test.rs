@@ -941,9 +941,12 @@ impl TestCaseGenerator {
             .expect("request id not found");
 
         if is_reset_check {
-            assert!(!was_match);
-            assert!(!was_skip_persistence_match);
+            // assert that we don't report unique for reset_check requests. only enrollment requests can be reported as unique
+            assert!(was_match);
+            assert!(was_skip_persistence_match);
             assert!(!was_reauth_success);
+
+            // assert that we report correct matched indices for reset_check requests
             if expected_idx.is_some() {
                 assert_eq!(idx, expected_idx.unwrap());
             } else {
