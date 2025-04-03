@@ -80,7 +80,7 @@ pub async fn batch_signed_lift(
     for v in pre_lift.iter_mut() {
         v.add_assign_const_role(1_u16 << 15, session.own_role());
     }
-    let mut lifted_values = lift::<16>(session, pre_lift).await?;
+    let mut lifted_values = lift(session, pre_lift).await?;
     // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
     // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
     // get signed shares over 2^{32}
