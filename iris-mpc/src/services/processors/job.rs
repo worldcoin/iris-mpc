@@ -1,7 +1,7 @@
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::Config;
+use iris_mpc_common::config::{Config, ModeOfDeployment};
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -13,6 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
+use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
@@ -152,14 +153,16 @@ pub async fn process_job_result(
         })
         .collect::<eyre::Result<Vec<_>>>()?;
 
-    let mut tx = store.tx().await?;
+    let mut iris_tx = store.tx().await?;
 
-    store.insert_results(&mut tx, &uniqueness_results).await?;
+    store
+        .insert_results(&mut iris_tx, &uniqueness_results)
+        .await?;
 
     // TODO: update modifications table to store reauth and deletion results
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {
-        let db_serial_ids = store.insert_irises(&mut tx, &codes_and_masks).await?;
+        let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
 
         // Check if the serial_ids match between memory and db.
         if memory_serial_ids != db_serial_ids {
@@ -189,7 +192,7 @@ pub async fn process_job_result(
             );
             store
                 .update_iris(
-                    Some(&mut tx),
+                    Some(&mut iris_tx),
                     serial_id as i64,
                     &left_iris_requests.code[i],
                     &left_iris_requests.mask[i],
@@ -200,14 +203,7 @@ pub async fn process_job_result(
         }
     }
 
-    // Graph mutation.
-    let mut graph_tx = graph_store.tx_wrap(tx);
-    if !config.disable_persistence {
-        hawk_mutation.persist(&mut graph_tx).await?;
-    }
-    let tx = graph_tx.tx;
-
-    tx.commit().await?;
+    persist(iris_tx, graph_store, hawk_mutation, config).await?;
 
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id);
@@ -291,6 +287,54 @@ pub async fn process_job_result(
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     shutdown_handler.decrement_batches_pending_completion();
+
+    Ok(())
+}
+
+async fn persist(
+    iris_tx: Transaction<'_, Postgres>,
+    graph_store: &GraphStore,
+    hawk_mutation: HawkMutation,
+    config: &Config,
+) -> eyre::Result<()> {
+    // If we're in ShadowReadOnly mode, never commit to iris-db, but possibly commit graph.
+    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
+        if !config.cpu_disable_persistence {
+            let mut graph_tx = graph_store.tx().await?;
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        } else {
+            tracing::info!(
+                "Not persisting graph changes due to ShadowReadOnly + cpu_disable_persistence=true"
+            );
+        }
+        return Ok(());
+    }
+
+    // In normal (non‐ShadowReadOnly) mode, handle each exclusive persistence setting:
+    match (config.cpu_disable_persistence, config.disable_persistence) {
+        // If *both* are disabled, do nothing with either DB:
+        (true, true) => {}
+
+        // If only CPU persistence is disabled => we commit iris changes only:
+        (true, false) => {
+            iris_tx.commit().await?;
+        }
+
+        // If only “base” (iris) persistence is disabled => we commit the graph:
+        (false, true) => {
+            let mut graph_tx = graph_store.tx().await?;
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        }
+
+        // If *both* are enabled => wrap iris_tx so commits go to both DBs:
+        (false, false) => {
+            let mut graph_tx = graph_store.tx_wrap(iris_tx);
+            hawk_mutation.persist(&mut graph_tx).await?;
+            graph_tx.tx.commit().await?;
+        }
+    }
 
     Ok(())
 }

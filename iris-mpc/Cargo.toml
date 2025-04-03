@@ -38,6 +38,8 @@ metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
+chrono = "0.4.38"
+sqlx.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
@@ -59,4 +61,3 @@ path = "bin/server/iris_mpc_hawk.rs"
 [[bin]]
 name = "client"
 path = "bin/client/client.rs"
-
