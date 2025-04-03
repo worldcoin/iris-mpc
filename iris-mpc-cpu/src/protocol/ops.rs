@@ -217,7 +217,6 @@ pub async fn galois_ring_to_rep3(
         .await?;
 
     // receiving from previous party
-
     let shares_b = {
         let serialized_other_share = network.receive_prev().await;
         match NetworkValue::from_network(serialized_other_share) {

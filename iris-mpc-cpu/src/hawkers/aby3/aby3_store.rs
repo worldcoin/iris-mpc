@@ -13,6 +13,7 @@ use crate::{
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
+use prost::Message;
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::instrument;
 
@@ -197,6 +198,27 @@ impl Aby3Store {
         galois_ring_to_rep3(&mut self.session, ds_and_ts)
             .await
             .unwrap()
+    }
+    
+    pub(crate) async fn compare_batches(
+        &mut self,
+        batch_hash: u64,
+    ) -> bool {
+        let network = &mut self.session.network_session;
+
+        // sending to the next party
+        network.send_next(vec![1,2,3,4,5]).await.expect("Failed to send hash!");
+        network.send_prev(vec![1,2,3,4,5]).await.expect("Failed to send hash!");
+
+        // receiving from previous party
+        let previous_hash = network.receive_prev().await;
+        
+        // compare the hashes
+        let next_hash = network.receive_next().await;
+        
+        tracing::info!("compare_batches: previous_hash: {:?}, next_hash: {:?}", previous_hash, next_hash);
+        
+        return true
     }
 }
 

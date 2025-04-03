@@ -38,6 +38,10 @@ use std::{
     time::Instant,
     vec,
 };
+use std::hash::{
+    Hasher,
+    Hash
+};
 use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
@@ -814,6 +818,12 @@ impl HawkHandle {
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
 
+                {
+                    // pick up the first session for each side
+                    let mut batch_check_session = sessions[0][0].write().await;
+                    batch_check_session.aby3_store.compare_batches(compute_batch_hash(&search_queries.clone())).await;
+                }
+
                 let intra_results = intra_batch_is_match(&sessions, search_queries)
                     .await
                     .unwrap();
@@ -908,6 +918,27 @@ impl HawkHandle {
         self.job_queue.send(job).await?;
         rx.await?
     }
+}
+
+/// Compute a hash of the batch of queries.
+fn compute_batch_hash(queries: &BothEyes<VecRequests<VecRots<QueryRef>>>) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+
+    let mut hasher = DefaultHasher::new();
+
+    // Hash the queries for both eyes
+    for eye_queries in queries {
+        for request in eye_queries {
+            let rotations = request.deref();
+            for rotation in rotations {
+                // Hash the processed query data
+                rotation.query.code.coefs.hash(&mut hasher);
+                rotation.query.mask.coefs.hash(&mut hasher);
+            }
+        }
+    }
+
+    hasher.finish()
 }
 
 #[derive(Default)]

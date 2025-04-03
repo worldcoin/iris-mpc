@@ -43,6 +43,7 @@ tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
+sha2 = "0.10.8"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }

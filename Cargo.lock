@@ -2378,6 +2378,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "static_assertions",
  "tokio",
