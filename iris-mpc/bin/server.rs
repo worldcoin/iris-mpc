@@ -13,6 +13,7 @@ use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
+use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
@@ -999,7 +1000,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
-        common_config_hash: config.common_config_hash(),
+        common_config_hash: CommonConfig::from(config.clone()).hash()?,
     };
 
     tracing::info!("Sync state: {:?}", my_state);

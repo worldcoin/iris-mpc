@@ -13,7 +13,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::{Config, ModeOfCompute};
+use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -176,7 +176,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_sync_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
-        common_config_hash: config.common_config_hash(),
+        common_config_hash: CommonConfig::from(config.clone()).hash()?,
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
