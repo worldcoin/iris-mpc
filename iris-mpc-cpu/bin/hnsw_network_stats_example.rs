@@ -47,7 +47,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &format!("{data_dir}/graph_{database_size}.dat"),
         &mut rng,
         database_size,
-        false,
     )
     .await?;
 

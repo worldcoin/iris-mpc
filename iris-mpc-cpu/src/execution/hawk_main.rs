@@ -408,7 +408,6 @@ impl HawkActor {
         }
     }
 
-    // TODO: Implement actual parallelism.
     pub async fn insert(
         &mut self,
         sessions: &[HawkSessionRef],
@@ -417,7 +416,7 @@ impl HawkActor {
         let insert_plans = join_plans(plans);
         let mut connect_plans = vec![];
         for plan in insert_plans {
-            // TODO: Parallel insertions are not supported, so only one session is needed.
+            // Parallel insertions are not supported, so only one session is needed.
             let mut session = sessions[0].write().await;
             let cp = self.insert_one(&mut session, plan).await?;
             connect_plans.push(cp);
@@ -425,7 +424,6 @@ impl HawkActor {
         Ok(connect_plans)
     }
 
-    // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn insert_one(
         &mut self,
         session: &mut HawkSession,
@@ -1179,7 +1177,8 @@ mod tests_db {
     use crate::{
         hawkers::aby3::aby3_store::VectorId,
         hnsw::{
-            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
+            searcher::ConnectPlanLayerV,
             SortedNeighborhood,
         },
         shares::share::DistanceShare,
@@ -1205,10 +1204,7 @@ mod tests_db {
                             vectors[side],
                             distance.clone(),
                         )]),
-                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
-                            *vector,
-                            distance.clone(),
-                        )])],
+                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
                     set_ep: i == side,
                 })
@@ -1249,8 +1245,8 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.deref(),
-                &[(expected_ep, distance.clone())],
+                links.0,
+                vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
         }
