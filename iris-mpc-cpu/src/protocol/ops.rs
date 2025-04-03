@@ -4,7 +4,10 @@ use super::binary::{
 };
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
-    network::value::NetworkValue::{self},
+    network::value::{
+        NetworkInt,
+        NetworkValue::{self},
+    },
     protocol::{
         prf::{Prf, PrfSeed},
         shared_iris::GaloisRingSharedIris,
@@ -14,6 +17,7 @@ use crate::{
         ring_impl::RingElement,
         share::{DistanceShare, Share},
         vecshare::VecShare,
+        IntRing2k,
     },
 };
 use eyre::eyre;
@@ -308,6 +312,33 @@ pub async fn compare_threshold_and_open(
         .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn open_ring<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    shares: &[Share<T>],
+) -> eyre::Result<Vec<T>> {
+    let network = &mut session.network_session;
+    let message = if shares.len() == 1 {
+        T::new_network_element(shares[0].b)
+    } else {
+        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
+        T::new_network_vec(shares)
+    };
+
+    network.send_next(message.to_network()).await?;
+
+    // receiving from previous party
+    let serialized_other_shares = network.receive_prev().await;
+    let c = NetworkValue::from_network(serialized_other_shares)
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+
+    // ADD shares with the received shares
+    izip!(shares.iter(), c.iter())
+        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+        .collect::<eyre::Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,9 +346,7 @@ mod tests {
         execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
         network::value::NetworkInt,
-        protocol::{
-            binary::open_ring, ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris,
-        },
+        protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
     use aes_prng::AesRng;

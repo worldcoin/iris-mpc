@@ -814,30 +814,3 @@ pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Res
         .map(|(s, c)| Ok((s.a ^ s.b ^ c).convert()))
         .collect::<eyre::Result<Vec<_>>>()
 }
-
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_ring<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    shares: &[Share<T>],
-) -> eyre::Result<Vec<T>> {
-    let network = &mut session.network_session;
-    let message = if shares.len() == 1 {
-        T::new_network_element(shares[0].b)
-    } else {
-        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        T::new_network_vec(shares)
-    };
-
-    network.send_next(message.to_network()).await?;
-
-    // receiving from previous party
-    let serialized_other_shares = network.receive_prev().await;
-    let c = NetworkValue::from_network(serialized_other_shares)
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
-
-    // ADD shares with the received shares
-    izip!(shares.iter(), c.iter())
-        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
-        .collect::<eyre::Result<Vec<_>>>()
-}
