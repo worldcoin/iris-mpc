@@ -50,6 +50,7 @@ pub(crate) async fn fetch_shares_encryption_key_pair(
 ///
 /// A node's synchronization state.
 ///
+#[allow(dead_code)]
 pub(crate) async fn fetch_sync_state(
     config: &Config,
     iris_pg_store: &Store,

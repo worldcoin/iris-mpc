@@ -10,8 +10,6 @@ use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE};
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
-use iris_mpc_common::helpers::sqs::delete_messages_until_sequence_num;
-use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
@@ -21,43 +19,29 @@ use iris_mpc_cpu::execution::hawk_main::{
 use iris_mpc_store::{S3Store, Store};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
-static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
-
 pub async fn server_main(config: Config) -> eyre::Result<()> {
-    // Shutdown if last results synchornization timed out.
+    // Validate config - escape if invalid.
+    tracing::info!("Validating config");
+    utils::validate_config(&config);
+
+    // Set shutdown handler.
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
 
-    // Validate config - escape if invalid.
-    tracing::info!("Validating config");
-    utils::validate_config(&config);
-
-    // Set batch size config settings.
-    tracing::info!("Initialising processing batch size");
-    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
-    let max_sync_lookback: usize = config.max_batch_size * 2;
-    let max_rollback: usize = config.max_batch_size * 2;
-    tracing::info!("   batch size -> {}", config.max_batch_size);
-
-    // Set backend service pointers.
-    tracing::info!("Setting store pointers");
+    // Set external service client pointers.
+    tracing::info!("Setting external service client pointers");
     let iris_pg_store = Store::new_from_config(&config).await?;
     let graph_pg_store = GraphStore::from_iris_store(&iris_pg_store);
-    tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
 
-    // Validate length of iris store - escape if invalid.
-    tracing::info!("Validating Iris store consistency");
-    let store_len = utils::validate_iris_store_consistency(&config, &iris_pg_store).await?;
-
-    // Set shares.
+    // Set encryption keys.
     tracing::info!("Setting shares encryption key");
     let shares_encryption_key_pair =
         utils::fetch_shares_encryption_key_pair(&config, aws_clients.secrets_manager_client)
@@ -76,21 +60,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let is_ready_flag = Arc::new(AtomicBool::new(false));
     let is_ready_flag_cloned = Arc::clone(&is_ready_flag);
 
-    let sync_state = utils::fetch_sync_state(
-        &config,
-        &iris_pg_store,
-        &aws_clients.sqs_client,
-        store_len,
-        max_sync_lookback,
-    )
-    .await
-    .unwrap();
-
     // On a background thread spawn the node's ops web service.
     background_tasks.spawn(
         utils::get_spinup_web_service_future(
             config.clone(),
-            sync_state.clone(),
             Arc::clone(&shutdown_handler),
             Arc::clone(&is_ready_flag),
         )
@@ -237,69 +210,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
-    let all_startup_sync_addresses = utils::get_check_addresses(&config, "startup-sync");
-    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
-    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
-
-    tracing::info!("Database store length is: {}", store_len);
-    let mut states = vec![sync_state.clone()];
-    for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(host.as_str()).await;
-        match res {
-            Ok(res) => {
-                let state: SyncState = match res.json().await {
-                    Ok(state) => state,
-                    Err(e) => {
-                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
-                        panic!(
-                            "could not get sync state from party {}, trying to restart",
-                            host
-                        );
-                    }
-                };
-                states.push(state);
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
-                panic!(
-                    "could not get sync state from party {}, trying to restart",
-                    host
-                );
-            }
-        }
-    }
-    let sync_result = SyncResult::new(sync_state.clone(), states);
-
-    // sync the queues
-    if config.enable_sync_queues_on_sns_sequence_number {
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            &config,
-            &aws_clients.sqs_client,
-            sync_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-        )
-        .await?;
-    }
-
-    if let Some(db_len) = sync_result.must_rollback_storage() {
-        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if db_len + max_rollback < store_len {
-            return Err(eyre!(
-                "Refusing to rollback so much (from {} to {})",
-                store_len,
-                db_len,
-            ));
-        }
-        tracing::warn!(
-            "Rolling back from database length {} to other nodes length {}",
-            store_len,
-            db_len
-        );
-        iris_pg_store.rollback(db_len).await?;
-        metrics::counter!("db.sync.rollback").increment(1);
-    }
-
     if download_shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
         return Ok(());
@@ -377,7 +287,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     let mut hawk_handle = HawkHandle::new(hawk_actor, 10).await?;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
+    let mut skip_request_ids = Vec::new();
 
     background_tasks.check_tasks();
 

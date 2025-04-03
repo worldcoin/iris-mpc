@@ -7,13 +7,16 @@ use iris_mpc_common::config::{Config, Opt};
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    // Load .env file(s).
     dotenvy::dotenv().ok();
 
-    println!("Init config");
+    // Set config.
+    println!("Initialising config");
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    println!("Init tracing");
+    // Set tracing.
+    println!("Initialising tracing");
     let _tracing_shutdown_handle = match initialize_tracing(&config) {
         Ok(handle) => handle,
         Err(e) => {
@@ -22,6 +25,7 @@ async fn main() -> eyre::Result<()> {
         }
     };
 
+    // Invoke main.
     match server_main(config).await {
         Ok(_) => {
             tracing::info!("Server exited normally");

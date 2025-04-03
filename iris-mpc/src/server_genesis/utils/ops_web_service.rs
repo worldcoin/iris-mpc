@@ -1,9 +1,6 @@
 use axum::{http::StatusCode, response::IntoResponse, routing::get, Router};
 use eyre::{Result, WrapErr};
-use iris_mpc_common::{
-    config::Config,
-    helpers::{shutdown_handler::ShutdownHandler, sync::SyncState},
-};
+use iris_mpc_common::{config::Config, helpers::shutdown_handler::ShutdownHandler};
 use serde::{Deserialize, Serialize};
 use std::{
     future::Future,
@@ -22,7 +19,6 @@ pub(crate) struct ReadyProbeResponse {
 
 pub(crate) async fn get_spinup_web_service_future(
     config: Config,
-    sync_state: SyncState,
     shutdown_handler: Arc<ShutdownHandler>,
     is_ready_flag: Arc<AtomicBool>,
 ) -> impl Future<Output = Result<()>> + Send {
@@ -46,7 +42,6 @@ pub(crate) async fn get_spinup_web_service_future(
     tracing::info!("Healthcheck probe response: {}", serialized_response);
 
     // Spinup server.
-    let sync_state = sync_state.clone();
     async move {
         // Generate a random UUID for each run.
         let app = Router::new()
@@ -76,10 +71,6 @@ pub(crate) async fn get_spinup_web_service_future(
                         }
                     }
                 }),
-            )
-            .route(
-                "/startup-sync",
-                get(move || async move { serde_json::to_string(&sync_state).unwrap() }),
             );
 
         let listener = tokio::net::TcpListener::bind(format!(
