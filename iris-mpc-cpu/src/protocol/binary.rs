@@ -16,12 +16,12 @@ use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::ops::SubAssign;
 use tracing::{instrument, trace, trace_span, Instrument};
 
-pub(crate) fn transposed_padded_len(len: usize) -> usize {
+fn transposed_padded_len(len: usize) -> usize {
     let padded_len = (len + 63) / 64;
     padded_len * 64
 }
 
-pub(crate) fn a2b_pre<T: IntRing2k>(
+fn a2b_pre<T: IntRing2k>(
     session: &Session,
     x: Share<T>,
 ) -> eyre::Result<(Share<T>, Share<T>, Share<T>)> {
@@ -53,7 +53,7 @@ pub(crate) fn a2b_pre<T: IntRing2k>(
     Ok((x1, x2, x3))
 }
 
-pub(crate) fn transposed_pack_xor_assign<T: IntRing2k>(x1: &mut [VecShare<T>], x2: &[VecShare<T>]) {
+fn transposed_pack_xor_assign<T: IntRing2k>(x1: &mut [VecShare<T>], x2: &[VecShare<T>]) {
     let len = x1.len();
     debug_assert_eq!(len, x2.len());
 
@@ -62,10 +62,7 @@ pub(crate) fn transposed_pack_xor_assign<T: IntRing2k>(x1: &mut [VecShare<T>], x
     }
 }
 
-pub(crate) fn transposed_pack_xor<T: IntRing2k>(
-    x1: &[VecShare<T>],
-    x2: &[VecShare<T>],
-) -> Vec<VecShare<T>> {
+fn transposed_pack_xor<T: IntRing2k>(x1: &[VecShare<T>], x2: &[VecShare<T>]) -> Vec<VecShare<T>> {
     let len = x1.len();
     debug_assert_eq!(len, x2.len());
 
@@ -76,7 +73,7 @@ pub(crate) fn transposed_pack_xor<T: IntRing2k>(
     res
 }
 
-pub(crate) async fn and_many_send<T: IntRing2k + NetworkInt>(
+async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -106,7 +103,7 @@ where
     Ok(shares_a)
 }
 
-pub(crate) async fn and_many_receive<T: IntRing2k + NetworkInt>(
+async fn and_many_receive<T: IntRing2k + NetworkInt>(
     session: &mut Session,
 ) -> Result<Vec<RingElement<T>>, Error> {
     let shares_b = {
@@ -120,7 +117,7 @@ pub(crate) async fn and_many_receive<T: IntRing2k + NetworkInt>(
     Ok(shares_b)
 }
 
-pub(crate) async fn and_many<T: IntRing2k + NetworkInt>(
+async fn and_many<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
     b: SliceShare<'_, T>,
@@ -135,7 +132,7 @@ where
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip(session, x1, x2))]
-pub(crate) async fn transposed_pack_and<T: IntRing2k + NetworkInt>(
+async fn transposed_pack_and<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -396,7 +393,7 @@ where
 
 // TODO this is unbalanced, so a real implementation should actually rotate
 // parties around
-pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
+async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
 ) -> Result<VecShare<T>, Error>
@@ -425,7 +422,7 @@ where
     Ok(res)
 }
 
-pub(crate) fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32>
+fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32>
 where
     u32: From<u16>,
 {
@@ -434,7 +431,7 @@ where
     Share::new(RingElement(a), RingElement(b))
 }
 
-pub(crate) fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
+fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
     VecShare::new_vec(vals.iter().map(mul_lift_2k::<K>).collect())
 }
 
@@ -503,7 +500,7 @@ pub(crate) async fn lift<const K: usize>(
 
 // MSB related code
 #[allow(dead_code)]
-pub(crate) async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
+async fn binary_add_3_get_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -566,7 +563,7 @@ where
 
 /// Returns the MSB of the sum of three 32-bit integers using the binary parallel prefix adder tree.
 /// Input integers are given in binary form.
-pub(crate) async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
+async fn binary_add_3_get_msb_prefix<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x1: Vec<VecShare<T>>,
     x2: Vec<VecShare<T>>,
@@ -720,29 +717,13 @@ where
 }
 
 /// Extracts the MSB of the secret shared input values as an arithmetic u64 share.
-pub async fn extract_msb_u32(
-    session: &mut Session,
-    x_: VecShare<u32>,
-) -> Result<VecShare<u64>, Error> {
+async fn extract_msb_u32(session: &mut Session, x_: VecShare<u32>) -> Result<VecShare<u64>, Error> {
     let x = x_.transpose_pack_u64();
     extract_msb::<u64>(session, x).await
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn single_extract_msb_u32<const K: usize>(
-    session: &mut Session,
-    x: Share<u32>,
-) -> Result<Share<Bit>, Error> {
-    let (a, b) = extract_msb_u32(session, VecShare::new_vec(vec![x]))
-        .await?
-        .get_at(0)
-        .get_ab();
-
-    Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
-}
-
-#[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn extract_msb_u32_batch(
+pub(crate) async fn extract_msb_u32_batch(
     session: &mut Session,
     x: &[Share<u32>],
 ) -> eyre::Result<Vec<Share<Bit>>> {
@@ -766,7 +747,10 @@ pub async fn extract_msb_u32_batch(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> eyre::Result<Vec<Bit>> {
+pub(crate) async fn open_bin(
+    session: &mut Session,
+    shares: &[Share<Bit>],
+) -> eyre::Result<Vec<Bit>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
         NetworkValue::RingElementBit(shares[0].b).to_network()

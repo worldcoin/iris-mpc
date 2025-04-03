@@ -1,4 +1,4 @@
-use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
+use super::binary::{extract_msb_u32_batch, lift, open_bin};
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
     network::value::NetworkValue::{self},
@@ -68,24 +68,6 @@ pub async fn compare_threshold(
         .collect();
 
     extract_msb_u32_batch(session, &diffs).await
-}
-
-/// The same as compare_threshold, but the input shares are 16-bit and lifted to
-/// 32-bit before threshold comparison.
-///
-/// See compare_threshold for more details.
-pub async fn lift_and_compare_threshold(
-    session: &mut Session,
-    code_dist: Share<u16>,
-    mask_dist: Share<u16>,
-) -> eyre::Result<Share<Bit>> {
-    let y = mul_lift_2k::<B_BITS>(&code_dist);
-    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
-    let mut x = x.pop().expect("Expected a single element in the VecShare");
-    x *= A as u32;
-    x -= y;
-
-    single_extract_msb_u32::<32>(session, x).await
 }
 
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
@@ -231,25 +213,6 @@ pub async fn galois_ring_to_rep3(
         .map(|(a, b)| Share::new(a, b))
         .collect();
     Ok(res)
-}
-
-/// Checks whether first Iris entry in the pair matches the Iris in the second
-/// entry. This is done in the following manner:
-/// - Compute the dot product between the two Irises.
-/// - Convert the partial Shamir share result to a replicated sharing and then
-/// - Compare the distance using the MATCH_THRESHOLD_RATIO from the
-///   `lift_and_compare_threshold` function.
-pub async fn galois_ring_is_match(
-    session: &mut Session,
-    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
-) -> eyre::Result<bool> {
-    assert_eq!(pairs.len(), 1);
-    let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
-    let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
-    // compute dots[0] - dots[1]
-    let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
-    let opened = open_bin(session, &[bit]).await?[0];
-    Ok(opened.convert())
 }
 
 /// Compares the given distance to a threshold and reveal the result.
