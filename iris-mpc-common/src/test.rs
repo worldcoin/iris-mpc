@@ -125,6 +125,8 @@ pub enum TestCase {
     /// Send a reset check request with an iris code known not to match any in the database
     /// Similar to NonMatchSkipPersistence, but using RESET_CHECK_MESSAGE_TYPE
     ResetCheckNonMatch,
+    /// Send an enrollment request using the iris codes used during ResetCheckNonMatch and expect it to be inserted without matches. This will make sure that reset_check did not write into the database.
+    EnrollmentAfterResetCheckNonMatch,
 }
 
 impl TestCase {
@@ -147,6 +149,7 @@ impl TestCase {
             TestCase::ReauthOrRuleMatchingTarget,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
+            TestCase::EnrollmentAfterResetCheckNonMatch,
         ]
     }
 }
@@ -200,6 +203,9 @@ pub struct TestCaseGenerator {
     /// responses received from the servers, where a new iris code was
     /// inserted. Maps position in the database to the E2ETemplate
     inserted_responses: HashMap<u32, E2ETemplate>,
+    /// responses used for reset checks, where a new iris code was
+    /// checked against the database
+    non_match_reset_check_templates: HashMap<String, E2ETemplate>,
     /// A buffer of indices that have been deleted, to choose a index from
     /// to send for testing against deletions. Once picked, it is removed
     /// from here
@@ -246,6 +252,7 @@ impl TestCaseGenerator {
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
             inserted_responses: HashMap::new(),
+            non_match_reset_check_templates: HashMap::new(),
             deleted_indices_buffer: Vec::new(),
             deleted_indices: HashSet::new(),
             disallowed_queries: Vec::new(),
@@ -438,6 +445,9 @@ impl TestCaseGenerator {
         if !self.deleted_indices_buffer.is_empty() {
             options.push(TestCase::PreviouslyDeleted);
         };
+        if !self.non_match_reset_check_templates.is_empty() {
+            options.push(TestCase::EnrollmentAfterResetCheckNonMatch);
+        }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
 
@@ -580,6 +590,7 @@ impl TestCaseGenerator {
                         } else {
                             // we flip less or equal to than the threshold so this should
                             // match
+                            self.disallowed_queries.push(db_index as u32);
                             ExpectedResult {
                                 db_index: Some(db_index as u32),
                                 is_batch_match: false,
@@ -814,7 +825,7 @@ impl TestCaseGenerator {
                     template
                 }
                 TestCase::ResetCheckMatch => {
-                    tracing::info!("Sending reset check request with a known iris code");
+                    tracing::info!("Sending reset check request with an existing iris code");
                     let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.expected_results.insert(
@@ -834,7 +845,7 @@ impl TestCaseGenerator {
                     }
                 }
                 TestCase::ResetCheckNonMatch => {
-                    tracing::info!("Sending reset check request with an unknown iris code");
+                    tracing::info!("Sending reset check request with fresh iris code");
                     let template = IrisCode::random_rng(&mut self.rng);
                     self.expected_results.insert(
                         request_id.to_string(),
@@ -851,6 +862,33 @@ impl TestCaseGenerator {
                         left: template.clone(),
                         right: template,
                     }
+                }
+                TestCase::EnrollmentAfterResetCheckNonMatch => {
+                    tracing::info!("Sending enrollment request using iris codes used during reset check non match");
+                    let req_id = self
+                        .non_match_reset_check_templates
+                        .keys()
+                        .choose(&mut self.rng)
+                        .unwrap()
+                        .clone();
+                    let e2e_template = self
+                        .non_match_reset_check_templates
+                        .get(&req_id)
+                        .unwrap()
+                        .clone();
+                    self.non_match_reset_check_templates.remove(&req_id);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult {
+                            db_index: None,
+                            is_batch_match: false,
+                            is_reauth_successful: None,
+                            is_skip_persistence_request: false,
+                            is_reset_check: false,
+                        },
+                    );
+                    self.skip_invalidate = true;
+                    e2e_template
                 }
             }
         };
@@ -941,16 +979,21 @@ impl TestCaseGenerator {
             .expect("request id not found");
 
         if is_reset_check {
-            // assert that we don't report unique for reset_check requests. only enrollment requests can be reported as unique
+            // assert that the reset_check requests are not reported as unique. match fields are only used for enrollment requests
             assert!(was_match);
             assert!(was_skip_persistence_match);
             assert!(!was_reauth_success);
 
-            // assert that we report correct matched indices for reset_check requests
+            // assert that we report correct matched indices upon reset_check requests
             if expected_idx.is_some() {
                 assert_eq!(idx, expected_idx.unwrap());
             } else {
                 assert_eq!(idx, u32::MAX);
+
+                // insert the template to enable testing EnrollmentAfterResetCheckNonMatch case
+                tracing::info!("Inserting non_match_reset_check_templates {}", req_id);
+                self.non_match_reset_check_templates
+                    .insert(req_id.to_string(), requests.get(req_id).unwrap().clone());
             }
             return;
         }
