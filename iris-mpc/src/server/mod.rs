@@ -714,6 +714,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
+
         let mut next_batch = receive_batch(
             party_id,
             &aws_clients.sqs_client,
