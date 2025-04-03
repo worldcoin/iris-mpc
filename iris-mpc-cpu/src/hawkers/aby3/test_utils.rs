@@ -19,15 +19,16 @@ use crate::{
     shares::{share::DistanceShare, RingElement, Share},
 };
 
-use super::aby3_store::{prepare_query, Aby3Store, IrisRef, SharedIrisesRef, VectorId};
+use super::aby3_store::{
+    prepare_query, Aby3Store, IrisRef, SharedIrises, SharedIrisesRef, VectorId,
+};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
 pub fn setup_local_player_preloaded_db(
     database: HashMap<VectorId, IrisRef>,
 ) -> eyre::Result<SharedIrisesRef> {
-    let aby3_store = SharedIrisesRef::new(database);
-    Ok(aby3_store)
+    Ok(SharedIrises::new(database).to_arc())
 }
 
 pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
@@ -71,7 +72,7 @@ pub async fn setup_local_store_aby3_players(
         .map(|session| {
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
-                storage: SharedIrisesRef::default(),
+                storage: SharedIrises::default().to_arc(),
             })))
         })
         .collect()

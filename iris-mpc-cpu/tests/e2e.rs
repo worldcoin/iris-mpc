@@ -7,7 +7,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
         aby3::{
-            aby3_store::{Aby3Store, SharedIrisesRef},
+            aby3_store::{Aby3Store, SharedIrises},
             test_utils::get_trivial_share,
         },
         plaintext_store::{PlaintextStore, PointId},
@@ -41,7 +41,7 @@ fn install_tracing() {
 async fn create_graph_from_plain_db(
     player_index: usize,
     db: &IrisDB,
-) -> eyre::Result<(GraphMem<Aby3Store>, [SharedIrisesRef; 2])> {
+) -> eyre::Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
@@ -65,16 +65,19 @@ async fn create_graph_from_plain_db(
         shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
-    let aby3_store = SharedIrisesRef::new(shared_irises);
+    let iris_store = SharedIrises::new(shared_irises);
 
-    Ok((mpc_graph, [(); 2].map(|_| aby3_store.clone())))
+    Ok((
+        [mpc_graph.clone(), mpc_graph],
+        [iris_store.clone(), iris_store],
+    ))
 }
 
 async fn start_hawk_node(args: &HawkArgs, db: &mut IrisDB) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    let (mpc_graph, aby3_store) = create_graph_from_plain_db(args.party_index, db).await?;
-    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, mpc_graph, aby3_store).await?;
+    let (graph, iris_store) = create_graph_from_plain_db(args.party_index, db).await?;
+    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
 
     let handle = HawkHandle::new(hawk_actor, HAWK_REQUEST_PARALLELISM).await?;
 
