@@ -1,5 +1,5 @@
 use crate::{
-    execution::session::Session,
+    execution::{hawk_main::state_check::SetHash, session::Session},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -64,12 +64,17 @@ pub struct SharedIrises {
     points: HashMap<VectorId, IrisRef>,
     next_id: u32,
     empty_iris: IrisRef,
+    set_hash: SetHash,
 }
 
 impl SharedIrises {
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        self.points.insert(vector_id, iris);
+        let was_there = self.points.insert(vector_id, iris);
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
+
+        if was_there.is_none() {
+            self.set_hash.add(&vector_id);
+        }
     }
 
     fn next_id(&mut self) -> VectorId {
@@ -117,6 +122,7 @@ impl SharedIrisesRef {
             points,
             next_id,
             empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            set_hash: SetHash::default(),
         };
         SharedIrisesRef {
             body: Arc::new(RwLock::new(body)),
@@ -151,6 +157,10 @@ impl SharedIrisesRef {
         let new_id = body.next_id();
         body.insert(new_id, new_vector);
         new_id
+    }
+
+    pub async fn digest(&self) -> u64 {
+        self.body.read().await.set_hash.digest()
     }
 }
 
