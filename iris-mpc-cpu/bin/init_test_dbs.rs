@@ -15,6 +15,7 @@ use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::info;
 
+// Process input arguments.
 #[allow(non_snake_case)]
 #[derive(Parser)]
 struct Args {
@@ -50,6 +51,31 @@ struct Args {
     aby3_prng_seed: u64,
 }
 
+// Type: Random number generators used to transform plaintext into secret shares.
+type Rngs = (AesRng, AesRng);
+
+// Convertor: Args -> HnswParams.
+impl From<&Args> for HnswParams {
+    fn from(args: &Args) -> Self {
+        let mut params = HnswParams::new(args.ef_constr, args.ef_search, args.M);
+        if let Some(q) = args.layer_probability {
+            params.layer_probability = q;
+        }
+
+        params
+    }
+}
+
+// Convertor: Args -> Rngs.
+impl From<&Args> for Rngs {
+    fn from(value: &Args) -> Self {
+        (
+            AesRng::seed_from_u64(value.hnsw_prng_seed),
+            AesRng::seed_from_u64(value.aby3_prng_seed),
+        )
+    }
+}
+
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -59,19 +85,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Parsing CLI arguments and initializing in-memory vector and graph stores");
 
     let args = Args::parse();
-
-    let M = args.M;
-    let ef_constr = args.ef_constr;
-    let ef_search = args.ef_search;
-    let layer_probability = args.layer_probability;
-
-    let mut params = HnswParams::new(ef_constr, ef_search, M);
-    if let Some(q) = layer_probability {
-        params.layer_probability = q
-    }
-
-    let mut hnsw_rng = AesRng::seed_from_u64(args.hnsw_prng_seed);
-    let mut aby3_rng = AesRng::seed_from_u64(args.aby3_prng_seed);
+    let params = HnswParams::from(&args);
+    let (mut hnsw_rng, mut aby3_rng) = Rngs::from(&args);
 
     // TODO establish connections with databases
     // TODO read existing graph and vector stores from database
