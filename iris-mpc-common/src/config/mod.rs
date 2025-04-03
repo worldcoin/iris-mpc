@@ -1,6 +1,7 @@
 use crate::config::json_wrapper::JsonStrWrapper;
 use clap::Parser;
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::Digest;
 use std::fmt;
 
 pub mod json_wrapper;
@@ -209,6 +210,121 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
+}
+
+impl Config {
+    pub fn common_config_hash(&self) -> String {
+        let mut hasher = sha2::Sha256::default();
+
+        // This is destructured here intentionally to cause a compile error if
+        // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
+        let Config {
+            environment,
+            party_id: _,           // party id is different for each server
+            requests_queue_url: _, // requests queue url is different for each server
+            results_topic_arn,     // TODO: do we want the results topic ARN in the hash?
+            kms_key_arns: _,       // kms key arns are different for each server
+            service: _,
+            database: _,     // database is different for each server
+            cpu_database: _, // cpu database is different for each server
+            aws: _,          // aws is different for each server
+            processing_timeout_secs,
+            startup_sync_timeout_secs,
+            public_key_base_url: _, // TODO: include in common config hash?
+            shares_bucket_name: _,  // TODO: should this be the same for all servers?
+            clear_db_before_init,
+            init_db_size,
+            max_db_size,
+            max_batch_size,
+            heartbeat_interval_secs,
+            heartbeat_initial_retries,
+            fake_db_size,
+            return_partial_results,
+            disable_persistence,
+            enable_debug_timing: _,
+            node_hostnames, // TODO: is this the same for all servers?
+            service_ports,
+            healthcheck_ports,
+            shutdown_last_results_sync_timeout_secs,
+            image_name,
+            enable_s3_importer: _, // it does not matter if this is synced or not between servers
+            db_chunks_bucket_name: _, // different for each server
+            load_chunks_parallelism: _, // could be different for each server
+            db_load_safety_overlap_seconds: _, // could be different for each server
+            db_chunks_folder_name: _, // different for each server
+            load_chunks_buffer_size: _, // could be different for each server
+            load_chunks_max_retries: _, // could be different for each server
+            load_chunks_initial_backoff_ms: _, // could be different for each server
+            fixed_shared_secrets,
+            luc_enabled,
+            luc_lookback_records,
+            luc_serial_ids_from_smpc_request,
+            match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
+            n_buckets,
+            enable_sending_anonymized_stats_message,
+            enable_reauth,
+            hawk_request_parallelism,
+            hawk_connection_parallelism,
+            hawk_server_healthcheck_port: _, // different for each server
+            max_deletions_per_batch,
+            mode_of_compute,
+            mode_of_deployment,
+            enable_modifications_sync,
+            enable_modifications_replay,
+            enable_sync_queues_on_sns_sequence_number,
+            sqs_sync_long_poll_seconds,
+            hawk_server_deletions_enabled,
+            hawk_server_reauths_enabled,
+        } = self;
+
+        hasher.update(environment.as_bytes());
+        hasher.update(results_topic_arn.as_bytes());
+        hasher.update(processing_timeout_secs.to_le_bytes());
+        hasher.update(startup_sync_timeout_secs.to_le_bytes());
+        hasher.update([*clear_db_before_init as u8]);
+        hasher.update(init_db_size.to_le_bytes());
+        hasher.update(max_db_size.to_le_bytes());
+        hasher.update(max_batch_size.to_le_bytes());
+        hasher.update(heartbeat_interval_secs.to_le_bytes());
+        hasher.update(heartbeat_initial_retries.to_le_bytes());
+        hasher.update(fake_db_size.to_le_bytes());
+        hasher.update([*return_partial_results as u8]);
+        hasher.update([*disable_persistence as u8]);
+        for hostname in node_hostnames {
+            hasher.update(hostname.as_bytes());
+        }
+        for port in service_ports {
+            hasher.update(port.as_bytes());
+        }
+        for port in healthcheck_ports {
+            hasher.update(port.as_bytes());
+        }
+        hasher.update(shutdown_last_results_sync_timeout_secs.to_le_bytes());
+        hasher.update(image_name.as_bytes());
+        hasher.update([*fixed_shared_secrets as u8]);
+        hasher.update([*luc_enabled as u8]);
+        hasher.update(luc_lookback_records.to_le_bytes());
+        hasher.update([*luc_serial_ids_from_smpc_request as u8]);
+        hasher.update(match_distances_buffer_size.to_le_bytes());
+        hasher.update(match_distances_buffer_size_extra_percent.to_le_bytes());
+        hasher.update(n_buckets.to_le_bytes());
+        hasher.update([*enable_sending_anonymized_stats_message as u8]);
+        hasher.update([*enable_reauth as u8]);
+        hasher.update(hawk_request_parallelism.to_le_bytes());
+        hasher.update(hawk_connection_parallelism.to_le_bytes());
+        hasher.update(max_deletions_per_batch.to_le_bytes());
+        hasher.update(bincode::serialize(mode_of_compute).unwrap());
+        hasher.update(bincode::serialize(mode_of_deployment).unwrap());
+        hasher.update([*enable_modifications_sync as u8]);
+        hasher.update([*enable_modifications_replay as u8]);
+        hasher.update([*enable_sync_queues_on_sns_sequence_number as u8]);
+        hasher.update(sqs_sync_long_poll_seconds.to_le_bytes());
+        hasher.update([*hawk_server_deletions_enabled as u8]);
+        hasher.update([*hawk_server_reauths_enabled as u8]);
+
+        hex::encode(hasher.finalize())
+    }
 }
 
 /// Enumeration over set of compute modes.

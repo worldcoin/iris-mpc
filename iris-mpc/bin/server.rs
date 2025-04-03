@@ -999,6 +999,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
+        common_config_hash: config.common_config_hash(),
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1281,6 +1282,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     let sync_result = SyncResult::new(my_state.clone(), states);
+
+    // check if common part of the config is the same across all nodes
+    sync_result.check_common_config_hash()?;
 
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {

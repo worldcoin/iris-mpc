@@ -8,6 +8,7 @@ pub struct SyncState {
     pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
+    pub common_config_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,6 +108,16 @@ impl SyncResult {
         } else {
             Some(smallest_len as usize)
         }
+    }
+
+    pub fn check_common_config_hash(&self) -> eyre::Result<()> {
+        let first_hash = self.all_states[0].common_config_hash.clone();
+        for state in &self.all_states {
+            if state.common_config_hash != first_hash {
+                return Err(eyre::eyre!("Inconsistent common config hash"));
+            }
+        }
+        Ok(())
     }
 
     pub fn deleted_request_ids(&self) -> Vec<String> {
@@ -257,18 +268,21 @@ mod tests {
                 deleted_request_ids: vec!["most late".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
+                common_config_hash: "config".to_string(),
             },
             SyncState {
                 db_len: 456,
                 deleted_request_ids: vec!["x".to_string(), "y".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
+                common_config_hash: "config".to_string(),
             },
             SyncState {
                 db_len: 789,
                 deleted_request_ids: vec!["most ahead".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
+                common_config_hash: "config".to_string(),
             },
         ];
         let deleted_request_ids = vec![
@@ -313,6 +327,7 @@ mod tests {
             deleted_request_ids: vec![],
             modifications,
             next_sns_sequence_num: None,
+            common_config_hash: "config".to_string(),
         }
     }
 
@@ -644,18 +659,21 @@ mod tests {
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
+                common_config_hash: "config".to_string(),
             },
             SyncState {
                 db_len: 20,
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
+                common_config_hash: "config".to_string(),
             },
             SyncState {
                 db_len: 30,
                 deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: None,
+                common_config_hash: "config".to_string(),
             },
         ];
 
@@ -668,6 +686,7 @@ mod tests {
             deleted_request_ids: vec![],
             modifications: vec![],
             next_sns_sequence_num: None,
+            common_config_hash: "config".to_string(),
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -777,6 +796,7 @@ mod tests {
             deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
             modifications: vec![],
             next_sns_sequence_num: None,
+            common_config_hash: "config".to_string(),
         }
     }
 }
