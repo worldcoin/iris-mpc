@@ -4,6 +4,7 @@ mod e2e_test {
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
+        job::Eye,
         test::{load_test_db, TestCaseGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
@@ -81,6 +82,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(0, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
@@ -113,6 +115,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
@@ -145,6 +148,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();

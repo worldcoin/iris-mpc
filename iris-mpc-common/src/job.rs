@@ -2,8 +2,13 @@ use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{statistics::BucketStatistics, sync::Modification},
 };
+use core::fmt;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, future::Future};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    future::Future,
+};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -135,6 +140,23 @@ pub enum Eye {
     Right,
 }
 
+impl Eye {
+    pub fn other(&self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
+impl Display for Eye {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Left => write!(f, "left"),
+            Self::Right => write!(f, "right"),
+        }
+    }
+}
 pub trait JobSubmissionHandle {
     type A;
 
