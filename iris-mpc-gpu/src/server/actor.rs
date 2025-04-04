@@ -31,7 +31,7 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
-        smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
@@ -553,10 +553,16 @@ impl ServerActor {
             .iter()
             .filter(|x| *x == REAUTH_MESSAGE_TYPE)
             .count();
+        let n_reset_checks = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
+            .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
-            batch.request_types.len() - n_reauths,
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} deletion requests",
+            batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
+            n_reset_checks,
             batch.deletion_requests_indices.len(),
         );
 
@@ -595,7 +601,10 @@ impl ServerActor {
                 .request_types
                 .iter()
                 .enumerate()
-                .filter(|(_, req_type)| req_type.as_str() == REAUTH_MESSAGE_TYPE)
+                .filter(|(_, req_type)| {
+                    req_type.as_str() == REAUTH_MESSAGE_TYPE
+                        || req_type.as_str() == RESET_CHECK_MESSAGE_TYPE
+                })
                 .map(|(index, _)| index)
                 .collect();
             batch.or_rule_indices = generate_luc_records(
@@ -957,7 +966,7 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
-        // sync the results across nodes, since these are the onse which the insertions are based upon
+        // sync the results across nodes, since these are the ones which the insertions are based upon
         self.sync_match_results(self.max_batch_size, &merged_results)?;
 
         // List the indices of the uniqueness requests that did not match as well as the

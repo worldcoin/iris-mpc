@@ -464,6 +464,7 @@ mod tests {
     fn dummy_entry(id: usize) -> DbStoredIris {
         DbStoredIris {
             id: id as i64,
+            version_id: 0,
             left_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             left_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
             right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),

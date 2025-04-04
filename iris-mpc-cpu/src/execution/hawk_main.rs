@@ -21,6 +21,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
 use iris_mpc_common::job::Eye;
@@ -54,6 +55,7 @@ mod is_match_batch;
 mod matching;
 mod rot;
 mod scheduler;
+pub mod state_check;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -798,13 +800,13 @@ impl HawkHandle {
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
         ];
-        Self::new_with_sessions(hawk_actor, sessions).await
-    }
 
-    pub async fn new_with_sessions(
-        mut hawk_actor: HawkActor,
-        sessions: BothEyes<Vec<HawkSessionRef>>,
-    ) -> Result<Self> {
+        // Validate the common state before starting.
+        try_join!(
+            HawkSession::state_check(&sessions[LEFT][0]),
+            HawkSession::state_check(&sessions[RIGHT][0]),
+        )?;
+
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
@@ -872,6 +874,14 @@ impl HawkHandle {
                 } else {
                     tracing::info!("Persistence is disabled, not writing to DB");
                 }
+
+                // Validate the common state after processing the requests.
+                try_join!(
+                    HawkSession::state_check(&sessions[LEFT][0]),
+                    HawkSession::state_check(&sessions[RIGHT][0]),
+                )
+                .expect("Party states diverged after processing requests");
+
                 metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
                 let left_query_count = search_queries[LEFT].len();
