@@ -58,6 +58,10 @@ db_dependent = []
 name = "hnsw"
 harness = false
 
+[[bench]]
+name = "set_hash"
+harness = false
+
 [[example]]
 name = "hnsw-ex"
 
