@@ -1386,9 +1386,9 @@ fn prepare_batch(
 
 fn check_bucket_statistics(
     bucket_statistics: &BucketStatistics,
-    num_gpus_per_party: usize,
+    _num_gpus_per_party: usize,
     num_buckets: usize,
-    match_distances_buffer_size: usize,
+    _match_distances_buffer_size: usize,
 ) -> Result<()> {
     if bucket_statistics.is_empty() {
         assert_eq!(bucket_statistics.buckets.len(), 0);
