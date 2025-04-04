@@ -754,6 +754,7 @@ impl HawkResult {
             reauth_or_rule_used: Default::default(),     // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
+            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
         }
     }
 }
