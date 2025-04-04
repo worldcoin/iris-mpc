@@ -438,7 +438,7 @@ where
 /// TODO: this is unbalanced.
 /// Party 2 sends twice more than other parties.
 /// So a real implementation should actually rotate parties around.
-async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
+pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
 ) -> Result<VecShare<T>, Error>
@@ -471,7 +471,7 @@ where
 ///
 /// This works since for any k-bit value b = x + y + z mod 2^16 with k < 16, it holds
 /// (x >> l) + (y >> l) + (z >> l) = (b >> l) mod 2^32 for any l <= 32-k.
-fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32> {
+pub(crate) fn mul_lift_2k<const K: u64>(val: &Share<u16>) -> Share<u32> {
     let a = (u32::from(val.a.0)) << K;
     let b = (u32::from(val.b.0)) << K;
     Share::new(RingElement(a), RingElement(b))
@@ -778,6 +778,19 @@ where
 async fn extract_msb_u32(session: &mut Session, x_: VecShare<u32>) -> Result<VecShare<u64>, Error> {
     let x = x_.transpose_pack_u64();
     extract_msb::<u64>(session, x).await
+}
+
+/// Extracts the MSB of the secret shared input value.
+pub(crate) async fn single_extract_msb_u32(
+    session: &mut Session,
+    x: Share<u32>,
+) -> Result<Share<Bit>, Error> {
+    let (a, b) = extract_msb_u32(session, VecShare::new_vec(vec![x]))
+        .await?
+        .get_at(0)
+        .get_ab();
+
+    Ok(Share::new(a.get_bit_as_bit(0), b.get_bit_as_bit(0)))
 }
 
 /// Extracts the secret shared MSBs of the secret shared input values.
