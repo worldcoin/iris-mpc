@@ -2,6 +2,7 @@ pub(crate) mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
+use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::{
     helpers::sync::Modification,
     job::{BatchMetadata, BatchQuery, Eye, IrisQueryBatchEntries},
@@ -110,6 +111,11 @@ pub struct PreprocessedBatchQuery {
     // this one is not needed for the GPU actor
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
 
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
+
     // additional fields which are GPU specific
     pub left_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
     pub right_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
@@ -205,6 +211,9 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             valid_entries: value.valid_entries,
             reauth_target_indices: value.reauth_target_indices,
             reauth_use_or_rule: value.reauth_use_or_rule,
+            reset_update_indices: value.reset_update_indices,
+            reset_update_request_ids: value.reset_update_request_ids,
+            reset_update_shares: value.reset_update_shares,
             deletion_requests_indices: value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
             left_iris_interpolated_requests_preprocessed:
