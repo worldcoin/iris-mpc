@@ -738,14 +738,28 @@ impl ServerActor {
         tracing::info!("Comparing left eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_left = CompactQuery {
-            code_query: batch
-                .left_iris_interpolated_requests_preprocessed
-                .code
-                .clone(),
-            mask_query: batch
-                .left_iris_interpolated_requests_preprocessed
-                .mask
-                .clone(),
+            code_query: if case == Case::Mirror {
+                batch
+                    .right_mirrored_iris_interpolated_requests_preprocessed
+                    .code
+                    .clone()
+            } else {
+                batch
+                    .left_iris_interpolated_requests_preprocessed
+                    .code
+                    .clone()
+            },
+            mask_query: if case == Case::Mirror {
+                batch
+                    .right_mirrored_iris_interpolated_requests_preprocessed
+                    .mask
+                    .clone()
+            } else {
+                batch
+                    .left_iris_interpolated_requests_preprocessed
+                    .mask
+                    .clone()
+            },
             code_query_insert: batch.left_iris_rotated_requests_preprocessed.code.clone(),
             mask_query_insert: batch.left_iris_rotated_requests_preprocessed.mask.clone(),
         };
@@ -824,14 +838,28 @@ impl ServerActor {
         tracing::info!("Comparing right eye queries");
         // *Query* variant including Lagrange interpolation.
         let compact_query_right = CompactQuery {
-            code_query: batch
-                .right_iris_interpolated_requests_preprocessed
-                .code
-                .clone(),
-            mask_query: batch
-                .right_iris_interpolated_requests_preprocessed
-                .mask
-                .clone(),
+            code_query: if case == Case::Mirror {
+                batch
+                    .left_mirrored_iris_interpolated_requests_preprocessed
+                    .code
+                    .clone()
+            } else {
+                batch
+                    .right_iris_interpolated_requests_preprocessed
+                    .code
+                    .clone()
+            },
+            mask_query: if case == Case::Mirror {
+                batch
+                    .left_mirrored_iris_interpolated_requests_preprocessed
+                    .mask
+                    .clone()
+            } else {
+                batch
+                    .right_iris_interpolated_requests_preprocessed
+                    .mask
+                    .clone()
+            },
             code_query_insert: batch.right_iris_rotated_requests_preprocessed.code.clone(),
             mask_query_insert: batch.right_iris_rotated_requests_preprocessed.mask.clone(),
         };
