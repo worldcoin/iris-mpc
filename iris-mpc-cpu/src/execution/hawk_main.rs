@@ -870,6 +870,14 @@ impl HawkHandle {
                 } else {
                     tracing::info!("Persistence is disabled, not writing to DB");
                 }
+
+                // Validate the common state after processing the requests.
+                try_join!(
+                    HawkSession::state_check(&sessions[LEFT][0]),
+                    HawkSession::state_check(&sessions[RIGHT][0]),
+                )
+                .expect("Party states diverged after processing requests");
+
                 metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
                 let left_query_count = search_queries[LEFT].len();
