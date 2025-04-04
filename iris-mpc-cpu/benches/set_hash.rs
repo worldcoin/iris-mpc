@@ -12,7 +12,7 @@ fn bench_set_hash(c: &mut Criterion) {
 
         b.iter(|| {
             set_hash.add_unordered(v);
-            set_hash.digest()
+            set_hash.checksum()
         });
     });
 
@@ -26,7 +26,7 @@ fn bench_set_hash(c: &mut Criterion) {
 
         b.iter(|| {
             set_hash.add_unordered(item);
-            set_hash.digest()
+            set_hash.checksum()
         });
     });
 }

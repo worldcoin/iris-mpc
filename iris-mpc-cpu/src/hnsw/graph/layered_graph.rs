@@ -149,13 +149,13 @@ impl<V: VectorStore> GraphMem<V> {
         self.layers.len()
     }
 
-    pub fn digest(&self) -> u64 {
+    pub fn checksum(&self) -> u64 {
         let mut set_hash = SetHash::default();
         set_hash.add_unordered(&self.entry_point);
         for (lc, layer) in self.layers.iter().enumerate() {
-            set_hash.add_unordered((lc as u64, layer.set_hash.digest()));
+            set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
-        set_hash.digest()
+        set_hash.checksum()
     }
 }
 

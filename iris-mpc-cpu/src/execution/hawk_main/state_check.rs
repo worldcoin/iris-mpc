@@ -20,7 +20,7 @@ impl SetHash {
         self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
     }
 
-    pub fn digest(&self) -> u64 {
+    pub fn checksum(&self) -> u64 {
         self.accumulator
     }
 
@@ -35,7 +35,7 @@ impl HawkSession {
     pub async fn state_check(session: &HawkSessionRef) -> Result<()> {
         let mut session = session.write().await;
 
-        let my_state = session.digest().await;
+        let my_state = session.checksum().await;
 
         let net = &mut session.aby3_store.session.network_session;
         net.send_prev(my_state.clone()).await?;
@@ -51,12 +51,12 @@ impl HawkSession {
         Ok(())
     }
 
-    async fn digest(&self) -> Vec<u8> {
-        let iris_digest = self.aby3_store.storage.digest().await;
+    async fn checksum(&self) -> Vec<u8> {
+        let iris_checksum = self.aby3_store.storage.checksum().await;
 
-        let graph_digest = self.graph_store.read().await.digest();
+        let graph_checksum = self.graph_store.read().await.checksum();
 
-        chain(iris_digest.to_le_bytes(), graph_digest.to_le_bytes()).collect_vec()
+        chain(iris_checksum.to_le_bytes(), graph_checksum.to_le_bytes()).collect_vec()
     }
 }
 
@@ -75,16 +75,16 @@ mod test {
         let c = (a, &SortedEdgeIds::from_ascending_vec(vec![b; 10]));
 
         let mut set_hash = SetHash::default();
-        digests.push(set_hash.digest());
+        digests.push(set_hash.checksum());
 
         set_hash.add_unordered(a);
-        digests.push(set_hash.digest());
+        digests.push(set_hash.checksum());
 
         set_hash.add_unordered(b);
-        digests.push(set_hash.digest());
+        digests.push(set_hash.checksum());
 
         set_hash.add_unordered(c);
-        digests.push(set_hash.digest());
+        digests.push(set_hash.checksum());
 
         assert!(digests.iter().all_unique());
 
@@ -95,18 +95,18 @@ mod test {
             set_hash.remove(c);
             set_hash.add_unordered(c);
             set_hash.add_unordered(b);
-            set_hash.digest()
+            set_hash.checksum()
         };
         assert_eq!(digests.pop().unwrap(), different_order);
 
         set_hash.remove(c);
-        assert_eq!(digests.pop().unwrap(), set_hash.digest());
+        assert_eq!(digests.pop().unwrap(), set_hash.checksum());
 
         set_hash.remove(b);
-        assert_eq!(digests.pop().unwrap(), set_hash.digest());
+        assert_eq!(digests.pop().unwrap(), set_hash.checksum());
 
         set_hash.remove(a);
-        assert_eq!(digests.pop().unwrap(), set_hash.digest());
-        assert_eq!(SetHash::default().digest(), set_hash.digest());
+        assert_eq!(digests.pop().unwrap(), set_hash.checksum());
+        assert_eq!(SetHash::default().checksum(), set_hash.checksum());
     }
 }

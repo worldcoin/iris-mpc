@@ -159,8 +159,8 @@ impl SharedIrisesRef {
         new_id
     }
 
-    pub async fn digest(&self) -> u64 {
-        self.body.read().await.set_hash.digest()
+    pub async fn checksum(&self) -> u64 {
+        self.body.read().await.set_hash.checksum()
     }
 }
 
