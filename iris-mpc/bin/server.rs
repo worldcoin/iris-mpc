@@ -511,7 +511,7 @@ async fn receive_batch(
                             // skip_persistence is only used for uniqueness requests
                             batch_query.skip_persistence.push(false);
 
-                            // We don't need OR rule for reset check
+                            // We need to use AND rule for reset check requests
                             batch_query.or_rule_indices.push(vec![]);
 
                             let semaphore = Arc::clone(&semaphore);
