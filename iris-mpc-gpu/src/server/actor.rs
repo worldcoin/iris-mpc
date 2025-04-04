@@ -553,10 +553,16 @@ impl ServerActor {
             .iter()
             .filter(|x| *x == REAUTH_MESSAGE_TYPE)
             .count();
+        let n_reset_checks = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
+            .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
-            batch.request_types.len() - n_reauths,
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} deletion requests",
+            batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
+            n_reset_checks,
             batch.deletion_requests_indices.len(),
         );
 
