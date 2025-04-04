@@ -387,34 +387,35 @@ async fn receive_batch(
 
                         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-                        if reauth_request.use_or_rule
-                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                        {
-                            tracing::error!(
+                        if config.enable_reauth {
+                            if reauth_request.use_or_rule
+                                && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                            {
+                                tracing::error!(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
-                            continue;
-                        }
+                                continue;
+                            }
 
-                        if modifications.contains_key(&reauth_request.serial_id) {
-                            tracing::warn!(
+                            if modifications.contains_key(&reauth_request.serial_id) {
+                                tracing::warn!(
                                 "Received another modification operation in batch: {}. Skipping",
                                 reauth_request.serial_id
                             );
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                reauth_request.serial_id as i64,
-                                REAUTH_MESSAGE_TYPE,
-                                Some(reauth_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        modifications.insert(reauth_request.serial_id, modification);
+                                continue;
+                            }
 
-                        if config.enable_reauth {
                             msg_counter += 1;
+
+                            let modification = store
+                                .insert_modification(
+                                    reauth_request.serial_id as i64,
+                                    REAUTH_MESSAGE_TYPE,
+                                    Some(reauth_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            modifications.insert(reauth_request.serial_id, modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
