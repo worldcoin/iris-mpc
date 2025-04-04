@@ -1378,7 +1378,7 @@ impl ServerActor {
             if case == Case::Normal && previous_results.is_some() {
                 let mirror_results = previous_results.unwrap();
                 (0..request_count)
-                    .map(|i| matches[i] == false && mirror_results.matches[i] == true)
+                    .map(|i| !matches[i] && mirror_results.matches[i])
                     .collect()
             } else {
                 vec![false; request_count]
