@@ -13,7 +13,8 @@ use crate::{
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
@@ -54,6 +55,10 @@ impl<V: VectorStore> GraphMem<V> {
             entry_point: None,
             layers: vec![],
         }
+    }
+
+    pub fn to_arc(self) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(self))
     }
 
     pub fn from_precomputed(

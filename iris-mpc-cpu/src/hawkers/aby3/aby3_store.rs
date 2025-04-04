@@ -67,7 +67,23 @@ pub struct SharedIrises {
     set_hash: SetHash,
 }
 
+impl Default for SharedIrises {
+    fn default() -> Self {
+        SharedIrises::new(HashMap::new())
+    }
+}
+
 impl SharedIrises {
+    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+        SharedIrises {
+            points,
+            next_id,
+            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            set_hash: SetHash::default(),
+        }
+    }
+
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
         let was_there = self.points.insert(vector_id, iris);
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
@@ -91,6 +107,12 @@ impl SharedIrises {
         // TODO: Handle missing vectors.
         Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
     }
+
+    pub fn to_arc(self) -> SharedIrisesRef {
+        SharedIrisesRef {
+            body: Arc::new(RwLock::new(self)),
+        }
+    }
 }
 
 /// Reference to inserted irises.
@@ -105,28 +127,6 @@ pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
 impl std::fmt::Debug for SharedIrisesRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt("SharedIrisesRef", f)
-    }
-}
-
-impl Default for SharedIrisesRef {
-    fn default() -> Self {
-        SharedIrisesRef::new(HashMap::new())
-    }
-}
-
-// Constructor.
-impl SharedIrisesRef {
-    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
-        let body = SharedIrises {
-            points,
-            next_id,
-            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
-            set_hash: SetHash::default(),
-        };
-        SharedIrisesRef {
-            body: Arc::new(RwLock::new(body)),
-        }
     }
 }
 
