@@ -9,7 +9,11 @@ use super::{
     sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
-use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
+    SortedNeighborhood, VectorStore,
+};
+use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -201,7 +205,7 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub neighbors: SortedNeighborhood<Vector, Distance>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<SortedNeighborhood<Vector, Distance>>,
+    pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
 impl Default for HnswSearcher {
@@ -713,7 +717,7 @@ impl HnswSearcher {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
-            .vectors_cloned()
+            .0
             .into_iter()
             .filter(|e| visited.insert(e.clone()))
             .collect();
@@ -850,7 +854,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhoodV<V>>,
+        mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
     ) -> ConnectPlanV<V> {
         let mut plan = ConnectPlan {
@@ -859,9 +863,20 @@ impl HnswSearcher {
             set_ep,
         };
 
-        struct NeighborUpdate<Vector, Distance> {
+        // Truncate search results to size M before insertion
+        for (lc, l_links) in links.iter_mut().enumerate() {
+            let M = self.params.get_M(lc);
+            l_links.trim_to_k_nearest(M);
+        }
+
+        struct NeighborUpdate<Query, Vector, Distance> {
+            /// The distance between the vector being inserted to a base vector.
             nb_dist: Distance,
-            nb_links: SortedNeighborhood<Vector, Distance>,
+            /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
+            nb_query: Query,
+            /// The neighborhood of the base vector.
+            nb_links: SortedEdgeIds<Vector>,
+            /// The current state of the search.
             search: BinarySearch,
         }
 
@@ -869,15 +884,18 @@ impl HnswSearcher {
         // initialize binary search
         let mut neighbors = Vec::new();
         for (lc, l_links) in links.iter().enumerate() {
+            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
+
             let mut l_neighbors = Vec::with_capacity(l_links.len());
-            for (nb, nb_dist) in l_links.iter().cloned() {
-                let nb_links = graph.get_links(&nb, lc).await;
+            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
+                let nb_links = graph.get_links(nb, lc).await;
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
                 };
                 let neighbor = NeighborUpdate {
-                    nb_dist,
+                    nb_dist: nb_dist.clone(),
+                    nb_query,
                     nb_links,
                     search,
                 };
@@ -894,15 +912,27 @@ impl HnswSearcher {
             .collect();
 
         while !searches_ongoing.is_empty() {
-            let lt_queries: Vec<_> = searches_ongoing
+            // Find the next batch of distances to evaluate.
+            // This is each base neighbor versus the next search position in its neighborhood.
+            let dist_batch = searches_ongoing
                 .iter()
                 .map(|n| {
                     let cmp_idx = n.search.next().unwrap();
-                    (n.nb_dist.clone(), n.nb_links[cmp_idx].1.clone())
+                    (n.nb_query.clone(), n.nb_links[cmp_idx].clone())
                 })
-                .collect();
+                .collect_vec();
 
-            let results = store.less_than_batch(&lt_queries).await;
+            // Compute the distances.
+            let link_distances = store.eval_distance_pairs(&dist_batch).await;
+
+            // Prepare a batch of less_than.
+            // This is |inserted--base| versus |base--neighborhood|.
+            let lt_batch = izip!(&searches_ongoing, link_distances)
+                .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
+                .collect_vec();
+
+            // Compute the less_than.
+            let results = store.less_than_batch(&lt_batch).await;
 
             searches_ongoing
                 .iter_mut()
@@ -922,9 +952,7 @@ impl HnswSearcher {
                 let max_links = self.params.get_M_max(lc);
                 l_neighbors.iter_mut().for_each(|n| {
                     let insertion_idx = n.search.result().unwrap();
-                    n.nb_links
-                        .edges
-                        .insert(insertion_idx, (inserted_vector.clone(), n.nb_dist.clone()));
+                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
                     n.nb_links.trim_to_k_nearest(max_links);
                 });
             });
@@ -935,7 +963,7 @@ impl HnswSearcher {
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
                 neighbors: l_links,
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect(),
+                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
             })
             .collect();
 
