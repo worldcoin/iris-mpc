@@ -52,3 +52,33 @@ impl HawkSession {
         chain(iris_digest.to_le_bytes(), graph_digest.to_le_bytes()).collect_vec()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::hnsw::graph::neighborhood::SortedEdgeIds;
+    use iris_mpc_common::vector_id::VectorId;
+
+    #[test]
+    fn test_set_hash() {
+        let mut digests = vec![];
+
+        let mut set_hash = SetHash::default();
+        digests.push(set_hash.digest());
+
+        set_hash.add_unordered(VectorId::from_serial_id(1));
+        digests.push(set_hash.digest());
+
+        set_hash.add_unordered(VectorId::from_serial_id(111));
+        digests.push(set_hash.digest());
+
+        set_hash.add_unordered((
+            1_u8,
+            VectorId::from_serial_id(1),
+            SortedEdgeIds::from_ascending_vec(vec![VectorId::from_serial_id(2); 10]),
+        ));
+        digests.push(set_hash.digest());
+
+        assert!(digests.iter().all_unique());
+    }
+}
