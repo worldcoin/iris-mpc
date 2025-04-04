@@ -131,7 +131,7 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Ab
     let mut shared_layers = vec![];
     for layer in layers {
         let links = layer.get_links_map();
-        let mut shared_links = HashMap::new();
+        let mut shared_layer = Layer::new();
         for (source_v, queue) in links {
             let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
@@ -139,9 +139,9 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Ab
                 let target_v = VectorId::from(*target_v);
                 shared_queue.push(target_v);
             }
-            shared_links.insert(source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
+            shared_layer.set_links(source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
         }
-        shared_layers.push(Layer::from_links(shared_links));
+        shared_layers.push(shared_layer);
     }
     GraphMem::from_precomputed(new_ep, shared_layers)
 }
