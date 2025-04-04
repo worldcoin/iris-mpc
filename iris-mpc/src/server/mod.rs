@@ -13,7 +13,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::{Config, ModeOfCompute};
+use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -176,6 +176,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_sync_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
+        common_config: CommonConfig::from(config.clone()),
     };
 
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -477,6 +478,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     let sync_result = SyncResult::new(my_state.clone(), states);
+
+    // check if common part of the config is the same across all nodes
+    sync_result.check_common_config()?;
 
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
