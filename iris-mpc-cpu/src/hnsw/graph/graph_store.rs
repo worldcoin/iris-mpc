@@ -136,7 +136,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         })
     }
 
-    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
         let table = self.entry_table();
         sqlx::query(&format!(
             "
@@ -176,7 +176,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .unwrap_or_else(SortedNeighborhoodV::<V>::new)
     }
 
-    async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
         let table = self.links_table();
         sqlx::query(&format!(
             "

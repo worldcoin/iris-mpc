@@ -4,12 +4,14 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, STORE_IDS},
+    execution::hawk_main::{BothEyes, StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{GraphMem, HnswParams, HnswSearcher},
+    hnsw::{graph::{graph_store::GraphPg, layered_graph::EntryPoint}, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
+use iris_mpc_store::{Store, StoredIrisRef};
+use itertools::izip;
 use rand::{RngCore, SeedableRng};
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
@@ -88,7 +90,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let params = HnswParams::from(&args);
     let (mut hnsw_rng, mut aby3_rng) = Rngs::from(&args);
 
-    // TODO establish connections with databases
+    info!("Establishing connections with databases");
+
+    let store = iris_mpc_store::Store::new("postgres://postgres:postgres@localhost:5432", "SMPC_dev_2").await.unwrap();
+    let graph_pg: GraphPg<PlaintextStore> = GraphPg::from_iris_store(&store);
+
     // TODO read existing graph and vector stores from database
 
     info!(
@@ -152,17 +158,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let vectors: BothEyes<_> = [results[0].1.take().unwrap(), results[1].1.take().unwrap()];
     let graphs: BothEyes<_> = [results[0].2.take().unwrap(), results[1].2.take().unwrap()];
 
-    for side in STORE_IDS {
+    for (graph, side) in izip!(graphs.into_iter(), STORE_IDS) {
         info!(
             "Persisting {} graph over {} iris codes to DB",
             side,
             &vectors[side as usize].points.len()
         );
-        persist_graph_db(&graphs[side as usize]);
+        persist_graph_db(graph, &graph_pg, side).await?;
     }
-
-    info!("Dropping HNSW graphs to conserve system memory");
-    drop(graphs);
 
     info!("Converting plaintext iris codes locally into secret shares");
 
@@ -183,9 +186,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        for (party, iris_shares) in shared_irises.iter().enumerate() {
+        // TODO insertion has to be handled with both sides at once as input
+
+        for (party, iris_shares) in shared_irises.into_iter().enumerate() {
             info!("Persisting {} shares for party {} to DB", side, party);
-            persist_vector_shares(iris_shares);
+            persist_vector_shares(iris_shares, &store).await?;
         }
     }
 
@@ -194,16 +199,65 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn persist_graph_db(_graph: &GraphMem<PlaintextStore>) {
-    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphPg.from_iris_store
+async fn persist_graph_db(graph: GraphMem<PlaintextStore>, graph_pg: &GraphPg<PlaintextStore>, side: StoreId) -> Result<(), Box<dyn Error>> {
+    let mut graph_tx = graph_pg.tx().await.unwrap();
 
-    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphOps.set_links
-    // See: iris_mpc_cpu::hnsw::graph::graph_store::GraphOps.set_entry_point
+    let GraphMem { entry_point, layers } = graph;
+
+    if let Some( EntryPoint { point, layer } ) = entry_point {
+        let mut graph_ops = graph_tx.with_graph(side);
+        graph_ops.set_entry_point(point, layer).await;
+    }
+
+    for (lc, layer) in layers.into_iter().enumerate() {
+        for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
+            {
+                let mut graph_ops = graph_tx.with_graph(side);
+                graph_ops.set_links(pt, links, lc).await;
+            }
+
+            if (idx % 1000) == 0 {
+                graph_tx.tx.commit().await?;
+                graph_tx = graph_pg.tx().await.unwrap();
+            }
+        }
+    }
+
+    graph_tx.tx.commit().await?;
+
+    Ok(())
 }
 
-fn persist_vector_shares(_shares: &[GaloisRingSharedIris]) {
-    // See: iris_mpc_store::lib::new
-    // With url and schema name, can produce new Store struct using `new`
 
-    // See: iris_mpc_store::lib::insert_irises
+// TODO handle both eyes at once
+async fn persist_vector_shares(shares: Vec<GaloisRingSharedIris>, store: &Store) -> Result<(), Box<dyn Error>> {
+    let mut tx = store.tx().await?;
+
+    for (idx, iris) in shares.into_iter().enumerate() {
+        let GaloisRingSharedIris { code, mask } = iris;
+
+        // Inserting shares and masks in the db. Currently reuses the same
+        // share and mask for left and right
+        store.insert_irises(
+            &mut tx,
+            &[StoredIrisRef {
+                id: (idx + 1) as i64,
+                left_code: &code.coefs,
+                left_mask: &mask.coefs,
+                right_code: &code.coefs,
+                right_mask: &mask.coefs,
+            }],
+        )
+        .await?;
+
+        if (idx % 1000) == 0 {
+            tx.commit().await?;
+            tx = store.tx().await?;
+        }
+    }
+    tracing::info!("Completed initialization of iris db, committing...");
+    tx.commit().await?;
+    tracing::info!("Committed");
+
+    Ok(())
 }

@@ -28,12 +28,12 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     /// Starting vector and layer for HNSW search
-    entry_point: Option<EntryPoint<V::VectorRef>>,
+    pub entry_point: Option<EntryPoint<V::VectorRef>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
-    layers: Vec<Layer<V>>,
+    pub layers: Vec<Layer<V>>,
 }
 
 impl<V: VectorStore> Clone for GraphMem<V> {
@@ -157,7 +157,7 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
+    pub links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
 }
 
 impl<V: VectorStore> Clone for Layer<V> {
