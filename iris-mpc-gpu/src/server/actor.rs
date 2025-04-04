@@ -149,6 +149,7 @@ pub struct ServerActor {
     buckets: ChunkShare<u32>,
     anonymized_bucket_statistics_left: BucketStatistics,
     anonymized_bucket_statistics_right: BucketStatistics,
+    full_scan_side: Eye,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -167,6 +168,7 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
+        full_scan_side: Eye,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -183,6 +185,7 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
+            full_scan_side,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -199,6 +202,7 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
+        full_scan_side: Eye,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -217,6 +221,7 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
+            full_scan_side,
         )
     }
 
@@ -235,6 +240,7 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
+        full_scan_side: Eye,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -251,6 +257,7 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
+            full_scan_side,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -270,6 +277,7 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
+        full_scan_side: Eye,
     ) -> eyre::Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
@@ -502,6 +510,7 @@ impl ServerActor {
             match_distances_indices_right,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            full_scan_side,
         })
     }
 
@@ -689,24 +698,30 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
-        // COMPARE LEFT EYE QUERIES
+        // COMPARE FULL SCAN EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        tracing::info!("Comparing left eye queries");
+        tracing::info!("Comparing {} eye queries", self.full_scan_side);
         // *Query* variant including Lagrange interpolation.
-        let compact_query_left = CompactQuery {
+        let compact_query_side1 = CompactQuery {
             code_query: batch
-                .left_iris_interpolated_requests_preprocessed
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
                 .code
                 .clone(),
             mask_query: batch
-                .left_iris_interpolated_requests_preprocessed
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
                 .mask
                 .clone(),
-            code_query_insert: batch.left_iris_rotated_requests_preprocessed.code.clone(),
-            mask_query_insert: batch.left_iris_rotated_requests_preprocessed.mask.clone(),
+            code_query_insert: batch
+                .get_iris_requests_rotated_preprocessed(self.full_scan_side)
+                .code
+                .clone(),
+            mask_query_insert: batch
+                .get_iris_requests_rotated_preprocessed(self.full_scan_side)
+                .mask
+                .clone(),
         };
 
-        let (compact_device_queries_left, compact_device_sums_left) = record_stream_time!(
+        let (compact_device_queries_side1, compact_device_sums_side1) = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -715,37 +730,40 @@ impl ServerActor {
             {
                 // This needs to be max_batch_size, even though the query can be shorter to have
                 // enough padding for GEMM
-                let compact_device_queries_left = compact_query_left.htod_transfer(
+                let compact_device_queries_side1 = compact_query_side1.htod_transfer(
                     &self.device_manager,
                     &self.streams[0],
                     self.max_batch_size,
                 )?;
 
-                let compact_device_sums_left = compact_device_queries_left.query_sums(
+                let compact_device_sums_side1 = compact_device_queries_side1.query_sums(
                     &self.codes_engine,
                     &self.masks_engine,
                     &self.streams[0],
                     &self.cublas_handles[0],
                 )?;
 
-                (compact_device_queries_left, compact_device_sums_left)
+                (compact_device_queries_side1, compact_device_sums_side1)
             }
         );
 
-        tracing::info!("Comparing left eye queries against DB and self");
+        tracing::info!(
+            "Comparing {} eye queries against DB and self",
+            self.full_scan_side
+        );
         self.compare_query_against_db_and_self(
-            &compact_device_queries_left,
-            &compact_device_sums_left,
+            &compact_device_queries_side1,
+            &compact_device_sums_side1,
             &mut events,
-            Eye::Left,
+            self.full_scan_side,
             batch_size,
         );
 
         ///////////////////////////////////////////////////////////////////
-        // FETCH PARTIAL LEFT RESULTS
+        // FETCH PARTIAL FULL SCAN PARTIAL RESULTS
         ///////////////////////////////////////////////////////////////////
-        tracing::info!("Fetching partial left results");
-        let mut partial_matches_left = self.distance_comparator.get_partial_results(
+        tracing::info!("Fetching partial {} results", self.full_scan_side);
+        let mut partial_matches_side1 = self.distance_comparator.get_partial_results(
             &self.db_match_list_left,
             &self.current_db_sizes,
             &self.streams[0],
@@ -771,28 +789,35 @@ impl ServerActor {
                 );
                 continue;
             }
-            partial_matches_left[device_idx as usize].push(db_idx);
+            partial_matches_side1[device_idx as usize].push(db_idx);
         }
 
         ///////////////////////////////////////////////////////////////////
-        // COMPARE RIGHT EYE QUERIES
+        // COMPARE OTHER EYE QUERIES
         ///////////////////////////////////////////////////////////////////
-        tracing::info!("Comparing right eye queries");
+        let other_side = self.full_scan_side.other();
+        tracing::info!("Comparing {} eye queries", other_side);
         // *Query* variant including Lagrange interpolation.
-        let compact_query_right = CompactQuery {
+        let compact_query_side2 = CompactQuery {
             code_query: batch
-                .right_iris_interpolated_requests_preprocessed
+                .get_iris_interpolated_requests_preprocessed(other_side)
                 .code
                 .clone(),
             mask_query: batch
-                .right_iris_interpolated_requests_preprocessed
+                .get_iris_interpolated_requests_preprocessed(other_side)
                 .mask
                 .clone(),
-            code_query_insert: batch.right_iris_rotated_requests_preprocessed.code.clone(),
-            mask_query_insert: batch.right_iris_rotated_requests_preprocessed.mask.clone(),
+            code_query_insert: batch
+                .get_iris_requests_rotated_preprocessed(other_side)
+                .code
+                .clone(),
+            mask_query_insert: batch
+                .get_iris_requests_rotated_preprocessed(other_side)
+                .mask
+                .clone(),
         };
 
-        let (compact_device_queries_right, compact_device_sums_right) = record_stream_time!(
+        let (compact_device_queries_side2, compact_device_sums_side2) = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -801,50 +826,51 @@ impl ServerActor {
             {
                 // This needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
                 // enough padding for GEMM
-                let compact_device_queries_right = compact_query_right.htod_transfer(
+                let compact_device_queries_side2 = compact_query_side2.htod_transfer(
                     &self.device_manager,
                     &self.streams[0],
                     self.max_batch_size,
                 )?;
 
-                let compact_device_sums_right = compact_device_queries_right.query_sums(
+                let compact_device_sums_side2 = compact_device_queries_side2.query_sums(
                     &self.codes_engine,
                     &self.masks_engine,
                     &self.streams[0],
                     &self.cublas_handles[0],
                 )?;
 
-                (compact_device_queries_right, compact_device_sums_right)
+                (compact_device_queries_side2, compact_device_sums_side2)
             }
         );
 
-        if partial_matches_left
+        if partial_matches_side1
             .iter()
             .any(|x| x.len() >= DB_CHUNK_SIZE)
         {
             tracing::warn!(
-                "Partial matches left too large, doing full match: {} > {}",
-                partial_matches_left.len(),
+                "Partial matches {} too large, doing full match: {} > {}",
+                self.full_scan_side,
+                partial_matches_side1.len(),
                 DB_CHUNK_SIZE
             );
 
             tracing::info!("Comparing right eye queries against DB and self");
             self.compare_query_against_db_and_self(
-                &compact_device_queries_right,
-                &compact_device_sums_right,
+                &compact_device_queries_side2,
+                &compact_device_sums_side2,
                 &mut events,
-                Eye::Right,
+                other_side,
                 batch_size,
             );
         } else {
             tracing::info!("Comparing right eye queries against DB subset");
             self.compare_query_against_db_subset_and_self(
-                &compact_device_queries_right,
-                &compact_device_sums_right,
+                &compact_device_queries_side2,
+                &compact_device_sums_side2,
                 &mut events,
-                Eye::Right,
+                other_side,
                 batch_size,
-                &partial_matches_left,
+                &partial_matches_side1,
             );
         }
 
@@ -1143,14 +1169,26 @@ impl ServerActor {
                         self.device_manager.device(i).bind_to_thread().unwrap();
                         for insertion_idx in uniqueness_insertion_list[i].clone() {
                             write_db_at_index(
-                                &self.left_code_db_slices,
-                                &self.left_mask_db_slices,
-                                &self.right_code_db_slices,
-                                &self.right_mask_db_slices,
-                                &compact_device_queries_left,
-                                &compact_device_sums_left,
-                                &compact_device_queries_right,
-                                &compact_device_sums_right,
+                                match self.full_scan_side {
+                                    Eye::Left => &self.left_code_db_slices,
+                                    Eye::Right => &self.right_code_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.left_mask_db_slices,
+                                    Eye::Right => &self.right_mask_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.right_code_db_slices,
+                                    Eye::Right => &self.left_code_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.right_mask_db_slices,
+                                    Eye::Right => &self.left_mask_db_slices,
+                                },
+                                &compact_device_queries_side1,
+                                &compact_device_sums_side1,
+                                &compact_device_queries_side2,
+                                &compact_device_sums_side2,
                                 insertion_idx,
                                 self.current_db_sizes[i],
                                 i,
@@ -1186,14 +1224,26 @@ impl ServerActor {
                                 continue;
                             }
                             write_db_at_index(
-                                &self.left_code_db_slices,
-                                &self.left_mask_db_slices,
-                                &self.right_code_db_slices,
-                                &self.right_mask_db_slices,
-                                &compact_device_queries_left,
-                                &compact_device_sums_left,
-                                &compact_device_queries_right,
-                                &compact_device_sums_right,
+                                match self.full_scan_side {
+                                    Eye::Left => &self.left_code_db_slices,
+                                    Eye::Right => &self.right_code_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.left_mask_db_slices,
+                                    Eye::Right => &self.right_mask_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.right_code_db_slices,
+                                    Eye::Right => &self.left_code_db_slices,
+                                },
+                                match self.full_scan_side {
+                                    Eye::Left => &self.right_mask_db_slices,
+                                    Eye::Right => &self.left_mask_db_slices,
+                                },
+                                &compact_device_queries_side1,
+                                &compact_device_sums_side1,
+                                &compact_device_queries_side2,
+                                &compact_device_sums_side2,
                                 reauth_pos,
                                 device_db_index as usize,
                                 i,

@@ -1,4 +1,4 @@
-use crate::config::json_wrapper::JsonStrWrapper;
+use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -215,6 +215,13 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_resets_enabled")]
     pub hawk_server_resets_enabled: bool,
+
+    #[serde(default = "default_full_scan_side")]
+    pub full_scan_side: Eye,
+}
+
+fn default_full_scan_side() -> Eye {
+    Eye::Left
 }
 
 /// Enumeration over set of compute modes.
