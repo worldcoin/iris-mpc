@@ -101,19 +101,6 @@ impl<V: VectorStore> GraphMem<V> {
         self.set_links(q, plan.neighbors.edge_ids(), lc).await;
     }
 
-    pub fn digest_slow(&self) -> u64 {
-        let mut set_hash = SetHash::default();
-        set_hash.add_unordered(&self.entry_point);
-        for (lc, layer) in self.layers.iter().enumerate() {
-            for (v, links) in layer.get_links_map() {
-                set_hash.add_unordered((lc as u8, v, links));
-            }
-        }
-        set_hash.digest()
-    }
-}
-
-impl<V: VectorStore> GraphMem<V> {
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         self.entry_point
             .as_ref()
@@ -161,6 +148,15 @@ impl<V: VectorStore> GraphMem<V> {
     pub async fn num_layers(&self) -> usize {
         self.layers.len()
     }
+
+    pub fn digest(&self) -> u64 {
+        let mut set_hash = SetHash::default();
+        set_hash.add_unordered(&self.entry_point);
+        for (lc, layer) in self.layers.iter().enumerate() {
+            set_hash.add_unordered((lc as u64, layer.set_hash.digest()));
+        }
+        set_hash.digest()
+    }
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
@@ -168,33 +164,38 @@ pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
     links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
+    set_hash: SetHash,
 }
 
 impl<V: VectorStore> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
+            set_hash: self.set_hash.clone(),
         }
     }
 }
 
 impl<V: VectorStore> Layer<V> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
+            set_hash: SetHash::default(),
         }
-    }
-
-    pub fn from_links(links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>) -> Self {
-        Layer { links }
     }
 
     fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
         self.links.get(from).cloned()
     }
 
-    fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
-        self.links.insert(from, links);
+    pub fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
+        self.set_hash.add_unordered((&from, &links));
+
+        let previous = self.links.insert(from.clone(), links);
+
+        if let Some(previous) = previous {
+            self.set_hash.remove((&from, &previous))
+        }
     }
 
     pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>> {
@@ -225,19 +226,14 @@ where
         .layers
         .into_iter()
         .map(|v| {
-            let links: HashMap<_, _> = v
-                .links
-                .into_iter()
-                .map(|(v, nbhd)| {
-                    (
-                        vector_map(v),
-                        SortedEdgeIds::from_ascending_vec(
-                            nbhd.0.into_iter().map(vector_map).collect(),
-                        ),
-                    )
-                })
-                .collect();
-            Layer::<V> { links }
+            let mut layer = Layer::new();
+            for (from, nbhd) in v.links.into_iter() {
+                layer.set_links(
+                    vector_map(from),
+                    SortedEdgeIds::from_ascending_vec(nbhd.0.into_iter().map(vector_map).collect()),
+                );
+            }
+            layer
         })
         .collect();
 

@@ -6,21 +6,28 @@ use std::hash::{Hash, Hasher};
 
 use super::{HawkSession, HawkSessionRef};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetHash {
-    hash: u64,
+    accumulator: u64,
 }
 
 impl SetHash {
     pub fn add_unordered(&mut self, value: impl Hash) {
-        let mut hasher = SipHasher13::default();
-        value.hash(&mut hasher);
-        let h = hasher.finish();
-        self.hash = self.hash.wrapping_add(h);
+        self.accumulator = self.accumulator.wrapping_add(Self::hash(value));
+    }
+
+    pub fn remove(&mut self, value: impl Hash) {
+        self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
     }
 
     pub fn digest(&self) -> u64 {
-        self.hash
+        self.accumulator
+    }
+
+    fn hash(value: impl Hash) -> u64 {
+        let mut hasher = SipHasher13::default();
+        value.hash(&mut hasher);
+        hasher.finish()
     }
 }
 
@@ -47,7 +54,7 @@ impl HawkSession {
     async fn digest(&self) -> Vec<u8> {
         let iris_digest = self.aby3_store.storage.digest().await;
 
-        let graph_digest = self.graph_store.read().await.digest_slow();
+        let graph_digest = self.graph_store.read().await.digest();
 
         chain(iris_digest.to_le_bytes(), graph_digest.to_le_bytes()).collect_vec()
     }
@@ -63,22 +70,43 @@ mod test {
     fn test_set_hash() {
         let mut digests = vec![];
 
+        let a = 12_u64;
+        let b = VectorId::from_serial_id(34);
+        let c = (a, &SortedEdgeIds::from_ascending_vec(vec![b; 10]));
+
         let mut set_hash = SetHash::default();
         digests.push(set_hash.digest());
 
-        set_hash.add_unordered(VectorId::from_serial_id(1));
+        set_hash.add_unordered(a);
         digests.push(set_hash.digest());
 
-        set_hash.add_unordered(VectorId::from_serial_id(111));
+        set_hash.add_unordered(b);
         digests.push(set_hash.digest());
 
-        set_hash.add_unordered((
-            1_u8,
-            VectorId::from_serial_id(1),
-            SortedEdgeIds::from_ascending_vec(vec![VectorId::from_serial_id(2); 10]),
-        ));
+        set_hash.add_unordered(c);
         digests.push(set_hash.digest());
 
         assert!(digests.iter().all_unique());
+
+        let different_order = {
+            let mut set_hash = SetHash::default();
+            set_hash.add_unordered(c);
+            set_hash.add_unordered(a);
+            set_hash.remove(c);
+            set_hash.add_unordered(c);
+            set_hash.add_unordered(b);
+            set_hash.digest()
+        };
+        assert_eq!(digests.pop().unwrap(), different_order);
+
+        set_hash.remove(c);
+        assert_eq!(digests.pop().unwrap(), set_hash.digest());
+
+        set_hash.remove(b);
+        assert_eq!(digests.pop().unwrap(), set_hash.digest());
+
+        set_hash.remove(a);
+        assert_eq!(digests.pop().unwrap(), set_hash.digest());
+        assert_eq!(SetHash::default().digest(), set_hash.digest());
     }
 }
