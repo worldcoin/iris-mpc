@@ -1,7 +1,13 @@
-use super::binary::{extract_msb_u32_batch, lift, mul_lift_2k, open_bin, single_extract_msb_u32};
+use super::binary::{
+    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
+    single_extract_msb_u32,
+};
 use crate::{
-    execution::session::{BootSession, Session, SessionHandles},
-    network::value::NetworkValue::{self},
+    execution::session::{NetworkSession, Session, SessionHandles},
+    network::value::{
+        NetworkInt,
+        NetworkValue::{self},
+    },
     protocol::{
         prf::{Prf, PrfSeed},
         shared_iris::GaloisRingSharedIris,
@@ -11,10 +17,11 @@ use crate::{
         ring_impl::RingElement,
         share::{DistanceShare, Share},
         vecshare::VecShare,
+        IntRing2k,
     },
 };
 use eyre::eyre;
-use itertools::izip;
+use itertools::{izip, Itertools};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -26,24 +33,17 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
-#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_identity), skip_all)]
-pub async fn setup_replicated_prf(session: &BootSession, my_seed: PrfSeed) -> eyre::Result<Prf> {
-    let next_role = session.own_role()?.next(3);
-    let prev_role = session.own_role()?.prev(3);
-    let network = session.network();
+#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_role), skip_all)]
+pub async fn setup_replicated_prf(
+    session: &mut NetworkSession,
+    my_seed: PrfSeed,
+) -> eyre::Result<Prf> {
     // send my_seed to the next party
-    let next_party = session.identity(&next_role)?;
-    network
-        .send(
-            NetworkValue::PrfKey(my_seed).to_network(),
-            next_party,
-            &session.session_id,
-        )
+    session
+        .send_next(NetworkValue::PrfKey(my_seed).to_network())
         .await?;
     // received other seed from the previous party
-    let serialized_other_seed = network
-        .receive(session.identity(&prev_role)?, &session.session_id)
-        .await;
+    let serialized_other_seed = session.receive_prev().await;
     // deserializing received seed.
     let other_seed = match NetworkValue::from_network(serialized_other_seed) {
         Ok(NetworkValue::PrfKey(seed)) => seed,
@@ -77,6 +77,48 @@ pub async fn compare_threshold(
     extract_msb_u32_batch(session, &diffs).await
 }
 
+/// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
+pub fn translate_threshold_a(t: f64) -> u32 {
+    assert!(
+        (0. ..=1.).contains(&t),
+        "Threshold must be in the range [0, 1]"
+    );
+    ((1. - 2. * t) * (B as f64)) as u32
+}
+/// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
+/// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
+pub async fn compare_threshold_buckets(
+    session: &mut Session,
+    threshold_a_terms: &[u32],
+    distances: &[DistanceShare<u32>],
+) -> eyre::Result<Vec<Share<u32>>> {
+    let diffs = threshold_a_terms
+        .iter()
+        .flat_map(|a| {
+            distances.iter().map(|d| {
+                let x = d.mask_dot.clone() * *a;
+                let y = d.code_dot.clone() * B as u32;
+                x - y
+            })
+        })
+        .collect_vec();
+
+    let msbs = extract_msb_u32_batch(session, &diffs).await?;
+    let msbs = VecShare::new_vec(msbs);
+
+    // bit_inject all MSBs into u32 to be able to add them up
+    let sums = bit_inject_ot_2round(session, msbs).await?;
+    // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
+    let buckets = sums
+        .into_iter()
+        .chunks(distances.len())
+        .into_iter()
+        .map(|chunk| chunk.reduce(|a, b| a + b).unwrap_or_default())
+        .collect_vec();
+
+    Ok(buckets)
+}
+
 /// The same as compare_threshold, but the input shares are 16-bit and lifted to
 /// 32-bit before threshold comparison.
 ///
@@ -87,12 +129,12 @@ pub async fn lift_and_compare_threshold(
     mask_dist: Share<u16>,
 ) -> eyre::Result<Share<Bit>> {
     let y = mul_lift_2k::<B_BITS>(&code_dist);
-    let mut x = lift::<{ B_BITS as usize }>(session, VecShare::new_vec(vec![mask_dist])).await?;
+    let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x.pop().expect("Expected a single element in the VecShare");
     x *= A as u32;
     x -= y;
 
-    single_extract_msb_u32::<32>(session, x).await
+    single_extract_msb_u32(session, x).await
 }
 
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
@@ -103,14 +145,14 @@ pub async fn batch_signed_lift(
 ) -> eyre::Result<VecShare<u32>> {
     // Compute (v + 2^{15}) % 2^{16}, to make values positive.
     for v in pre_lift.iter_mut() {
-        v.add_assign_const_role(1_u16 << 15, session.own_role()?);
+        v.add_assign_const_role(1_u16 << 15, session.own_role());
     }
-    let mut lifted_values = lift::<16>(session, pre_lift).await?;
+    let mut lifted_values = lift(session, pre_lift).await?;
     // Now we got shares of d1' over 2^32 such that d1' = (d1'_1 + d1'_2 + d1'_3) %
     // 2^{16} = d1 Next we subtract the 2^15 term we've added previously to
     // get signed shares over 2^{32}
     for v in lifted_values.iter_mut() {
-        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role()?);
+        v.add_assign_const_role(((1_u64 << 32) - (1_u64 << 15)) as u32, session.own_role());
     }
     Ok(lifted_values)
 }
@@ -137,34 +179,20 @@ pub(crate) async fn cross_mul(
     let res_a: Vec<RingElement<u32>> = distances
         .iter()
         .map(|(d1, d2)| {
-            session.prf_as_mut().gen_zero_share() + &d2.code_dot * &d1.mask_dot
-                - &d1.code_dot * &d2.mask_dot
+            session.prf.gen_zero_share() + &d2.code_dot * &d1.mask_dot - &d1.code_dot * &d2.mask_dot
         })
         .collect();
 
-    let network = session.network();
-    let next_role = session.identity(&session.own_role()?.next(3))?;
-    let prev_role = session.identity(&session.own_role()?.prev(3))?;
+    let network = &mut session.network_session;
 
-    if res_a.len() == 1 {
-        network
-            .send(
-                NetworkValue::RingElement32(res_a[0]).to_network(),
-                next_role,
-                &session.session_id(),
-            )
-            .await?;
+    let message = if res_a.len() == 1 {
+        NetworkValue::RingElement32(res_a[0]).to_network()
     } else {
-        network
-            .send(
-                NetworkValue::VecRing32(res_a.clone()).to_network(),
-                next_role,
-                &session.session_id(),
-            )
-            .await?;
+        NetworkValue::VecRing32(res_a.clone()).to_network()
     };
+    network.send_next(message).await?;
 
-    let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+    let serialized_reply = network.receive_prev().await;
     let res_b = match NetworkValue::from_network(serialized_reply) {
         Ok(NetworkValue::RingElement32(element)) => vec![element],
         Ok(NetworkValue::VecRing32(elements)) => elements,
@@ -224,31 +252,23 @@ pub async fn galois_ring_to_rep3(
     session: &mut Session,
     items: Vec<RingElement<u16>>,
 ) -> eyre::Result<Vec<Share<u16>>> {
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let next_party = session.next_identity()?;
+    let network = &mut session.network_session;
 
     // make sure we mask the input with a zero sharing
     let masked_items: Vec<_> = items
         .iter()
-        .map(|x| session.prf_as_mut().gen_zero_share() + x)
+        .map(|x| session.prf.gen_zero_share() + x)
         .collect();
 
     // sending to the next party
     network
-        .send(
-            NetworkValue::VecRing16(masked_items.clone()).to_network(),
-            &next_party,
-            &sid,
-        )
+        .send_next(NetworkValue::VecRing16(masked_items.clone()).to_network())
         .await?;
 
     // receiving from previous party
-    let network = session.network().clone();
-    let sid = session.session_id();
-    let prev_party = session.prev_identity()?;
+
     let shares_b = {
-        let serialized_other_share = network.receive(&prev_party, &sid).await;
+        let serialized_other_share = network.receive_prev().await;
         match NetworkValue::from_network(serialized_other_share) {
             Ok(NetworkValue::VecRing16(message)) => Ok(message),
             _ => Err(eyre!("Error in receiving in galois_ring_to_rep3 operation")),
@@ -262,25 +282,6 @@ pub async fn galois_ring_to_rep3(
     Ok(res)
 }
 
-/// Checks whether first Iris entry in the pair matches the Iris in the second
-/// entry. This is done in the following manner:
-/// - Compute the dot product between the two Irises.
-/// - Convert the partial Shamir share result to a replicated sharing and then
-/// - Compare the distance using the MATCH_THRESHOLD_RATIO from the
-///   `lift_and_compare_threshold` function.
-pub async fn galois_ring_is_match(
-    session: &mut Session,
-    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
-) -> eyre::Result<bool> {
-    assert_eq!(pairs.len(), 1);
-    let additive_dots = galois_ring_pairwise_distance(session, pairs).await?;
-    let rep_dots = galois_ring_to_rep3(session, additive_dots).await?;
-    // compute dots[0] - dots[1]
-    let bit = lift_and_compare_threshold(session, rep_dots[0].clone(), rep_dots[1].clone()).await?;
-    let opened = open_bin(session, &[bit]).await?[0];
-    Ok(opened.convert())
-}
-
 /// Compares the given distance to a threshold and reveal the result.
 pub async fn compare_threshold_and_open(
     session: &mut Session,
@@ -292,15 +293,40 @@ pub async fn compare_threshold_and_open(
         .map(|v| v.into_iter().map(|x| x.convert()).collect())
 }
 
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn open_ring<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    shares: &[Share<T>],
+) -> eyre::Result<Vec<T>> {
+    let network = &mut session.network_session;
+    let message = if shares.len() == 1 {
+        T::new_network_element(shares[0].b)
+    } else {
+        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
+        T::new_network_vec(shares)
+    };
+
+    network.send_next(message.to_network()).await?;
+
+    // receiving from previous party
+    let serialized_other_shares = network.receive_prev().await;
+    let c = NetworkValue::from_network(serialized_other_shares)
+        .and_then(|v| T::into_vec(v))
+        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+
+    // ADD shares with the received shares
+    izip!(shares.iter(), c.iter())
+        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+        .collect::<eyre::Result<Vec<_>>>()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        execution::{
-            local::{generate_local_identities, LocalRuntime},
-            player::Identity,
-        },
+        execution::local::{generate_local_identities, LocalRuntime},
         hawkers::plaintext_store::PlaintextIris,
+        network::value::NetworkInt,
         protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
     };
@@ -308,24 +334,17 @@ mod tests {
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::{Rng, RngCore, SeedableRng};
+    use rand_distr::{Distribution, Standard};
     use rstest::rstest;
-    use std::collections::HashMap;
-    use tokio::task::JoinSet;
+    use std::{array, collections::HashMap, sync::Arc};
+    use tokio::{sync::Mutex, task::JoinSet};
     use tracing::trace;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_single(session: &Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
-        let network = session.network();
-        let next_role = session.identity(&session.own_role()?.next(3))?;
-        let prev_role = session.identity(&session.own_role()?.prev(3))?;
-        network
-            .send(
-                RingElement32(x.b).to_network(),
-                next_role,
-                &session.session_id(),
-            )
-            .await?;
-        let serialized_reply = network.receive(prev_role, &session.session_id()).await;
+    async fn open_single(session: &mut Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
+        let network = &mut session.network_session;
+        network.send_next(RingElement32(x.b).to_network()).await?;
+        let serialized_reply = network.receive_prev().await;
         let missing_share = match NetworkValue::from_network(serialized_reply) {
             Ok(NetworkValue::RingElement32(element)) => element,
             _ => return Err(eyre!("Could not deserialize RingElement32")),
@@ -335,30 +354,23 @@ mod tests {
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_t_many<T>(session: &Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
+    async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
     where
-        T: IntRing2k,
-        NetworkValue: From<Vec<RingElement<T>>>,
-        Vec<RingElement<T>>: TryFrom<NetworkValue, Error = eyre::Error>,
+        T: IntRing2k + NetworkInt,
     {
-        let next_party = session.next_identity()?;
-        let network = session.network().clone();
-        let sid = session.session_id();
+        let network = &mut session.network_session;
 
         let shares_b: Vec<_> = shares.iter().map(|s| s.b).collect();
         let message = shares_b;
         network
-            .send(NetworkValue::from(message).to_network(), &next_party, &sid)
+            .send_next(T::new_network_vec(message).to_network())
             .await?;
 
         // receiving from previous party
-        let network = session.network().clone();
-        let sid = session.session_id();
-        let prev_party = session.prev_identity()?;
         let shares_c = {
-            let serialized_other_share = network.receive(&prev_party, &sid).await;
+            let serialized_other_share = network.receive_prev().await;
             let net_message = NetworkValue::from_network(serialized_other_share)?;
-            Vec::<RingElement<T>>::try_from(net_message)
+            T::into_vec(net_message)
         }?;
 
         let res = shares
@@ -392,11 +404,9 @@ mod tests {
         // P2: [seed_2, seed_1]
         // This is done by calling next() on the PRFs and see whether they match with
         // the ones created from scratch.
-        let prf0 = runtime
-            .sessions
-            .get_mut(&"alice".into())
-            .unwrap()
-            .prf_as_mut();
+
+        // Alice
+        let prf0 = &mut runtime.sessions[0].prf;
         assert_eq!(
             prf0.get_my_prf().next_u64(),
             Prf::new(seeds[0], seeds[2]).get_my_prf().next_u64()
@@ -406,11 +416,8 @@ mod tests {
             Prf::new(seeds[0], seeds[2]).get_prev_prf().next_u64()
         );
 
-        let prf1 = runtime
-            .sessions
-            .get_mut(&"bob".into())
-            .unwrap()
-            .prf_as_mut();
+        // Bob
+        let prf1 = &mut runtime.sessions[1].prf;
         assert_eq!(
             prf1.get_my_prf().next_u64(),
             Prf::new(seeds[1], seeds[0]).get_my_prf().next_u64()
@@ -420,11 +427,8 @@ mod tests {
             Prf::new(seeds[1], seeds[0]).get_prev_prf().next_u64()
         );
 
-        let prf2 = runtime
-            .sessions
-            .get_mut(&"charlie".into())
-            .unwrap()
-            .prf_as_mut();
+        // Charlie
+        let prf2 = &mut runtime.sessions[2].prf;
         assert_eq!(
             prf2.get_my_prf().next_u64(),
             Prf::new(seeds[2], seeds[1]).get_my_prf().next_u64()
@@ -435,12 +439,15 @@ mod tests {
         );
     }
 
-    fn create_single_sharing<R: RngCore>(
+    fn create_single_sharing<R: RngCore, T: IntRing2k>(
         rng: &mut R,
-        input: u16,
-    ) -> (Share<u16>, Share<u16>, Share<u16>) {
-        let a = RingElement(rng.gen::<u16>());
-        let b = RingElement(rng.gen::<u16>());
+        input: T,
+    ) -> (Share<T>, Share<T>, Share<T>)
+    where
+        Standard: Distribution<T>,
+    {
+        let a = RingElement(rng.gen::<T>());
+        let b = RingElement(rng.gen::<T>());
         let c = RingElement(input) - a - b;
 
         let share1 = Share::new(a, c);
@@ -448,13 +455,19 @@ mod tests {
         let share3 = Share::new(c, b);
         (share1, share2, share3)
     }
-    struct LocalShares1D {
-        p0: Vec<Share<u16>>,
-        p1: Vec<Share<u16>>,
-        p2: Vec<Share<u16>>,
+    struct LocalShares1D<T: IntRing2k> {
+        p0: Vec<Share<T>>,
+        p1: Vec<Share<T>>,
+        p2: Vec<Share<T>>,
     }
 
-    fn create_array_sharing<R: RngCore>(rng: &mut R, input: &Vec<u16>) -> LocalShares1D {
+    fn create_array_sharing<R: RngCore, T: IntRing2k>(
+        rng: &mut R,
+        input: &Vec<T>,
+    ) -> LocalShares1D<T>
+    where
+        Standard: Distribution<T>,
+    {
         let mut player0 = Vec::new();
         let mut player1 = Vec::new();
         let mut player2 = Vec::new();
@@ -480,7 +493,7 @@ mod tests {
         let four_shares = create_array_sharing(&mut rng, &four_items);
 
         let num_parties = 3;
-        let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
+        let identities = generate_local_identities();
 
         let four_share_map = HashMap::from([
             (identities[0].clone(), four_shares.p0),
@@ -498,16 +511,27 @@ mod tests {
             .await
             .unwrap();
 
+        let sessions: Vec<Arc<Mutex<Session>>> = runtime
+            .sessions
+            .into_iter()
+            .map(|s| Arc::new(Mutex::new(s)))
+            .collect();
+
         let mut jobs = JoinSet::new();
-        for player in identities.iter() {
-            let mut player_session = runtime.sessions.get(player).unwrap().clone();
-            let four_shares = four_share_map.get(player).unwrap().clone();
+        for session in sessions {
+            let session_lock = session.lock().await;
+            let four_shares = four_share_map
+                .get(&session_lock.own_identity())
+                .unwrap()
+                .clone();
+            let session = session.clone();
             jobs.spawn(async move {
-                let four_shares = batch_signed_lift_vec(&mut player_session, four_shares)
+                let mut session = session.lock().await;
+                let four_shares = batch_signed_lift_vec(&mut session, four_shares)
                     .await
                     .unwrap();
                 let out_shared = cross_mul(
-                    &mut player_session,
+                    &mut session,
                     &[(
                         DistanceShare {
                             code_dot: four_shares[0].clone(),
@@ -523,7 +547,7 @@ mod tests {
                 .unwrap()[0]
                     .clone();
 
-                open_single(&player_session, out_shared).await.unwrap()
+                open_single(&mut session, out_shared).await.unwrap()
             });
         }
         // check first party output is equal to the expected result.
@@ -531,29 +555,119 @@ mod tests {
         assert_eq!(t, RingElement(2));
     }
 
+    #[tokio::test]
+    async fn test_compare_threshold_buckets() {
+        const NUM_BUCKETS: usize = 100;
+        const NUM_ITEMS: usize = 20;
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let items = (0..NUM_ITEMS)
+            .flat_map(|_| {
+                let mask = rng.gen_range(6000u32..12000);
+                let code = rng.gen_range(-12000i16..12000);
+                [code as u16 as u32, mask]
+            })
+            .collect_vec();
+
+        let shares = create_array_sharing(&mut rng, &items);
+
+        let thresholds: [f64; NUM_BUCKETS] =
+            array::from_fn(|i| i as f64 / (NUM_BUCKETS * 2) as f64);
+        let threshold_a_terms = thresholds
+            .iter()
+            .map(|x| translate_threshold_a(*x))
+            .collect_vec();
+
+        let num_parties = 3;
+        let identities = generate_local_identities();
+
+        let share_map = HashMap::from([
+            (identities[0].clone(), shares.p0),
+            (identities[1].clone(), shares.p1),
+            (identities[2].clone(), shares.p2),
+        ]);
+
+        let mut seeds = Vec::new();
+        for i in 0..num_parties {
+            let mut seed = [0_u8; 16];
+            seed[0] = i;
+            seeds.push(seed);
+        }
+        let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
+            .await
+            .unwrap();
+
+        let sessions: Vec<Arc<Mutex<Session>>> = runtime
+            .sessions
+            .into_iter()
+            .map(|s| Arc::new(Mutex::new(s)))
+            .collect();
+
+        let mut jobs = JoinSet::new();
+        for session in sessions {
+            let session_lock = session.lock().await;
+            let shares = share_map.get(&session_lock.own_identity()).unwrap().clone();
+            let session = session.clone();
+            let threshold_a_terms = threshold_a_terms.clone();
+            jobs.spawn(async move {
+                let mut session = session.lock().await;
+                let distances = shares[..]
+                    .chunks_exact(2)
+                    .map(|x| DistanceShare {
+                        code_dot: x[0].clone(),
+                        mask_dot: x[1].clone(),
+                    })
+                    .collect_vec();
+
+                let bucket_result_shares =
+                    compare_threshold_buckets(&mut session, &threshold_a_terms, &distances)
+                        .await
+                        .unwrap();
+
+                open_ring(&mut session, &bucket_result_shares)
+                    .await
+                    .unwrap()
+            });
+        }
+        // check first party output is equal to the expected result.
+        let t1 = jobs.join_next().await.unwrap().unwrap();
+        let t2 = jobs.join_next().await.unwrap().unwrap();
+        let t3 = jobs.join_next().await.unwrap().unwrap();
+        let expected = items[..]
+            .chunks_exact(2)
+            .fold([0; NUM_BUCKETS], |mut acc, x| {
+                let code_dist = x[0];
+                let mask_dist = x[1];
+                for (i, &threshold) in thresholds.iter().enumerate() {
+                    let threshold_a = translate_threshold_a(threshold);
+                    let diff = (mask_dist * threshold_a).wrapping_sub(code_dist * 2u32.pow(16));
+                    acc[i] += if (diff as i32) < 0 { 1 } else { 0 };
+                }
+                acc
+            });
+        assert_eq!(t1, expected);
+        assert_eq!(t2, expected);
+        assert_eq!(t3, expected);
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_additive(session: &Session, x: Vec<RingElement<u16>>) -> eyre::Result<Vec<u16>> {
-        let network = session.network();
-        let next_role = session.identity(&session.own_role()?.next(3))?;
-        let prev_role = session.identity(&session.own_role()?.prev(3))?;
+    async fn open_additive(
+        session: &mut Session,
+        x: Vec<RingElement<u16>>,
+    ) -> eyre::Result<Vec<u16>> {
+        let prev_role = session.prev_identity()?;
+        let network = &mut session.network_session;
 
         network
-            .send(
-                NetworkValue::VecRing16(x.clone()).to_network(),
-                next_role,
-                &session.session_id(),
-            )
+            .send_next(NetworkValue::VecRing16(x.clone()).to_network())
             .await?;
 
         let message_bytes = NetworkValue::VecRing16(x.clone()).to_network();
         trace!(target: "searcher::network", action = "send", party = ?prev_role, bytes = message_bytes.len(), rounds = 0);
 
-        network
-            .send(message_bytes, prev_role, &session.session_id())
-            .await?;
+        network.send_prev(message_bytes).await?;
 
-        let serialized_reply_0 = network.receive(prev_role, &session.session_id()).await;
-        let serialized_reply_1 = network.receive(next_role, &session.session_id()).await;
+        let serialized_reply_0 = network.receive_prev().await;
+        let serialized_reply_1 = network.receive_next().await;
 
         let missing_share_0 = match NetworkValue::from_network(serialized_reply_0) {
             Ok(NetworkValue::VecRing16(element)) => element,
@@ -577,7 +691,7 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        let runtime = LocalRuntime::mock_setup_with_channel().await.unwrap();
+        let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
@@ -588,21 +702,22 @@ mod tests {
             GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();
-        for (index, player) in runtime.get_identities().iter().cloned().enumerate() {
-            let mut player_session = runtime.sessions.get(&player).unwrap().clone();
+        for (index, session) in sessions.iter().enumerate() {
             let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
             own_shares.iter_mut().for_each(|(_x, y)| {
                 y.code.preprocess_iris_code_query_share();
                 y.mask.preprocess_mask_code_query_share();
             });
+            let session = session.clone();
             jobs.spawn(async move {
+                let mut player_session = session.lock().await;
                 let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
                     .await
                     .unwrap();
-                let opened_x = open_additive(&player_session, x.clone()).await.unwrap();
+                let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
-                let opened_x_rep = open_t_many(&player_session, x_rep).await.unwrap();
+                let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();
                 (opened_x, opened_x_rep)
             });
         }

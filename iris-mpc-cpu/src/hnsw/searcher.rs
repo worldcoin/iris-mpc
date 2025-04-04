@@ -6,10 +6,14 @@
 
 use super::{
     graph::neighborhood::SortedNeighborhoodV,
-    sorting::{swap_network::apply_swap_network, tree_min::tree_min},
+    sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
-use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
+use crate::hnsw::{
+    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
+    SortedNeighborhood, VectorStore,
+};
+use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
@@ -201,7 +205,7 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub neighbors: SortedNeighborhood<Vector, Distance>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<SortedNeighborhood<Vector, Distance>>,
+    pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
 impl Default for HnswSearcher {
@@ -214,36 +218,6 @@ impl Default for HnswSearcher {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
-    /// Prepare bidirectional connections between `q` and its `neighbors` in layer `lc`
-    /// by computing the updated neighborhoods of each neighbor after insertion.
-    async fn connect_prepare<V: VectorStore>(
-        &self,
-        store: &mut V,
-        graph: &GraphMem<V>,
-        q: &V::VectorRef,
-        mut neighbors: SortedNeighborhoodV<V>,
-        lc: usize,
-    ) -> ConnectPlanLayerV<V> {
-        let M = self.params.get_M(lc);
-        let max_links = self.params.get_M_max(lc);
-
-        neighbors.trim_to_k_nearest(M);
-
-        // Connect all n -> q
-        let mut nb_links = vec![];
-        for (n, nq) in neighbors.iter() {
-            let mut links = graph.get_links(n, lc).await;
-            links.insert(store, q.clone(), nq.clone()).await;
-            links.trim_to_k_nearest(max_links);
-            nb_links.push(links);
-        }
-
-        ConnectPlanLayer {
-            neighbors,
-            nb_links,
-        }
-    }
-
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer(&self, rng: &mut impl RngCore) -> usize {
@@ -743,7 +717,7 @@ impl HnswSearcher {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
-            .vectors_cloned()
+            .0
             .into_iter()
             .filter(|e| visited.insert(e.clone()))
             .collect();
@@ -867,7 +841,12 @@ impl HnswSearcher {
 
     /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
     /// into `graph` with the specified neighbors `links` and setting the entry point of the
-    /// graph if `set_ep` is `true`.
+    /// graph if `set_ep` is `true`.  The `links` vector contains the neighbor lists for the
+    /// newly inserted node in different graph layers in which it is to be inserted, starting
+    /// with layer 0.
+    ///
+    /// In this implementation, comparisons required for computing the insertion indices for
+    /// updated neighborhoods are done in batches.
     ///
     /// This function call does *not* update `graph`.
     pub async fn insert_prepare<V: VectorStore>(
@@ -875,7 +854,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V>,
         inserted_vector: V::VectorRef,
-        links: Vec<SortedNeighborhoodV<V>>,
+        mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
     ) -> ConnectPlanV<V> {
         let mut plan = ConnectPlan {
@@ -884,13 +863,109 @@ impl HnswSearcher {
             set_ep,
         };
 
-        // Connect the new vector to its neighbors in each layer.
-        for (lc, layer_links) in links.into_iter().enumerate() {
-            let lp = self
-                .connect_prepare(store, graph, &inserted_vector, layer_links, lc)
-                .await;
-            plan.layers.push(lp);
+        // Truncate search results to size M before insertion
+        for (lc, l_links) in links.iter_mut().enumerate() {
+            let M = self.params.get_M(lc);
+            l_links.trim_to_k_nearest(M);
         }
+
+        struct NeighborUpdate<Query, Vector, Distance> {
+            /// The distance between the vector being inserted to a base vector.
+            nb_dist: Distance,
+            /// The base vector that we connect to. It is in "query" form to compare to `nb_links`.
+            nb_query: Query,
+            /// The neighborhood of the base vector.
+            nb_links: SortedEdgeIds<Vector>,
+            /// The current state of the search.
+            search: BinarySearch,
+        }
+
+        // Collect current neighborhoods of new neighbors in each layer and
+        // initialize binary search
+        let mut neighbors = Vec::new();
+        for (lc, l_links) in links.iter().enumerate() {
+            let nb_queries = store.vectors_as_queries(l_links.vectors_cloned()).await;
+
+            let mut l_neighbors = Vec::with_capacity(l_links.len());
+            for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
+                let nb_links = graph.get_links(nb, lc).await;
+                let search = BinarySearch {
+                    left: 0,
+                    right: nb_links.len(),
+                };
+                let neighbor = NeighborUpdate {
+                    nb_dist: nb_dist.clone(),
+                    nb_query,
+                    nb_links,
+                    search,
+                };
+                l_neighbors.push(neighbor);
+            }
+            neighbors.push(l_neighbors);
+        }
+
+        // Run searches until completion, executing comparisons in batches
+        let mut searches_ongoing: Vec<_> = neighbors
+            .iter_mut()
+            .flatten()
+            .filter(|n| !n.search.is_finished())
+            .collect();
+
+        while !searches_ongoing.is_empty() {
+            // Find the next batch of distances to evaluate.
+            // This is each base neighbor versus the next search position in its neighborhood.
+            let dist_batch = searches_ongoing
+                .iter()
+                .map(|n| {
+                    let cmp_idx = n.search.next().unwrap();
+                    (n.nb_query.clone(), n.nb_links[cmp_idx].clone())
+                })
+                .collect_vec();
+
+            // Compute the distances.
+            let link_distances = store.eval_distance_pairs(&dist_batch).await;
+
+            // Prepare a batch of less_than.
+            // This is |inserted--base| versus |base--neighborhood|.
+            let lt_batch = izip!(&searches_ongoing, link_distances)
+                .map(|(n, link_dist)| (n.nb_dist.clone(), link_dist))
+                .collect_vec();
+
+            // Compute the less_than.
+            let results = store.less_than_batch(&lt_batch).await;
+
+            searches_ongoing
+                .iter_mut()
+                .zip(results)
+                .for_each(|(n, res)| {
+                    n.search.update(res);
+                });
+
+            searches_ongoing.retain(|n| !n.search.is_finished());
+        }
+
+        // Directly insert new vector into neighborhoods from search results
+        neighbors
+            .iter_mut()
+            .enumerate()
+            .for_each(|(lc, l_neighbors)| {
+                let max_links = self.params.get_M_max(lc);
+                l_neighbors.iter_mut().for_each(|n| {
+                    let insertion_idx = n.search.result().unwrap();
+                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
+                    n.nb_links.trim_to_k_nearest(max_links);
+                });
+            });
+
+        // Generate ConnectPlanLayer structs
+        plan.layers = links
+            .into_iter()
+            .zip(neighbors)
+            .map(|(l_links, l_neighbors)| ConnectPlanLayer {
+                neighbors: l_links,
+                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
+            })
+            .collect();
 
         plan
     }

@@ -6,13 +6,13 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::config::ModeOfDeployment;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
 };
+use iris_mpc_common::{config::ModeOfDeployment, vector_id::VectorId};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -47,19 +47,19 @@ pub enum StoredIris {
 }
 
 impl StoredIris {
-    /// Returns the `id` from either variant.
-    pub fn index(&self) -> usize {
+    /// Returns the `serial_id` from either variant.
+    pub fn serial_id(&self) -> usize {
         match self {
-            StoredIris::DB(db) => db.index(),
-            StoredIris::S3(s3) => s3.index(),
+            StoredIris::DB(db) => db.serial_id(),
+            StoredIris::S3(s3) => s3.serial_id(),
         }
     }
 }
 
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct DbStoredIris {
-    #[allow(dead_code)]
-    id: i64, // BIGSERIAL
+    id: i64,             // BIGSERIAL
+    version_id: i16,     // SMALLINT
     left_code: Vec<u8>,  // BYTEA
     left_mask: Vec<u8>,  // BYTEA
     right_code: Vec<u8>, // BYTEA
@@ -67,9 +67,18 @@ pub struct DbStoredIris {
 }
 
 impl DbStoredIris {
-    /// The index which is contiguous and starts from 0.
-    pub fn index(&self) -> usize {
+    /// The index which is contiguous and starts from 1.
+    pub fn serial_id(&self) -> usize {
         self.id as usize
+    }
+
+    pub fn version_id(&self) -> i16 {
+        self.version_id
+    }
+
+    pub fn vector_id(&self) -> VectorId {
+        // TODO: Distinguish vector_id from serial_id.
+        VectorId::from_serial_id(self.id as u32)
     }
 
     pub fn left_code(&self) -> &[u16] {
@@ -196,7 +205,7 @@ impl Store {
         Ok(count.0 as usize)
     }
 
-    /// Stream irises in order.
+    /// (only for testing) Stream irises in order.
     pub async fn stream_irises(
         &self,
     ) -> impl Stream<Item = Result<DbStoredIris, sqlx::Error>> + '_ {
@@ -238,7 +247,7 @@ impl Store {
             // This base query yields `DbStoredIris`
             let stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2 AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
@@ -247,7 +256,7 @@ impl Store {
                 .fetch(&self.pool)
                 .map_err(Into::into),
                 None => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
@@ -358,56 +367,6 @@ WHERE id = $1;
             }
         }
 
-        Ok(())
-    }
-
-    pub async fn insert_or_update_left_iris(
-        &self,
-        id: i64,
-        left_code: &[u16],
-        left_mask: &[u16],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        let query = sqlx::query(
-            r#"
-INSERT INTO irises (id, left_code, left_mask)
-VALUES ( $1, $2, $3 )
-ON CONFLICT (id)
-DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask;
-"#,
-        )
-        .bind(id)
-        .bind(cast_slice::<u16, u8>(left_code))
-        .bind(cast_slice::<u16, u8>(left_mask));
-
-        query.execute(&mut *tx).await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn insert_or_update_right_iris(
-        &self,
-        id: i64,
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-
-        let query = sqlx::query(
-            r#"
-INSERT INTO irises (id, right_code, right_mask)
-VALUES ( $1, $2, $3 )
-ON CONFLICT (id)
-DO UPDATE SET right_code = EXCLUDED.right_code, right_mask = EXCLUDED.right_mask;
-"#,
-        )
-        .bind(id)
-        .bind(cast_slice::<u16, u8>(right_code))
-        .bind(cast_slice::<u16, u8>(right_mask));
-
-        query.execute(&mut *tx).await?;
-        tx.commit().await?;
         Ok(())
     }
 
@@ -771,9 +730,13 @@ pub mod tests {
         assert_eq!(got, got_par);
 
         assert_eq!(got_len, 3);
+        assert_eq!(got_par.len(), 3);
         assert_eq!(got.len(), 3);
+
         for i in 0..3 {
-            assert_eq!(got[i].id, (i + 1) as i64);
+            assert_eq!(got[i].serial_id(), i + 1);
+            assert_eq!(got[i].version_id(), 0);
+            assert_eq!(got[i].vector_id(), VectorId::new(i as u32 + 1, 0));
             assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
             assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
             assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
@@ -947,71 +910,6 @@ pub mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_left_right() -> Result<()> {
-        let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
-
-        for i in 0..10u16 {
-            if i % 2 == 0 {
-                store
-                    .insert_or_update_left_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
-                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
-                    )
-                    .await?;
-                store
-                    .insert_or_update_right_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
-                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
-                    )
-                    .await?;
-            } else {
-                store
-                    .insert_or_update_right_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12],
-                        &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16],
-                    )
-                    .await?;
-                store
-                    .insert_or_update_left_iris(
-                        (i + 1) as i64,
-                        &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4],
-                        &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8],
-                    )
-                    .await?;
-            }
-        }
-
-        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
-
-        for i in 0..10u16 {
-            assert_eq!(got[i as usize].id, (i + 1) as i64);
-            assert_eq!(
-                got[i as usize].left_code(),
-                &[i * 100 + 1, i * 100 + 2, i * 100 + 3, i * 100 + 4]
-            );
-            assert_eq!(
-                got[i as usize].left_mask(),
-                &[i * 100 + 5, i * 100 + 6, i * 100 + 7, i * 100 + 8]
-            );
-            assert_eq!(
-                got[i as usize].right_code(),
-                &[i * 100 + 9, i * 100 + 10, i * 100 + 11, i * 100 + 12]
-            );
-            assert_eq!(
-                got[i as usize].right_mask(),
-                &[i * 100 + 13, i * 100 + 14, i * 100 + 15, i * 100 + 16]
-            );
-        }
-
-        cleanup(&store, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
         let store = Store::new(&test_db_url()?, &schema_name).await?;
@@ -1068,12 +966,47 @@ pub mod tests {
         assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].right_code), updated_right_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].right_mask), updated_right_mask.coefs);
+        assert_eq!(got[0].version_id(), 1);
 
         // assert the other iris in db is not updated
         assert_eq!(cast_u8_to_u16(&got[1].left_code), iris2.left_code);
         assert_eq!(cast_u8_to_u16(&got[1].left_mask), iris2.left_mask);
         assert_eq!(cast_u8_to_u16(&got[1].right_code), iris2.right_code);
         assert_eq!(cast_u8_to_u16(&got[1].right_mask), iris2.right_mask);
+        assert_eq!(got[1].version_id(), 0);
+
+        // update with the same values and expect the version not to change
+        store
+            .update_iris(
+                None,
+                1,
+                &updated_left_code,
+                &updated_left_mask,
+                &updated_right_code,
+                &updated_right_mask,
+            )
+            .await?;
+
+        let got_second_update: Vec<DbStoredIris> =
+            store.stream_irises().await.try_collect().await?;
+        assert_eq!(got_second_update.len(), 2);
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].left_code),
+            updated_left_code.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].left_mask),
+            updated_left_mask.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].right_code),
+            updated_right_code.coefs
+        );
+        assert_eq!(
+            cast_u8_to_u16(&got_second_update[0].right_mask),
+            updated_right_mask.coefs
+        );
+        assert_eq!(got_second_update[0].version_id(), 1);
 
         cleanup(&store, &schema_name).await?;
         Ok(())

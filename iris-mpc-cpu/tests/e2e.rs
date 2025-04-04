@@ -6,15 +6,11 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
-        aby3::{
-            aby3_store::{Aby3Store, SharedIrisesRef},
-            test_utils::get_trivial_share,
-        },
-        plaintext_store::PlaintextStore,
+        aby3::aby3_store::{Aby3Store, SharedIrises},
+        plaintext_store::{PlaintextStore, PointId},
     },
     hnsw::{graph::layered_graph::migrate, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
-    shares::share::DistanceShare,
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -26,6 +22,7 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
+const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 
 fn install_tracing() {
@@ -40,40 +37,34 @@ fn install_tracing() {
 async fn create_graph_from_plain_db(
     player_index: usize,
     db: &IrisDB,
-) -> eyre::Result<(GraphMem<Aby3Store>, [SharedIrisesRef; 2])> {
+) -> eyre::Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
 
-    let mpc_graph: GraphMem<Aby3Store> = migrate(
-        graph,
-        |v| v.into(),
-        |(c, m)| {
-            DistanceShare::new(
-                get_trivial_share(c, player_index),
-                get_trivial_share(m, player_index),
-            )
-        },
-    );
+    let mpc_graph: GraphMem<Aby3Store> = migrate(graph, |v| v.into());
 
     let mut shared_irises = HashMap::new();
 
     for (vector_id, iris) in store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_serial_id(vector_id as u32);
+        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
         let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
-    let aby3_store = SharedIrisesRef::new(shared_irises);
+    let iris_store = SharedIrises::new(shared_irises);
 
-    Ok((mpc_graph, [(); 2].map(|_| aby3_store.clone())))
+    Ok((
+        [mpc_graph.clone(), mpc_graph],
+        [iris_store.clone(), iris_store],
+    ))
 }
 
 async fn start_hawk_node(args: &HawkArgs, db: &mut IrisDB) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    let (mpc_graph, aby3_store) = create_graph_from_plain_db(args.party_index, db).await?;
-    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, mpc_graph, aby3_store).await?;
+    let (graph, iris_store) = create_graph_from_plain_db(args.party_index, db).await?;
+    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
 
     let handle = HawkHandle::new(hawk_actor, HAWK_REQUEST_PARALLELISM).await?;
 
@@ -99,7 +90,10 @@ async fn e2e_test() -> Result<()> {
         party_index: 0,
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
+        connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         disable_persistence: false,
+        match_distances_buffer_size: 64,
+        n_buckets: 10,
     };
     let args1 = HawkArgs {
         party_index: 1,
@@ -132,6 +126,8 @@ async fn e2e_test() -> Result<()> {
     test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleNonMatchingTarget);
+    test_case_generator.disable_test_case(TestCase::ResetCheckMatch);
+    test_case_generator.disable_test_case(TestCase::ResetCheckNonMatch);
 
     // TODO: enable this once supported
     // test_case_generator.enable_bucket_statistic_checks(

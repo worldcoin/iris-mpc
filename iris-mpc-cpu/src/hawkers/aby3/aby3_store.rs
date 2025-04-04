@@ -1,6 +1,5 @@
 use crate::{
-    execution::{player::Identity, session::Session},
-    hawkers::plaintext_store::PointId,
+    execution::{hawk_main::state_check::SetHash, session::Session},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -11,72 +10,16 @@ use crate::{
     },
     shares::share::{DistanceShare, Share},
 };
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    fmt::{Debug, Display},
-    num::ParseIntError,
-    str::FromStr,
-    sync::Arc,
-    vec,
-};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::sync::{RwLock, RwLockWriteGuard};
 use tracing::instrument;
 
+pub use iris_mpc_common::vector_id::VectorId;
+
 /// Reference to an iris in the Shamir secret shared form over a Galois ring.
 pub type IrisRef = Arc<GaloisRingSharedIris>;
-
-/// Unique identifier for an iris inserted into the store.
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct VectorId {
-    pub(crate) id: PointId,
-}
-
-impl Display for VectorId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Display::fmt(&self.id, f)
-    }
-}
-
-impl FromStr for VectorId {
-    type Err = ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(VectorId {
-            id: FromStr::from_str(s)?,
-        })
-    }
-}
-
-impl From<PointId> for VectorId {
-    fn from(id: PointId) -> Self {
-        VectorId { id }
-    }
-}
-
-impl From<&PointId> for VectorId {
-    fn from(id: &PointId) -> Self {
-        VectorId { id: *id }
-    }
-}
-
-impl From<usize> for VectorId {
-    fn from(id: usize) -> Self {
-        VectorId { id: id.into() }
-    }
-}
-
-impl VectorId {
-    pub fn from_serial_id(id: u32) -> Self {
-        VectorId { id: id.into() }
-    }
-
-    /// Returns the ID of a vector as a number.
-    pub fn to_serial_id(&self) -> u32 {
-        self.id.0
-    }
-}
 
 /// Iris to be searcher or inserted into the store.
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
@@ -121,18 +64,37 @@ pub struct SharedIrises {
     points: HashMap<VectorId, IrisRef>,
     next_id: u32,
     empty_iris: IrisRef,
+    set_hash: SetHash,
+}
+
+impl Default for SharedIrises {
+    fn default() -> Self {
+        SharedIrises::new(HashMap::new())
+    }
 }
 
 impl SharedIrises {
+    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+        SharedIrises {
+            points,
+            next_id,
+            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            set_hash: SetHash::default(),
+        }
+    }
+
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        self.points.insert(vector_id, iris);
-        self.next_id = self.next_id.max(vector_id.to_serial_id() + 1);
+        let was_there = self.points.insert(vector_id, iris);
+        self.next_id = self.next_id.max(vector_id.serial_id() + 1);
+
+        if was_there.is_none() {
+            self.set_hash.add_unordered(vector_id);
+        }
     }
 
     fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId {
-            id: PointId(self.next_id),
-        };
+        let new_id = VectorId::from_serial_id(self.next_id);
         self.next_id += 1;
         new_id
     }
@@ -144,6 +106,12 @@ impl SharedIrises {
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
         Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
+    }
+
+    pub fn to_arc(self) -> SharedIrisesRef {
+        SharedIrisesRef {
+            body: Arc::new(RwLock::new(self)),
+        }
     }
 }
 
@@ -162,31 +130,6 @@ impl std::fmt::Debug for SharedIrisesRef {
     }
 }
 
-impl Default for SharedIrisesRef {
-    fn default() -> Self {
-        SharedIrisesRef::new(HashMap::new())
-    }
-}
-
-// Constructor.
-impl SharedIrisesRef {
-    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let next_id = points
-            .keys()
-            .map(|v| v.to_serial_id() + 1)
-            .max()
-            .unwrap_or(0);
-        let body = SharedIrises {
-            points,
-            next_id,
-            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
-        };
-        SharedIrisesRef {
-            body: Arc::new(RwLock::new(body)),
-        }
-    }
-}
-
 // Getters, iterators and mutators of the iris storage.
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
@@ -197,9 +140,15 @@ impl SharedIrisesRef {
         self.body.read().await.get_vector(vector)
     }
 
-    pub async fn iter_vectors<'a>(&'a self, vector_ids: &'a [VectorId]) -> Vec<IrisRef> {
+    pub async fn iter_vectors(
+        &self,
+        vector_ids: impl IntoIterator<Item = &VectorId>,
+    ) -> Vec<IrisRef> {
         let body = self.body.read().await;
-        vector_ids.iter().map(|v| body.get_vector(v)).collect_vec()
+        vector_ids
+            .into_iter()
+            .map(|v| body.get_vector(v))
+            .collect_vec()
     }
 
     pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
@@ -209,15 +158,17 @@ impl SharedIrisesRef {
         body.insert(new_id, new_vector);
         new_id
     }
+
+    pub async fn checksum(&self) -> u64 {
+        self.body.read().await.set_hash.checksum()
+    }
 }
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
 /// Note that all SMPC operations are performed in a single session.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Aby3Store {
-    /// Identity of the party performing computations in this store
-    pub owner: Identity,
     /// Reference to the shared irises
     pub storage: SharedIrisesRef,
     /// Session for the SMPC operations
@@ -273,6 +224,15 @@ impl VectorStore for Aby3Store {
     /// Distance represented as a pair of u32 shares.
     type DistanceRef = DistanceShare<u32>;
 
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+        self.storage
+            .iter_vectors(&vectors)
+            .await
+            .into_iter()
+            .map(|v| prepare_query((*v).clone()))
+            .collect()
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -283,6 +243,24 @@ impl VectorStore for Aby3Store {
         let pairs = vec![(&query.processed_query, &*vector_point)];
         let dist = self.eval_pairwise_distances(pairs).await;
         self.lift_distances(dist).await.unwrap()[0].clone()
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
+    async fn eval_distance_pairs(
+        &mut self,
+        pairs: &[(Self::QueryRef, Self::VectorRef)],
+    ) -> Vec<Self::DistanceRef> {
+        let vectors = self
+            .storage
+            .iter_vectors(pairs.iter().map(|(_, v)| v))
+            .await;
+
+        let pairs = izip!(pairs, &vectors)
+            .map(|((q, _), v)| (&q.processed_query, &**v))
+            .collect_vec();
+
+        let dist = self.eval_pairwise_distances(pairs).await;
+        self.lift_distances(dist).await.unwrap()
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
@@ -297,12 +275,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.iter_vectors(vectors).await;
         let pairs = queries
             .iter()
-            .flat_map(|q| {
-                vectors
-                    .iter()
-                    .map(|vector| (&q.processed_query, &**vector))
-                    .collect::<Vec<_>>()
-            })
+            .flat_map(|q| vectors.iter().map(|vector| (&q.processed_query, &**vector)))
             .collect::<Vec<_>>();
 
         let dist = self.eval_pairwise_distances(pairs).await;
@@ -388,17 +361,18 @@ mod tests {
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
 
-        let mut stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
+        let stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
 
         let mut jobs = JoinSet::new();
-        for store in stores.iter_mut() {
-            let player_index = get_owner_index(store)?;
+        for store in stores.iter() {
+            let player_index = get_owner_index(store).await?;
             let queries = (0..database_size)
                 .map(|id| prepare_query(shared_irises[id][player_index].clone()))
                 .collect::<Vec<_>>();
-            let mut store = store.clone();
             let mut rng = rng.clone();
+            let store = store.clone();
             jobs.spawn(async move {
+                let mut store = store.lock().await;
                 let mut aby3_graph = GraphMem::new();
                 let db = HnswSearcher::default();
 
@@ -406,7 +380,7 @@ mod tests {
                 // insert queries
                 for query in queries.iter() {
                     let inserted_vector = db
-                        .insert(&mut store, &mut aby3_graph, query, &mut rng)
+                        .insert(&mut *store, &mut aby3_graph, query, &mut rng)
                         .await;
                     inserted.push(inserted_vector)
                 }
@@ -416,9 +390,9 @@ mod tests {
                 for v in inserted.into_iter() {
                     let query = store.storage.get_vector(&v).await;
                     let query = prepare_query((*query).clone());
-                    let neighbors = db.search(&mut store, &mut aby3_graph, &query, 1).await;
+                    let neighbors = db.search(&mut *store, &mut aby3_graph, &query, 1).await;
                     tracing::debug!("Finished checking query");
-                    matching_results.push(db.is_match(&mut store, &[neighbors]).await)
+                    matching_results.push(db.is_match(&mut *store, &[neighbors]).await)
                 }
                 matching_results
             });
@@ -443,14 +417,17 @@ mod tests {
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
         let (mut cleartext_data, secret_data) =
-            lazy_random_setup(&mut rng, database_size, network_t.clone(), true).await?;
+            lazy_random_setup(&mut rng, database_size, network_t.clone()).await?;
 
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let vector_graph_stores = shared_random_setup(&mut rng, database_size, network_t).await?;
+        let mut vector_graph_stores =
+            shared_random_setup(&mut rng, database_size, network_t).await?;
 
         for ((v_from_scratch, _), (premade_v, _)) in
             vector_graph_stores.iter().zip(secret_data.iter())
         {
+            let v_from_scratch = v_from_scratch.lock().await;
+            let premade_v = premade_v.lock().await;
             assert_eq!(
                 v_from_scratch.storage.body.read().await.points,
                 premade_v.storage.body.read().await.points
@@ -459,6 +436,7 @@ mod tests {
         let hawk_searcher = HnswSearcher::default();
 
         for i in 0..database_size {
+            let vector_id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
                 .await;
@@ -469,16 +447,20 @@ mod tests {
             );
 
             let mut jobs = JoinSet::new();
-            for (v, g) in vector_graph_stores.iter() {
+            for (v, g) in vector_graph_stores.iter_mut() {
                 let hawk_searcher = hawk_searcher.clone();
-                let mut v = v.clone();
+                let v_lock = v.lock().await;
                 let mut g = g.clone();
-                let q = v.storage.get_vector(&i.into()).await;
+                let q = v_lock.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
+                let v = v.clone();
                 jobs.spawn(async move {
-                    let secret_neighbors = hawk_searcher.search(&mut v, &mut g, &q, 1).await;
+                    let mut v_lock = v.lock().await;
+                    let secret_neighbors = hawk_searcher.search(&mut *v_lock, &mut g, &q, 1).await;
 
-                    hawk_searcher.is_match(&mut v, &[secret_neighbors]).await
+                    hawk_searcher
+                        .is_match(&mut *v_lock, &[secret_neighbors])
+                        .await
                 });
             }
             let scratch_results = jobs.join_all().await;
@@ -486,14 +468,18 @@ mod tests {
             let mut jobs = JoinSet::new();
             for (v, g) in secret_data.iter() {
                 let hawk_searcher = hawk_searcher.clone();
-                let mut v = v.clone();
+                let v = v.clone();
                 let mut g = g.clone();
                 jobs.spawn(async move {
-                    let query = v.storage.get_vector(&i.into()).await;
+                    let mut v_lock = v.lock().await;
+                    let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
-                    let secret_neighbors = hawk_searcher.search(&mut v, &mut g, &query, 1).await;
+                    let secret_neighbors =
+                        hawk_searcher.search(&mut *v_lock, &mut g, &query, 1).await;
 
-                    hawk_searcher.is_match(&mut v, &[secret_neighbors]).await
+                    hawk_searcher
+                        .is_match(&mut *v_lock, &[secret_neighbors])
+                        .await
                 });
             }
             let premade_results = jobs.join_all().await;
@@ -548,13 +534,14 @@ mod tests {
 
         let mut aby3_inserts = vec![];
         for store in local_stores.iter_mut() {
-            let player_index = get_owner_index(store)?;
+            let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_dim)
                 .map(|id| prepare_query(shared_irises[id][player_index].clone()))
                 .collect();
             let mut player_inserts = vec![];
+            let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store.storage.insert(p).await);
+                player_inserts.push(store_lock.storage.insert(p).await);
             }
             aby3_inserts.push(player_inserts);
         }
@@ -563,14 +550,15 @@ mod tests {
             for comb2 in it2.clone() {
                 let mut jobs = JoinSet::new();
                 for store in local_stores.iter() {
-                    let player_index = get_owner_index(store)?;
+                    let player_index = get_owner_index(store).await?;
                     let player_inserts = aby3_inserts[player_index].clone();
-                    let mut store = store.clone();
+                    let store = store.clone();
                     let index10 = comb1[0];
                     let index11 = comb1[1];
                     let index20 = comb2[0];
                     let index21 = comb2[1];
                     jobs.spawn(async move {
+                        let mut store = store.lock().await;
                         let dist1_aby3 = eval_vector_distance(
                             &mut store,
                             &player_inserts[index10],
@@ -640,36 +628,38 @@ mod tests {
         let mut aby3_inserts = vec![];
         let mut queries = vec![];
         for store in local_stores.iter_mut() {
-            let player_index = get_owner_index(store).unwrap();
+            let player_index = get_owner_index(store).await.unwrap();
             let player_preps: Vec<_> = (0..db_size)
                 .map(|id| prepare_query(shared_irises[id][player_index].clone()))
                 .collect();
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
+            let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store.insert(p).await);
+                player_inserts.push(store_lock.insert(p).await);
             }
             aby3_inserts.push(player_inserts);
         }
 
         let mut jobs = JoinSet::new();
         for store in local_stores.iter() {
-            let player_index = get_owner_index(store).unwrap();
+            let player_index = get_owner_index(store).await.unwrap();
             let player_inserts = aby3_inserts[player_index].clone();
             let player_preps = queries[player_index].clone();
-            let mut store = store.clone();
+            let store = store.clone();
             jobs.spawn(async move {
-                let dist1_aby3 = store
+                let mut store_lock = store.lock().await;
+                let dist1_aby3 = store_lock
                     .eval_distance_batch(&[player_preps[0].clone()], &player_inserts)
                     .await;
-                let dist2_aby3 = store
+                let dist2_aby3 = store_lock
                     .eval_distance_batch(&[player_preps[1].clone()], &player_inserts)
                     .await;
                 let dist_aby3 = dist1_aby3
                     .into_iter()
                     .zip(dist2_aby3.into_iter())
                     .collect::<Vec<_>>();
-                store.less_than_batch(&dist_aby3).await
+                store_lock.less_than_batch(&dist_aby3).await
             });
         }
         let bits_aby3 = jobs.join_all().await;
@@ -691,16 +681,18 @@ mod tests {
                 .unwrap();
 
         for i in 0..database_size {
+            let vector_id = VectorId::from_0_index(i as u32);
             let mut jobs = JoinSet::new();
             for (store, graph) in vectors_and_graphs.iter_mut() {
-                let mut store = store.clone();
                 let mut graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.storage.get_vector(&i.into()).await;
+                let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
+                let store = store.clone();
                 jobs.spawn(async move {
-                    let secret_neighbors = searcher.search(&mut store, &mut graph, &q, 1).await;
-                    searcher.is_match(&mut store, &[secret_neighbors]).await
+                    let mut store = store.lock().await;
+                    let secret_neighbors = searcher.search(&mut *store, &mut graph, &q, 1).await;
+                    searcher.is_match(&mut *store, &[secret_neighbors]).await
                 });
             }
             let res = jobs.join_all().await;

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::eyre;
-use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
 
@@ -70,8 +70,13 @@ impl S3StoredIris {
         })
     }
 
-    pub fn index(&self) -> usize {
+    pub fn serial_id(&self) -> usize {
         self.id as usize
+    }
+
+    pub fn vector_id(&self) -> VectorId {
+        // TODO: Distinguish vector_id from serial_id.
+        VectorId::from_serial_id(self.id as u32)
     }
 
     pub fn left_code_odd(&self) -> &Vec<u8> {
@@ -459,6 +464,7 @@ mod tests {
     fn dummy_entry(id: usize) -> DbStoredIris {
         DbStoredIris {
             id: id as i64,
+            version_id: 0,
             left_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             left_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
             right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
@@ -517,7 +523,7 @@ mod tests {
         let mut count = 0;
         let mut ids: HashSet<usize> = HashSet::from_iter(1..MOCK_ENTRIES);
         while let Some(chunk) = rx.recv().await {
-            ids.remove(&(chunk.index()));
+            ids.remove(&(chunk.serial_id()));
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);
@@ -578,7 +584,7 @@ mod tests {
         let mut count = 0;
         let mut ids: HashSet<usize> = (1..=MOCK_ENTRIES).collect();
         while let Some(chunk) = rx.recv().await {
-            ids.remove(&chunk.index());
+            ids.remove(&chunk.serial_id());
             count += 1;
         }
         assert_eq!(count, MOCK_ENTRIES);

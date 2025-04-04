@@ -4,12 +4,49 @@
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
 use crate::hnsw::{
-    sorting::{batcher::partial_batcher_network, swap_network::apply_swap_network},
+    sorting::{
+        batcher::partial_batcher_network, binary_search::BinarySearch,
+        swap_network::apply_swap_network,
+    },
     VectorStore,
 };
 use serde::{Deserialize, Serialize};
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 use tracing::{debug, instrument};
+
+/// A sorted list of edge IDs (without distances).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+pub struct SortedEdgeIds<V>(pub Vec<V>);
+
+impl<V> SortedEdgeIds<V> {
+    pub fn from_ascending_vec(edges: Vec<V>) -> Self {
+        SortedEdgeIds(edges)
+    }
+
+    pub fn trim_to_k_nearest(&mut self, k: usize) {
+        self.0.truncate(k);
+    }
+}
+
+impl<V> Default for SortedEdgeIds<V> {
+    fn default() -> Self {
+        SortedEdgeIds(vec![])
+    }
+}
+
+impl<V> Deref for SortedEdgeIds<V> {
+    type Target = Vec<V>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<V> DerefMut for SortedEdgeIds<V> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
@@ -55,15 +92,15 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
-        let index_asc = Self::binary_search(
-            store,
-            &self
-                .iter()
-                .map(|(_, dist)| dist.clone())
-                .collect::<Vec<Distance>>(),
-            &dist,
-        )
-        .await;
+        let mut bin_search = BinarySearch {
+            left: 0,
+            right: self.edges.len(),
+        };
+        while let Some(cmp_idx) = bin_search.next() {
+            let res = store.less_than(&dist, &self.edges[cmp_idx].1).await;
+            bin_search.update(res);
+        }
+        let index_asc = bin_search.result().unwrap();
         self.edges.insert(index_asc, (to, dist));
     }
 
@@ -91,6 +128,10 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
                 self.insert(store, e.clone(), eq.clone()).await;
             }
         }
+    }
+
+    pub fn edge_ids(&self) -> SortedEdgeIds<Vector> {
+        SortedEdgeIds(self.vectors_cloned())
     }
 
     pub fn vectors_cloned(&self) -> Vec<Vector> {
@@ -139,26 +180,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         let network = partial_batcher_network(sorted_prefix_size, unsorted_size);
 
         apply_swap_network(store, &mut self.edges, &network).await;
-    }
-
-    /// Find the insertion index for a target distance in the current
-    /// neighborhood list.
-    async fn binary_search<V>(store: &mut V, distances: &[Distance], target: &Distance) -> usize
-    where
-        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
-    {
-        let mut left = 0;
-        let mut right = distances.len();
-
-        while left < right {
-            let mid = left + (right - left) / 2;
-
-            match store.less_than(&distances[mid], target).await {
-                true => left = mid + 1,
-                false => right = mid,
-            }
-        }
-        left
     }
 
     /// Count the neighbors that match according to `store.is_match`.

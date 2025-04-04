@@ -268,16 +268,15 @@ impl VecShare<u32> {
         res
     }
 
-    pub fn transpose_pack_u64(self) -> Vec<VecShare<u64>> {
-        self.transpose_pack_u64_with_len::<{ u32::BITS as usize }>()
-    }
-
-    pub fn transpose_pack_u64_with_len<const L: usize>(mut self) -> Vec<VecShare<u64>> {
+    /// Transposes `u32` shares into slices of bits and packs them into `u64` shares.
+    /// The result is a vector of `VecShare<u64>` with 32 elements corresponding to each bit.
+    /// The length of each `VecShare<u64>` is ceil(length of self / 64).
+    pub fn transpose_pack_u64(mut self) -> Vec<VecShare<u64>> {
         // Pad to multiple of 64
         let len = (self.shares.len() + 63) / 64;
         self.shares.resize(len * 64, Share::default());
 
-        let mut res = (0..L)
+        let mut res = (0..32)
             .map(|_| VecShare::new_vec(vec![Share::default(); len]))
             .collect::<Vec<_>>();
 
@@ -287,20 +286,19 @@ impl VecShare<u32> {
                 des.shares[j] = src;
             }
         }
-        debug_assert_eq!(res.len(), L);
+        debug_assert_eq!(res.len(), 32);
         res
     }
 
-    pub fn transpose_pack_u128(self) -> Vec<VecShare<u128>> {
-        self.transpose_pack_u128_with_len::<{ u32::BITS as usize }>()
-    }
-
-    pub fn transpose_pack_u128_with_len<const L: usize>(mut self) -> Vec<VecShare<u128>> {
+    /// Transposes `u32` shares into slices of bits and packs them into `u128` shares.
+    /// The result is a vector of `VecShare<u128>` with 32 elements corresponding to each bit.
+    /// The length of each `VecShare<u128>` is ceil(length of self / 128).
+    pub fn transpose_pack_u128(mut self) -> Vec<VecShare<u128>> {
         // Pad to multiple of 128
         let len = (self.shares.len() + 127) / 128;
         self.shares.resize(len * 128, Share::default());
 
-        let mut res = (0..L)
+        let mut res = (0..32)
             .map(|_| VecShare::new_vec(vec![Share::default(); len]))
             .collect::<Vec<_>>();
 
@@ -310,7 +308,7 @@ impl VecShare<u32> {
                 des.shares[j] = src;
             }
         }
-        debug_assert_eq!(res.len(), L);
+        debug_assert_eq!(res.len(), 32);
         res
     }
 }

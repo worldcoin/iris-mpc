@@ -528,7 +528,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        connection_parallelism: config.hawk_connection_parallelism,
         disable_persistence: config.disable_persistence,
+        match_distances_buffer_size: config.match_distances_buffer_size,
+        n_buckets: config.n_buckets,
     };
 
     tracing::info!(
@@ -702,6 +705,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
+
         let mut next_batch = receive_batch(
             party_id,
             &aws_clients.sqs_client,

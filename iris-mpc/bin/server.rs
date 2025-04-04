@@ -25,12 +25,13 @@ use iris_mpc_common::{
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
-            SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ResetCheckRequest, SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+            RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
-            UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+            ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
             ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::{Modification, SyncResult, SyncState},
@@ -76,26 +77,32 @@ type GaloisShares = (
     Vec<GaloisRingTrimmedMaskCodeShare>,
     Vec<GaloisRingIrisCodeShare>,
     Vec<GaloisRingTrimmedMaskCodeShare>,
+    Vec<GaloisRingIrisCodeShare>,
+    Vec<GaloisRingTrimmedMaskCodeShare>,
 );
 type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingTrimmedMaskCodeShare =
-        GaloisRingIrisCodeShare::from_base64(&mask_share)
-            .context("Failed to base64 parse iris mask")?
-            .into();
+    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
+        .context("Failed to base64 parse iris mask")?;
 
     Ok((iris_share, mask_share))
+}
+
+fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
+    mask.into()
 }
 
 fn preprocess_iris_message_shares(
     code_share: GaloisRingIrisCodeShare,
     mask_share: GaloisRingTrimmedMaskCodeShare,
+    code_share_mirrored: GaloisRingIrisCodeShare,
+    mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
 ) -> eyre::Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
@@ -112,6 +119,15 @@ fn preprocess_iris_message_shares(
     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
     GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
+    // Mirrored share and mask.
+    // Only interested in the Lagrange interpolated share and mask for the mirrored case.
+    let mut code_share_mirrored = code_share_mirrored;
+    let mut mask_share_mirrored = mask_share_mirrored;
+
+    // With Lagrange interpolation.
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
+
     Ok((
         store_iris_shares,
         store_mask_shares,
@@ -119,6 +135,8 @@ fn preprocess_iris_message_shares(
         db_mask_shares,
         code_share.all_rotations(),
         mask_share.all_rotations(),
+        code_share_mirrored.all_rotations(),
+        mask_share_mirrored.all_rotations(),
     ))
 }
 
@@ -135,6 +153,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -368,34 +387,35 @@ async fn receive_batch(
 
                         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-                        if reauth_request.use_or_rule
-                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                        {
-                            tracing::error!(
+                        if config.enable_reauth {
+                            if reauth_request.use_or_rule
+                                && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                            {
+                                tracing::error!(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
-                            continue;
-                        }
+                                continue;
+                            }
 
-                        if modifications.contains_key(&reauth_request.serial_id) {
-                            tracing::warn!(
+                            if modifications.contains_key(&reauth_request.serial_id) {
+                                tracing::warn!(
                                 "Received another modification operation in batch: {}. Skipping",
                                 reauth_request.serial_id
                             );
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                reauth_request.serial_id as i64,
-                                REAUTH_MESSAGE_TYPE,
-                                Some(reauth_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        modifications.insert(reauth_request.serial_id, modification);
+                                continue;
+                            }
 
-                        if config.enable_reauth {
                             msg_counter += 1;
+
+                            let modification = store
+                                .insert_modification(
+                                    reauth_request.serial_id as i64,
+                                    REAUTH_MESSAGE_TYPE,
+                                    Some(reauth_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            modifications.insert(reauth_request.serial_id, modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -453,6 +473,64 @@ async fn receive_batch(
                         }
                     }
 
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
+
+                        let reset_check_request: ResetCheckRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("Reset check request", e)
+                            })?;
+                        metrics::counter!("request.received", "type" => "reset_check").increment(1);
+
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        if config.enable_reset {
+                            msg_counter += 1;
+
+                            if let Some(batch_size) = reset_check_request.batch_size {
+                                *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                    batch_size.clamp(1, max_batch_size);
+                                tracing::info!("Updating batch size to {}", batch_size);
+                            }
+
+                            batch_query
+                                .request_ids
+                                .push(reset_check_request.reset_id.clone());
+                            batch_query
+                                .request_types
+                                .push(RESET_CHECK_MESSAGE_TYPE.to_string());
+                            batch_query.metadata.push(batch_metadata);
+                            batch_query.sns_message_ids.push(sns_message_id);
+
+                            // skip_persistence is only used for uniqueness requests
+                            batch_query.skip_persistence.push(false);
+
+                            // We need to use AND rule for reset check requests
+                            batch_query.or_rule_indices.push(vec![]);
+
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = s3_client.clone();
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reset_check_request.s3_key.clone();
+                            let handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                            )?;
+
+                            handles.push(handle);
+                        }
+                    }
+
                     _ => {
                         client
                             .delete_message()
@@ -479,6 +557,8 @@ async fn receive_batch(
                     db_mask_shares_left,
                     iris_shares_left,
                     mask_shares_left,
+                    iris_shares_left_mirrored,
+                    mask_shares_left_mirrored,
                 ),
                 (
                     store_iris_shares_right,
@@ -487,6 +567,8 @@ async fn receive_batch(
                     db_mask_shares_right,
                     iris_shares_right,
                     mask_shares_right,
+                    iris_shares_right_mirrored,
+                    mask_shares_right_mirrored,
                 ),
             ),
             valid_entry,
@@ -520,6 +602,15 @@ async fn receive_batch(
                         let serialized = serde_json::to_string(&message).unwrap();
                         (reauth_error_result_attributes, serialized)
                     }
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let message = ResetCheckResult::new_error_result(
+                            request_id.clone(),
+                            config.party_id,
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (reset_error_result_attributes, serialized)
+                    }
                     _ => unreachable!(), // we don't push a handle for unknown message types
                 };
 
@@ -545,10 +636,14 @@ async fn receive_batch(
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                         ),
                         (
                             dummy_code_share.clone(),
                             dummy_mask_share.clone(),
+                            dummy_code_share.clone().all_rotations(),
+                            dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
                             dummy_mask_share.clone().all_rotations(),
                             dummy_code_share.clone().all_rotations(),
@@ -611,6 +706,22 @@ async fn receive_batch(
             .right_iris_interpolated_requests
             .mask
             .extend(mask_shares_right);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_left_mirrored);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_left_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .code
+            .extend(iris_shares_right_mirrored);
+        batch_query
+            .right_mirrored_iris_interpolated_requests
+            .mask
+            .extend(mask_shares_right_mirrored);
     }
 
     tracing::info!(
@@ -637,7 +748,7 @@ fn get_iris_shares_parse_task(
         tokio::spawn(async move {
             let _ = semaphore.acquire().await?;
 
-            let (share_b64, hash) =
+            let (encrypted_iris_share_b64, hash) =
                 match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
                     .await
                 {
@@ -648,16 +759,18 @@ fn get_iris_shares_parse_task(
                     }
                 };
 
-            let iris_message_share =
-                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
-                    Ok(iris_data) => iris_data,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                        eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                    }
-                };
+            let iris_share_b64 = match decrypt_iris_share(
+                encrypted_iris_share_b64,
+                shares_encryption_key_pairs.clone(),
+            ) {
+                Ok(iris_data) => iris_data,
+                Err(e) => {
+                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
+                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
+                }
+            };
 
-            match validate_iris_share(hash, iris_message_share.clone()) {
+            match validate_iris_share(hash, iris_share_b64.clone()) {
                 Ok(_) => {}
                 Err(e) => {
                     tracing::error!("Failed to validate iris shares: {:?}", e);
@@ -666,22 +779,42 @@ fn get_iris_shares_parse_task(
             }
 
             let (left_code, left_mask) = decode_iris_message_shares(
-                iris_message_share.left_iris_code_shares,
-                iris_message_share.left_mask_code_shares,
+                iris_share_b64.left_iris_code_shares,
+                iris_share_b64.left_mask_code_shares,
             )?;
 
             let (right_code, right_mask) = decode_iris_message_shares(
-                iris_message_share.right_iris_code_shares,
-                iris_message_share.right_mask_code_shares,
+                iris_share_b64.right_iris_code_shares,
+                iris_share_b64.right_mask_code_shares,
             )?;
 
-            // Preprocess shares for left eye.
-            let left_future =
-                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
+            let (left_code_mirrored, left_mask_mirrored) =
+                (left_code.mirrored(), left_mask.mirrored());
+            let (right_code_mirrored, right_mask_mirrored) =
+                (right_code.mirrored(), right_mask.mirrored());
 
-            // Preprocess shares for right eye.
-            let right_future =
-                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
+            let left_mask_trimmed = trim_mask(left_mask);
+            let right_mask_trimmed = trim_mask(right_mask);
+            let left_mask_mirrored_trimmed = trim_mask(left_mask_mirrored);
+            let right_mask_mirrored_trimmed = trim_mask(right_mask_mirrored);
+
+            let left_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    left_code,
+                    left_mask_trimmed,
+                    left_code_mirrored,
+                    left_mask_mirrored_trimmed,
+                )
+            });
+
+            let right_future = spawn_blocking(move || {
+                preprocess_iris_message_shares(
+                    right_code,
+                    right_mask_trimmed,
+                    right_code_mirrored,
+                    right_mask_mirrored_trimmed,
+                )
+            });
 
             let (left_result, right_result) = tokio::join!(left_future, right_future);
 
@@ -857,6 +990,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -1579,6 +1713,38 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<Vec<String>>();
 
+            let reset_check_results = request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, request_type)| *request_type == RESET_CHECK_MESSAGE_TYPE)
+                .map(|(i, _)| {
+                    let reset_id = request_ids[i].clone();
+                    let result_event = ResetCheckResult::new(
+                        reset_id.clone(),
+                        party_id,
+                        Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
+                        Some(
+                            partial_match_ids_left[i]
+                                .iter()
+                                .map(|x| x + 1)
+                                .collect::<Vec<_>>(),
+                        ),
+                        Some(
+                            partial_match_ids_right[i]
+                                .iter()
+                                .map(|x| x + 1)
+                                .collect::<Vec<_>>(),
+                        ),
+                        Some(matched_batch_request_ids[i].clone()),
+                        Some(partial_match_counters_right[i]),
+                        Some(partial_match_counters_left[i]),
+                    );
+
+                    serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset check result")
+                })
+                .collect::<Vec<String>>();
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
@@ -1678,6 +1844,19 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await?;
 
+            if !reset_check_results.is_empty() {
+                tracing::info!("Sending {} reset check results", reset_check_results.len());
+                send_results_to_sns(
+                    reset_check_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &reset_result_attributes,
+                    RESET_CHECK_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
             if (config_bg.enable_sending_anonymized_stats_message)
                 && (!anonymized_bucket_statistics_left.buckets.is_empty()
                     || !anonymized_bucket_statistics_right.buckets.is_empty())
@@ -1774,6 +1953,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_error_result_attribute = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
@@ -1806,6 +1986,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &shutdown_handler,
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
+            &reset_error_result_attribute,
         );
 
         loop {
@@ -1859,6 +2040,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &shutdown_handler,
                 &uniqueness_error_result_attribute,
                 &reauth_error_result_attribute,
+                &reset_error_result_attribute,
             );
 
             // await the result
@@ -1919,7 +2101,8 @@ async fn load_db_records<'a>(
         let iris = iris.unwrap();
 
         actor.load_single_record_from_db(
-            iris.index() - 1,
+            iris.serial_id() - 1,
+            iris.vector_id(),
             iris.left_code(),
             iris.left_mask(),
             iris.right_code(),
@@ -1927,9 +2110,9 @@ async fn load_db_records<'a>(
         );
 
         // Only increment db size if record has not been loaded via s3 before
-        if all_serial_ids.contains(&(iris.index() as i64)) {
-            actor.increment_db_size(iris.index() - 1);
-            all_serial_ids.remove(&(iris.index() as i64));
+        if all_serial_ids.contains(&(iris.serial_id() as i64)) {
+            actor.increment_db_size(iris.serial_id() - 1);
+            all_serial_ids.remove(&(iris.serial_id() as i64));
             record_counter += 1;
         }
 
@@ -2058,7 +2241,7 @@ async fn load_db(
         while let Some(iris) = rx.recv().await {
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
-            let index = iris.index();
+            let index = iris.serial_id();
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
@@ -2076,7 +2259,8 @@ async fn load_db(
             }
 
             actor.load_single_record_from_s3(
-                iris.index() - 1,
+                iris.serial_id() - 1,
+                iris.vector_id(),
                 iris.left_code_odd(),
                 iris.left_code_even(),
                 iris.right_code_odd(),

@@ -172,8 +172,14 @@ pub struct Config {
     #[serde(default)]
     pub enable_reauth: bool,
 
+    #[serde(default)]
+    pub enable_reset: bool,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
+
+    #[serde(default = "default_hawk_connection_parallelism")]
+    pub hawk_connection_parallelism: usize,
 
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
@@ -206,6 +212,8 @@ pub struct Config {
 
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
+
+    pub hawk_server_resets_enabled: bool,
 
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
@@ -303,6 +311,10 @@ fn default_hawk_request_parallelism() -> usize {
     10
 }
 
+fn default_hawk_connection_parallelism() -> usize {
+    10
+}
+
 fn default_hawk_server_healthcheck_port() -> usize {
     300
 }
@@ -324,6 +336,10 @@ fn default_sqs_sync_long_poll_seconds() -> i32 {
 }
 
 fn default_hawk_server_reauths_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_resets_enabled() -> bool {
     false
 }
 

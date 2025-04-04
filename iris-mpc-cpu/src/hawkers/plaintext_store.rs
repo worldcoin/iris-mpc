@@ -18,6 +18,8 @@ use std::{
 };
 use tracing::debug;
 
+use super::aby3::aby3_store::VectorId;
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
 
@@ -107,6 +109,12 @@ impl From<u32> for PointId {
     }
 }
 
+impl From<PointId> for VectorId {
+    fn from(id: PointId) -> Self {
+        VectorId::from_0_index(id.0)
+    }
+}
+
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: Vec<PlaintextPoint>,
@@ -132,6 +140,10 @@ impl VectorStore for PlaintextStore {
     type QueryRef = PointId; // Vector ID, pending insertion.
     type VectorRef = PointId; // Vector ID, inserted.
     type DistanceRef = (u16, u16);
+
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+        vectors
+    }
 
     async fn eval_distance(
         &mut self,

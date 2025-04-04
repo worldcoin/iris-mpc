@@ -31,11 +31,13 @@ rand_distr = "0.4.3"
 rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
+siphasher = "1"
 static_assertions.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tonic = "0.12.3"
+metrics = "0.22.1"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
 tracing-subscriber.workspace = true
@@ -54,6 +56,10 @@ db_dependent = []
 
 [[bench]]
 name = "hnsw"
+harness = false
+
+[[bench]]
+name = "set_hash"
 harness = false
 
 [[example]]

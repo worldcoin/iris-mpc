@@ -111,6 +111,15 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
 
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_LOOKBACK_RECORDS
+    value: "500"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+    value: "true"
+
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
@@ -142,6 +151,15 @@ env:
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "20"
+
+  - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
 
 initContainer:
   enabled: true

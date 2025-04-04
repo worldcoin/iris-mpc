@@ -21,7 +21,7 @@ impl<T> Ref for T where
 
 /// The operations exposed by a vector store, sufficient for a search algorithm.
 #[allow(async_fn_in_trait)]
-pub trait VectorStore: Clone + Debug {
+pub trait VectorStore: Debug {
     /// Opaque reference to a query.
     ///
     /// Example: a preprocessed representation optimized for distance
@@ -58,7 +58,25 @@ pub trait VectorStore: Clone + Debug {
 
     // Batch variants
 
-    /// Evaluate the distances between a query and a batch of vectors.
+    /// Prepare queries from vectors. The query form may include some precomputation
+    /// to help comparison to other vectors.
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
+
+    /// Evaluate the distance between pairs of (query, vector), in batch.
+    /// The default implementation is a loop over `eval_distance`.
+    /// Override for more efficient batch distance evaluations.
+    async fn eval_distance_pairs(
+        &mut self,
+        pairs: &[(Self::QueryRef, Self::VectorRef)],
+    ) -> Vec<Self::DistanceRef> {
+        let mut results = Vec::with_capacity(pairs.len());
+        for (query, vector) in pairs {
+            results.push(self.eval_distance(query, vector).await);
+        }
+        results
+    }
+
+    /// Evaluate the distances between all queries and all vectors (cartesian product).
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.
     async fn eval_distance_batch(
@@ -86,7 +104,8 @@ pub trait VectorStore: Clone + Debug {
         results
     }
 
-    /// Compare a distance with a batch of distances.
+    /// Compare pairs of distances in batch. For each pair (a, b),
+    /// return the boolean `a < b`.
     /// The default implementation is a loop over `less_than`.
     /// Override for more efficient batch comparisons.
     async fn less_than_batch(
