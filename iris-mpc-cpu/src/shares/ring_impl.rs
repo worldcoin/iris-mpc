@@ -36,7 +36,7 @@ impl<T: IntRing2k> Iterator for BitIter<'_, T> {
         } else {
             let bit = ((self.bits.0 >> self.index) & T::one()) == T::one();
             self.index += 1;
-            Some(Bit(bit as u8))
+            Some(Bit::new(bit))
         }
     }
 
@@ -91,7 +91,7 @@ impl<T: IntRing2k> RingElement<T> {
 
     pub(crate) fn get_bit_as_bit(&self, index: usize) -> RingElement<Bit> {
         let bit = ((self.0 >> index) & T::one()) == T::one();
-        RingElement(Bit(bit as u8))
+        RingElement(Bit::new(bit))
     }
 }
 
@@ -429,11 +429,171 @@ mod unsafe_test {
         }
     }
 
+    fn test_get_bit<T: IntRing2k>()
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = AesRng::from_entropy();
+        let t_vec: Vec<T> = (0..ELEMENTS).map(|_| rng.gen()).collect();
+        let rt_vec: Vec<RingElement<T>> = t_vec.iter().cloned().map(RingElement).collect();
+
+        for i in 0..ELEMENTS {
+            let mut bit_iter = rt_vec[i].bit_iter();
+            for j in 0..T::K {
+                let expected_bit_t = (t_vec[i] >> j) & T::one();
+                assert_eq!(expected_bit_t, rt_vec[i].get_bit(j).0);
+                let expected_bit: Bit = (expected_bit_t == T::one()).into();
+                assert_eq!(Some(expected_bit), bit_iter.next());
+                assert_eq!(bit_iter.size_hint(), (T::K - j - 1, Some(T::K - j - 1)));
+            }
+        }
+    }
+
+    fn arithmetic_test<T: IntRing2k>()
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = AesRng::from_entropy();
+        let a_t: T = rng.gen();
+        let b_t: T = rng.gen();
+        let b_t_ref = &b_t;
+        let a = RingElement(a_t);
+        let b = RingElement(b_t);
+        let b_ref = &b;
+
+        // Addition
+        let expected_add = RingElement(a_t.wrapping_add(&b_t));
+        assert_eq!(a + b, expected_add);
+        assert_eq!(a + b_ref, expected_add);
+        let mut c = a;
+        c += b;
+        assert_eq!(c, expected_add);
+        c = a;
+        c += b_ref;
+        assert_eq!(c, expected_add);
+
+        // Subtraction
+        let expected_sub = RingElement(a_t.wrapping_sub(&b_t));
+        assert_eq!(a - b, expected_sub);
+        assert_eq!(a - b_ref, expected_sub);
+        c = a;
+        c -= b;
+        assert_eq!(c, expected_sub);
+        c = a;
+        c -= b_ref;
+        assert_eq!(c, expected_sub);
+
+        // Multiplication
+        let expected_mul = RingElement(a_t.wrapping_mul(&b_t));
+        assert_eq!(a * b, expected_mul);
+        assert_eq!(a * b_ref, expected_mul);
+        c = a;
+        c *= b;
+        assert_eq!(c, expected_mul);
+        c = a;
+        c *= b_ref;
+        assert_eq!(c, expected_mul);
+        assert_eq!(a * b_t, expected_mul);
+        assert_eq!(a * b_t_ref, expected_mul);
+        c = a;
+        c *= b_t;
+        assert_eq!(c, expected_mul);
+        c = a;
+        c *= b_t_ref;
+        assert_eq!(c, expected_mul);
+
+        // Negation
+        let expected_neg = RingElement(a_t.wrapping_neg());
+        assert_eq!(-a, expected_neg);
+
+        // NOT
+        let expected_not = RingElement(!a_t);
+        assert_eq!(!a, expected_not);
+
+        // XOR
+        let expected_xor = RingElement(a_t ^ b_t);
+        assert_eq!(a ^ b, expected_xor);
+        assert_eq!(a ^ b_ref, expected_xor);
+        c = a;
+        c ^= b;
+        assert_eq!(c, expected_xor);
+        c = a;
+        c ^= b_ref;
+        assert_eq!(c, expected_xor);
+
+        // OR
+        let expected_or = RingElement(a_t | b_t);
+        assert_eq!(a | b, expected_or);
+        assert_eq!(a | b_ref, expected_or);
+        c = a;
+        c |= b;
+        assert_eq!(c, expected_or);
+        c = a;
+        c |= b_ref;
+        assert_eq!(c, expected_or);
+
+        // AND
+        let expected_and = RingElement(a_t & b_t);
+        assert_eq!(a & b, expected_and);
+        assert_eq!(a & b_ref, expected_and);
+        assert_eq!(a & b_t, expected_and);
+        c = a;
+        c &= b;
+        assert_eq!(c, expected_and);
+        c = a;
+        c &= b_ref;
+        assert_eq!(c, expected_and);
+
+        // Shift left
+        let expected_shl = RingElement(a_t.wrapping_shl(1));
+        assert_eq!(a << 1, expected_shl);
+        c = a;
+        c <<= 1;
+        assert_eq!(c, expected_shl);
+
+        // Shift right
+        let expected_shr = RingElement(a_t.wrapping_shr(1));
+        assert_eq!(a >> 1, expected_shr);
+        c = a;
+        c >>= 1;
+        assert_eq!(c, expected_shr);
+
+        // Remainder
+        if !b_t.is_zero() {
+            let expected_rem = RingElement(a_t % b_t);
+            assert_eq!(a % b_t, expected_rem);
+        }
+    }
+
+    fn identities_test<T: IntRing2k>() {
+        let one: RingElement<T> = RingElement::one();
+        assert!(!one.is_zero());
+        assert!(one.is_one());
+        let zero = RingElement::zero();
+        assert!(zero.is_zero());
+        assert!(!zero.is_one());
+        assert_eq!(one, zero + one);
+    }
+
+    fn display_test<T: IntRing2k>()
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = AesRng::from_entropy();
+        let a_t: T = rng.gen();
+        let a = RingElement(a_t);
+        assert_eq!(format!("{}", a), format!("{}", a_t));
+    }
+
     macro_rules! test_impl {
         ($([$ty:ty,$fn:ident]),*) => ($(
             #[test]
             fn $fn() {
                 conversion_test::<$ty>();
+                test_get_bit::<$ty>();
+                arithmetic_test::<$ty>();
+                identities_test::<$ty>();
+                display_test::<$ty>();
             }
         )*)
     }
