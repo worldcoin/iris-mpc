@@ -213,6 +213,7 @@ pub struct Config {
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
 
+    #[serde(default = "default_hawk_server_resets_enabled")]
     pub hawk_server_resets_enabled: bool,
 
     #[serde(default = "default_full_scan_side")]
