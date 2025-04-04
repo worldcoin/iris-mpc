@@ -92,7 +92,7 @@ impl JobSubmissionHandle for ServerActorHandle {
     }
 }
 
-const DB_CHUNK_SIZE: usize = 1 << 15;
+pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
@@ -408,8 +408,14 @@ impl ServerActor {
         let query_db_size = vec![n_queries; device_manager.device_count()];
         let current_db_sizes = vec![0; device_manager.device_count()];
 
-        let code_chunk_buffers = vec![codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
-        let mask_chunk_buffers = vec![masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE); 2];
+        let code_chunk_buffers = vec![
+            codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+            codes_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+        ];
+        let mask_chunk_buffers = vec![
+            masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+            masks_engine.alloc_db_chunk_buffer(DB_CHUNK_SIZE),
+        ];
 
         // Create all needed events
         let phase1_events = vec![device_manager.create_events(); 2];
@@ -736,6 +742,39 @@ impl ServerActor {
         );
 
         ///////////////////////////////////////////////////////////////////
+        // FETCH PARTIAL LEFT RESULTS
+        ///////////////////////////////////////////////////////////////////
+        tracing::info!("Fetching partial left results");
+        let mut partial_matches_left = self.distance_comparator.get_partial_results(
+            &self.db_match_list_left,
+            &self.current_db_sizes,
+            &self.streams[0],
+        );
+
+        // also add the OR rule indices to the partial matches
+        let or_indices = batch
+            .or_rule_indices
+            .iter()
+            .flatten()
+            .copied()
+            .unique()
+            .collect_vec();
+
+        for or_idx in or_indices {
+            let device_idx = or_idx % self.device_manager.device_count() as u32;
+            let db_idx = or_idx / self.device_manager.device_count() as u32;
+            if db_idx as usize >= self.current_db_sizes[device_idx as usize] {
+                tracing::warn!(
+                    "OR rule index {} is out of bounds for device {}",
+                    or_idx,
+                    device_idx
+                );
+                continue;
+            }
+            partial_matches_left[device_idx as usize].push(db_idx);
+        }
+
+        ///////////////////////////////////////////////////////////////////
         // COMPARE RIGHT EYE QUERIES
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing right eye queries");
@@ -779,14 +818,35 @@ impl ServerActor {
             }
         );
 
-        tracing::info!("Comparing right eye queries against DB and self");
-        self.compare_query_against_db_and_self(
-            &compact_device_queries_right,
-            &compact_device_sums_right,
-            &mut events,
-            Eye::Right,
-            batch_size,
-        );
+        if partial_matches_left
+            .iter()
+            .any(|x| x.len() >= DB_CHUNK_SIZE)
+        {
+            tracing::warn!(
+                "Partial matches left too large, doing full match: {} > {}",
+                partial_matches_left.len(),
+                DB_CHUNK_SIZE
+            );
+
+            tracing::info!("Comparing right eye queries against DB and self");
+            self.compare_query_against_db_and_self(
+                &compact_device_queries_right,
+                &compact_device_sums_right,
+                &mut events,
+                Eye::Right,
+                batch_size,
+            );
+        } else {
+            tracing::info!("Comparing right eye queries against DB subset");
+            self.compare_query_against_db_subset_and_self(
+                &compact_device_queries_right,
+                &compact_device_sums_right,
+                &mut events,
+                Eye::Right,
+                batch_size,
+                &partial_matches_left,
+            );
+        }
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1248,27 +1308,9 @@ impl ServerActor {
         Ok(())
     }
 
-    fn compare_query_against_db_and_self(
-        &mut self,
-        compact_device_queries: &DeviceCompactQuery,
-        compact_device_sums: &DeviceCompactSums,
-        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
-        eye_db: Eye,
-        batch_size: usize,
-    ) {
-        let batch_streams = &self.streams[0];
-        let batch_cublas = &self.cublas_handles[0];
-
-        // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
-        };
-
-        let (db_match_bitmap, batch_match_bitmap) = match eye_db {
-            Eye::Left => (&self.db_match_list_left, &self.batch_match_list_left),
-            Eye::Right => (&self.db_match_list_right, &self.batch_match_list_right),
-        };
+    fn try_calculate_bucket_stats(&mut self, eye_db: Eye) {
+        // we use the batch_streams for this
+        let streams = &self.streams[0];
 
         let (
             match_distances_buffers_codes,
@@ -1289,7 +1331,6 @@ impl ServerActor {
                 &self.match_distances_indices_right,
             ),
         };
-
         let bucket_distance_counters = self
             .device_manager
             .devices()
@@ -1318,14 +1359,13 @@ impl ServerActor {
                 }
             );
 
-            self.device_manager.await_streams(batch_streams);
+            self.device_manager.await_streams(streams);
 
             let indices = match_distances_indices
                 .iter()
                 .enumerate()
                 .map(|(i, x)| {
-                    dtoh_on_stream_sync(x, &self.device_manager.device(i), &batch_streams[i])
-                        .unwrap()
+                    dtoh_on_stream_sync(x, &self.device_manager.device(i), &streams[i]).unwrap()
                 })
                 .collect::<Vec<_>>();
 
@@ -1342,7 +1382,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_codes,
                 self.match_distances_buffer_size,
-                batch_streams,
+                streams,
             );
 
             let match_distances_buffers_codes_view =
@@ -1353,7 +1393,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_masks,
                 self.match_distances_buffer_size,
-                batch_streams,
+                streams,
             );
 
             let match_distances_buffers_masks_view =
@@ -1362,7 +1402,7 @@ impl ServerActor {
             self.phase2_buckets.compare_multiple_thresholds(
                 &match_distances_buffers_codes_view,
                 &match_distances_buffers_masks_view,
-                batch_streams,
+                streams,
                 &(1..=self.n_buckets)
                     .map(|x: usize| {
                         Circuits::translate_threshold_a(
@@ -1373,9 +1413,7 @@ impl ServerActor {
                 &mut self.buckets,
             );
 
-            let buckets = self
-                .phase2_buckets
-                .open_buckets(&self.buckets, batch_streams);
+            let buckets = self.phase2_buckets.open_buckets(&self.buckets, streams);
 
             tracing::info!("Buckets: {:?}", buckets);
 
@@ -1412,11 +1450,11 @@ impl ServerActor {
                  codes: &[ChunkShare<u16>],
                  masks: &[ChunkShare<u16>],
                  buckets: &ChunkShare<u32>| {
-                    reset_slice(self.device_manager.devices(), counter, 0, batch_streams);
-                    reset_slice(self.device_manager.devices(), indices, 0xff, batch_streams);
-                    reset_share(self.device_manager.devices(), masks, 0xff, batch_streams);
-                    reset_share(self.device_manager.devices(), codes, 0xff, batch_streams);
-                    reset_single_share(self.device_manager.devices(), buckets, 0, batch_streams, 0);
+                    reset_slice(self.device_manager.devices(), counter, 0, streams);
+                    reset_slice(self.device_manager.devices(), indices, 0xff, streams);
+                    reset_share(self.device_manager.devices(), masks, 0xff, streams);
+                    reset_share(self.device_manager.devices(), codes, 0xff, streams);
+                    reset_single_share(self.device_manager.devices(), buckets, 0, streams, 0);
                 };
 
             match eye_db {
@@ -1440,10 +1478,26 @@ impl ServerActor {
                 }
             }
 
-            self.device_manager.await_streams(batch_streams);
+            self.device_manager.await_streams(streams);
 
             tracing::info!("Bucket calculation took {:?}", now.elapsed());
         }
+    }
+
+    fn compare_query_against_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+    ) {
+        let batch_streams = &self.streams[0];
+        let batch_cublas = &self.cublas_handles[0];
+
+        let batch_match_bitmap = match eye_db {
+            Eye::Left => &self.batch_match_list_left,
+            Eye::Right => &self.batch_match_list_right,
+        };
 
         // ---- START BATCH DEDUP ----
         tracing::info!(party_id = self.party_id, "Starting batch deduplication");
@@ -1537,7 +1591,220 @@ impl ServerActor {
         self.phase2_batch.return_result_buffer(res);
 
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
+    }
+
+    fn compare_query_against_db_subset_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+        batch_size: usize,
+        db_subset_idx: &[Vec<u32>],
+    ) {
+        assert!(
+            eye_db == Eye::Right,
+            "We expect this to be called for the right eye only"
+        );
+
+        // we try to calculate the bucket stats here if we have collected enough of them
+        self.try_calculate_bucket_stats(eye_db);
+
+        // ---- START BATCH DEDUP ----
+        self.compare_query_against_self(
+            compact_device_queries,
+            compact_device_sums,
+            events,
+            eye_db,
+        );
         // ---- END BATCH DEDUP ----
+
+        // if the subset is completely empty, we can skip the whole process after we do the batch check
+        if db_subset_idx.iter().all(|x| x.is_empty()) {
+            return;
+        }
+
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+
+        // We copied over a subset of the db, so we match against DB chunks of the given sizes
+        let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
+        let dot_chunk_size = chunk_size
+            .iter()
+            .map(|&s| (s.max(1).div_ceil(64) * 64))
+            .collect::<Vec<_>>();
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "prefetch_db_chunk",
+            self.enable_debug_timing,
+            {
+                self.codes_engine.prefetch_db_subset_into_chunk_buffers(
+                    code_db_slices,
+                    &self.code_chunk_buffers[0],
+                    db_subset_idx,
+                    &self.streams[0],
+                );
+                self.masks_engine.prefetch_db_subset_into_chunk_buffers(
+                    mask_db_slices,
+                    &self.mask_chunk_buffers[0],
+                    db_subset_idx,
+                    &self.streams[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_dot",
+            self.enable_debug_timing,
+            {
+                compact_device_queries.dot_products_against_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    &CudaVec2DSlicerRawPointer::from(&self.code_chunk_buffers[0]),
+                    &CudaVec2DSlicerRawPointer::from(&self.mask_chunk_buffers[0]),
+                    &dot_chunk_size,
+                    0,
+                    &self.streams[0],
+                    &self.cublas_handles[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_reduce",
+            self.enable_debug_timing,
+            {
+                compact_device_sums.compute_dot_reducer_against_prepared_db(
+                    &mut self.codes_engine,
+                    &mut self.masks_engine,
+                    &self.code_chunk_buffers[0].sums,
+                    &self.mask_chunk_buffers[0].sums,
+                    &dot_chunk_size,
+                    &self.streams[0],
+                );
+            }
+        );
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_reshare",
+            self.enable_debug_timing,
+            {
+                self.codes_engine
+                    .reshare_results(&dot_chunk_size, &self.streams[0]);
+                self.masks_engine
+                    .reshare_results(&dot_chunk_size, &self.streams[0]);
+            }
+        );
+
+        // ---- END PHASE 1 ----
+
+        // ---- START PHASE 2 ----
+        let max_chunk_size = dot_chunk_size.iter().max().copied().unwrap();
+        let phase_2_chunk_sizes = vec![max_chunk_size; self.device_manager.device_count()];
+        let code_dots = self.codes_engine.result_chunk_shares(&phase_2_chunk_sizes);
+        let mask_dots = self.masks_engine.result_chunk_shares(&phase_2_chunk_sizes);
+
+        assert_eq!(
+            (max_chunk_size * self.max_batch_size * ROTATIONS) % 64,
+            0,
+            "Phase 2 input size must be a multiple of 64"
+        );
+        self.phase2
+            .set_chunk_size(max_chunk_size * self.max_batch_size * ROTATIONS / 64);
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_threshold",
+            self.enable_debug_timing,
+            {
+                self.phase2
+                    .compare_threshold_masked_many(&code_dots, &mask_dots, &self.streams[0]);
+            }
+        );
+
+        let res = self.phase2.take_result_buffer();
+
+        let db_match_bitmap = match eye_db {
+            Eye::Left => &self.db_match_list_left,
+            Eye::Right => &self.db_match_list_right,
+        };
+
+        // ignore all device results where the chunk size is 0
+        let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
+
+        record_stream_time!(
+            &self.device_manager,
+            &self.streams[0],
+            events,
+            "db_open",
+            self.enable_debug_timing,
+            {
+                open_subset_results(
+                    &mut self.phase2,
+                    &res,
+                    &self.distance_comparator,
+                    db_match_bitmap,
+                    max_chunk_size * self.max_batch_size * ROTATIONS / 64,
+                    &dot_chunk_size,
+                    &chunk_size,
+                    &self.current_db_sizes,
+                    &ignore_device_results,
+                    batch_size,
+                    &self.streams[0],
+                    db_subset_idx,
+                );
+                self.phase2.return_result_buffer(res);
+            }
+        );
+    }
+
+    fn compare_query_against_db_and_self(
+        &mut self,
+        compact_device_queries: &DeviceCompactQuery,
+        compact_device_sums: &DeviceCompactSums,
+        events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
+        eye_db: Eye,
+        batch_size: usize,
+    ) {
+        // we try to calculate the bucket stats here if we have collected enough of them
+        self.try_calculate_bucket_stats(eye_db);
+
+        // ---- START BATCH DEDUP ----
+        self.compare_query_against_self(
+            compact_device_queries,
+            compact_device_sums,
+            events,
+            eye_db,
+        );
+        // ---- END BATCH DEDUP ----
+
+        // which database are we querying against
+        let (code_db_slices, mask_db_slices) = match eye_db {
+            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
+            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        };
+
+        let db_match_bitmap = match eye_db {
+            Eye::Left => &self.db_match_list_left,
+            Eye::Right => &self.db_match_list_right,
+        };
 
         let chunk_sizes = |chunk_idx: usize| {
             self.current_db_sizes
@@ -1639,7 +1906,7 @@ impl ServerActor {
             // ---- START PHASE 1 ----
             record_stream_time!(
                 &self.device_manager,
-                batch_streams,
+                request_streams,
                 events,
                 "db_dot",
                 self.enable_debug_timing,
@@ -1732,6 +1999,27 @@ impl ServerActor {
                 );
 
                 let res = self.phase2.take_result_buffer();
+
+                let (
+                    match_distances_buffers_codes,
+                    match_distances_buffers_masks,
+                    match_distances_counters,
+                    match_distances_indices,
+                ) = match eye_db {
+                    Eye::Left => (
+                        &self.match_distances_buffer_codes_left,
+                        &self.match_distances_buffer_masks_left,
+                        &self.match_distances_counter_left,
+                        &self.match_distances_indices_left,
+                    ),
+                    Eye::Right => (
+                        &self.match_distances_buffer_codes_right,
+                        &self.match_distances_buffer_masks_right,
+                        &self.match_distances_counter_right,
+                        &self.match_distances_indices_right,
+                    ),
+                };
+
                 record_stream_time!(
                     &self.device_manager,
                     request_streams,
@@ -2060,6 +2348,60 @@ fn open(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn open_subset_results(
+    party: &mut Circuits,
+    x: &[ChunkShare<u64>],
+    distance_comparator: &DistanceComparator,
+    matches_bitmap: &[CudaSlice<u64>],
+    chunk_size: usize,
+    db_sizes: &[usize],
+    real_db_sizes: &[usize],
+    total_db_sizes: &[usize],
+    ignore_db_results: &[bool],
+    batch_size: usize,
+    streams: &[CudaStream],
+    index_mapping: &[Vec<u32>],
+) {
+    let n_devices = x.len();
+    let mut a = Vec::with_capacity(n_devices);
+    let mut b = Vec::with_capacity(n_devices);
+    let mut c = Vec::with_capacity(n_devices);
+
+    cudarc::nccl::result::group_start().unwrap();
+    for (idx, res) in x.iter().enumerate() {
+        // Result is in bit 0
+        let res = res.get_offset(0, chunk_size);
+        party.comms()[idx]
+            .send_view(&res.b, party.next_id(), &streams[idx])
+            .unwrap();
+        a.push(res.a);
+        b.push(res.b);
+    }
+    for (idx, res) in x.iter().enumerate() {
+        let mut res = res.get_offset(1, chunk_size);
+        party.comms()[idx]
+            .receive_view(&mut res.a, party.prev_id(), &streams[idx])
+            .unwrap();
+        c.push(res.a);
+    }
+    cudarc::nccl::result::group_end().unwrap();
+
+    distance_comparator.open_results_with_index_mapping(
+        &a,
+        &b,
+        &c,
+        matches_bitmap,
+        db_sizes,
+        real_db_sizes,
+        total_db_sizes,
+        ignore_db_results,
+        batch_size,
+        streams,
+        index_mapping,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
 fn open_batch(
     party: &mut Circuits,
     x: &[ChunkShare<u64>],
@@ -2187,7 +2529,7 @@ fn reset_share<T>(
     }
 }
 
-fn reset_slice<T>(
+pub(crate) fn reset_slice<T>(
     devs: &[Arc<CudaDevice>],
     dst: &[CudaSlice<T>],
     value: u8,
