@@ -754,7 +754,6 @@ impl ServerActor {
             }
         }
 
-        // TODO: patch the compact query creation to work with the mirror case
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
@@ -1967,13 +1966,10 @@ impl ServerActor {
         batch_size: usize,
     ) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        // TODO: design decision on how to handle bucket stats in the mirrored case
         self.try_calculate_bucket_stats(eye_db);
 
         // ---- START BATCH DEDUP ----
-        // TODO: needs modification to be able to check mirrored against the normal in the batch
         self.compare_query_against_self(
-            // TODO: refactor to be able to add mirrored query to check against
             compact_device_queries,
             compact_device_sums,
             events,
