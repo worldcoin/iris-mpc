@@ -58,8 +58,8 @@ impl StoredIris {
 
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct DbStoredIris {
-    #[allow(dead_code)]
-    id: i64, // BIGSERIAL
+    id: i64,             // BIGSERIAL
+    version_id: i16,     // SMALLINT
     left_code: Vec<u8>,  // BYTEA
     left_mask: Vec<u8>,  // BYTEA
     right_code: Vec<u8>, // BYTEA
@@ -70,6 +70,10 @@ impl DbStoredIris {
     /// The index which is contiguous and starts from 1.
     pub fn serial_id(&self) -> usize {
         self.id as usize
+    }
+
+    pub fn version_id(&self) -> i16 {
+        self.version_id
     }
 
     pub fn vector_id(&self) -> VectorId {
@@ -94,46 +98,6 @@ impl DbStoredIris {
     }
     pub fn id(&self) -> i64 {
         self.id
-    }
-}
-
-#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
-pub struct DbStoredIrisWithVersion {
-    #[allow(dead_code)]
-    id: i64, // BIGSERIAL
-    left_code: Vec<u8>,  // BYTEA
-    left_mask: Vec<u8>,  // BYTEA
-    right_code: Vec<u8>, // BYTEA
-    right_mask: Vec<u8>, // BYTEA
-    version_id: i16,     // SMALLINT
-}
-
-impl DbStoredIrisWithVersion {
-    /// The index which is contiguous and starts from 0.
-    pub fn index(&self) -> usize {
-        self.id as usize
-    }
-
-    pub fn left_code(&self) -> &[u16] {
-        cast_u8_to_u16(&self.left_code)
-    }
-
-    pub fn left_mask(&self) -> &[u16] {
-        cast_u8_to_u16(&self.left_mask)
-    }
-
-    pub fn right_code(&self) -> &[u16] {
-        cast_u8_to_u16(&self.right_code)
-    }
-
-    pub fn right_mask(&self) -> &[u16] {
-        cast_u8_to_u16(&self.right_mask)
-    }
-    pub fn id(&self) -> i64 {
-        self.id
-    }
-    pub fn version_id(&self) -> i16 {
-        self.version_id
     }
 }
 
@@ -279,16 +243,6 @@ impl Store {
             .fetch(&self.pool)
     }
 
-    /// (only for testing) Stream irises including version in order.
-    pub async fn stream_irises_with_version(
-        &self,
-    ) -> impl Stream<Item = Result<DbStoredIrisWithVersion, sqlx::Error>> + '_ {
-        sqlx::query_as::<_, DbStoredIrisWithVersion>(
-            "SELECT * FROM irises WHERE id >= 1 ORDER BY id",
-        )
-        .fetch(&self.pool)
-    }
-
     pub fn stream_irises_in_range(
         &self,
         id_range: std::ops::Range<u64>,
@@ -323,7 +277,7 @@ impl Store {
             // This base query yields `DbStoredIris`
             let stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2 AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
@@ -332,7 +286,7 @@ impl Store {
                 .fetch(&self.pool)
                 .map_err(Into::into),
                 None => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
@@ -809,18 +763,14 @@ pub mod tests {
         assert_eq!(got_par.len(), 3);
         assert_eq!(got.len(), 3);
 
-        let got_versions: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
         for i in 0..3 {
-            assert_eq!(got_versions[i].id, (i + 1) as i64);
-            assert_eq!(got_versions[i].left_code(), codes_and_masks[i].left_code);
-            assert_eq!(got_versions[i].left_mask(), codes_and_masks[i].left_mask);
-            assert_eq!(got_versions[i].right_code(), codes_and_masks[i].right_code);
-            assert_eq!(got_versions[i].right_mask(), codes_and_masks[i].right_mask);
-            assert_eq!(got_versions[i].version_id(), 0);
+            assert_eq!(got[i].serial_id(), i + 1);
+            assert_eq!(got[i].version_id(), 0);
+            assert_eq!(got[i].vector_id(), VectorId::new(i as u32 + 1, 0));
+            assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
+            assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
+            assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
+            assert_eq!(got[i].right_mask(), codes_and_masks[i].right_mask);
         }
 
         // Clean up on success.
@@ -1040,11 +990,7 @@ pub mod tests {
             .await?;
 
         // assert iris updated in db with new values
-        let got: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 2);
         assert_eq!(cast_u8_to_u16(&got[0].left_code), updated_left_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
@@ -1071,11 +1017,8 @@ pub mod tests {
             )
             .await?;
 
-        let got_second_update: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
+        let got_second_update: Vec<DbStoredIris> =
+            store.stream_irises().await.try_collect().await?;
         assert_eq!(got_second_update.len(), 2);
         assert_eq!(
             cast_u8_to_u16(&got_second_update[0].left_code),

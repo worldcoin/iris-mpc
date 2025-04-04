@@ -31,7 +31,7 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
-        smpc_request::{REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
@@ -553,10 +553,16 @@ impl ServerActor {
             .iter()
             .filter(|x| *x == REAUTH_MESSAGE_TYPE)
             .count();
+        let n_reset_checks = batch
+            .request_types
+            .iter()
+            .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
+            .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} deletion requests",
-            batch.request_types.len() - n_reauths,
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} deletion requests",
+            batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
+            n_reset_checks,
             batch.deletion_requests_indices.len(),
         );
 
@@ -595,7 +601,10 @@ impl ServerActor {
                 .request_types
                 .iter()
                 .enumerate()
-                .filter(|(_, req_type)| req_type.as_str() == REAUTH_MESSAGE_TYPE)
+                .filter(|(_, req_type)| {
+                    req_type.as_str() == REAUTH_MESSAGE_TYPE
+                        || req_type.as_str() == RESET_CHECK_MESSAGE_TYPE
+                })
                 .map(|(index, _)| index)
                 .collect();
             batch.or_rule_indices = generate_luc_records(
@@ -956,6 +965,10 @@ impl ServerActor {
         // Format: merged_results[query_index]
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
+
+        // sync the results across nodes, since these are the ones which the insertions are based upon
+        self.sync_match_results(self.max_batch_size, &merged_results)?;
+
         // List the indices of the uniqueness requests that did not match as well as the
         // skipped requests that did not match We do not insert the skipped
         // requests into the DB
@@ -1778,6 +1791,51 @@ impl ServerActor {
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
+    }
+
+    fn sync_match_results(
+        &mut self,
+        max_batch_size: usize,
+        match_results: &[u32],
+    ) -> eyre::Result<()> {
+        assert!(match_results.len() <= max_batch_size);
+        let mut buffer = self
+            .device_manager
+            .device(0)
+            .alloc_zeros(max_batch_size * self.comms[0].world_size())
+            .unwrap();
+
+        let mut host_buffer = vec![0u32; max_batch_size];
+        host_buffer[..match_results.len()].copy_from_slice(match_results);
+
+        let buffer_self = self.device_manager.device(0).htod_copy(host_buffer)?;
+        self.device_manager.device(0).synchronize()?;
+        self.comms[0]
+            .all_gather(&buffer_self, &mut buffer)
+            .map_err(|e| eyre!(format!("{:?}", e)))?;
+        self.device_manager.device(0).synchronize()?;
+
+        let results = self.device_manager.device(0).dtoh_sync_copy(&buffer)?;
+        let results: Vec<_> = results
+            .chunks_exact(results.len() / self.comms[0].world_size())
+            .collect();
+
+        // check that the results are the same on all nodes
+        for i in 0..self.comms[0].world_size() {
+            if &results[i][..match_results.len()] != match_results {
+                tracing::error!(
+                    party_id = self.party_id,
+                    "Match results mismatch with node {}. MPC protocol produced out of sync results.",
+                    i
+                );
+                metrics::counter!("mpc.mismatch").increment(1);
+                return Err(eyre!(
+                    "Match results mismatch with node {}. MPC protocol produced out of sync results.",
+                    i
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn sync_batch_entries(
