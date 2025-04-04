@@ -99,6 +99,12 @@ pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Case {
+    Normal,
+    Mirror,
+}
+
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
     pub device_manager: Arc<DeviceManager>,
@@ -524,15 +530,24 @@ impl ServerActor {
                 return_channel,
             } = job;
 
-            // Call process_batch_query with mirrored_flow = false, get the results
-            // and send them to the return_channel
-            match self.process_batch_query(batch, false) {
-                Ok(result) => {
-                    // Send the result to the return channel
-                    let _ = return_channel.send(result);
+            match self.process_batch_query(batch.clone(), Case::Mirror, None) {
+                Ok(mirrored_results) => {
+                    match self.process_batch_query(batch, Case::Normal, Some(mirrored_results)) {
+                        Ok(combined_results) => {
+                            tracing::info!(
+                                "Combined_results.full_face_mirror_attack_detected: {:?}",
+                                combined_results.full_face_mirror_attack_detected
+                            );
+                            // Send the combined results to the return channel
+                            let _ = return_channel.send(combined_results);
+                        }
+                        Err(e) => {
+                            tracing::error!("Error processing batch query (normal flow): {:?}", e);
+                        }
+                    }
                 }
                 Err(e) => {
-                    tracing::error!("Error processing batch query: {:?}", e);
+                    tracing::error!("Error processing batch query (mirror flow): {:?}", e);
                 }
             }
         }
@@ -570,7 +585,8 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
-        _mirrored_flow: bool, // Will be used in future mirror attack prevention implementation
+        case: Case,
+        previous_results: Option<ServerJobResult>,
     ) -> eyre::Result<ServerJobResult> {
         let now = Instant::now();
 
@@ -738,6 +754,7 @@ impl ServerActor {
             }
         }
 
+        // TODO: patch the compact query creation to work with the mirror case
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
@@ -1146,6 +1163,7 @@ impl ServerActor {
         // List the indices of the uniqueness requests that did not match as well as the
         // skipped requests that did not match We do not insert the skipped
         // requests into the DB
+        // TODO: implement the mirror attack detection using the mirror results.matches
         let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
             merged_results
                 .iter()
@@ -1214,25 +1232,29 @@ impl ServerActor {
             })
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
-        for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
-            if !*success {
-                continue;
+
+        // reauth_updates_per_device only used in the normal case during the db write, we can skip in mirrored case
+        if case == Case::Normal {
+            for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
+                if !*success {
+                    continue;
+                }
+                let reauth_id = batch.request_ids[reauth_pos].clone();
+                let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
+                let device_index = reauth_index % self.device_manager.device_count() as u32;
+                reauth_updates_per_device[device_index as usize].push(reauth_pos);
             }
-            let reauth_id = batch.request_ids[reauth_pos].clone();
-            let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
-            let device_index = reauth_index % self.device_manager.device_count() as u32;
-            reauth_updates_per_device[device_index as usize].push(reauth_pos);
         }
 
-        // Write back to in-memory db
+        // Write back to in-memory db - only in normal mode
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
         let n_insertions = uniqueness_insertion_list
             .iter()
             .map(|x| x.len())
             .sum::<usize>();
 
-        // Check if we actually have space left to write the new entries
-        if previous_total_db_size + n_insertions > self.max_db_size {
+        // Check if we actually have space left to write the new entries - only relevant for normal mode
+        if case == Case::Normal && previous_total_db_size + n_insertions > self.max_db_size {
             tracing::error!(
                 "Cannot write new entries, since DB size would be exceeded, current: {}, batch \
                  insertions: {}, max: {}",
@@ -1243,9 +1265,10 @@ impl ServerActor {
             eyre::bail!("DB size exceeded");
         }
 
-        // TODO: if we are in the mirror case we have to disable the storing
-        // TODO: we do the mirror case first so we can avoid the storing
-        if self.disable_persistence {
+        // Only persist in normal mode, never in mirror mode
+        if case == Case::Mirror {
+            tracing::info!("Mirror mode - not persisting results to in-memory DB");
+        } else if self.disable_persistence {
             tracing::info!("Persistence is disabled, not writing to DB");
         } else {
             record_stream_time!(
@@ -1346,6 +1369,21 @@ impl ServerActor {
         }
 
         let request_count = batch.request_ids.len();
+
+        // Check for mirror attack detection when we have previous results and are in normal mode
+        // TODO: maybe add a counter to count the cases when both match (mirrored and normal)
+        // metrics::counter!("request.received", "type" => "identity_deletion")
+        //.increment(1);
+        let full_face_mirror_attack_detected: Vec<bool> =
+            if case == Case::Normal && previous_results.is_some() {
+                let mirror_results = previous_results.unwrap();
+                (0..request_count)
+                    .map(|i| matches[i] == false && mirror_results.matches[i] == true)
+                    .collect()
+            } else {
+                vec![false; request_count]
+            };
+
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
             merged_results,
@@ -1363,6 +1401,7 @@ impl ServerActor {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
+            // TODO: if the bucket is not empty (from the mirrored case) then just place it here, for both
             anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
             anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
             successful_reauths,
@@ -1373,7 +1412,7 @@ impl ServerActor {
             reset_update_shares: batch.reset_update_shares,
             modifications: batch.modifications,
             actor_data: (),
-            full_face_mirror_attack_detected: vec![false; request_count],
+            full_face_mirror_attack_detected,
         };
 
         self.anonymized_bucket_statistics_left.buckets.clear();
@@ -1412,9 +1451,10 @@ impl ServerActor {
             / now.elapsed().as_secs_f64()
             / 1e6;
         tracing::info!(
-            "Batch took {:?} [{:.2} Melems/s]",
+            "Batch took {:?} [{:.2} Melems/s] (case: {:?})",
             now.elapsed(),
-            processed_mil_elements_per_second
+            processed_mil_elements_per_second,
+            case
         );
 
         metrics::histogram!("batch_duration").record(now.elapsed().as_secs_f64());
