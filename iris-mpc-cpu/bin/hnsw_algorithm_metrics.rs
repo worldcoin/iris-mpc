@@ -69,8 +69,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     let filter = Targets::new()
-        .with_target("iris_mpc_cpu::hnsw", Level::INFO)
-        .with_target("iris_mpc_cpu::hawkers", Level::INFO);
+        .with_target("iris_mpc_cpu::hnsw", Level::DEBUG)
+        .with_target("iris_mpc_cpu::hawkers", Level::DEBUG);
     let file = File::create("searcher_time_tree.txt")?;
     let file_processor = PrettyPrinter::new().writer(std::sync::Mutex::new(file));
 
