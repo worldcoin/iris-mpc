@@ -384,7 +384,7 @@ impl<T: IntRing2k> Rem<T> for RingElement<T> {
 }
 
 #[cfg(test)]
-mod unsafe_test {
+mod tests {
     use super::*;
     use aes_prng::AesRng;
     use rand::{Rng, SeedableRng};
