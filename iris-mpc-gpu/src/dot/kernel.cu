@@ -87,6 +87,59 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
+extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping)
+{
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
+        for (int i = 0; i < 64; i++)
+        {
+            unsigned int queryIdx = (idx * 64 + i) / chunkLength;
+            unsigned int chunkDbIdx = (idx * 64 + i) % chunkLength;
+            bool match = (result & (1ULL << i));
+
+            // Check if we are out of bounds for the query or db
+            if (queryIdx >= queryLength || chunkDbIdx >= realChunkLen || !match)
+            {
+                continue;
+            }
+
+            // Mark which results are matches with a bit in the output
+            unsigned int dbIdx = indexMapping[chunkDbIdx];
+            unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx;
+            atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
+        }
+    }
+}
+
+extern "C" __global__ void partialDbResults(unsigned long long *matchResults, unsigned int *partialResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int maxMatches)
+{
+
+    size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < numElements)
+    {
+        for (int i = 0; i < 64; i++)
+        {
+            unsigned int queryIdx = (idx * 64 + i) / dbLength;
+            unsigned int dbIdx = (idx * 64 + i) % dbLength;
+            bool match = (matchResults[idx] & (1ULL << i));
+
+            // Check bounds
+            if (queryIdx >= queryLength || dbIdx >= dbLength)
+                continue;
+
+            // Check for partial results (only used for debugging)
+            if (match)
+            {
+                unsigned int queryMatchCounter = atomicAdd(matchCounter, 1);
+                if (queryMatchCounter < maxMatches)
+                    partialResults[queryMatchCounter] = dbIdx;
+            }
+        }
+    }
+}
+
 extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
 {
 

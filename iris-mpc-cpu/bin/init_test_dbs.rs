@@ -4,7 +4,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, StoreId, STORE_IDS},
+    execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::{graph_store::GraphPg, layered_graph::EntryPoint}, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,

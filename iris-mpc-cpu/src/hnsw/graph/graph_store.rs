@@ -1,8 +1,7 @@
-use super::layered_graph::EntryPoint;
+use super::{layered_graph::EntryPoint, neighborhood::SortedEdgeIds};
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV,
         searcher::{ConnectPlanLayerV, ConnectPlanV},
         GraphMem, VectorStore,
     },
@@ -22,7 +21,7 @@ use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    links: Json<SortedNeighborhoodV<V>>,
+    links: Json<SortedEdgeIds<V::VectorRef>>,
     layer: i32,
 }
 
@@ -118,7 +117,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await;
+        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
     }
 
     pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
@@ -155,7 +154,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedNeighborhoodV<V> {
+    ) -> SortedEdgeIds<V::VectorRef> {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -170,13 +169,18 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
-            let x: Json<SortedNeighborhoodV<V>> = row.get("links");
+            let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
             x.as_ref().clone()
         })
-        .unwrap_or_else(SortedNeighborhoodV::<V>::new)
+        .unwrap_or_else(SortedEdgeIds::default)
     }
 
-    pub async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
+    pub async fn set_links(
+        &mut self,
+        base: V::VectorRef,
+        links: SortedEdgeIds<V::VectorRef>,
+        lc: usize,
+    ) {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -351,6 +355,7 @@ mod tests {
                     .insert(&mut vector_store, vectors[j], distances[j])
                     .await;
             }
+            let links = links.edge_ids();
 
             graph_ops.set_links(vectors[i], links.clone(), 0).await;
 

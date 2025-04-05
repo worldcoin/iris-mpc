@@ -6,7 +6,9 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{
+        Aby3Store, Query, QueryRef, SharedIrises, SharedIrisesMut, SharedIrisesRef,
+    },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -19,6 +21,7 @@ use crate::{
 use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
+use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
 use iris_mpc_common::job::Eye;
@@ -52,6 +55,7 @@ mod is_match_batch;
 mod matching;
 mod rot;
 mod scheduler;
+pub mod state_check;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -182,16 +186,16 @@ impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            GraphMem::<Aby3Store>::new(),
-            [(); 2].map(|_| SharedIrisesRef::default()),
+            [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
+            [(); 2].map(|_| SharedIrises::default()),
         )
         .await
     }
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        graph: GraphMem<Aby3Store>,
-        iris_store: BothEyes<SharedIrisesRef>,
+        graph: BothEyes<GraphMem<Aby3Store>>,
+        iris_store: BothEyes<SharedIrises>,
     ) -> Result<Self> {
         let search_params = Arc::new(HnswSearcher::default());
 
@@ -249,7 +253,9 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
+        let graph_store = graph.map(GraphMem::to_arc);
+        let iris_store = iris_store.map(SharedIrises::to_arc);
+
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,
@@ -421,7 +427,6 @@ impl HawkActor {
         }
     }
 
-    // TODO: Implement actual parallelism.
     pub async fn insert(
         &mut self,
         sessions: &[HawkSessionRef],
@@ -430,7 +435,7 @@ impl HawkActor {
         let insert_plans = join_plans(plans);
         let mut connect_plans = vec![];
         for plan in insert_plans {
-            // TODO: Parallel insertions are not supported, so only one session is needed.
+            // Parallel insertions are not supported, so only one session is needed.
             let mut session = sessions[0].write().await;
             let cp = self.insert_one(&mut session, plan).await?;
             connect_plans.push(cp);
@@ -438,7 +443,6 @@ impl HawkActor {
         Ok(connect_plans)
     }
 
-    // TODO: Remove `&mut self` requirement to support parallel sessions.
     async fn insert_one(
         &mut self,
         session: &mut HawkSession,
@@ -809,13 +813,13 @@ impl HawkHandle {
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
             Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
         ];
-        Self::new_with_sessions(hawk_actor, sessions).await
-    }
 
-    pub async fn new_with_sessions(
-        mut hawk_actor: HawkActor,
-        sessions: BothEyes<Vec<HawkSessionRef>>,
-    ) -> Result<Self> {
+        // Validate the common state before starting.
+        try_join!(
+            HawkSession::state_check(&sessions[LEFT][0]),
+            HawkSession::state_check(&sessions[RIGHT][0]),
+        )?;
+
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
@@ -883,6 +887,14 @@ impl HawkHandle {
                 } else {
                     tracing::info!("Persistence is disabled, not writing to DB");
                 }
+
+                // Validate the common state after processing the requests.
+                try_join!(
+                    HawkSession::state_check(&sessions[LEFT][0]),
+                    HawkSession::state_check(&sessions[RIGHT][0]),
+                )
+                .expect("Party states diverged after processing requests");
+
                 metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
                 let left_query_count = search_queries[LEFT].len();
@@ -1192,7 +1204,8 @@ mod tests_db {
     use crate::{
         hawkers::aby3::aby3_store::VectorId,
         hnsw::{
-            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
+            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
+            searcher::ConnectPlanLayerV,
             SortedNeighborhood,
         },
         shares::share::DistanceShare,
@@ -1218,10 +1231,7 @@ mod tests_db {
                             vectors[side],
                             distance.clone(),
                         )]),
-                        nb_links: vec![SortedNeighborhood::from_ascending_vec(vec![(
-                            *vector,
-                            distance.clone(),
-                        )])],
+                        nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
                     set_ep: i == side,
                 })
@@ -1262,8 +1272,8 @@ mod tests_db {
 
             let links = graph.read().await.get_links(&vectors[2], 0).await;
             assert_eq!(
-                links.deref(),
-                &[(expected_ep, distance.clone())],
+                links.0,
+                vec![expected_ep],
                 "vec_2 connects to the entry point"
             );
         }

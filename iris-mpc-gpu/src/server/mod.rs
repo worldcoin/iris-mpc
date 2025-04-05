@@ -1,10 +1,10 @@
-mod actor;
+pub(crate) mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
 use iris_mpc_common::{
     helpers::sync::Modification,
-    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries},
+    job::{BatchMetadata, BatchQuery, Eye, IrisQueryBatchEntries},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -121,6 +121,42 @@ pub struct PreprocessedBatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+}
+
+impl PreprocessedBatchQuery {
+    pub fn get_iris_requests(&self, eye: Eye) -> &IrisQueryBatchEntries {
+        match eye {
+            Eye::Left => &self.left_iris_requests,
+            Eye::Right => &self.right_iris_requests,
+        }
+    }
+
+    pub fn get_iris_interpolated_requests_preprocessed(
+        &self,
+        eye: Eye,
+    ) -> &BatchQueryEntriesPreprocessed {
+        match eye {
+            Eye::Left => &self.left_iris_interpolated_requests_preprocessed,
+            Eye::Right => &self.right_iris_interpolated_requests_preprocessed,
+        }
+    }
+
+    pub fn get_iris_requests_rotated(&self, eye: Eye) -> &IrisQueryBatchEntries {
+        match eye {
+            Eye::Left => &self.left_iris_rotated_requests,
+            Eye::Right => &self.right_iris_rotated_requests,
+        }
+    }
+
+    pub fn get_iris_requests_rotated_preprocessed(
+        &self,
+        eye: Eye,
+    ) -> &BatchQueryEntriesPreprocessed {
+        match eye {
+            Eye::Left => &self.left_iris_rotated_requests_preprocessed,
+            Eye::Right => &self.right_iris_rotated_requests_preprocessed,
+        }
+    }
 }
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
