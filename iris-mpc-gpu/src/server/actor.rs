@@ -1162,16 +1162,28 @@ impl ServerActor {
         // List the indices of the uniqueness requests that did not match as well as the
         // skipped requests that did not match We do not insert the skipped
         // requests into the DB
-        // TODO: implement the mirror attack detection using the mirror results.matches
+        // Full face mirror attack detection additional check:
+        // This is being executed for both mirrored and normal mode. In the second run(normal mode) we have the previous results(mirror_results) available
+        // We only add entries in the uniqueness_insertion_list if they did not match in the mirror case as well
         let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
             merged_results
                 .iter()
                 .enumerate()
                 .filter(|&(idx, &num)| {
-                    batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                    // Basic condition: must be a uniqueness request, with no match, and below supermatcher threshold
+                    let basic_condition = batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
                         && num == NON_MATCH_ID
                         && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
-                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD;
+
+                    // When in normal mode and we have mirrored results, only consider that
+                    // the entry was unique if it did not match in the mirror case as well
+                    match (case, &previous_results) {
+                        (Case::Normal, Some(mirror_results)) => {
+                            basic_condition && !mirror_results.matches_with_skip_persistence[idx]
+                        }
+                        _ => basic_condition, // In mirror mode or without previous results, just use basic condition (should not happen)
+                    }
                 })
                 .map(|(idx, _num)| idx)
                 .partition(|&idx| !batch.skip_persistence[idx]);
