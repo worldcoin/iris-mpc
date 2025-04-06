@@ -1382,15 +1382,33 @@ impl ServerActor {
         let request_count = batch.request_ids.len();
 
         // Check for mirror attack detection when we have previous results and are in normal mode
-        // TODO: maybe add a counter to count the cases when both match (mirrored and normal)
-        // metrics::counter!("request.received", "type" => "identity_deletion")
-        //.increment(1);
         let full_face_mirror_attack_detected: Vec<bool> =
             if case == Case::Normal && previous_results.is_some() {
                 let mirror_results = previous_results.unwrap();
-                (0..request_count)
+                let attack_detected = (0..request_count)
                     .map(|i| !matches[i] && mirror_results.matches[i])
-                    .collect()
+                    .collect();
+
+                // Edge case where both normal and mirrored matches occur
+                // Could be possible, but unlikely
+                // Its the case when a user:
+                // - Has already two unique accounts by having attempted to mirror attack us in the past
+                // - Tries to enroll again
+                let both_matched_count = (0..request_count)
+                    .filter(|&i| matches[i] && mirror_results.matches[i])
+                    .count();
+
+                // Increment counter for cases where both normal and mirrored matches occur
+                if both_matched_count > 0 {
+                    tracing::info!(
+                        "Detected {} cases where both normal and mirrored matches occurred",
+                        both_matched_count
+                    );
+                    metrics::counter!("mirror.attack.both_matched")
+                        .increment(both_matched_count as u64);
+                }
+
+                attack_detected
             } else {
                 vec![false; request_count]
             };
