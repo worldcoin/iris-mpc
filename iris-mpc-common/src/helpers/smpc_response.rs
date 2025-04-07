@@ -21,6 +21,7 @@ pub struct UniquenessResult {
     pub matched_batch_request_ids: Option<Vec<String>>,
     pub error: Option<bool>,
     pub error_reason: Option<String>,
+    pub full_face_mirror_attack_detected: bool,
 }
 
 impl UniquenessResult {
@@ -36,6 +37,7 @@ impl UniquenessResult {
         matched_batch_request_ids: Option<Vec<String>>,
         partial_matches_count_right: Option<usize>,
         partial_matches_count_left: Option<usize>,
+        full_face_mirror_attack_detected: bool,
     ) -> Self {
         Self {
             node_id,
@@ -50,6 +52,7 @@ impl UniquenessResult {
             partial_matches_count_left,
             error: None,
             error_reason: None,
+            full_face_mirror_attack_detected,
         }
     }
 
@@ -67,6 +70,7 @@ impl UniquenessResult {
             partial_matches_count_left: None,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
+            full_face_mirror_attack_detected: false,
         }
     }
 }
