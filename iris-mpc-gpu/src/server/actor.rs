@@ -123,10 +123,10 @@ pub struct ServerActor {
     distance_comparator: DistanceComparator,
     comms: Vec<Arc<NcclComm>>,
     // DB slices
-    pub left_code_db_slices: SlicedProcessedDatabase,
-    pub left_mask_db_slices: SlicedProcessedDatabase,
-    pub right_code_db_slices: SlicedProcessedDatabase,
-    pub right_mask_db_slices: SlicedProcessedDatabase,
+    pub active_side_code_db_slices: SlicedProcessedDatabase,
+    pub active_side_mask_db_slices: SlicedProcessedDatabase,
+    pub inactive_side_code_db_slices: Option<SlicedProcessedDatabase>,
+    pub inactive_side_mask_db_slices: Option<SlicedProcessedDatabase>,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<CudaSlice<u32>>,
@@ -181,6 +181,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        load_partial_side_on_demand: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -198,6 +199,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            load_partial_side_on_demand,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -215,6 +217,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        load_partial_side_on_demand: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -234,6 +237,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            load_partial_side_on_demand,
         )
     }
 
@@ -253,6 +257,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        load_partial_side_on_demand: bool,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -270,6 +275,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            load_partial_side_on_demand,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -290,6 +296,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        load_partial_side_on_demand: bool,
     ) -> eyre::Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
@@ -332,10 +339,18 @@ impl ServerActor {
 
         let now = Instant::now();
 
-        let left_code_db_slices = codes_engine.alloc_db(max_db_size);
-        let left_mask_db_slices = masks_engine.alloc_db(max_db_size);
-        let right_code_db_slices = codes_engine.alloc_db(max_db_size);
-        let right_mask_db_slices = masks_engine.alloc_db(max_db_size);
+        let active_side_code_db_slices = codes_engine.alloc_db(max_db_size);
+        let active_side_mask_db_slices = masks_engine.alloc_db(max_db_size);
+        let inactive_side_code_db_slices = if load_partial_side_on_demand {
+            None
+        } else {
+            Some(codes_engine.alloc_db(max_db_size))
+        };
+        let inactive_side_mask_db_slices = if load_partial_side_on_demand {
+            None
+        } else {
+            Some(masks_engine.alloc_db(max_db_size))
+        };
 
         tracing::info!("GPU actor: Allocated db in {:?}", now.elapsed());
 
@@ -485,10 +500,10 @@ impl ServerActor {
             batch_codes_engine,
             batch_masks_engine,
             comms,
-            left_code_db_slices,
-            left_mask_db_slices,
-            right_code_db_slices,
-            right_mask_db_slices,
+            active_side_code_db_slices,
+            active_side_mask_db_slices,
+            inactive_side_code_db_slices,
+            inactive_side_mask_db_slices,
             streams,
             cublas_handles,
             results,
@@ -585,26 +600,30 @@ impl ServerActor {
         let page_lock_ts = Instant::now();
         tracing::info!("Starting page lock");
         self.device_manager.register_host_memory(
-            &self.left_code_db_slices,
+            &self.active_side_code_db_slices,
             self.max_db_size,
             IRIS_CODE_LENGTH,
         );
-        self.device_manager.register_host_memory(
-            &self.right_code_db_slices,
-            self.max_db_size,
-            IRIS_CODE_LENGTH,
-        );
+        if let Some(inactive_side_code_db_slices) = &self.inactive_side_code_db_slices {
+            self.device_manager.register_host_memory(
+                inactive_side_code_db_slices,
+                self.max_db_size,
+                IRIS_CODE_LENGTH,
+            );
+        }
         tracing::info!("Page locking completed for code slice");
         self.device_manager.register_host_memory(
-            &self.left_mask_db_slices,
+            &self.active_side_mask_db_slices,
             self.max_db_size,
             MASK_CODE_LENGTH,
         );
-        self.device_manager.register_host_memory(
-            &self.right_mask_db_slices,
-            self.max_db_size,
-            MASK_CODE_LENGTH,
-        );
+        if let Some(inactive_side_mask_db_slices) = &self.inactive_side_mask_db_slices {
+            self.device_manager.register_host_memory(
+                inactive_side_mask_db_slices,
+                self.max_db_size,
+                MASK_CODE_LENGTH,
+            );
+        }
         tracing::info!("Page locking completed for mask slice");
         tracing::info!("Page locking completed in {:?}", page_lock_ts.elapsed());
     }
@@ -770,10 +789,10 @@ impl ServerActor {
                     .bind_to_thread()
                     .unwrap();
                 write_db_at_index(
-                    &self.left_code_db_slices,
-                    &self.left_mask_db_slices,
-                    &self.right_code_db_slices,
-                    &self.right_mask_db_slices,
+                    Some(&self.active_side_code_db_slices),
+                    Some(&self.active_side_mask_db_slices),
+                    self.inactive_side_code_db_slices.as_ref(),
+                    self.inactive_side_mask_db_slices.as_ref(),
                     &dummy_queries,
                     &dummy_sums,
                     &dummy_queries,
@@ -1385,22 +1404,10 @@ impl ServerActor {
                         self.device_manager.device(i).bind_to_thread().unwrap();
                         for insertion_idx in uniqueness_insertion_list[i].clone() {
                             write_db_at_index(
-                                match self.full_scan_side {
-                                    Eye::Left => &self.left_code_db_slices,
-                                    Eye::Right => &self.right_code_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.left_mask_db_slices,
-                                    Eye::Right => &self.right_mask_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.right_code_db_slices,
-                                    Eye::Right => &self.left_code_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.right_mask_db_slices,
-                                    Eye::Right => &self.left_mask_db_slices,
-                                },
+                                Some(&self.active_side_code_db_slices),
+                                Some(&self.active_side_mask_db_slices),
+                                self.inactive_side_code_db_slices.as_ref(),
+                                self.inactive_side_mask_db_slices.as_ref(),
                                 &compact_device_queries_side1,
                                 &compact_device_sums_side1,
                                 &compact_device_queries_side2,
@@ -1440,22 +1447,10 @@ impl ServerActor {
                                 continue;
                             }
                             write_db_at_index(
-                                match self.full_scan_side {
-                                    Eye::Left => &self.left_code_db_slices,
-                                    Eye::Right => &self.right_code_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.left_mask_db_slices,
-                                    Eye::Right => &self.right_mask_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.right_code_db_slices,
-                                    Eye::Right => &self.left_code_db_slices,
-                                },
-                                match self.full_scan_side {
-                                    Eye::Left => &self.right_mask_db_slices,
-                                    Eye::Right => &self.left_mask_db_slices,
-                                },
+                                Some(&self.active_side_code_db_slices),
+                                Some(&self.active_side_mask_db_slices),
+                                self.inactive_side_code_db_slices.as_ref(),
+                                self.inactive_side_mask_db_slices.as_ref(),
                                 &compact_device_queries_side1,
                                 &compact_device_sums_side1,
                                 &compact_device_queries_side2,
@@ -1903,9 +1898,20 @@ impl ServerActor {
         }
 
         // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        let (code_db_slices, mask_db_slices) = if eye_db == self.full_scan_side {
+            (
+                &self.active_side_code_db_slices,
+                &self.active_side_mask_db_slices,
+            )
+        } else {
+            (
+                self.inactive_side_code_db_slices
+                    .as_ref()
+                    .expect("we cannot do sub compare against a side that is not loaded in memory"),
+                self.inactive_side_mask_db_slices
+                    .as_ref()
+                    .expect("we cannot do sub compare against a side that is not loaded in memory"),
+            )
         };
 
         // We copied over a subset of the db, so we match against DB chunks of the given sizes
@@ -2077,9 +2083,20 @@ impl ServerActor {
         // ---- END BATCH DEDUP ----
 
         // which database are we querying against
-        let (code_db_slices, mask_db_slices) = match eye_db {
-            Eye::Left => (&self.left_code_db_slices, &self.left_mask_db_slices),
-            Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
+        let (code_db_slices, mask_db_slices) = if eye_db == self.full_scan_side {
+            (
+                &self.active_side_code_db_slices,
+                &self.active_side_mask_db_slices,
+            )
+        } else {
+            (
+                self.inactive_side_code_db_slices.as_ref().expect(
+                    "we cannot do full compare against a side that is not loaded in memory",
+                ),
+                self.inactive_side_mask_db_slices.as_ref().expect(
+                    "we cannot do full compare against a side that is not loaded in memory",
+                ),
+            )
         };
 
         let db_match_bitmap = match eye_db {
@@ -2872,10 +2889,10 @@ fn calculate_insertion_indices(
 
 #[allow(clippy::too_many_arguments)]
 fn write_db_at_index(
-    left_code_db_slices: &SlicedProcessedDatabase,
-    left_mask_db_slices: &SlicedProcessedDatabase,
-    right_code_db_slices: &SlicedProcessedDatabase,
-    right_mask_db_slices: &SlicedProcessedDatabase,
+    left_code_db_slices: Option<&SlicedProcessedDatabase>,
+    left_mask_db_slices: Option<&SlicedProcessedDatabase>,
+    right_code_db_slices: Option<&SlicedProcessedDatabase>,
+    right_mask_db_slices: Option<&SlicedProcessedDatabase>,
     compact_device_queries_left: &DeviceCompactQuery,
     compact_device_sums_left: &DeviceCompactSums,
     compact_device_queries_right: &DeviceCompactQuery,
@@ -2912,41 +2929,60 @@ fn write_db_at_index(
         ),
     ] {
         unsafe {
-            helpers::dtoh_at_offset(
-                db.code_gr.limb_0[device_index],
-                dst_index * code_length,
-                *query.limb_0[device_index].device_ptr(),
-                code_length * 15 + src_index * code_length * ROTATIONS,
-                code_length,
-                streams[device_index].stream,
-            );
+            if let Some(db) = db {
+                helpers::dtoh_at_offset(
+                    db.code_gr.limb_0[device_index],
+                    dst_index * code_length,
+                    *query.limb_0[device_index].device_ptr(),
+                    code_length * 15 + src_index * code_length * ROTATIONS,
+                    code_length,
+                    streams[device_index].stream,
+                );
 
-            helpers::dtoh_at_offset(
-                db.code_gr.limb_1[device_index],
-                dst_index * code_length,
-                *query.limb_1[device_index].device_ptr(),
-                code_length * 15 + src_index * code_length * ROTATIONS,
-                code_length,
-                streams[device_index].stream,
-            );
+                helpers::dtoh_at_offset(
+                    db.code_gr.limb_1[device_index],
+                    dst_index * code_length,
+                    *query.limb_1[device_index].device_ptr(),
+                    code_length * 15 + src_index * code_length * ROTATIONS,
+                    code_length,
+                    streams[device_index].stream,
+                );
+                helpers::dtoh_at_offset(
+                    db.code_gr.limb_0[device_index],
+                    dst_index * code_length,
+                    *query.limb_0[device_index].device_ptr(),
+                    code_length * 15 + src_index * code_length * ROTATIONS,
+                    code_length,
+                    streams[device_index].stream,
+                );
 
-            helpers::dtod_at_offset(
-                *db.code_sums_gr.limb_0[device_index].device_ptr(),
-                dst_index * mem::size_of::<u32>(),
-                *sums.limb_0[device_index].device_ptr(),
-                mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
-                mem::size_of::<u32>(),
-                streams[device_index].stream,
-            );
+                helpers::dtoh_at_offset(
+                    db.code_gr.limb_1[device_index],
+                    dst_index * code_length,
+                    *query.limb_1[device_index].device_ptr(),
+                    code_length * 15 + src_index * code_length * ROTATIONS,
+                    code_length,
+                    streams[device_index].stream,
+                );
 
-            helpers::dtod_at_offset(
-                *db.code_sums_gr.limb_1[device_index].device_ptr(),
-                dst_index * mem::size_of::<u32>(),
-                *sums.limb_1[device_index].device_ptr(),
-                mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
-                mem::size_of::<u32>(),
-                streams[device_index].stream,
-            );
+                helpers::dtod_at_offset(
+                    *db.code_sums_gr.limb_0[device_index].device_ptr(),
+                    dst_index * mem::size_of::<u32>(),
+                    *sums.limb_0[device_index].device_ptr(),
+                    mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
+                    mem::size_of::<u32>(),
+                    streams[device_index].stream,
+                );
+
+                helpers::dtod_at_offset(
+                    *db.code_sums_gr.limb_1[device_index].device_ptr(),
+                    dst_index * mem::size_of::<u32>(),
+                    *sums.limb_1[device_index].device_ptr(),
+                    mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
+                    mem::size_of::<u32>(),
+                    streams[device_index].stream,
+                );
+            }
         }
     }
 }
@@ -3063,32 +3099,52 @@ impl InMemoryStore for ServerActor {
     ) {
         ShareDB::load_single_record_from_db(
             index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
+            &self.active_side_code_db_slices.code_gr,
+            if self.full_scan_side == Eye::Left {
+                left_code
+            } else {
+                right_code
+            },
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
         ShareDB::load_single_record_from_db(
             index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
+            &self.active_side_mask_db_slices.code_gr,
+            if self.full_scan_side == Eye::Left {
+                left_mask
+            } else {
+                right_mask
+            },
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
+        if let Some(inactive_side_code_db_slices) = &self.inactive_side_code_db_slices {
+            ShareDB::load_single_record_from_db(
+                index,
+                &inactive_side_code_db_slices.code_gr,
+                if self.full_scan_side == Eye::Left {
+                    right_code
+                } else {
+                    left_code
+                },
+                self.device_manager.device_count(),
+                IRIS_CODE_LENGTH,
+            );
+        }
+        if let Some(inactive_side_mask_db_slices) = &self.inactive_side_mask_db_slices {
+            ShareDB::load_single_record_from_db(
+                index,
+                &inactive_side_mask_db_slices.code_gr,
+                if self.full_scan_side == Eye::Left {
+                    right_mask
+                } else {
+                    left_mask
+                },
+                self.device_manager.device_count(),
+                MASK_CODE_LENGTH,
+            );
+        }
     }
     fn increment_db_size(&mut self, index: usize) {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
@@ -3109,36 +3165,72 @@ impl InMemoryStore for ServerActor {
     ) {
         ShareDB::load_single_record_from_s3(
             index,
-            &self.left_code_db_slices.code_gr,
-            left_code_odd,
-            left_code_even,
+            &self.active_side_code_db_slices.code_gr,
+            if self.full_scan_side == Eye::Left {
+                left_code_odd
+            } else {
+                right_code_odd
+            },
+            if self.full_scan_side == Eye::Left {
+                left_code_even
+            } else {
+                right_code_even
+            },
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
         ShareDB::load_single_record_from_s3(
             index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask_odd,
-            left_mask_even,
+            &self.active_side_mask_db_slices.code_gr,
+            if self.full_scan_side == Eye::Left {
+                left_mask_odd
+            } else {
+                right_mask_odd
+            },
+            if self.full_scan_side == Eye::Left {
+                left_mask_even
+            } else {
+                right_mask_even
+            },
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code_odd,
-            right_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_s3(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask_odd,
-            right_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
+        if let Some(inactive_side_code_db_slices) = &self.inactive_side_code_db_slices {
+            ShareDB::load_single_record_from_s3(
+                index,
+                &inactive_side_code_db_slices.code_gr,
+                if self.full_scan_side == Eye::Left {
+                    right_code_odd
+                } else {
+                    left_code_odd
+                },
+                if self.full_scan_side == Eye::Left {
+                    right_code_even
+                } else {
+                    left_code_even
+                },
+                self.device_manager.device_count(),
+                IRIS_CODE_LENGTH,
+            );
+        }
+        if let Some(inactive_side_mask_db_slices) = &self.inactive_side_mask_db_slices {
+            ShareDB::load_single_record_from_s3(
+                index,
+                &inactive_side_mask_db_slices.code_gr,
+                if self.full_scan_side == Eye::Left {
+                    right_mask_odd
+                } else {
+                    left_mask_odd
+                },
+                if self.full_scan_side == Eye::Left {
+                    right_mask_even
+                } else {
+                    left_mask_even
+                },
+                self.device_manager.device_count(),
+                MASK_CODE_LENGTH,
+            );
+        }
     }
 
     fn preprocess_db(&mut self) {
@@ -3146,13 +3238,15 @@ impl InMemoryStore for ServerActor {
         self.register_host_memory();
 
         self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
+            .preprocess_db(&mut self.active_side_code_db_slices, &self.current_db_sizes);
         self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+            .preprocess_db(&mut self.active_side_mask_db_slices, &self.current_db_sizes);
+        if let Some(db) = &mut self.inactive_side_code_db_slices {
+            self.codes_engine.preprocess_db(db, &self.current_db_sizes);
+        }
+        if let Some(db) = &mut self.inactive_side_mask_db_slices {
+            self.masks_engine.preprocess_db(db, &self.current_db_sizes);
+        }
     }
 
     fn current_db_sizes(&self) -> impl std::fmt::Debug {

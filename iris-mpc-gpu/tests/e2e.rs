@@ -114,6 +114,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);

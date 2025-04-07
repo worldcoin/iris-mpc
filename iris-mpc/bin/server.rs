@@ -1654,6 +1654,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
+            false,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
