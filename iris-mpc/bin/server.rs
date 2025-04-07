@@ -172,7 +172,7 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let modifications = &mut batch_query.modifications;
+    let batch_modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -229,7 +229,7 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if modifications.contains_key(&identity_deletion_request.serial_id) {
+                        if batch_modifications.contains_key(&identity_deletion_request.serial_id) {
                             tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 identity_deletion_request.serial_id,
@@ -244,7 +244,8 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
-                        modifications.insert(identity_deletion_request.serial_id, modification);
+                        batch_modifications
+                            .insert(identity_deletion_request.serial_id, modification);
 
                         batch_query
                             .deletion_requests_indices
@@ -404,7 +405,7 @@ async fn receive_batch(
                                 continue;
                             }
 
-                            if modifications.contains_key(&reauth_request.serial_id) {
+                            if batch_modifications.contains_key(&reauth_request.serial_id) {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reauth_request.serial_id,
@@ -422,7 +423,7 @@ async fn receive_batch(
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            modifications.insert(reauth_request.serial_id, modification);
+                            batch_modifications.insert(reauth_request.serial_id, modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -591,7 +592,7 @@ async fn receive_batch(
                                 }
                             };
 
-                            if modifications.contains_key(&reset_update_request.serial_id) {
+                            if batch_modifications.contains_key(&reset_update_request.serial_id) {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reset_update_request.serial_id,
@@ -607,7 +608,8 @@ async fn receive_batch(
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            modifications.insert(reset_update_request.serial_id, modification);
+                            batch_modifications
+                                .insert(reset_update_request.serial_id, modification);
 
                             batch_query
                                 .reset_update_indices
