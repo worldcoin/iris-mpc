@@ -2116,7 +2116,6 @@ impl ServerActor {
                 .await_event(request_streams, &self.phase1_events[db_chunk_idx % 2]);
 
             // ---- START PHASE 1 ----
-            // Dot product = hamming distance against the database(chunk)
             record_stream_time!(
                 &self.device_manager,
                 request_streams,
