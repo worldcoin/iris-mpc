@@ -1,45 +1,7 @@
 use super::{bit::Bit, int_ring::IntRing2k, ring_impl::RingElement, share::Share};
-use bytes::{Buf, BytesMut};
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
-use std::{
-    marker::PhantomData,
-    ops::{AddAssign, BitXor, BitXorAssign, Deref, DerefMut, Not, SubAssign},
-};
-
-#[repr(transparent)]
-pub struct RingBytesIter<T: IntRing2k> {
-    bytes: BytesMut,
-    _marker: std::marker::PhantomData<T>,
-}
-
-impl<T: IntRing2k> RingBytesIter<T> {
-    pub fn new(bytes: BytesMut) -> Self {
-        Self {
-            bytes,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<T: IntRing2k> Iterator for RingBytesIter<T> {
-    type Item = RingElement<T>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.bytes.remaining() == 0 {
-            None
-        } else {
-            let res = bytemuck::pod_read_unaligned(&self.bytes.chunk()[..T::BYTES]);
-            self.bytes.advance(T::BYTES);
-            Some(RingElement(res))
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.bytes.remaining() / T::BYTES;
-        (len, Some(len))
-    }
-}
+use std::ops::{AddAssign, BitXor, BitXorAssign, Deref, DerefMut, Not, SubAssign};
 
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
@@ -173,17 +135,8 @@ impl<T: IntRing2k> VecShare<T> {
         (SliceShareMut { shares: a }, SliceShareMut { shares: b })
     }
 
-    pub fn get_at(self, index: usize) -> Share<T> {
+    pub fn get_at(&self, index: usize) -> Share<T> {
         self.shares[index].to_owned()
-    }
-
-    pub fn from_avec_biter(a: Vec<RingElement<T>>, b: RingBytesIter<T>) -> Self {
-        let shares = a
-            .into_iter()
-            .zip(b)
-            .map(|(a_, b_)| Share::new(a_, b_))
-            .collect();
-        Self { shares }
     }
 
     pub fn from_ab(a: Vec<RingElement<T>>, b: Vec<RingElement<T>>) -> Self {
@@ -387,5 +340,161 @@ impl<'a, T: IntRing2k> Deref for SliceShareMut<'a, T> {
 impl<'a, T: IntRing2k> DerefMut for SliceShareMut<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.shares
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use num_traits::One;
+    use rand::Rng;
+    use rand_distr::{Distribution, Standard};
+
+    fn test_access<T: IntRing2k>()
+    where
+        Standard: Distribution<RingElement<T>>,
+    {
+        let mut rng = rand::thread_rng();
+        let share1: Share<T> = Share::new(rng.gen(), rng.gen());
+
+        let mut vec_share = VecShare::new_share(share1.clone());
+        assert!(!vec_share.is_empty());
+        let popped_share = vec_share.pop();
+        assert!(popped_share.is_some());
+        assert_eq!(popped_share.unwrap(), share1);
+        assert!(vec_share.is_empty());
+
+        let mut shares = vec![Share::zero()];
+        let one_share = Share::new(RingElement::one(), RingElement::one());
+        for i in 1..17 {
+            shares.push(one_share.clone() + &shares[i - 1]);
+        }
+        vec_share = VecShare::new_vec(shares);
+        let (slice1, slice2) = vec_share.split_at(3);
+        assert!(!slice1.is_empty());
+        assert_eq!(slice1.len(), 3);
+        assert_eq!(slice2.len(), 14);
+        for chunk in slice2.chunks(2) {
+            assert_eq!(chunk.len(), 2);
+            assert_eq!(one_share.clone() + &chunk[0], chunk[1]);
+        }
+
+        let mut vec_share = VecShare::new_share(Share::zero());
+        vec_share.extend_from_slice(slice1);
+        assert_eq!(vec_share.len(), 4);
+        let slice_mut = vec_share.as_slice_mut();
+        let vec_share_tmp = slice_mut.to_vec();
+        let three_share = one_share.clone() + one_share.clone() + one_share.clone();
+        assert_eq!(vec_share_tmp.sum(), three_share);
+        let (slice21, slice22) = slice2.split_at(2);
+        assert_eq!(slice21.len(), 2);
+        assert_eq!(slice22.len(), 12);
+        assert_eq!(slice21[0], three_share);
+        assert_eq!(slice21[1], one_share.clone() + three_share);
+
+        vec_share = VecShare::new_vec(vec![share1.clone(), !&share1]);
+        let mut not_vec_share = vec_share.clone();
+        not_vec_share.not_inplace();
+        assert_eq!(vec_share.get_at(0), not_vec_share.get_at(1));
+        assert_eq!(vec_share.get_at(1), not_vec_share.get_at(0));
+    }
+
+    fn test_arithmetic<T: IntRing2k>()
+    where
+        Standard: Distribution<RingElement<T>>,
+    {
+        let mut rng = rand::thread_rng();
+        let share1: Share<T> = Share::new(rng.gen(), rng.gen());
+
+        // NOT
+        let vec_share = VecShare::new_vec(vec![share1.clone(), !&share1]);
+        let mut not_vec_share = vec_share.clone();
+        not_vec_share.not_inplace();
+        assert_eq!(vec_share.get_at(0), not_vec_share.get_at(1));
+        assert_eq!(vec_share.get_at(1), not_vec_share.get_at(0));
+        let slice_share = vec_share.as_slice();
+        assert_eq!(!slice_share, not_vec_share);
+
+        // XOR
+        let vec_zero = VecShare::new_vec(vec![Share::zero(); 2]);
+        assert_eq!(vec_share.clone() ^ vec_share.clone(), vec_zero);
+        assert_eq!(vec_share.clone() ^ slice_share, vec_zero);
+        assert_eq!(
+            (slice_share ^ vec_share.as_slice()).inner(),
+            vec_zero.clone().inner()
+        );
+
+        let mut c = vec_zero.clone();
+        c ^= vec_share.clone();
+        assert_eq!(c, vec_share);
+        c = vec_zero.clone();
+        c ^= slice_share;
+        assert_eq!(c, vec_share);
+
+        // Addition
+        let mut c = vec_zero.clone();
+        c += slice_share;
+        assert_eq!(c, vec_share);
+
+        // Subtraction
+        let mut c = vec_share.clone();
+        c -= vec_share.clone();
+        assert_eq!(c, vec_zero);
+        c = vec_share.clone();
+        c -= slice_share;
+        assert_eq!(c, vec_zero);
+    }
+
+    fn test_bit<T: IntRing2k>()
+    where
+        Standard: Distribution<RingElement<T>> + Distribution<RingElement<Bit>>,
+    {
+        let mut rng = rand::thread_rng();
+        let share: Share<T> = Share::new(rng.gen(), rng.gen());
+        let bit_vec_share = VecShare::from_share(share.clone());
+        assert_eq!(bit_vec_share.len(), T::K);
+        for (i_bit, bit) in bit_vec_share.into_iter().enumerate() {
+            assert_eq!(bit.a, share.a.get_bit_as_bit(i_bit));
+            assert_eq!(bit.b, share.b.get_bit_as_bit(i_bit));
+        }
+
+        let mut bit_rng = rand::thread_rng();
+        let bit_shares = VecShare::new_vec(
+            (0..(T::K + 1))
+                .map(|_| {
+                    let share: Share<Bit> = Share::new(bit_rng.gen(), bit_rng.gen());
+                    share
+                })
+                .collect::<Vec<_>>(),
+        );
+        let t_shares: VecShare<T> = bit_shares.clone().pack();
+        for (i_bit, bit) in bit_shares.into_iter().enumerate() {
+            let share_index = i_bit / T::K;
+            let bit_index = i_bit % T::K;
+            assert_eq!(
+                bit.a,
+                t_shares.get_at(share_index).a.get_bit_as_bit(bit_index)
+            );
+        }
+    }
+
+    macro_rules! test_impl {
+        ($([$ty:ty,$fn:ident]),*) => ($(
+            #[test]
+            fn $fn() {
+                test_access::<$ty>();
+                test_arithmetic::<$ty>();
+                test_bit::<$ty>();
+            }
+        )*)
+    }
+
+    test_impl! {
+        [Bit, bit_test],
+        [u8, u8_test],
+        [u16, u16_test],
+        [u32, u32_test],
+        [u64, u64_test],
+        [u128, u128_test]
     }
 }
