@@ -1,13 +1,7 @@
 name: Check Cargo Dependencies
 on:
-  pull_request:
-  workflow_dispatch:
   push:
-    branches:
-      - main
-      - prod
-    tags:
-      - "**"
+
 
 jobs:
   cargo-deny:
