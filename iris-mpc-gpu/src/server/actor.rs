@@ -720,7 +720,7 @@ impl ServerActor {
             // Overwrite the in-memory db
             for (reset_index, shares) in izip!(
                 batch.reset_update_indices.clone(),
-                batch.reset_update_shares
+                batch.reset_update_shares.clone()
             ) {
                 let (queries_left, sums_left) =
                     self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;

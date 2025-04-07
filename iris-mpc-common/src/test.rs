@@ -127,6 +127,10 @@ pub enum TestCase {
     ResetCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetCheckNonMatch and expect it to be inserted without matches. This will make sure that reset_check did not write into the database.
     EnrollmentAfterResetCheckNonMatch,
+    /// Send a reset update request to replace an existing iris code in the database
+    ResetUpdate,
+    /// Send an enrollment request using the iris codes used during ResetUpdate and expect a match result
+    MatchAfterResetUpdate,
 }
 
 impl TestCase {
@@ -150,6 +154,8 @@ impl TestCase {
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
+            TestCase::ResetUpdate,
+            TestCase::MatchAfterResetUpdate,
         ]
     }
 }
@@ -180,6 +186,8 @@ pub struct ExpectedResult {
     is_reauth_successful: Option<bool>,
     /// Whether this is a RESET_CHECK_MESSAGE_TYPE request
     is_reset_check: bool,
+    /// Whether this is a RESET_UPDATE_MESSAGE_TYPE request
+    is_reset_update: bool,
 }
 
 impl ExpectedResult {
@@ -197,6 +205,7 @@ pub struct ExpectedResultBuilder {
     is_batch_match: bool,
     is_reauth_successful: Option<bool>,
     is_reset_check: bool,
+    is_reset_update: bool,
 }
 
 impl ExpectedResultBuilder {
@@ -230,6 +239,12 @@ impl ExpectedResultBuilder {
         self
     }
 
+    /// Sets is_reset_update
+    pub fn with_reset_update(mut self, is_reset_update: bool) -> Self {
+        self.is_reset_update = is_reset_update;
+        self
+    }
+
     /// Builds the ExpectedResult
     pub fn build(self) -> ExpectedResult {
         ExpectedResult {
@@ -238,6 +253,7 @@ impl ExpectedResultBuilder {
             is_batch_match: self.is_batch_match,
             is_reauth_successful: self.is_reauth_successful,
             is_reset_check: self.is_reset_check,
+            is_reset_update: self.is_reset_update,
         }
     }
 }
@@ -266,6 +282,8 @@ pub struct TestCaseGenerator {
     /// responses used for reset checks, where a new iris code was
     /// checked against the database
     non_match_reset_check_templates: HashMap<String, E2ETemplate>,
+    /// templates used for reset updates where memory is overridden with these
+    reset_update_templates: HashMap<u32, E2ETemplate>,
     /// A buffer of indices that have been deleted, to choose a index from
     /// to send for testing against deletions. Once picked, it is removed
     /// from here
@@ -313,6 +331,7 @@ impl TestCaseGenerator {
             reauth_target_indices: HashMap::new(),
             inserted_responses: HashMap::new(),
             non_match_reset_check_templates: HashMap::new(),
+            reset_update_templates: HashMap::new(),
             deleted_indices_buffer: Vec::new(),
             deleted_indices: HashSet::new(),
             disallowed_queries: Vec::new(),
@@ -498,6 +517,7 @@ impl TestCaseGenerator {
             TestCase::NonMatchSkipPersistence,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
+            TestCase::ResetUpdate,
         ];
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
@@ -507,6 +527,9 @@ impl TestCaseGenerator {
         };
         if !self.non_match_reset_check_templates.is_empty() {
             options.push(TestCase::EnrollmentAfterResetCheckNonMatch);
+        }
+        if !self.reset_update_templates.is_empty() {
+            options.push(TestCase::MatchAfterResetUpdate);
         }
 
         options.retain(|x| self.enabled_test_cases.contains(x));
@@ -692,11 +715,11 @@ impl TestCaseGenerator {
                     // select a random one to use as matching signup
                     let matching_db_index =
                         db_indexes_copy[self.rng.gen_range(0..db_indexes_copy.len())];
-
+                    self.disallowed_queries.push(matching_db_index as u32);
                     // comparison against this item will use the OR rule
                     or_rule_indices = db_indexes_copy.iter().map(|&x| x as u32).collect();
 
-                    // apply variation to either right of left code
+                    // apply variation to either right or left code
                     let will_match: bool = self.rng.gen();
                     let flip_right = if will_match {
                         Some(self.rng.gen())
@@ -860,6 +883,39 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
+                TestCase::ResetUpdate => {
+                    tracing::info!("Sending reset update request");
+                    let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    self.db_indices_used_in_current_batch.insert(db_index);
+                    self.disallowed_queries.push(db_index as u32);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder().with_reset_update(true).build(),
+                    );
+                    let template = IrisCode::random_rng(&mut self.rng);
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
+                }
+                TestCase::MatchAfterResetUpdate => {
+                    tracing::info!(
+                        "Sending enrollment request using iris codes used during reset update"
+                    );
+                    let db_idx = *self
+                        .reset_update_templates
+                        .keys()
+                        .choose(&mut self.rng)
+                        .unwrap();
+                    let e2e_template = self.reset_update_templates.get(&db_idx).unwrap().clone();
+                    self.reset_update_templates.remove(&db_idx);
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder().with_db_index(db_idx).build(),
+                    );
+                    self.skip_invalidate = true;
+                    e2e_template
+                }
             }
         };
         (
@@ -943,10 +999,19 @@ impl TestCaseGenerator {
             is_reauth_successful,
             is_skip_persistence_request,
             is_reset_check,
+            is_reset_update,
         } = self
             .expected_results
             .get(req_id)
             .expect("request id not found");
+
+        if is_reset_update {
+            // insert reset_update template to enable testing MatchAfterResetUpdate case
+            self.reset_update_templates
+                .insert(idx, requests.get(req_id).unwrap().clone());
+            self.inserted_responses.remove(&idx);
+            return;
+        }
 
         if is_reset_check {
             // assert that the reset_check requests are not reported as unique. match fields are only used for enrollment requests

@@ -14,8 +14,8 @@ use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -231,8 +231,9 @@ async fn receive_batch(
                             .increment(1);
                         if modifications.contains_key(&identity_deletion_request.serial_id) {
                             tracing::warn!(
-                                "Received multiple modification operations in batch on a serial id: {}. Skipping identity deletion request",
-                                identity_deletion_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                identity_deletion_request.serial_id,
+                                identity_deletion_request,
                             );
                             continue;
                         }
@@ -405,8 +406,9 @@ async fn receive_batch(
 
                             if modifications.contains_key(&reauth_request.serial_id) {
                                 tracing::warn!(
-                                "Received multiple modification operations in batch on a serial id: {}. Skipping reauth request",
-                                reauth_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reauth_request.serial_id,
+                                reauth_request,
                             );
                                 continue;
                             }
@@ -591,8 +593,9 @@ async fn receive_batch(
 
                             if modifications.contains_key(&reset_update_request.serial_id) {
                                 tracing::warn!(
-                                "Received multiple modification operations in batch on a serial id: {}. Skipping reset update request",
-                                reset_update_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
                             );
                                 continue;
                             }
