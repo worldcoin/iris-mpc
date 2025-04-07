@@ -14,6 +14,7 @@ use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -963,8 +964,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
+    let schema_name = format!(
+        "{}_{}_{}",
+        config.app_name, config.environment, config.party_id
+    );
+    let db_config = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?;
+
+    tracing::info!(
+        "Creating new iris storage from: {:?} with schema {}",
+        db_config,
+        schema_name
+    );
+    let postgres_client =
+        PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -1498,6 +1514,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
+            config.full_scan_side,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

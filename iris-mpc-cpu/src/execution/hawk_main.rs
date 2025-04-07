@@ -6,7 +6,9 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{Aby3Store, Query, QueryRef, SharedIrisesMut, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{
+        Aby3Store, Query, QueryRef, SharedIrises, SharedIrisesMut, SharedIrisesRef,
+    },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -171,16 +173,16 @@ impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            GraphMem::<Aby3Store>::new(),
-            [(); 2].map(|_| SharedIrisesRef::default()),
+            [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
+            [(); 2].map(|_| SharedIrises::default()),
         )
         .await
     }
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        graph: GraphMem<Aby3Store>,
-        iris_store: BothEyes<SharedIrisesRef>,
+        graph: BothEyes<GraphMem<Aby3Store>>,
+        iris_store: BothEyes<SharedIrises>,
     ) -> Result<Self> {
         let search_params = Arc::new(HnswSearcher::default());
 
@@ -238,7 +240,9 @@ impl HawkActor {
             .into_iter()
             .collect::<Result<()>>()?;
 
-        let graph_store = [(); 2].map(|_| Arc::new(RwLock::new(graph.clone())));
+        let graph_store = graph.map(GraphMem::to_arc);
+        let iris_store = iris_store.map(SharedIrises::to_arc);
+
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
             args.n_buckets,

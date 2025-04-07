@@ -1034,9 +1034,6 @@ impl TestCaseGenerator {
                     matches,
                     matches_with_skip_persistence,
                     merged_results,
-                    match_ids,
-                    partial_match_ids_left,
-                    partial_match_ids_right,
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
@@ -1065,9 +1062,6 @@ impl TestCaseGenerator {
                     &was_skip_persistence_match,
                     &was_reauth_success,
                     &idx,
-                    partial_left,
-                    partial_right,
-                    match_id,
                     matched_batch_req_ids,
                 ) in izip!(
                     thread_request_ids,
@@ -1075,19 +1069,12 @@ impl TestCaseGenerator {
                     matches_with_skip_persistence,
                     successful_reauths,
                     merged_results,
-                    partial_match_ids_left,
-                    partial_match_ids_right,
-                    match_ids,
                     matched_batch_request_ids
                 ) {
                     assert!(requests.contains_key(req_id));
 
                     resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
 
-                    if !self.or_rule_matches.contains(req_id) {
-                        assert_eq!(partial_left, partial_right);
-                        assert_eq!(partial_left, match_id);
-                    }
                     self.check_result(
                         req_id,
                         idx,

@@ -8,7 +8,7 @@ use crate::{
 };
 use eyre::Result;
 use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_store::Store;
+use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
@@ -32,12 +32,19 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl<V: VectorStore> GraphPg<V> {
-    pub fn from_iris_store(store: &Store) -> Self {
-        Self {
-            pool: store.pool.clone(),
-            schema_name: store.schema_name.clone(),
+    pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
+        tracing::info!(
+            "Created a graph store with schema: {}",
+            postgres_client.schema_name,
+        );
+
+        postgres_client.migrate().await;
+
+        Ok(Self {
+            pool: postgres_client.pool.clone(),
+            schema_name: postgres_client.schema_name.clone(),
             phantom: PhantomData,
-        }
+        })
     }
 
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
@@ -243,6 +250,7 @@ where
 
 pub mod test_utils {
     use super::*;
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
     use std::ops::{Deref, DerefMut};
 
@@ -251,20 +259,24 @@ pub mod test_utils {
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
-        store: Store,
+        postgres_client: PostgresClient,
         pub graph: GraphPg<V>,
     }
 
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let store = Store::new(&test_db_url()?, &schema_name).await?;
-            let graph = GraphPg::from_iris_store(&store);
-            Ok(TestGraphPg { store, graph })
+            let postgres_client =
+                PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            let graph = GraphPg::new(&postgres_client).await?;
+            Ok(TestGraphPg {
+                postgres_client,
+                graph,
+            })
         }
 
         pub async fn cleanup(&self) -> Result<()> {
-            cleanup(&self.store, &self.store.schema_name).await
+            cleanup(&self.postgres_client, &self.postgres_client.schema_name).await
         }
 
         pub fn owned(&self) -> GraphPg<V> {
