@@ -1,6 +1,5 @@
 use super::{int_ring::IntRing2k, ring_impl::RingElement};
 use crate::execution::player::Role;
-use iris_mpc_common::id::PartyID;
 use num_traits::Zero;
 use serde::{Deserialize, Serialize};
 use std::ops::{
@@ -18,14 +17,6 @@ pub struct Share<T: IntRing2k> {
 impl<T: IntRing2k> Share<T> {
     pub fn new(a: RingElement<T>, b: RingElement<T>) -> Self {
         Self { a, b }
-    }
-
-    pub fn add_assign_const(&mut self, other: T, id: PartyID) {
-        match id {
-            PartyID::ID0 => self.a += RingElement(other),
-            PartyID::ID1 => self.b += RingElement(other),
-            PartyID::ID2 => {}
-        }
     }
 
     pub fn add_assign_const_role(&mut self, other: T, role: Role) {
@@ -339,5 +330,222 @@ where
 {
     pub fn new(code_dot: Share<T>, mask_dot: Share<T>) -> Self {
         DistanceShare { code_dot, mask_dot }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::shares::bit::Bit;
+
+    use super::*;
+    use aes_prng::AesRng;
+    use itertools::izip;
+    use rand::{Rng, SeedableRng};
+    use rand_distr::{Distribution, Standard};
+
+    fn get_shares<T: IntRing2k>(value: T, bitwise: bool) -> Vec<Share<T>>
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = AesRng::from_entropy();
+        let b = RingElement(rng.gen());
+        let c = RingElement(rng.gen());
+        let a = if bitwise {
+            RingElement(value) ^ b ^ c
+        } else {
+            RingElement(value) - b - c
+        };
+        vec![Share::new(a, c), Share::new(b, a), Share::new(c, b)]
+    }
+
+    fn reconstruct_shares<T: IntRing2k>(shares: Vec<Share<T>>) -> RingElement<T> {
+        shares[0].a + shares[1].a + shares[2].a
+    }
+
+    fn reconstruct_bit_shares<T: IntRing2k>(shares: Vec<Share<T>>) -> RingElement<T> {
+        shares[0].a ^ shares[1].a ^ shares[2].a
+    }
+
+    fn reconstruct_mul_shares<T: IntRing2k>(shares: Vec<RingElement<T>>) -> RingElement<T> {
+        shares[0] + shares[1] + shares[2]
+    }
+
+    fn reconstruct_mul_bit_shares<T: IntRing2k>(shares: Vec<RingElement<T>>) -> RingElement<T> {
+        shares[0] ^ shares[1] ^ shares[2]
+    }
+
+    fn arithmetic_test<T: IntRing2k>()
+    where
+        Standard: Distribution<T>,
+    {
+        let mut rng = AesRng::from_entropy();
+        let a_t: T = rng.gen();
+        let b_t: T = rng.gen();
+
+        let a = get_shares(a_t, false);
+        let b = get_shares(b_t, false);
+
+        // Addition
+        let expected_add = RingElement(a_t.wrapping_add(&b_t));
+        let mut c = izip!(a.clone(), b.clone())
+            .map(|(a, b)| a + b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_add);
+
+        c = izip!(a.clone(), b.iter())
+            .map(|(a, b)| a + b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_add);
+
+        c = a.clone();
+        c.iter_mut().zip(b.iter()).for_each(|(a, b)| *a += b);
+        assert_eq!(reconstruct_shares(c), expected_add);
+
+        c = a.clone();
+        c.iter_mut()
+            .zip(b.iter().cloned())
+            .for_each(|(a, b)| *a += b);
+        assert_eq!(reconstruct_shares(c), expected_add);
+
+        // Addition with a constant
+        c = a.clone();
+        c.iter_mut()
+            .enumerate()
+            .for_each(|(i, a)| a.add_assign_const_role(T::one(), Role::new(i)));
+        assert_eq!(
+            reconstruct_shares(c),
+            RingElement(a_t.wrapping_add(&T::one()))
+        );
+
+        // Subtraction
+        let expected_sub = RingElement(a_t.wrapping_sub(&b_t));
+        let mut c = izip!(a.clone(), b.clone())
+            .map(|(a, b)| a - b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_sub);
+
+        c = izip!(a.clone(), b.iter())
+            .map(|(a, b)| a - b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_sub);
+
+        c = a.clone();
+        c.iter_mut().zip(b.iter()).for_each(|(a, b)| *a -= b);
+        assert_eq!(reconstruct_shares(c), expected_sub);
+
+        c = a.clone();
+        c.iter_mut()
+            .zip(b.iter().cloned())
+            .for_each(|(a, b)| *a -= b);
+        assert_eq!(reconstruct_shares(c), expected_sub);
+
+        // Multiplication
+        let expected_mul = RingElement(a_t.wrapping_mul(&b_t));
+        let c = izip!(a.iter(), b.iter())
+            .map(|(a, b)| a * b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_mul_shares(c), expected_mul);
+
+        // Multiplication with a constant
+        let mut c = a.iter().map(|a| a * b_t).collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_mul);
+        c = a.iter().cloned().map(|a| a * b_t).collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_mul);
+        c = a
+            .iter()
+            .cloned()
+            .map(|a| a * RingElement(b_t))
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_mul);
+        c = a.clone();
+        c.iter_mut().for_each(|a| *a *= b_t);
+        assert_eq!(reconstruct_shares(c), expected_mul);
+
+        // Negation
+        let expected_neg = -RingElement(a_t);
+        let mut c = a.iter().map(|a| -a).collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_neg);
+        c = a.iter().cloned().map(|a| -a).collect::<Vec<_>>();
+        assert_eq!(reconstruct_shares(c), expected_neg);
+
+        let a = get_shares(a_t, true);
+        let b = get_shares(b_t, true);
+
+        // XOR
+        let expected_xor = RingElement(a_t ^ b_t);
+        let mut c = izip!(a.clone(), b.clone())
+            .map(|(a, b)| a ^ b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_xor);
+
+        c = izip!(a.clone(), b.iter())
+            .map(|(a, b)| a ^ b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_xor);
+
+        c = izip!(a.iter(), b.iter())
+            .map(|(a, b)| a ^ b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_xor);
+
+        c = a.clone();
+        c.iter_mut().zip(b.iter()).for_each(|(a, b)| *a ^= b);
+        assert_eq!(reconstruct_bit_shares(c), expected_xor);
+
+        c = a.clone();
+        c.iter_mut()
+            .zip(b.iter().cloned())
+            .for_each(|(a, b)| *a ^= b);
+        assert_eq!(reconstruct_bit_shares(c), expected_xor);
+
+        // AND
+        let expected_and = RingElement(a_t & b_t);
+        let c = izip!(a.iter(), b.iter())
+            .map(|(a, b)| a & b)
+            .collect::<Vec<_>>();
+        assert_eq!(reconstruct_mul_bit_shares(c), expected_and);
+        let mut c = a.iter().cloned().map(|a| a & b_t).collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_and);
+        c = a.iter().map(|a| a & &RingElement(b_t)).collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_and);
+
+        // NOT
+        let expected_not = RingElement(!a_t);
+        c = a.iter().map(|a| !a).collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_not);
+
+        // Shift
+        let expected_shl = RingElement(a_t << 1);
+        let mut c = a.iter().cloned().map(|a| a << 1).collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_shl);
+        let expected_shr = RingElement(a_t >> 1);
+        c = a.iter().map(|a| a >> 1).collect::<Vec<_>>();
+        assert_eq!(reconstruct_bit_shares(c), expected_shr);
+    }
+
+    fn identity_test<T: IntRing2k>() {
+        let a: Share<T> = Share::zero();
+        assert_eq!(a.a, RingElement::zero());
+        assert_eq!(a.b, RingElement::zero());
+        assert!(a.is_zero());
+    }
+
+    macro_rules! test_impl {
+        ($([$ty:ty,$fn:ident]),*) => ($(
+            #[test]
+            fn $fn() {
+                arithmetic_test::<$ty>();
+                identity_test::<$ty>();
+            }
+        )*)
+    }
+
+    test_impl! {
+        [Bit, bit_test],
+        [u8, u8_test],
+        [u16, u16_test],
+        [u32, u32_test],
+        [u64, u64_test],
+        [u128, u128_test]
     }
 }
