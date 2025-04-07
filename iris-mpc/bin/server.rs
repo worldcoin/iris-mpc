@@ -231,7 +231,7 @@ async fn receive_batch(
                             .increment(1);
                         if modifications.contains_key(&identity_deletion_request.serial_id) {
                             tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
+                                "Received multiple modification operations in batch on a serial id: {}. Skipping identity deletion request",
                                 identity_deletion_request.serial_id
                             );
                             continue;
@@ -405,7 +405,7 @@ async fn receive_batch(
 
                             if modifications.contains_key(&reauth_request.serial_id) {
                                 tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
+                                "Received multiple modification operations in batch on a serial id: {}. Skipping reauth request",
                                 reauth_request.serial_id
                             );
                                 continue;
@@ -561,16 +561,50 @@ async fn receive_batch(
                             let bucket_name = config.shares_bucket_name.clone();
                             let s3_key = reset_update_request.s3_key.clone();
 
-                            // TODO handle errors better here.
-                            let (left_shares, right_shares) = get_iris_shares_parse_task(
+                            let task_handle = get_iris_shares_parse_task(
                                 party_id,
                                 shares_encryption_key_pairs,
                                 semaphore,
                                 s3_client_arc,
                                 bucket_name,
                                 s3_key,
-                            )?
-                            .await??;
+                            )?;
+
+                            let (left_shares, right_shares) = match task_handle.await {
+                                Ok(result) => {
+                                    match result {
+                                        Ok(shares) => shares,
+                                        Err(e) => {
+                                            tracing::error!("Failed to process iris shares for reset update: {:?}", e);
+                                            continue;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to join task handle for reset update: {:?}",
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            if modifications.contains_key(&reset_update_request.serial_id) {
+                                tracing::warn!(
+                                "Received multiple modification operations in batch on a serial id: {}. Skipping reset update request",
+                                reset_update_request.serial_id
+                            );
+                                continue;
+                            }
+
+                            let modification = store
+                                .insert_modification(
+                                    reset_update_request.serial_id as i64,
+                                    RESET_UPDATE_MESSAGE_TYPE,
+                                    Some(reset_update_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            modifications.insert(reset_update_request.serial_id, modification);
 
                             batch_query
                                 .reset_update_indices
@@ -888,6 +922,7 @@ async fn send_last_modifications_to_sns(
     config: &Config,
     reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
 ) -> eyre::Result<()> {
     // Fetch the last modifications from the database
@@ -905,6 +940,7 @@ async fn send_last_modifications_to_sns(
     // Collect messages by type
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
+    let mut reset_update_messages = Vec::new();
     for modification in &last_modifications {
         if modification.result_message_body.is_none() {
             tracing::error!("Missing modification result message body");
@@ -924,6 +960,9 @@ async fn send_last_modifications_to_sns(
             REAUTH_MESSAGE_TYPE => {
                 reauth_messages.push(body);
             }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                reset_update_messages.push(body);
+            }
             other => {
                 tracing::error!("Unknown message type: {}", other);
             }
@@ -931,10 +970,11 @@ async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} deletion, {} reauth",
+        "Sending {} last modifications to SNS. {} deletion, {} reauth, {} reset update",
         last_modifications.len(),
         deletion_messages.len(),
         reauth_messages.len(),
+        reset_update_messages.len(),
     );
 
     if !deletion_messages.is_empty() {
@@ -957,6 +997,18 @@ async fn send_last_modifications_to_sns(
             config,
             reauth_message_attributes,
             REAUTH_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reset_update_messages.is_empty() {
+        send_results_to_sns(
+            reset_update_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            reset_update_message_attributes,
+            RESET_UPDATE_MESSAGE_TYPE,
         )
         .await?;
     }
@@ -1504,20 +1556,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     dummy_shares_for_deletions.clone().0,
                     dummy_shares_for_deletions.clone().1,
                 ),
-                REAUTH_MESSAGE_TYPE => {
-                    let (left_shares, right_shares) = get_iris_shares_parse_task(
-                        party_id,
-                        shares_encryption_key_pair.clone(),
-                        Arc::clone(&semaphore),
-                        aws_clients.s3_client.clone(),
-                        config.shares_bucket_name.clone(),
-                        modification.clone().s3_url.unwrap(),
-                    )?
-                    .await?
-                    .unwrap();
-                    (left_shares.0, left_shares.1, right_shares.0, right_shares.1)
-                }
-                RESET_UPDATE_MESSAGE_TYPE => {
+                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE => {
                     let (left_shares, right_shares) = get_iris_shares_parse_task(
                         party_id,
                         shares_encryption_key_pair.clone(),
@@ -1549,6 +1588,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &config,
             &reauth_result_attributes,
             &identity_deletion_result_attributes,
+            &reset_update_result_attributes,
             max_modification_lookback,
         )
         .await
