@@ -2,7 +2,10 @@ use std::{error::Error, fs::File, io::BufReader, path::PathBuf};
 
 use aes_prng::AesRng;
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, postgres::{AccessMode, PostgresClient}};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode,
+    postgres::{AccessMode, PostgresClient},
+};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
@@ -345,8 +348,9 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     let mut dbs = Vec::new();
 
     for (url, schema) in izip!(args.db_urls.iter(), args.db_schemas.iter()).take(N_PARTIES) {
-        let client =
-            PostgresClient::new(url, schema, AccessMode::ReadWrite).await.unwrap();
+        let client = PostgresClient::new(url, schema, AccessMode::ReadWrite)
+            .await
+            .unwrap();
         let store = Store::new(&client).await.unwrap();
         let graph_pg = GraphPg::new(&client).await.unwrap();
         dbs.push(DbContext { store, graph_pg });
