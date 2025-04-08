@@ -233,7 +233,7 @@ pub async fn cross_compare(
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
     pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
-) -> eyre::Result<Vec<RingElement<u16>>> {
+) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (x, y) = pair;
@@ -245,7 +245,7 @@ pub async fn galois_ring_pairwise_distance(
         // the elements that a full GaloisRingMask has.
         additive_shares.push(RingElement(2) * RingElement(mask_dist));
     }
-    Ok(additive_shares)
+    additive_shares
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by
@@ -714,9 +714,7 @@ mod tests {
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
                 let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
-                let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
-                    .await
-                    .unwrap();
+                let x = galois_ring_pairwise_distance(&mut player_session, &own_shares).await;
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();

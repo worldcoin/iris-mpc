@@ -13,7 +13,7 @@ pub async fn calculate_missing_is_match(
     search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
     missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-) -> BothEyes<VecRequests<MapEdges<bool>>> {
+) -> eyre::Result<BothEyes<VecRequests<MapEdges<bool>>>> {
     let [missing_vectors_left, missing_vectors_right] = missing_vector_ids;
 
     // Parallelize left and right sessions (IO only).
@@ -25,14 +25,14 @@ pub async fn calculate_missing_is_match(
             &sessions[RIGHT]
         ),
     );
-    [out_l, out_r]
+    Ok([out_l?, out_r?])
 }
 
 async fn per_side(
     queries: &VecRequests<VecRots<QueryRef>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSessionRef>,
-) -> VecRequests<MapEdges<bool>> {
+) -> eyre::Result<VecRequests<MapEdges<bool>>> {
     // A request is to compare all rotations to a list of vectors - it is the length of the vector ids.
     let n_requests = missing_vector_ids.len();
     // A task is to compare one rotation to the vectors.
@@ -61,7 +61,11 @@ async fn per_side(
         .map(|(chunk, session)| per_session(chunk, session.clone()))
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
-        .await;
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, JoinError>>()?
+        .into_iter()
+        .collect::<eyre::Result<Vec<_>>>()?;
 
     // Undo the chunking per session.
     let results = unsplit_tasks(results);
@@ -77,38 +81,38 @@ async fn per_side(
         .collect_vec();
 
     assert_eq!(results.len(), n_requests);
-    results
+    Ok(results)
 }
 
 async fn per_session(
     tasks: VecRequests<(QueryRef, Arc<VecEdges<VectorId>>)>,
     session: HawkSessionRef,
-) -> VecRequests<MapEdges<bool>> {
+) -> eyre::Result<VecRequests<MapEdges<bool>>> {
     let mut session = session.write().await;
 
     let mut out = Vec::with_capacity(tasks.len());
     for (query, vectors) in tasks {
-        let matches = per_query(query, &vectors, &mut session).await;
+        let matches = per_query(query, &vectors, &mut session).await?;
         out.push(matches);
     }
-    out
+    Ok(out)
 }
 
 async fn per_query(
     query: QueryRef,
     vector_ids: &[VectorId],
     session: &mut HawkSession,
-) -> MapEdges<bool> {
+) -> eyre::Result<MapEdges<bool>> {
     let distances = session
         .aby3_store
         .eval_distance_batch(&[query], vector_ids)
-        .await;
+        .await?;
 
-    let is_matches = session.aby3_store.is_match_batch(&distances).await;
+    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
 
-    izip!(vector_ids, is_matches)
+    Ok(izip!(vector_ids, is_matches)
         .map(|(v, m)| (*v, m))
-        .collect()
+        .collect())
 }
 
 /// Split a Vec into at most `n_sessions` chunks.
@@ -128,8 +132,8 @@ fn split_tasks<T>(tasks: Vec<T>, n_sessions: usize) -> Vec<Vec<T>> {
         .collect_vec()
 }
 
-fn unsplit_tasks<T>(chunks: Vec<Result<Vec<T>, JoinError>>) -> Vec<T> {
-    chunks.into_iter().flat_map(Result::unwrap).collect_vec()
+fn unsplit_tasks<T>(chunks: Vec<Vec<T>>) -> Vec<T> {
+    chunks.into_iter().flatten().collect_vec()
 }
 
 fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool> {
@@ -146,7 +150,7 @@ mod test {
     use super::*;
 
     #[tokio::test]
-    async fn test_split_tasks() {
+    async fn test_split_tasks() -> eyre::Result<()> {
         let tasks = vec![1, 2, 3, 4, 5, 6, 7, 8, 9];
         let expect = vec![10, 20, 30, 40, 50, 60, 70, 80, 90];
         let per_query = |q| q * 10;
@@ -156,10 +160,14 @@ mod test {
             let chunks = split_tasks(tasks.clone(), n_sessions);
             assert_eq!(chunks.len(), n_sessions.min(tasks.len()));
 
-            let results = chunks.into_iter().map(per_session).collect_vec();
+            let results = chunks
+                .into_iter()
+                .map(per_session)
+                .collect::<eyre::Result<Vec<_>>>()?;
 
             let results = unsplit_tasks(results);
             assert_eq!(results, expect);
         }
+        Ok(())
     }
 }

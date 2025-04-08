@@ -168,9 +168,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
                     let pairs = [(&x1, &y1), (&x2, &y2)];
-                    let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
-                        .await
-                        .unwrap();
+                    let ds_and_ts =
+                        galois_ring_pairwise_distance(&mut player_session, &pairs).await;
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
@@ -291,7 +290,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                     .search(&mut *vector_store, &mut graph_store, &query, 1)
                                     .await
                                     .unwrap();
-                                searcher.is_match(&mut *vector_store, &[neighbors]).await;
+                                searcher
+                                    .is_match(&mut *vector_store, &[neighbors])
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;

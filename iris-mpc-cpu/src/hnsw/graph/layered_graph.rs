@@ -293,23 +293,23 @@ mod tests {
             &mut self,
             query: &Self::QueryRef,
             vector: &Self::VectorRef,
-        ) -> Self::DistanceRef {
+        ) -> eyre::Result<Self::DistanceRef> {
             // Hamming distance
             let vector_0 = self.points[&(query.0 as usize)].data;
             let vector_1 = self.points[&(vector.0 as usize)].data;
-            hamming_distance(vector_0, vector_1)
+            Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-            *distance == 0
+        async fn is_match(&mut self, distance: &Self::DistanceRef) -> eyre::Result<bool> {
+            Ok(*distance == 0)
         }
 
         async fn less_than(
             &mut self,
             distance1: &Self::DistanceRef,
             distance2: &Self::DistanceRef,
-        ) -> bool {
-            *distance1 < *distance2
+        ) -> eyre::Result<bool> {
+            Ok(*distance1 < *distance2)
         }
     }
 
@@ -348,7 +348,7 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
         }
 
         let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
@@ -386,7 +386,7 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
 
             point_ids_map.insert(query, PointId(rng.next_u32()));
         }

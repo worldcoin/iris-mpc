@@ -116,7 +116,7 @@ pub async fn apply_swap_network<V: VectorStore>(
     store: &mut V,
     list: &mut [(V::VectorRef, V::DistanceRef)],
     network: &SwapNetwork,
-) {
+) -> eyre::Result<()> {
     for layer in network.layers.iter() {
         let distances: Vec<_> = layer
             .iter()
@@ -128,11 +128,13 @@ pub async fn apply_swap_network<V: VectorStore>(
                 },
             )
             .collect();
-        let comp_results = store.less_than_batch(&distances).await;
+        let comp_results = store.less_than_batch(&distances).await?;
         for ((idx1, idx2), is_gt) in layer.iter().zip(comp_results) {
             if is_gt {
                 list.swap(*idx1, *idx2)
             }
         }
     }
+
+    Ok(())
 }

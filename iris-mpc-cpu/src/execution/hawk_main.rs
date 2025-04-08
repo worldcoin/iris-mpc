@@ -20,7 +20,7 @@ use crate::{
 };
 use aes_prng::AesRng;
 use clap::Parser;
-use eyre::Result;
+use eyre::{Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
@@ -404,7 +404,7 @@ impl HawkActor {
 
         let match_count = search_params
             .match_count(&mut session.aby3_store, &links)
-            .await;
+            .await?;
 
         Ok(InsertPlan {
             query,
@@ -447,7 +447,7 @@ impl HawkActor {
                 insert_plan.links,
                 insert_plan.set_ep,
             )
-            .await;
+            .await?;
 
         graph_store.insert_apply(connect_plan.clone()).await;
 
@@ -818,16 +818,13 @@ impl HawkHandle {
                 let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
                     job.request.search_queries();
 
-                let intra_results = intra_batch_is_match(&sessions, search_queries)
-                    .await
-                    .unwrap();
+                let intra_results = intra_batch_is_match(&sessions, search_queries).await?;
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
                 let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = hawk_actor
                     .search_both_eyes(&sessions, search_queries)
-                    .await
-                    .unwrap();
+                    .await?;
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
@@ -837,7 +834,7 @@ impl HawkHandle {
                         step1.missing_vector_ids(),
                         &sessions,
                     )
-                    .await;
+                    .await?;
                     step1.step2(&missing_is_match)
                 };
 
@@ -864,7 +861,7 @@ impl HawkHandle {
                             .collect();
 
                         // Insert in memory, and return the plans to update the persistent database.
-                        let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                        let plans = hawk_actor.insert(sessions, insert_plans).await?;
 
                         // Convert to Vec<Option> matching the request order.
                         for (i, plan) in izip!(&insert_indices, plans) {
@@ -891,6 +888,7 @@ impl HawkHandle {
 
                 let _ = job.return_channel.send(Ok(results));
             }
+            Ok::<_, Report>(())
         });
 
         Ok(Self { job_queue: tx })

@@ -4,14 +4,17 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     network::{grpc::setup_local_grpc_networking, local::LocalNetworkingStore, NetworkType},
-    protocol::{ops::setup_replicated_prf, prf::PrfSeed},
+    protocol::{
+        ops::setup_replicated_prf,
+        prf::{Prf, PrfSeed},
+    },
 };
 use futures::future::join_all;
 use std::{
     collections::HashSet,
     sync::{Arc, LazyLock},
 };
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 pub fn generate_local_identities() -> Vec<Identity> {
     vec![
@@ -101,14 +104,13 @@ impl LocalRuntime {
                 let mut jobs = vec![];
                 for player in networks.iter() {
                     let player = player.clone();
-                    let task =
-                        tokio::spawn(async move { player.create_session(sess_id).await.unwrap() });
+                    let task = tokio::spawn(async move { player.create_session(sess_id).await });
                     jobs.push(task);
                 }
                 let grpc_sessions = join_all(jobs)
                     .await
                     .into_iter()
-                    .map(|r| r.map_err(eyre::Report::new))
+                    .map(|r| r.map_err(eyre::Report::new)?)
                     .collect::<eyre::Result<Vec<_>>>()?;
                 let network_sessions: Vec<NetworkSession> = grpc_sessions
                     .into_iter()
@@ -127,11 +129,9 @@ impl LocalRuntime {
         let mut jobs = vec![];
         for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id];
-            let task = tokio::spawn(async move {
-                let prf = setup_replicated_prf(&mut network_session, player_seed)
-                    .await
-                    .unwrap();
-                (network_session, prf)
+            let task: JoinHandle<eyre::Result<(NetworkSession, Prf)>> = tokio::spawn(async move {
+                let prf = setup_replicated_prf(&mut network_session, player_seed).await?;
+                Ok((network_session, prf))
             });
             jobs.push(task);
         }
@@ -139,7 +139,7 @@ impl LocalRuntime {
             .await
             .into_iter()
             .map(|t| {
-                let (network_session, prf) = t?;
+                let (network_session, prf) = t??;
                 Ok(Session {
                     network_session,
                     prf,

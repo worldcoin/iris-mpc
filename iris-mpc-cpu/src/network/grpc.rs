@@ -863,6 +863,7 @@ mod tests {
                     searcher
                         .is_match(&mut *store_lock, &[secret_neighbors])
                         .await
+                        .unwrap()
                 });
             }
             let res = jobs.join_all().await;

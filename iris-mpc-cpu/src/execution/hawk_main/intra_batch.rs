@@ -43,7 +43,9 @@ pub async fn intra_batch_is_match(
         .map(per_session)
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
-        .await;
+        .await
+        .into_iter()
+        .collect::<Result<Vec<Result<_>>, JoinError>>()?;
 
     aggregate_results(n_requests, results)
 }
@@ -52,7 +54,7 @@ async fn per_session(
     search_queries: &VecRequests<VecRots<QueryRef>>,
     session: &mut HawkSession,
     batch: Batch,
-) -> Vec<IsMatch> {
+) -> eyre::Result<Vec<IsMatch>> {
     // Enumerate the pairs of requests.
     // These are unordered pairs: if we do (i, j) we skip (j, i).
     let pairs = batch
@@ -81,13 +83,13 @@ async fn per_session(
     let distances = session
         .aby3_store
         .eval_pairwise_distances(query_pairs)
-        .await;
-    let distances = session.aby3_store.lift_distances(distances).await.unwrap();
-    let is_matches = session.aby3_store.is_match_batch(&distances).await;
+        .await?;
+    let distances = session.aby3_store.lift_distances(distances).await?;
+    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
 
-    izip!(pairs, is_matches)
+    Ok(izip!(pairs, is_matches)
         .filter_map(|(pair, is_match)| is_match.then_some(pair))
-        .collect_vec()
+        .collect_vec())
 }
 
 struct IsMatch {
@@ -98,7 +100,7 @@ struct IsMatch {
 
 fn aggregate_results(
     n_requests: usize,
-    results: Vec<Result<Vec<IsMatch>, JoinError>>,
+    results: Vec<Result<Vec<IsMatch>>>,
 ) -> Result<VecRequests<Vec<usize>>> {
     let mut join = HashMap::new();
 
