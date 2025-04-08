@@ -2,7 +2,7 @@ use std::{error::Error, fs::File, io::BufReader, path::PathBuf};
 
 use aes_prng::AesRng;
 use clap::Parser;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, postgres::{AccessMode, PostgresClient}};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
@@ -345,8 +345,11 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     let mut dbs = Vec::new();
 
     for (url, schema) in izip!(args.db_urls.iter(), args.db_schemas.iter()).take(N_PARTIES) {
-        let store = Store::new(url, schema).await.unwrap();
-        dbs.push(DbContext { store });
+        let client =
+            PostgresClient::new(url, schema, AccessMode::ReadWrite).await.unwrap();
+        let store = Store::new(&client).await.unwrap();
+        let graph_pg = GraphPg::new(&client).await.unwrap();
+        dbs.push(DbContext { store, graph_pg });
     }
 
     dbs
@@ -355,6 +358,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
 struct DbContext {
     /// Postgres store to persist data against
     store: Store,
+    graph_pg: GraphPg<PlaintextStore>,
 }
 
 impl DbContext {
@@ -363,8 +367,7 @@ impl DbContext {
         graph: GraphMem<PlaintextStore>,
         side: StoreId,
     ) -> Result<(), Box<dyn Error>> {
-        let graph_pg: GraphPg<PlaintextStore> = GraphPg::from_iris_store(&self.store);
-        let mut graph_tx = graph_pg.tx().await.unwrap();
+        let mut graph_tx = self.graph_pg.tx().await.unwrap();
 
         let GraphMem {
             entry_point,
@@ -385,7 +388,7 @@ impl DbContext {
 
                 if (idx % 1000) == 999 {
                     graph_tx.tx.commit().await?;
-                    graph_tx = graph_pg.tx().await.unwrap();
+                    graph_tx = self.graph_pg.tx().await.unwrap();
                 }
             }
         }
@@ -443,8 +446,7 @@ impl DbContext {
         &self,
         side: StoreId,
     ) -> Result<GraphMem<PlaintextStore>, eyre::Report> {
-        let graph_pg: GraphPg<PlaintextStore> = GraphPg::from_iris_store(&self.store);
-        let mut graph_tx = graph_pg.tx().await.unwrap();
+        let mut graph_tx = self.graph_pg.tx().await.unwrap();
         let mut graph_ops = graph_tx.with_graph(side);
 
         graph_ops.load_to_mem().await
