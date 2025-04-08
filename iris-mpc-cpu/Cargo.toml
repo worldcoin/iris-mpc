@@ -53,6 +53,7 @@ uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = [
     "tokio-sleep",
 ] }
+rand_chacha = { version = "0.3", features = ["serde1"] }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
