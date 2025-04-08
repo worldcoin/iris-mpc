@@ -1341,6 +1341,7 @@ impl ServerActor {
                 reauth_or_rule_used: batch.reauth_use_or_rule,
                 reset_update_indices: batch.reset_update_indices,
                 reset_update_request_ids: batch.reset_update_request_ids,
+                reset_update_shares: batch.reset_update_shares,
                 modifications: batch.modifications,
                 actor_data: (),
             })

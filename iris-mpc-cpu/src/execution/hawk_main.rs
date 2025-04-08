@@ -754,6 +754,7 @@ impl HawkResult {
             reauth_or_rule_used: Default::default(),     // TODO.
             reset_update_indices: vec![],                // TODO.
             reset_update_request_ids: vec![],            // TODO.
+            reset_update_shares: vec![],                 // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
         }
