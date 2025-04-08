@@ -1,3 +1,4 @@
+use crate::job::GaloisSharesBothSides;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -127,8 +128,6 @@ pub enum TestCase {
     ResetCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetCheckNonMatch and expect it to be inserted without matches. This will make sure that reset_check did not write into the database.
     EnrollmentAfterResetCheckNonMatch,
-    /// Send a reset update request to replace an existing iris code in the database
-    ResetUpdate,
     /// Send an enrollment request using the iris codes used during ResetUpdate and expect a match result
     MatchAfterResetUpdate,
 }
@@ -154,7 +153,6 @@ impl TestCase {
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
-            TestCase::ResetUpdate,
             TestCase::MatchAfterResetUpdate,
         ]
     }
@@ -186,8 +184,6 @@ pub struct ExpectedResult {
     is_reauth_successful: Option<bool>,
     /// Whether this is a RESET_CHECK_MESSAGE_TYPE request
     is_reset_check: bool,
-    /// Whether this is a RESET_UPDATE_MESSAGE_TYPE request
-    is_reset_update: bool,
 }
 
 impl ExpectedResult {
@@ -205,7 +201,6 @@ pub struct ExpectedResultBuilder {
     is_batch_match: bool,
     is_reauth_successful: Option<bool>,
     is_reset_check: bool,
-    is_reset_update: bool,
 }
 
 impl ExpectedResultBuilder {
@@ -239,12 +234,6 @@ impl ExpectedResultBuilder {
         self
     }
 
-    /// Sets is_reset_update
-    pub fn with_reset_update(mut self, is_reset_update: bool) -> Self {
-        self.is_reset_update = is_reset_update;
-        self
-    }
-
     /// Builds the ExpectedResult
     pub fn build(self) -> ExpectedResult {
         ExpectedResult {
@@ -253,7 +242,6 @@ impl ExpectedResultBuilder {
             is_batch_match: self.is_batch_match,
             is_reauth_successful: self.is_reauth_successful,
             is_reset_check: self.is_reset_check,
-            is_reset_update: self.is_reset_update,
         }
     }
 }
@@ -379,6 +367,7 @@ impl TestCaseGenerator {
         &mut self,
         max_batch_size: usize,
         max_deletions_per_batch: usize,
+        max_reset_updates_per_batch: usize,
     ) -> Result<([BatchQuery; 3], HashMap<String, E2ETemplate>)> {
         let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
         let mut batch0 = BatchQuery::default();
@@ -454,11 +443,13 @@ impl TestCaseGenerator {
                 let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
+                    || self.disallowed_queries.contains(&(idx as u32))
                 {
                     continue;
                 }
                 self.deleted_indices_buffer.push(idx as u32);
                 self.deleted_indices.insert(idx as u32);
+                self.disallowed_queries.push(idx as u32);
                 tracing::info!("Deleting index {}", idx);
 
                 batch0.deletion_requests_indices.push(idx as u32);
@@ -466,6 +457,66 @@ impl TestCaseGenerator {
                 batch2.deletion_requests_indices.push(idx as u32);
             }
         }
+
+        // for non-empty batches also add some reset updates
+        if max_reset_updates_per_batch > 0 {
+            for _ in 0..self.rng.gen_range(0..max_reset_updates_per_batch) {
+                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                if self.deleted_indices.contains(&(idx as u32))
+                    || self.db_indices_used_in_current_batch.contains(&idx)
+                    || self.disallowed_queries.contains(&(idx as u32))
+                {
+                    continue;
+                }
+                let code = IrisCode::random_rng(&mut self.rng);
+                let template = E2ETemplate {
+                    left: code.clone(),
+                    right: code,
+                };
+                let shared_template = template.to_shared_template(true, &mut self.rng);
+                let shares0 = GaloisSharesBothSides {
+                    code_left: shared_template.left_shared_code[0].clone(),
+                    mask_left: shared_template.left_shared_mask[0].clone(),
+                    code_right: shared_template.right_shared_code[0].clone(),
+                    mask_right: shared_template.right_shared_mask[0].clone(),
+                };
+                let shares1 = GaloisSharesBothSides {
+                    code_left: shared_template.left_shared_code[1].clone(),
+                    mask_left: shared_template.left_shared_mask[1].clone(),
+                    code_right: shared_template.right_shared_code[1].clone(),
+                    mask_right: shared_template.right_shared_mask[1].clone(),
+                };
+                let shares2 = GaloisSharesBothSides {
+                    code_left: shared_template.left_shared_code[2].clone(),
+                    mask_left: shared_template.left_shared_mask[2].clone(),
+                    code_right: shared_template.right_shared_code[2].clone(),
+                    mask_right: shared_template.right_shared_mask[2].clone(),
+                };
+                self.disallowed_queries.push(idx as u32);
+                self.reset_update_templates
+                    .insert(idx as u32, template.clone());
+                let req_id = Uuid::new_v4().to_string();
+                requests.insert(req_id.clone(), template.clone());
+                tracing::info!(
+                    "Applying reset update to index {} with request id {}",
+                    idx,
+                    req_id
+                );
+
+                batch0.reset_update_request_ids.push(req_id.clone());
+                batch1.reset_update_request_ids.push(req_id.clone());
+                batch2.reset_update_request_ids.push(req_id);
+
+                batch0.reset_update_indices.push(idx as u32);
+                batch1.reset_update_indices.push(idx as u32);
+                batch2.reset_update_indices.push(idx as u32);
+
+                batch0.reset_update_shares.push(shares0);
+                batch1.reset_update_shares.push(shares1);
+                batch2.reset_update_shares.push(shares2);
+            }
+        }
+
         Ok(([batch0, batch1, batch2], requests))
     }
 
@@ -481,6 +532,12 @@ impl TestCaseGenerator {
         for _ in 0..100 {
             let potential_db_index = self.rng.gen_range(range.clone());
             if self.deleted_indices.contains(&(potential_db_index as u32)) {
+                continue;
+            }
+            if self
+                .db_indices_used_in_current_batch
+                .contains(&potential_db_index)
+            {
                 continue;
             }
             if self
@@ -517,7 +574,6 @@ impl TestCaseGenerator {
             TestCase::NonMatchSkipPersistence,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
-            TestCase::ResetUpdate,
         ];
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
@@ -883,21 +939,6 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
-                TestCase::ResetUpdate => {
-                    tracing::info!("Sending reset update request");
-                    let (db_index, _) = self.get_iris_code_in_db(DatabaseRange::Full);
-                    self.db_indices_used_in_current_batch.insert(db_index);
-                    self.disallowed_queries.push(db_index as u32);
-                    self.expected_results.insert(
-                        request_id.to_string(),
-                        ExpectedResult::builder().with_reset_update(true).build(),
-                    );
-                    let template = IrisCode::random_rng(&mut self.rng);
-                    E2ETemplate {
-                        left: template.clone(),
-                        right: template,
-                    }
-                }
                 TestCase::MatchAfterResetUpdate => {
                     tracing::info!(
                         "Sending enrollment request using iris codes used during reset update"
@@ -999,19 +1040,10 @@ impl TestCaseGenerator {
             is_reauth_successful,
             is_skip_persistence_request,
             is_reset_check,
-            is_reset_update,
         } = self
             .expected_results
             .get(req_id)
             .expect("request id not found");
-
-        if is_reset_update {
-            // insert reset_update template to enable testing MatchAfterResetUpdate case
-            self.reset_update_templates
-                .insert(idx, requests.get(req_id).unwrap().clone());
-            self.inserted_responses.remove(&idx);
-            return;
-        }
 
         if is_reset_check {
             // assert that the reset_check requests are not reported as unique. match fields are only used for enrollment requests
@@ -1065,13 +1097,17 @@ impl TestCaseGenerator {
         num_batches: usize,
         max_batch_size: usize,
         max_deletions_per_batch: usize,
+        max_reset_updates_per_batch: usize,
         handles: [&mut impl JobSubmissionHandle; 3],
     ) -> Result<()> {
         let [handle0, handle1, handle2] = handles;
         for _ in 0..num_batches {
             // Skip empty batch
-            let ([batch0, batch1, batch2], requests) =
-                self.generate_query_batch(max_batch_size, max_deletions_per_batch)?;
+            let ([batch0, batch1, batch2], requests) = self.generate_query_batch(
+                max_batch_size,
+                max_deletions_per_batch,
+                max_reset_updates_per_batch,
+            )?;
             if batch0.request_ids.is_empty() {
                 continue;
             }
@@ -1103,6 +1139,8 @@ impl TestCaseGenerator {
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
                     successful_reauths,
+                    reset_update_indices,
+                    reset_update_request_ids,
                     ..
                 } = res;
 
@@ -1149,6 +1187,12 @@ impl TestCaseGenerator {
                         &requests,
                         was_reauth_success,
                     );
+                }
+
+                for (req_id, idx) in izip!(reset_update_request_ids, reset_update_indices) {
+                    assert!(requests.contains_key(req_id));
+                    assert!(self.reset_update_templates.contains_key(idx));
+                    resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
                 }
             }
 

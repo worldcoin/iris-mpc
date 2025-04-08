@@ -21,6 +21,7 @@ mod e2e_test {
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
+    const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -206,6 +207,7 @@ mod e2e_test {
                 NUM_BATCHES,
                 MAX_BATCH_SIZE,
                 MAX_DELETIONS_PER_BATCH,
+                MAX_RESET_UPDATES_PER_BATCH,
                 [&mut handle0, &mut handle1, &mut handle2],
             )
             .await?;
