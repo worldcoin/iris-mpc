@@ -1,7 +1,9 @@
 pub(crate) mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
-pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
+pub use actor::{
+    generate_luc_records, prepare_or_policy_bitmap, Case, ServerActor, ServerActorHandle,
+};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::{
     helpers::sync::Modification,
@@ -144,10 +146,18 @@ impl PreprocessedBatchQuery {
     pub fn get_iris_interpolated_requests_preprocessed(
         &self,
         eye: Eye,
+        case: Case,
     ) -> &BatchQueryEntriesPreprocessed {
-        match eye {
-            Eye::Left => &self.left_iris_interpolated_requests_preprocessed,
-            Eye::Right => &self.right_iris_interpolated_requests_preprocessed,
+        if case == Case::Mirror {
+            match eye {
+                Eye::Left => &self.right_mirrored_iris_interpolated_requests_preprocessed,
+                Eye::Right => &self.left_mirrored_iris_interpolated_requests_preprocessed,
+            }
+        } else {
+            match eye {
+                Eye::Left => &self.left_iris_interpolated_requests_preprocessed,
+                Eye::Right => &self.right_iris_interpolated_requests_preprocessed,
+            }
         }
     }
 

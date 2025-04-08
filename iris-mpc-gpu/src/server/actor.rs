@@ -808,11 +808,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side1 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, case)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, case)
                 .mask
                 .clone(),
             code_query_insert: batch
@@ -904,11 +904,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side2 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side)
+                .get_iris_interpolated_requests_preprocessed(other_side, case)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side)
+                .get_iris_interpolated_requests_preprocessed(other_side, case)
                 .mask
                 .clone(),
             code_query_insert: batch
