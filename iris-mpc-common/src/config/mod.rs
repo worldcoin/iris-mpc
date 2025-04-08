@@ -269,7 +269,7 @@ fn default_startup_sync_timeout_secs() -> u64 {
 }
 
 fn default_max_batch_size() -> usize {
-    1
+    64
 }
 
 fn default_heartbeat_interval_secs() -> u64 {
