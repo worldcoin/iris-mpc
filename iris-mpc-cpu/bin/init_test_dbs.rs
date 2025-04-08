@@ -128,8 +128,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Establishing connections with databases");
     let dbs = init_dbs(&args).await;
 
-    info!("Counting existing database irises");
     let n_existing_irises = dbs[0].store.get_max_serial_id().await?;
+    info!("Found {} existing database irises", n_existing_irises);
 
     let (mut hnsw_rng_l, mut hnsw_rng_r, mut aby3_rng) = Rngs::from(&args);
     let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
@@ -144,7 +144,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             hnsw_rng_r = rng_r;
         } else {
             warn!(
-                "Couldn't load intermediate PRNG state from file: {}",
+                "Couldn't load intermediate HNSW PRNG state from file: {}",
                 prng_state_filename
             );
             warn!("Initialized PRNGs from explicit seeds");
@@ -173,10 +173,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    // read graph store from party 0
-    let graph_l = dbs[0].load_graph_to_mem(StoreId::Left).await?;
-    let graph_r = dbs[0].load_graph_to_mem(StoreId::Right).await?;
-    let graphs = [graph_l, graph_r];
+    let graphs = if n_existing_irises > 0 {
+        // read graph store from party 0
+        let graph_l = dbs[0].load_graph_to_mem(StoreId::Left).await?;
+        let graph_r = dbs[0].load_graph_to_mem(StoreId::Right).await?;
+        [graph_l, graph_r]
+    } else {
+        // new graphs
+        [GraphMem::new(), GraphMem::new()]
+    };
 
     info!(
         "Reading NDJSON file of plaintext iris codes: {:?}",
@@ -222,7 +227,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
         hnsw_rngs.into_iter()
     ) {
         let params = params.clone();
-        // let mut hnsw_rng = AesRng::seed_from_u64(hnsw_rng.next_u64());
 
         jobs.spawn(async move {
             let searcher = HnswSearcher { params };
@@ -286,16 +290,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             batch[party].push((shares_l, shares_r));
         }
 
-        if (idx + 1) % BATCH_SIZE == 0 {
+        if (idx - n_existing_irises + 1) % BATCH_SIZE == 0 {
             for (db, shares) in izip!(&dbs, batch.iter_mut()) {
                 #[allow(clippy::drain_collect)]
                 db.persist_vector_shares(shares.drain(..).collect()).await?;
             }
-            info!("Persisted {} locally generated shares", idx + 1);
+            info!("Persisted {} locally generated shares", idx - n_existing_irises + 1);
         }
     }
 
-    // persist any remaining elements in batch
     for (db, shares) in izip!(&dbs, batch.iter_mut()) {
         #[allow(clippy::drain_collect)]
         db.persist_vector_shares(shares.drain(..).collect()).await?;
