@@ -36,7 +36,7 @@ pub async fn get_own_batch_sync_state(
 ) -> eyre::Result<BatchSyncState> {
     let next_sns_sequence_num = get_next_sns_seq_num(config, &sqs_client.clone())
         .await?
-        .unwrap();
+        .unwrap_or(0);
     let batch_sync_state = BatchSyncState {
         next_sns_sequence_num,
     };

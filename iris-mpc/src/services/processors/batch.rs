@@ -172,13 +172,20 @@ impl<'a> BatchProcessor<'a> {
                     own_sequence_num
                 );
 
-                if own_sequence_num >= max_sequence_num {
+                if (own_sequence_num >= max_sequence_num) && self.msg_counter > 0 {
                     tracing::info!("Own sequence number is greater than or equal to max sequence number. No need to poll further.");
                     return Ok(());
                 }
                 // Continue polling until we reach this sequence number
                 self.poll_until_sequence_num(max_sequence_num, queue_url)
                     .await?;
+                // if no messages are received, we poll until we receive the next 1 message
+                if self.msg_counter == 0 {
+                    tracing::info!(
+                        "No messages received, polling until we receive at least one message"
+                    );
+                    self.poll_until_batch_size(1, queue_url).await?;
+                }
             }
         }
 
@@ -189,6 +196,11 @@ impl<'a> BatchProcessor<'a> {
         max_batch_size: usize,
         queue_url: &str,
     ) -> Result<(), ReceiveRequestError> {
+        tracing::info!(
+            "Polling SQS for messages until batch size {} is reached, msg counter: {}",
+            max_batch_size,
+            self.msg_counter
+        );
         while self.msg_counter < max_batch_size {
             let rcv_message_output = self
                 .client
@@ -256,6 +268,11 @@ impl<'a> BatchProcessor<'a> {
                         {
                             if let Ok(seq_num) = sequence_num_str.parse::<u128>() {
                                 current_sequence_num = seq_num;
+                            } else {
+                                tracing::error!(
+                                    "Failed to parse sequence number from message attributes: {}",
+                                    sequence_num_str
+                                );
                             }
                         }
                     }
