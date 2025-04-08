@@ -211,7 +211,7 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    if len == x2.len() && len == x3.len() {
+    if len != x2.len() || len != x3.len() {
         return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
@@ -574,7 +574,7 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    if len == x2.len() && len == x3.len() {
+    if len != x2.len() || len != x3.len() {
         return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
@@ -651,7 +651,7 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    if len == x2.len() && len == x3.len() {
+    if len != x2.len() || len != x3.len() {
         return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
