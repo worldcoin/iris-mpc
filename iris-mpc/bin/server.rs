@@ -13,6 +13,7 @@ use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
+use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -1200,6 +1201,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
+        common_config: CommonConfig::from(config.clone()),
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1482,6 +1484,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     let sync_result = SyncResult::new(my_state.clone(), states);
+
+    // check if common part of the config is the same across all nodes
+    sync_result.check_common_config()?;
 
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
