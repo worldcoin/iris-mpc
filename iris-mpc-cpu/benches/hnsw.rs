@@ -212,7 +212,6 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 &format!("./data/graph_{}.dat", database_size),
                 &mut rng,
                 database_size,
-                false,
             )
             .await
         });

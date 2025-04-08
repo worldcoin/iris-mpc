@@ -2276,6 +2276,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "bytemuck",
+ "chrono",
  "clap",
  "criterion",
  "dotenvy",
@@ -2293,6 +2294,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sodiumoxide",
+ "sqlx",
  "static_assertions",
  "telemetry-batteries",
  "tokio",
@@ -2320,6 +2322,7 @@ dependencies = [
  "config",
  "data-encoding",
  "digest",
+ "dotenvy",
  "eyre",
  "float_eq",
  "hex",
@@ -2336,10 +2339,10 @@ dependencies = [
  "serde_json",
  "sha2",
  "sodiumoxide",
+ "sqlx",
  "thiserror",
  "time",
  "tokio",
- "tokio-retry",
  "tracing",
  "tracing-subscriber",
  "url",
@@ -2378,6 +2381,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "siphasher",
  "sqlx",
  "static_assertions",
  "tokio",
@@ -3008,9 +3012,9 @@ checksum = "b410bbe7e14ab526a0e86877eb47c6996a2bd7746f027ba551028c925390e4e9"
 
 [[package]]
 name = "openssl"
-version = "0.10.70"
+version = "0.10.72"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61cfb4e166a8bb8c9b55c500bc2308550148ece889be90f609377e58140f42c6"
+checksum = "fedfea7d58a1f73118430a55da6a286e7b044961736ce96a16a17068ea25e5da"
 dependencies = [
  "bitflags",
  "cfg-if",
@@ -3040,9 +3044,9 @@ checksum = "ff011a302c396a5197692431fc1948019154afc178baf7d8e37367442a4601cf"
 
 [[package]]
 name = "openssl-sys"
-version = "0.9.105"
+version = "0.9.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b22d5b84be05a8d6947c7cb71f7c849aa0f112acd4bf51c2a7c1c988ac0a9dc"
+checksum = "8288979acd84749c744a9014b4382d42b8f7b2592847b5afb2ed29e5d16ede07"
 dependencies = [
  "cc",
  "libc",
@@ -4237,6 +4241,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "siphasher"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
+
+[[package]]
 name = "sketches-ddsketch"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4764,17 +4774,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbae76ab933c85776efabc971569dd6119c580d8f5d448769dec1764bf796ef2"
 dependencies = [
  "native-tls",
- "tokio",
-]
-
-[[package]]
-name = "tokio-retry"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f57eb36ecbe0fc510036adff84824dd3c24bb781e21bfa67b69d556aa85214f"
-dependencies = [
- "pin-project",
- "rand",
  "tokio",
 ]
 

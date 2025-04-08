@@ -1,4 +1,4 @@
-use crate::config::json_wrapper::JsonStrWrapper;
+use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
@@ -19,6 +19,9 @@ pub struct Opt {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_app_name")]
+    pub app_name: String,
+
     #[serde(default)]
     pub environment: String,
 
@@ -84,6 +87,9 @@ pub struct Config {
 
     #[serde(default)]
     pub disable_persistence: bool,
+
+    #[serde(default)]
+    pub cpu_disable_persistence: bool,
 
     #[serde(default)]
     pub enable_debug_timing: bool,
@@ -172,6 +178,9 @@ pub struct Config {
     #[serde(default)]
     pub enable_reauth: bool,
 
+    #[serde(default)]
+    pub enable_reset: bool,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
@@ -210,8 +219,18 @@ pub struct Config {
     #[serde(default = "default_hawk_server_reauths_enabled")]
     pub hawk_server_reauths_enabled: bool,
 
+    #[serde(default = "default_hawk_server_resets_enabled")]
+    pub hawk_server_resets_enabled: bool,
+
+    #[serde(default = "default_full_scan_side")]
+    pub full_scan_side: Eye,
+
     #[serde(default = "default_batch_polling_timeout_secs")]
     pub batch_polling_timeout_secs: u64,
+}
+
+fn default_full_scan_side() -> Eye {
+    Eye::Left
 }
 
 /// Enumeration over set of compute modes.
@@ -267,6 +286,10 @@ fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
 
 fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
+}
+
+fn default_app_name() -> String {
+    "SMPC".to_string()
 }
 
 fn default_db_load_safety_overlap_seconds() -> i64 {
@@ -327,6 +350,10 @@ fn default_sqs_sync_long_poll_seconds() -> i32 {
 }
 
 fn default_hawk_server_reauths_enabled() -> bool {
+    false
+}
+
+fn default_hawk_server_resets_enabled() -> bool {
     false
 }
 

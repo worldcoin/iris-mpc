@@ -11,32 +11,16 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
+    postgres::PostgresClient,
+    vector_id::VectorId,
 };
-use iris_mpc_common::{config::ModeOfDeployment, vector_id::VectorId};
+
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{
-    migrate::Migrator, postgres::PgPoolOptions, Executor, PgPool, Postgres, Row, Transaction,
-};
+use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
-
-const APP_NAME: &str = "SMPC";
-const MAX_CONNECTIONS: u32 = 100;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
-
-fn sql_switch_schema(schema_name: &str) -> Result<String> {
-    sanitize_identifier(schema_name)?;
-    Ok(format!(
-        "
-        CREATE SCHEMA IF NOT EXISTS \"{}\";
-        SET search_path TO \"{}\";
-        ",
-        schema_name, schema_name
-    ))
-}
 
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
@@ -58,8 +42,8 @@ impl StoredIris {
 
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct DbStoredIris {
-    #[allow(dead_code)]
-    id: i64, // BIGSERIAL
+    id: i64,             // BIGSERIAL
+    version_id: i16,     // SMALLINT
     left_code: Vec<u8>,  // BYTEA
     left_mask: Vec<u8>,  // BYTEA
     right_code: Vec<u8>, // BYTEA
@@ -70,6 +54,10 @@ impl DbStoredIris {
     /// The index which is contiguous and starts from 1.
     pub fn serial_id(&self) -> usize {
         self.id as usize
+    }
+
+    pub fn version_id(&self) -> i16 {
+        self.version_id
     }
 
     pub fn vector_id(&self) -> VectorId {
@@ -94,46 +82,6 @@ impl DbStoredIris {
     }
     pub fn id(&self) -> i64 {
         self.id
-    }
-}
-
-#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
-pub struct DbStoredIrisWithVersion {
-    #[allow(dead_code)]
-    id: i64, // BIGSERIAL
-    left_code: Vec<u8>,  // BYTEA
-    left_mask: Vec<u8>,  // BYTEA
-    right_code: Vec<u8>, // BYTEA
-    right_mask: Vec<u8>, // BYTEA
-    version_id: i16,     // SMALLINT
-}
-
-impl DbStoredIrisWithVersion {
-    /// The index which is contiguous and starts from 0.
-    pub fn index(&self) -> usize {
-        self.id as usize
-    }
-
-    pub fn left_code(&self) -> &[u16] {
-        cast_u8_to_u16(&self.left_code)
-    }
-
-    pub fn left_mask(&self) -> &[u16] {
-        cast_u8_to_u16(&self.left_mask)
-    }
-
-    pub fn right_code(&self) -> &[u16] {
-        cast_u8_to_u16(&self.right_code)
-    }
-
-    pub fn right_mask(&self) -> &[u16] {
-        cast_u8_to_u16(&self.right_mask)
-    }
-    pub fn id(&self) -> i64 {
-        self.id
-    }
-    pub fn version_id(&self) -> i16 {
-        self.version_id
     }
 }
 
@@ -183,50 +131,17 @@ pub struct Store {
 }
 
 impl Store {
-    /// Connect to a database based on Config URL, environment, and party_id.
-    pub async fn new_from_config(config: &Config) -> Result<Self> {
-        // if running shadow mode in isolation, we should not read from the iris-mpc shares and instead create a new version
-        let db_config = if config.mode_of_deployment == ModeOfDeployment::ShadowIsolation {
-            config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?
-        } else {
-            config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?
-        };
+    pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
+        tracing::info!(
+            "Created and iris-mpc-store with schema: {}",
+            postgres_client.schema_name
+        );
 
-        let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-        Self::new(&db_config.url, &schema_name).await
-    }
-
-    pub async fn new(url: &str, schema_name: &str) -> Result<Self> {
-        tracing::info!("Connecting to V2 database with, schema: {}", schema_name);
-        let connect_sql = sql_switch_schema(schema_name)?;
-
-        let pool = PgPoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .after_connect(move |conn, _meta| {
-                // Switch to the given schema in every connection.
-                let connect_sql = connect_sql.clone();
-                Box::pin(async move {
-                    conn.execute(connect_sql.as_ref()).await.inspect_err(|e| {
-                        eprintln!("error in after_connect: {:?}", e);
-                    })?;
-                    Ok(())
-                })
-            })
-            .connect(url)
-            .await?;
-
-        // Create the schema on the first startup.
-        MIGRATOR.run(&pool).await?;
+        postgres_client.migrate().await;
 
         Ok(Store {
-            pool,
-            schema_name: schema_name.to_string(),
+            pool: postgres_client.pool.clone(),
+            schema_name: postgres_client.schema_name.to_string(),
         })
     }
 
@@ -247,16 +162,6 @@ impl Store {
     ) -> impl Stream<Item = Result<DbStoredIris, sqlx::Error>> + '_ {
         sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id >= 1 ORDER BY id")
             .fetch(&self.pool)
-    }
-
-    /// (only for testing) Stream irises including version in order.
-    pub async fn stream_irises_with_version(
-        &self,
-    ) -> impl Stream<Item = Result<DbStoredIrisWithVersion, sqlx::Error>> + '_ {
-        sqlx::query_as::<_, DbStoredIrisWithVersion>(
-            "SELECT * FROM irises WHERE id >= 1 ORDER BY id",
-        )
-        .fetch(&self.pool)
     }
 
     pub fn stream_irises_in_range(
@@ -293,7 +198,7 @@ impl Store {
             // This base query yields `DbStoredIris`
             let stream = match min_last_modified_at {
                 Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2 AND last_modified_at >= $3",
                 )
                 .bind(start_id as i64)
@@ -302,7 +207,7 @@ impl Store {
                 .fetch(&self.pool)
                 .map_err(Into::into),
                 None => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
+                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
                      BETWEEN $1 AND $2",
                 )
                 .bind(start_id as i64)
@@ -692,14 +597,6 @@ WHERE id = $1;
     }
 }
 
-fn sanitize_identifier(input: &str) -> Result<()> {
-    if input.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        Ok(())
-    } else {
-        Err(eyre!("Invalid SQL identifier"))
-    }
-}
-
 fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
     if s.is_empty() {
         &[] // A literal empty &[u8] may be unaligned.
@@ -713,17 +610,25 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
-    use iris_mpc_common::helpers::{
-        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
-        smpc_response::UniquenessResult,
-        sync::ModificationStatus,
+    use iris_mpc_common::{
+        helpers::{
+            smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+            smpc_response::UniquenessResult,
+            sync::ModificationStatus,
+        },
+        postgres::AccessMode,
     };
+
+    const MAX_CONNECTIONS: u32 = 100;
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
         // Create a unique schema for this test.
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 0);
@@ -779,29 +684,28 @@ pub mod tests {
         assert_eq!(got_par.len(), 3);
         assert_eq!(got.len(), 3);
 
-        let got_versions: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
         for i in 0..3 {
-            assert_eq!(got_versions[i].id, (i + 1) as i64);
-            assert_eq!(got_versions[i].left_code(), codes_and_masks[i].left_code);
-            assert_eq!(got_versions[i].left_mask(), codes_and_masks[i].left_mask);
-            assert_eq!(got_versions[i].right_code(), codes_and_masks[i].right_code);
-            assert_eq!(got_versions[i].right_mask(), codes_and_masks[i].right_mask);
-            assert_eq!(got_versions[i].version_id(), 0);
+            assert_eq!(got[i].serial_id(), i + 1);
+            assert_eq!(got[i].version_id(), 0);
+            assert_eq!(got[i].vector_id(), VectorId::new(i as u32 + 1, 0));
+            assert_eq!(got[i].left_code(), codes_and_masks[i].left_code);
+            assert_eq!(got[i].left_mask(), codes_and_masks[i].left_mask);
+            assert_eq!(got[i].right_code(), codes_and_masks[i].right_code);
+            assert_eq!(got[i].right_mask(), codes_and_masks[i].right_mask);
         }
 
         // Clean up on success.
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut tx = store.tx().await?;
         store.insert_results(&mut tx, &[]).await?;
@@ -809,7 +713,7 @@ pub mod tests {
         tx.commit().await?;
         store.mark_requests_deleted(&[]).await?;
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -818,7 +722,10 @@ pub mod tests {
         let count: usize = 1 << 3;
 
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut codes_and_masks = vec![];
 
@@ -870,14 +777,17 @@ pub mod tests {
         let got = store.last_results(count).await?;
         assert_eq!(got, result_events);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_init_db_with_random_shares() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let expected_generated_irises_num = 10;
         store
@@ -887,13 +797,16 @@ pub mod tests {
         let generated_irises_count = store.count_irises().await?;
         assert_eq!(generated_irises_count, expected_generated_irises_num);
 
-        cleanup(&store, &schema_name).await
+        cleanup(&postgres_client, &schema_name).await
     }
 
     #[tokio::test]
     async fn test_rollback() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let mut irises = vec![];
         for i in 0..10 {
@@ -916,14 +829,17 @@ pub mod tests {
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_results() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         let result_events = vec!["event1".to_string(), "event2".to_string()];
         let mut tx = store.tx().await?;
@@ -934,14 +850,17 @@ pub mod tests {
         let got = store.last_results(2).await?;
         assert_eq!(got, vec!["event1", "event2"]);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_mark_requests_deleted() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
 
@@ -955,14 +874,17 @@ pub mod tests {
             assert_eq!(got, request_ids);
         }
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_update_iris() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         // insert two irises into db
         let iris1 = StoredIrisRef {
@@ -1010,11 +932,7 @@ pub mod tests {
             .await?;
 
         // assert iris updated in db with new values
-        let got: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
+        let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 2);
         assert_eq!(cast_u8_to_u16(&got[0].left_code), updated_left_code.coefs);
         assert_eq!(cast_u8_to_u16(&got[0].left_mask), updated_left_mask.coefs);
@@ -1041,11 +959,8 @@ pub mod tests {
             )
             .await?;
 
-        let got_second_update: Vec<DbStoredIrisWithVersion> = store
-            .stream_irises_with_version()
-            .await
-            .try_collect()
-            .await?;
+        let got_second_update: Vec<DbStoredIris> =
+            store.stream_irises().await.try_collect().await?;
         assert_eq!(got_second_update.len(), 2);
         assert_eq!(
             cast_u8_to_u16(&got_second_update[0].left_code),
@@ -1065,14 +980,17 @@ pub mod tests {
         );
         assert_eq!(got_second_update[0].version_id(), 1);
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_insert_modification() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         // 1. Insert a new modification
         let inserted = store
@@ -1109,14 +1027,17 @@ pub mod tests {
         );
 
         // 5. Clean up
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
     #[tokio::test]
     async fn test_last_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert a few modifications
         for serial_id in 11..=15 {
@@ -1153,7 +1074,7 @@ pub mod tests {
             None,
         );
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -1180,7 +1101,10 @@ pub mod tests {
     #[tokio::test]
     async fn test_update_modifications() -> Result<()> {
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications
         let mut m1 = store
@@ -1239,7 +1163,7 @@ pub mod tests {
             Some("m1".to_string()),
         );
 
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -1247,7 +1171,10 @@ pub mod tests {
     async fn test_delete_modifications() -> Result<()> {
         // Set up a temporary schema and a new store.
         let schema_name = temporary_name();
-        let store = Store::new(&test_db_url()?, &schema_name).await?;
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications.
         let mut m1 = store
@@ -1284,7 +1211,7 @@ pub mod tests {
         assert_eq!(remaining[0].id, m1.id);
 
         // Clean up the temporary schema.
-        cleanup(&store, &schema_name).await?;
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 
@@ -1300,6 +1227,7 @@ pub mod tests {
 
 pub mod test_utils {
     use super::*;
+    const APP_NAME: &str = "SMPC";
     const DOTENV_TEST: &str = ".env.test";
 
     pub fn test_db_url() -> Result<String> {
@@ -1314,10 +1242,10 @@ pub mod test_utils {
         format!("SMPC_test{}_0", rand::random::<u32>())
     }
 
-    pub async fn cleanup(store: &Store, schema_name: &str) -> Result<()> {
+    pub async fn cleanup(postgres_client: &PostgresClient, schema_name: &str) -> Result<()> {
         assert!(schema_name.starts_with("SMPC_test"));
         sqlx::query(&format!("DROP SCHEMA \"{}\" CASCADE", schema_name))
-            .execute(&store.pool)
+            .execute(&postgres_client.pool)
             .await?;
         Ok(())
     }

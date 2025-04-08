@@ -1,5 +1,5 @@
 use crate::{
-    execution::session::Session,
+    execution::{hawk_main::state_check::SetHash, session::Session},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -10,7 +10,7 @@ use crate::{
     },
     shares::share::{DistanceShare, Share},
 };
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::sync::{RwLock, RwLockWriteGuard};
@@ -64,12 +64,33 @@ pub struct SharedIrises {
     points: HashMap<VectorId, IrisRef>,
     next_id: u32,
     empty_iris: IrisRef,
+    set_hash: SetHash,
+}
+
+impl Default for SharedIrises {
+    fn default() -> Self {
+        SharedIrises::new(HashMap::new())
+    }
 }
 
 impl SharedIrises {
+    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+        SharedIrises {
+            points,
+            next_id,
+            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            set_hash: SetHash::default(),
+        }
+    }
+
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        self.points.insert(vector_id, iris);
+        let was_there = self.points.insert(vector_id, iris);
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
+
+        if was_there.is_none() {
+            self.set_hash.add_unordered(vector_id);
+        }
     }
 
     fn next_id(&mut self) -> VectorId {
@@ -85,6 +106,12 @@ impl SharedIrises {
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
         Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
+    }
+
+    pub fn to_arc(self) -> SharedIrisesRef {
+        SharedIrisesRef {
+            body: Arc::new(RwLock::new(self)),
+        }
     }
 }
 
@@ -103,27 +130,6 @@ impl std::fmt::Debug for SharedIrisesRef {
     }
 }
 
-impl Default for SharedIrisesRef {
-    fn default() -> Self {
-        SharedIrisesRef::new(HashMap::new())
-    }
-}
-
-// Constructor.
-impl SharedIrisesRef {
-    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
-        let body = SharedIrises {
-            points,
-            next_id,
-            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
-        };
-        SharedIrisesRef {
-            body: Arc::new(RwLock::new(body)),
-        }
-    }
-}
-
 // Getters, iterators and mutators of the iris storage.
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
@@ -134,9 +140,15 @@ impl SharedIrisesRef {
         self.body.read().await.get_vector(vector)
     }
 
-    pub async fn iter_vectors<'a>(&'a self, vector_ids: &'a [VectorId]) -> Vec<IrisRef> {
+    pub async fn iter_vectors(
+        &self,
+        vector_ids: impl IntoIterator<Item = &VectorId>,
+    ) -> Vec<IrisRef> {
         let body = self.body.read().await;
-        vector_ids.iter().map(|v| body.get_vector(v)).collect_vec()
+        vector_ids
+            .into_iter()
+            .map(|v| body.get_vector(v))
+            .collect_vec()
     }
 
     pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
@@ -145,6 +157,10 @@ impl SharedIrisesRef {
         let new_id = body.next_id();
         body.insert(new_id, new_vector);
         new_id
+    }
+
+    pub async fn checksum(&self) -> u64 {
+        self.body.read().await.set_hash.checksum()
     }
 }
 
@@ -208,6 +224,15 @@ impl VectorStore for Aby3Store {
     /// Distance represented as a pair of u32 shares.
     type DistanceRef = DistanceShare<u32>;
 
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+        self.storage
+            .iter_vectors(&vectors)
+            .await
+            .into_iter()
+            .map(|v| prepare_query((*v).clone()))
+            .collect()
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -218,6 +243,24 @@ impl VectorStore for Aby3Store {
         let pairs = vec![(&query.processed_query, &*vector_point)];
         let dist = self.eval_pairwise_distances(pairs).await;
         self.lift_distances(dist).await.unwrap()[0].clone()
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
+    async fn eval_distance_pairs(
+        &mut self,
+        pairs: &[(Self::QueryRef, Self::VectorRef)],
+    ) -> Vec<Self::DistanceRef> {
+        let vectors = self
+            .storage
+            .iter_vectors(pairs.iter().map(|(_, v)| v))
+            .await;
+
+        let pairs = izip!(pairs, &vectors)
+            .map(|((q, _), v)| (&q.processed_query, &**v))
+            .collect_vec();
+
+        let dist = self.eval_pairwise_distances(pairs).await;
+        self.lift_distances(dist).await.unwrap()
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
@@ -232,12 +275,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.iter_vectors(vectors).await;
         let pairs = queries
             .iter()
-            .flat_map(|q| {
-                vectors
-                    .iter()
-                    .map(|vector| (&q.processed_query, &**vector))
-                    .collect::<Vec<_>>()
-            })
+            .flat_map(|q| vectors.iter().map(|vector| (&q.processed_query, &**vector)))
             .collect::<Vec<_>>();
 
         let dist = self.eval_pairwise_distances(pairs).await;
@@ -379,7 +417,7 @@ mod tests {
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
         let (mut cleartext_data, secret_data) =
-            lazy_random_setup(&mut rng, database_size, network_t.clone(), true).await?;
+            lazy_random_setup(&mut rng, database_size, network_t.clone()).await?;
 
         let mut rng = AesRng::seed_from_u64(0_u64);
         let mut vector_graph_stores =

@@ -1,5 +1,4 @@
 use crate::services::aws::clients::AwsClients;
-use crate::services::init::initialize_chacha_seeds;
 use crate::services::processors::batch::receive_batch;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
@@ -9,8 +8,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{eyre, WrapErr};
-use iris_mpc_common::config::{Config, ModeOfCompute};
+use eyre::{eyre, Report, WrapErr};
+use iris_mpc_common::config::{Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::batch_sync::get_own_batch_sync_state;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
@@ -26,9 +25,12 @@ use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::helpers::utils::get_check_addresses;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
+use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
+use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
 use std::mem;
@@ -39,7 +41,6 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
 
 const RNG_SEED_INIT_DB: u64 = 42;
-
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 
@@ -60,15 +61,21 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
     }
 
+    // Make sure the configuration is in correct state, to avoid complex handling of ReadOnly
+    // during ShadowReadOnly deployment we panic if the base store persistence is enabled.
+    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly && !config.disable_persistence
+    {
+        panic!(
+            "The system cannot start securely in ShadowReadOnly mode with enabled base persistence flag!"
+        )
+    }
+
     // Load batch_size config
     let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
-    // TODO: In future, make the Graph store use only the HNSW DB cluster
-    let graph_store = GraphStore::from_iris_store(&store);
+    let (store, graph_store) = prepare_stores(&config).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -89,9 +96,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     };
 
     let party_id = config.party_id;
-    tracing::info!("Deriving shared secrets");
-    let _chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
-
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
@@ -538,7 +542,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
-        disable_persistence: config.disable_persistence,
+        disable_persistence: config.cpu_disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
     };
@@ -820,4 +824,106 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
     Ok(())
+}
+
+async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
+    let schema_name = format!(
+        "{}_{}_{}",
+        config.app_name, config.environment, config.party_id
+    );
+
+    match config.mode_of_deployment {
+        // use the hawk db for both stores
+        ModeOfDeployment::ShadowIsolation => {
+            // This mode uses only Hawk DB
+            let hawk_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
+            let hawk_postgres_client =
+                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
+                    .await?;
+
+            // Store -> CPU
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                hawk_db_config,
+                config.mode_of_deployment
+            );
+            let store = Store::new(&hawk_postgres_client).await?;
+
+            // Graph -> CPU
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                hawk_db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+
+        // use base db for iris store and hawk db for graph store
+        ModeOfDeployment::ShadowReadOnly => {
+            let db_config = config
+                .database
+                .as_ref()
+                .ok_or(eyre!("Missing database config"))?;
+
+            let postgres_client =
+                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadOnly).await?;
+
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                db_config,
+                config.mode_of_deployment
+            );
+
+            let store = Store::new(&postgres_client).await?;
+
+            let hawk_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
+            let hawk_postgres_client =
+                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
+                    .await?;
+
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                hawk_db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+
+        // use the base db for both stores
+        _ => {
+            let db_config = config
+                .database
+                .as_ref()
+                .ok_or(eyre!("Missing database config"))?;
+
+            let postgres_client =
+                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
+
+            tracing::info!(
+                "Creating new iris store from: {:?} in mode {:?}",
+                db_config,
+                config.mode_of_deployment
+            );
+            let store = Store::new(&postgres_client).await?;
+
+            tracing::info!(
+                "Creating new graph store from: {:?} in mode {:?}",
+                db_config,
+                config.mode_of_deployment
+            );
+            let graph_store = GraphStore::new(&postgres_client).await?;
+
+            Ok((store, graph_store))
+        }
+    }
 }

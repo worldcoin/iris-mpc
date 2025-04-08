@@ -3,19 +3,23 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::SortedNeighborhoodV;
-use crate::hnsw::{
-    searcher::{ConnectPlanLayerV, ConnectPlanV},
-    SortedNeighborhood, VectorStore,
+use super::neighborhood::SortedEdgeIds;
+use crate::{
+    execution::hawk_main::state_check::SetHash,
+    hnsw::{
+        searcher::{ConnectPlanLayerV, ConnectPlanV},
+        VectorStore,
+    },
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
 /// search begins.
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct EntryPoint<VectorRef> {
     /// The vector reference of the entry point
     pub point: VectorRef,
@@ -51,6 +55,10 @@ impl<V: VectorStore> GraphMem<V> {
             entry_point: None,
             layers: vec![],
         }
+    }
+
+    pub fn to_arc(self) -> Arc<RwLock<Self>> {
+        Arc::new(RwLock::new(self))
     }
 
     pub fn from_precomputed(
@@ -95,11 +103,9 @@ impl<V: VectorStore> GraphMem<V> {
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await;
+        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
     }
-}
 
-impl<V: VectorStore> GraphMem<V> {
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
         self.entry_point
             .as_ref()
@@ -125,20 +131,16 @@ impl<V: VectorStore> GraphMem<V> {
         &self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedNeighborhoodV<V> {
+    ) -> SortedEdgeIds<V::VectorRef> {
         let layer = &self.layers[lc];
-        if let Some(links) = layer.get_links(base) {
-            links.clone()
-        } else {
-            SortedNeighborhood::new()
-        }
+        layer.get_links(base).unwrap_or_default()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
-        links: SortedNeighborhoodV<V>,
+        links: SortedEdgeIds<V::VectorRef>,
         lc: usize,
     ) {
         if self.layers.len() < lc + 1 {
@@ -151,67 +153,74 @@ impl<V: VectorStore> GraphMem<V> {
     pub async fn num_layers(&self) -> usize {
         self.layers.len()
     }
+
+    pub fn checksum(&self) -> u64 {
+        let mut set_hash = SetHash::default();
+        set_hash.add_unordered(&self.entry_point);
+        for (lc, layer) in self.layers.iter().enumerate() {
+            set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
+        }
+        set_hash.checksum()
+    }
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>,
+    links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
+    set_hash: SetHash,
 }
 
 impl<V: VectorStore> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
+            set_hash: self.set_hash.clone(),
         }
     }
 }
 
 impl<V: VectorStore> Layer<V> {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
+            set_hash: SetHash::default(),
         }
     }
 
-    pub fn from_links(links: HashMap<V::VectorRef, SortedNeighborhoodV<V>>) -> Self {
-        Layer { links }
+    fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
+        self.links.get(from).cloned()
     }
 
-    fn get_links(&self, from: &V::VectorRef) -> Option<&SortedNeighborhoodV<V>> {
-        self.links.get(from)
+    pub fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
+        self.set_hash.add_unordered((&from, &links));
+
+        let previous = self.links.insert(from.clone(), links);
+
+        if let Some(previous) = previous {
+            self.set_hash.remove((&from, &previous))
+        }
     }
 
-    fn set_links(&mut self, from: V::VectorRef, links: SortedNeighborhoodV<V>) {
-        self.links.insert(from, links);
-    }
-
-    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedNeighborhoodV<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>> {
         &self.links
     }
 }
 
-/// Convert a `GraphMem` data structure via a direct mapping of vector and
-/// distance references, leaving the edge sets associated with the mapped
+/// Convert a `GraphMem` data structure via a direct mapping of vector
+/// references, leaving the edge sets associated with the mapped
 /// vertices unchanged.
 ///
 /// This could be useful for cases where the representation of the graph
 /// vertices or distances is changed, but not the underlying values. For
 /// example:
-/// - plaintext distances are converted to MPC secret shares
-/// - the preprocessing done on secret shared distances is changed
 /// - vector ids are re-mapped to remove blank entries left by deletions
-pub fn migrate<U, V, VecMap, DistMap>(
-    graph: GraphMem<U>,
-    vector_map: VecMap,
-    distance_map: DistMap,
-) -> GraphMem<V>
+pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
     U: VectorStore,
     V: VectorStore,
     VecMap: Fn(U::VectorRef) -> V::VectorRef + Copy,
-    DistMap: Fn(U::DistanceRef) -> V::DistanceRef + Copy,
 {
     let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
         point: vector_map(ep.point),
@@ -222,23 +231,14 @@ where
         .layers
         .into_iter()
         .map(|v| {
-            let links: HashMap<_, _> = v
-                .links
-                .into_iter()
-                .map(|(v, nbhd)| {
-                    (
-                        vector_map(v),
-                        SortedNeighborhoodV::<V> {
-                            edges: nbhd
-                                .edges
-                                .into_iter()
-                                .map(|(w, d)| (vector_map(w), distance_map(d)))
-                                .collect(),
-                        },
-                    )
-                })
-                .collect();
-            Layer::<V> { links }
+            let mut layer = Layer::new();
+            for (from, nbhd) in v.links.into_iter() {
+                layer.set_links(
+                    vector_map(from),
+                    SortedEdgeIds::from_ascending_vec(nbhd.0.into_iter().map(vector_map).collect()),
+                );
+            }
+            layer
         })
         .collect();
 
@@ -281,6 +281,13 @@ mod tests {
         type QueryRef = PointId; // Vector ID, pending insertion.
         type VectorRef = PointId; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
+
+        async fn vectors_as_queries(
+            &mut self,
+            vectors: Vec<Self::VectorRef>,
+        ) -> Vec<Self::QueryRef> {
+            vectors
+        }
 
         async fn eval_distance(
             &mut self,
@@ -344,12 +351,11 @@ mod tests {
                 .await;
         }
 
-        let equal_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| v, |d| d);
+        let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
         assert_eq!(graph_store, equal_graph_store);
 
         let different_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| PointId(v.0 * 2), |d| d);
+            migrate(graph_store.clone(), |v| PointId(v.0 * 2));
         assert_ne!(graph_store, different_graph_store);
     }
 
@@ -362,10 +368,6 @@ mod tests {
 
         let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
             HashMap::new();
-        fn distance_map(d: <PlaintextStore as VectorStore>::DistanceRef) -> u32 {
-            let (num, denom) = d;
-            (num as u32) * (1 << 16) / (denom as u32)
-        }
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = vector_store.prepare_query(raw_query);
@@ -388,7 +390,7 @@ mod tests {
         }
 
         let new_graph_store: GraphMem<TestStore> =
-            migrate(graph_store.clone(), |v| point_ids_map[&v], distance_map);
+            migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
         let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_entry_point().await.unwrap();
@@ -407,12 +409,8 @@ mod tests {
             for (point_id, queue) in links.iter() {
                 let new_point_id = point_ids_map[point_id];
                 let new_queue_vec = new_links[&new_point_id].to_vec();
-                let queue_vec = queue.to_vec();
-                for ((neighbor_id, distance), (new_neighbor_id, new_distance)) in
-                    queue_vec.iter().zip(new_queue_vec)
-                {
+                for (neighbor_id, new_neighbor_id) in queue.iter().zip(new_queue_vec) {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
-                    assert_eq!(distance_map(*distance), new_distance);
                 }
             }
         }
