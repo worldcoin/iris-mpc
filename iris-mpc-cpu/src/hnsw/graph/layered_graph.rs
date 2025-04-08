@@ -335,7 +335,7 @@ mod tests {
 
         for raw_query in raw_queries.db {
             let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
@@ -373,7 +373,7 @@ mod tests {
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;

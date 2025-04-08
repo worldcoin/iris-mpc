@@ -337,7 +337,7 @@ where
 async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<T>, Error>
+) -> eyre::Result<VecShare<T>>
 where
     Standard: Distribution<T>,
 {
@@ -346,7 +346,7 @@ where
 
     let (m0, m1, wc) = {
         let reply_m0_and_m1 = network.receive_next().await;
-        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
+        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1)?;
         if m0_and_m1.len() != 2 {
             return Err(eyre!(
                 "Deserialized vec in bit inject is wrong length: {}",
@@ -357,7 +357,7 @@ where
             .into_iter()
             .map(T::into_vec)
             .collect_tuple()
-            .unwrap();
+            .ok_or(eyre!("Cannot deserialize m0 and m1 into tuple"))?;
 
         let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
@@ -762,7 +762,10 @@ where
         }
     }
     // a_msb XOR b_msb XOR top carry
-    let msb = msb_p ^ temp_g.pop().unwrap();
+    let msb = msb_p
+        ^ temp_g
+            .pop()
+            .ok_or(eyre!("Should contain exactly 1 carry"))?;
     Ok(msb)
 }
 
@@ -835,15 +838,14 @@ pub(crate) async fn extract_msb_u32_batch(
     let mut res = Vec::with_capacity(res_len);
 
     let packed_bits = extract_msb_u32(session, VecShare::new_vec(x.to_vec())).await?;
-    let mut packed_bits_iter = packed_bits.into_iter();
 
-    while res.len() < res_len {
-        let (a, b) = packed_bits_iter.next().unwrap().get_ab_ref();
+    'outer: for bit_batch in packed_bits.into_iter() {
+        let (a, b) = bit_batch.get_ab();
         for i in 0..64 {
-            if res.len() == res_len {
-                break;
-            }
             res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+            if res.len() == res_len {
+                break 'outer;
+            }
         }
     }
 

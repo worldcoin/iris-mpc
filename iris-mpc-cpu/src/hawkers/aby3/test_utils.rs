@@ -54,8 +54,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let storages: Vec<SharedIrisesRef> = shared_irises
         .into_iter()
-        .map(|player_irises| setup_local_player_preloaded_db(player_irises).unwrap())
-        .collect();
+        .map(setup_local_player_preloaded_db)
+        .collect::<eyre::Result<Vec<_>>>()?;
     let runtime = LocalRuntime::mock_setup(network_t).await?;
 
     runtime

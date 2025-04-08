@@ -3,6 +3,7 @@ use crate::{
     hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{GraphMem, HnswSearcher},
 };
+use eyre::eyre;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
@@ -22,7 +23,9 @@ pub fn search(
     rt.block_on(async move {
         let query = vector.prepare_query(query);
         let neighbors = searcher.search(vector, graph, &query, 1).await?;
-        let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
+        let (nearest, (dist_num, dist_denom)) = neighbors
+            .get_nearest()
+            .ok_or(eyre!("No nearest neighbor found"))?;
         Ok((*nearest, (*dist_num as f64) / (*dist_denom as f64)))
     })
 }
@@ -99,7 +102,8 @@ pub fn fill_from_ndjson_file(
     rt.block_on(async move {
         let mut rng = ThreadRng::default();
 
-        let file = File::open(filename).unwrap();
+        let file =
+            File::open(filename).map_err(|e| eyre::eyre!("Failed to open file {filename}: {e}"))?;
         let reader = BufReader::new(file);
 
         // Create an iterator over deserialized objects
@@ -108,7 +112,8 @@ pub fn fill_from_ndjson_file(
 
         // Iterate over each deserialized object
         for json_pt in stream {
-            let raw_query = (&json_pt.unwrap()).into();
+            let pt = json_pt.map_err(|e| eyre::eyre!("Failed to deserialize iris code: {e}"))?;
+            let raw_query = (&pt).try_into()?;
             let query = vector.prepare_query(raw_query);
             searcher.insert(vector, graph, &query, &mut rng).await?;
         }

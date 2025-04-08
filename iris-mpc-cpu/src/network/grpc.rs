@@ -417,17 +417,20 @@ impl GrpcNetworking {
             let mut request = Request::new(receiving_stream);
             request.metadata_mut().insert(
                 "sender_id",
-                AsciiMetadataValue::from_str(&self.party_id.0).unwrap(),
+                AsciiMetadataValue::from_str(&self.party_id.0)
+                    .map_err(|e| eyre!("Failed to convert Sender ID to ASCII: {e}"))?,
             );
             request.metadata_mut().insert(
                 "session_id",
-                AsciiMetadataValue::from_str(&session_id.0.to_string()).unwrap(),
+                AsciiMetadataValue::from_str(&session_id.0.to_string())
+                    .map_err(|e| eyre!("Failed to convert Session ID to ASCII: {e}"))?,
             );
 
             let round_robin = (session_id.0 as usize) % clients.len();
             let mut client = clients[round_robin].clone();
             tokio::spawn(async move {
-                let _response = client.start_message_stream(request).await.unwrap();
+                let _response = client.start_message_stream(request).await?;
+                Ok::<_, Status>(())
             });
             tracing::debug!(
                 "Player {:?} has created session {:?} with player {:?}",

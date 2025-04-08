@@ -391,7 +391,7 @@ impl HawkActor {
         session: &mut HawkSession,
         query: QueryRef,
     ) -> eyre::Result<InsertPlan> {
-        let insertion_layer = search_params.select_layer(&mut session.shared_rng);
+        let insertion_layer = search_params.select_layer(&mut session.shared_rng)?;
 
         let (links, set_ep) = search_params
             .search_to_insert(

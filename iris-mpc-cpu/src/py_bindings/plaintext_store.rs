@@ -13,21 +13,25 @@ pub struct Base64IrisCode {
     mask_codes: String,
 }
 
-impl From<&IrisCode> for Base64IrisCode {
-    fn from(value: &IrisCode) -> Self {
-        Self {
-            iris_codes: value.code.to_base64().unwrap(),
-            mask_codes: value.mask.to_base64().unwrap(),
-        }
+impl TryFrom<&IrisCode> for Base64IrisCode {
+    type Error = eyre::Report;
+
+    fn try_from(value: &IrisCode) -> Result<Self, Self::Error> {
+        Ok(Self {
+            iris_codes: value.code.to_base64()?,
+            mask_codes: value.mask.to_base64()?,
+        })
     }
 }
 
-impl From<&Base64IrisCode> for IrisCode {
-    fn from(value: &Base64IrisCode) -> Self {
-        Self {
-            code: IrisCodeArray::from_base64(&value.iris_codes).unwrap(),
-            mask: IrisCodeArray::from_base64(&value.mask_codes).unwrap(),
-        }
+impl TryFrom<&Base64IrisCode> for IrisCode {
+    type Error = eyre::Report;
+
+    fn try_from(value: &Base64IrisCode) -> Result<Self, Self::Error> {
+        Ok(IrisCode {
+            code: IrisCodeArray::from_base64(&value.iris_codes)?,
+            mask: IrisCodeArray::from_base64(&value.mask_codes)?,
+        })
     }
 }
 
@@ -44,7 +48,12 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     for json_pt in stream {
         let json_pt = json_pt?;
         vector.points.push(PlaintextPoint {
-            data: PlaintextIris((&json_pt).into()),
+            data: PlaintextIris((&json_pt).try_into().map_err(|e| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Failed to convert IrisCode: {e}"),
+                )
+            })?),
             is_persistent: true,
         });
     }
@@ -70,7 +79,12 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     for pt in &vector.points {
-        let json_pt: Base64IrisCode = (&pt.data.0).into();
+        let json_pt: Base64IrisCode = (&pt.data.0).try_into().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to convert IrisCode: {e}"),
+            )
+        })?;
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }

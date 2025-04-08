@@ -32,7 +32,7 @@ use tracing_subscriber::prelude::*;
 #[tokio::test]
 async fn test_counter_subscriber() -> Result<()> {
     let rng = &mut AesRng::seed_from_u64(0_u64);
-    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await;
+    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await?;
 
     // Set up tracing Subscriber for counting operations
 
@@ -161,23 +161,22 @@ async fn test_counter_subscriber() -> Result<()> {
 async fn init_hnsw(
     db_size: usize,
     rng: &mut AesRng,
-) -> (
+) -> eyre::Result<(
     HnswSearcher,
     PlaintextStore,
     GraphMem<PlaintextStore>,
     PointId,
     PointId,
-) {
+)> {
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
-    let (mut vector_store, graph_store) = PlaintextStore::create_random(rng, db_size, &searcher)
-        .await
-        .unwrap();
+    let (mut vector_store, graph_store) =
+        PlaintextStore::create_random(rng, db_size, &searcher).await?;
     let queries: Vec<_> = (0..=1)
         .map(|_| vector_store.prepare_query(IrisCode::random_rng(rng)))
         .collect();
-    (searcher, vector_store, graph_store, queries[0], queries[1])
+    Ok((searcher, vector_store, graph_store, queries[0], queries[1]))
 }
 
 async fn hnsw_search_queries_seq(

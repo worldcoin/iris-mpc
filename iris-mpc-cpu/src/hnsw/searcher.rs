@@ -221,11 +221,11 @@ impl Default for HnswSearcher {
 impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
-    pub fn select_layer(&self, rng: &mut impl RngCore) -> usize {
+    pub fn select_layer(&self, rng: &mut impl RngCore) -> eyre::Result<usize> {
         let p_geom = 1f64 - self.params.get_layer_probability();
-        let geom_distr = Geometric::new(p_geom).unwrap();
+        let geom_distr = Geometric::new(p_geom)?;
 
-        geom_distr.sample(rng) as usize
+        Ok(geom_distr.sample(rng) as usize)
     }
 
     /// Return a tuple containing a distance-sorted list initialized with the
@@ -320,7 +320,10 @@ impl HnswSearcher {
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // fq: The current furthest distance in W.
-        let (_, mut fq) = W.get_furthest().ok_or(eyre!("W cannot be empty"))?.clone();
+        let (_, mut fq) = W
+            .get_furthest()
+            .ok_or(eyre!("No furthest element found"))?
+            .clone();
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -366,7 +369,10 @@ impl HnswSearcher {
                     .await?;
 
                 // fq stays the furthest distance in W
-                (_, fq) = W.get_furthest().ok_or(eyre!("W cannot be empty"))?.clone();
+                (_, fq) = W
+                    .get_furthest()
+                    .ok_or(eyre!("No furthest element found"))?
+                    .clone();
             }
         }
 
@@ -531,7 +537,11 @@ impl HnswSearcher {
                 // Process pending comparisons queue if there are enough elements
                 if comparison_queue.len() >= target_batch_size {
                     // Compare elements against current farthest element of W
-                    let fq = W.get_furthest().unwrap().1.clone();
+                    let fq = W
+                        .get_furthest()
+                        .ok_or(eyre!("No furthest element found"))?
+                        .1
+                        .clone();
                     let batch: Vec<_> = comparison_queue
                         .iter()
                         .map(|(_c, cq)| (cq.clone(), fq.clone()))
@@ -603,7 +613,11 @@ impl HnswSearcher {
                 // Step 1: compare neighbors in pending comparisons queue
                 if !comparison_queue.is_empty() {
                     // Compare elements against current farthest element of W
-                    let fq = W.get_furthest().unwrap().1.clone();
+                    let fq = W
+                        .get_furthest()
+                        .ok_or(eyre!("No furthest element found"))?
+                        .1
+                        .clone();
                     let batch: Vec<_> = comparison_queue
                         .iter()
                         .map(|(_c, cq)| (cq.clone(), fq.clone()))
@@ -700,7 +714,7 @@ impl HnswSearcher {
                 .await?;
 
             // New closest node from greedy search of neighborhood
-            let (n_vec, n_dist) = c_links.first().unwrap().clone();
+            let (n_vec, n_dist) = c_links.first().ok_or(eyre!("No neighbors found"))?.clone();
 
             // If no neighbors are nearer, return current node; otherwise continue
             if n_vec == c_vec {
@@ -776,7 +790,7 @@ impl HnswSearcher {
         query: &V::QueryRef,
         rng: &mut impl RngCore,
     ) -> Result<V::VectorRef> {
-        let insertion_layer = self.select_layer(rng);
+        let insertion_layer = self.select_layer(rng)?;
         let (neighbors, set_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
             .await?;
@@ -925,10 +939,10 @@ impl HnswSearcher {
             let dist_batch = searches_ongoing
                 .iter()
                 .map(|n| {
-                    let cmp_idx = n.search.next().unwrap();
-                    (n.nb_query.clone(), n.nb_links[cmp_idx].clone())
+                    let cmp_idx = n.search.next().ok_or(eyre!("No next index found"))?;
+                    Ok((n.nb_query.clone(), n.nb_links[cmp_idx].clone()))
                 })
-                .collect_vec();
+                .collect::<Result<Vec<_>>>()?;
 
             // Compute the distances.
             let link_distances = store.eval_distance_pairs(&dist_batch).await?;
@@ -953,17 +967,14 @@ impl HnswSearcher {
         }
 
         // Directly insert new vector into neighborhoods from search results
-        neighbors
-            .iter_mut()
-            .enumerate()
-            .for_each(|(lc, l_neighbors)| {
-                let max_links = self.params.get_M_max(lc);
-                l_neighbors.iter_mut().for_each(|n| {
-                    let insertion_idx = n.search.result().unwrap();
-                    n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                    n.nb_links.trim_to_k_nearest(max_links);
-                });
-            });
+        for (lc, l_neighbors) in neighbors.iter_mut().enumerate() {
+            let max_links = self.params.get_M_max(lc);
+            for n in l_neighbors.iter_mut() {
+                let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
+                n.nb_links.insert(insertion_idx, inserted_vector.clone());
+                n.nb_links.trim_to_k_nearest(max_links);
+            }
+        }
 
         // Generate ConnectPlanLayer structs
         plan.layers = links
@@ -1051,7 +1062,7 @@ mod tests {
 
         // Insert the codes.
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng);
+            let insertion_layer = db.select_layer(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;

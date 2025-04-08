@@ -10,6 +10,7 @@ use crate::hnsw::{
     },
     VectorStore,
 };
+use eyre::eyre;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use tracing::{debug, instrument};
@@ -100,7 +101,9 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
             let res = store.less_than(&dist, &self.edges[cmp_idx].1).await?;
             bin_search.update(res);
         }
-        let index_asc = bin_search.result().unwrap();
+        let index_asc = bin_search
+            .result()
+            .ok_or(eyre!("Failed to find insertion index"))?;
         self.edges.insert(index_asc, (to, dist));
         Ok(())
     }
@@ -187,7 +190,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         let unsorted_size = vals.len();
 
         self.edges.extend_from_slice(vals);
-        let network = partial_batcher_network(sorted_prefix_size, unsorted_size);
+        let network = partial_batcher_network(sorted_prefix_size, unsorted_size)?;
 
         apply_swap_network(store, &mut self.edges, &network).await
     }
