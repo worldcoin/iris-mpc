@@ -317,7 +317,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 #[allow(clippy::drain_collect)]
                 db.persist_vector_shares(shares.drain(..).collect()).await?;
             }
-            info!("Persisted {} locally generated shares", idx - n_existing_irises + 1);
+            info!(
+                "Persisted {} locally generated shares",
+                idx - n_existing_irises + 1
+            );
         }
     }
 
