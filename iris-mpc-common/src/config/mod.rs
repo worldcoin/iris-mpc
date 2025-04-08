@@ -494,6 +494,11 @@ pub struct CommonConfig {
     sqs_sync_long_poll_seconds: i32,
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
+    app_name: String,
+    cpu_disable_persistence: bool,
+    enable_reset: bool,
+    hawk_server_resets_enabled: bool,
+    full_scan_side: Eye,
 }
 
 impl From<Config> for CommonConfig {
@@ -558,6 +563,11 @@ impl From<Config> for CommonConfig {
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
+            app_name,
+            cpu_disable_persistence,
+            enable_reset,
+            hawk_server_resets_enabled,
+            full_scan_side,
         } = value;
 
         Self {
@@ -598,6 +608,11 @@ impl From<Config> for CommonConfig {
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
+            app_name,
+            cpu_disable_persistence,
+            enable_reset,
+            hawk_server_resets_enabled,
+            full_scan_side,
         }
     }
 }
