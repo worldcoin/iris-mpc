@@ -64,7 +64,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                 let query = vector.prepare_query(raw_query.clone());
                 searcher
                     .insert(&mut vector, &mut graph, &query, &mut rng)
-                    .await;
+                    .await
+                    .unwrap();
             }
             (vector, graph)
         });
@@ -79,7 +80,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let query = db_vectors.prepare_query(on_the_fly_query);
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, &mut rng)
-                        .await;
+                        .await
+                        .unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             )
@@ -251,7 +253,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 searcher
                                     .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
-                                    .await;
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;
@@ -286,7 +289,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
                                     .search(&mut *vector_store, &mut graph_store, &query, 1)
-                                    .await;
+                                    .await
+                                    .unwrap();
                                 searcher.is_match(&mut *vector_store, &[neighbors]).await;
                             });
                         }

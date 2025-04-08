@@ -856,8 +856,10 @@ mod tests {
                 let mut graph = graph.clone();
                 jobs.spawn(async move {
                     let mut store_lock = store.lock().await;
-                    let secret_neighbors =
-                        searcher.search(&mut *store_lock, &mut graph, &q, 1).await;
+                    let secret_neighbors = searcher
+                        .search(&mut *store_lock, &mut graph, &q, 1)
+                        .await
+                        .unwrap();
                     searcher
                         .is_match(&mut *store_lock, &[secret_neighbors])
                         .await

@@ -13,6 +13,7 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
+use eyre::eyre;
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -270,10 +271,10 @@ impl HnswSearcher {
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
-    ) {
+    ) -> eyre::Result<()> {
         match ef {
             0 => {
-                panic!("ef cannot be 0");
+                return Err(eyre!("ef cannot be 0"));
             }
             1 => {
                 let start = W.get_nearest().expect("W cannot be empty");
@@ -289,6 +290,7 @@ impl HnswSearcher {
                 Self::layer_search_batched(store, graph, q, W, ef, lc).await;
             }
         }
+        Ok(())
     }
 
     /// The standard layer search algorithm for HNSW search, which inspects
@@ -745,17 +747,17 @@ impl HnswSearcher {
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
-    ) -> SortedNeighborhoodV<V> {
+    ) -> eyre::Result<SortedNeighborhoodV<V>> {
         let (mut W, layer_count) = self.search_init(store, graph, query).await;
 
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
             let ef = self.params.get_ef_search(lc);
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await;
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
         }
 
         W.trim_to_k_nearest(k);
-        W
+        Ok(W)
     }
 
     /// Insert `query` into the HNSW index represented by `store` and `graph`.
@@ -767,15 +769,15 @@ impl HnswSearcher {
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
         rng: &mut impl RngCore,
-    ) -> V::VectorRef {
+    ) -> eyre::Result<V::VectorRef> {
         let insertion_layer = self.select_layer(rng);
         let (neighbors, set_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
-            .await;
+            .await?;
         let inserted = store.insert(query).await;
         self.insert_from_search_results(store, graph, inserted.clone(), neighbors, set_ep)
             .await;
-        inserted
+        Ok(inserted)
     }
 
     /// Conduct the search phase of HNSW insertion of `query` into the graph at
@@ -805,7 +807,7 @@ impl HnswSearcher {
         graph: &GraphMem<V>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> (Vec<SortedNeighborhoodV<V>>, bool) {
+    ) -> eyre::Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
         let mut links = vec![];
 
         let (mut W, n_layers) = self.search_init(store, graph, query).await;
@@ -817,7 +819,7 @@ impl HnswSearcher {
             } else {
                 self.params.get_ef_constr_insert(lc)
             };
-            Self::search_layer(store, graph, query, &mut W, ef, lc).await;
+            Self::search_layer(store, graph, query, &mut W, ef, lc).await?;
 
             // Save links in output only for layers in which query is inserted
             if lc <= insertion_layer {
@@ -836,7 +838,7 @@ impl HnswSearcher {
         }
         debug_assert!(links.len() == insertion_layer + 1);
 
-        (links, set_ep)
+        Ok((links, set_ep))
     }
 
     /// Prepare a `ConnectPlan` representing the updates required to insert `inserted_vector`
@@ -1028,7 +1030,7 @@ mod tests {
     use tokio;
 
     #[tokio::test]
-    async fn test_hnsw_db() {
+    async fn test_hnsw_db() -> eyre::Result<()> {
         let vector_store = &mut PlaintextStore::default();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
@@ -1045,7 +1047,7 @@ mod tests {
             let insertion_layer = db.select_layer(rng);
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
-                .await;
+                .await?;
             assert!(!db.is_match(vector_store, &neighbors).await);
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
@@ -1061,15 +1063,17 @@ mod tests {
 
         // Insert the codes with helper function
         for query in queries2.iter() {
-            db.insert(vector_store, graph_store, query, rng).await;
+            db.insert(vector_store, graph_store, query, rng).await?;
         }
 
         // Search for the same codes and find matches.
         for query in queries1.iter().chain(queries2.iter()) {
-            let neighbors = db.search(vector_store, graph_store, query, 1).await;
+            let neighbors = db.search(vector_store, graph_store, query, 1).await?;
             println!("query: {query:?}");
             println!("neighbors: {neighbors:?}");
             assert!(db.is_match(vector_store, &[neighbors]).await);
         }
+
+        Ok(())
     }
 }

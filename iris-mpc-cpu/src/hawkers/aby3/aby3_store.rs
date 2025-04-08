@@ -381,7 +381,8 @@ mod tests {
                 for query in queries.iter() {
                     let inserted_vector = db
                         .insert(&mut *store, &mut aby3_graph, query, &mut rng)
-                        .await;
+                        .await
+                        .unwrap();
                     inserted.push(inserted_vector)
                 }
                 tracing::debug!("FINISHED INSERTING");
@@ -390,7 +391,10 @@ mod tests {
                 for v in inserted.into_iter() {
                     let query = store.storage.get_vector(&v).await;
                     let query = prepare_query((*query).clone());
-                    let neighbors = db.search(&mut *store, &mut aby3_graph, &query, 1).await;
+                    let neighbors = db
+                        .search(&mut *store, &mut aby3_graph, &query, 1)
+                        .await
+                        .unwrap();
                     tracing::debug!("Finished checking query");
                     matching_results.push(db.is_match(&mut *store, &[neighbors]).await)
                 }
@@ -439,7 +443,7 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
-                .await;
+                .await?;
             assert!(
                 hawk_searcher
                     .is_match(&mut cleartext_data.0, &[cleartext_neighbors])
@@ -456,7 +460,10 @@ mod tests {
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let secret_neighbors = hawk_searcher.search(&mut *v_lock, &mut g, &q, 1).await;
+                    let secret_neighbors = hawk_searcher
+                        .search(&mut *v_lock, &mut g, &q, 1)
+                        .await
+                        .unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -474,8 +481,10 @@ mod tests {
                     let mut v_lock = v.lock().await;
                     let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
-                    let secret_neighbors =
-                        hawk_searcher.search(&mut *v_lock, &mut g, &query, 1).await;
+                    let secret_neighbors = hawk_searcher
+                        .search(&mut *v_lock, &mut g, &query, 1)
+                        .await
+                        .unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -691,7 +700,10 @@ mod tests {
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
-                    let secret_neighbors = searcher.search(&mut *store, &mut graph, &q, 1).await;
+                    let secret_neighbors = searcher
+                        .search(&mut *store, &mut graph, &q, 1)
+                        .await
+                        .unwrap();
                     searcher.is_match(&mut *store, &[secret_neighbors]).await
                 });
             }

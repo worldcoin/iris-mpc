@@ -58,7 +58,7 @@ impl PyHnswSearcher {
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
     ) -> u32 {
-        let id = py_bindings::hnsw::insert(iris.0, &self.0, &mut vector.0, &mut graph.0);
+        let id = py_bindings::hnsw::insert(iris.0, &self.0, &mut vector.0, &mut graph.0).unwrap();
         id.0
     }
 
@@ -67,7 +67,8 @@ impl PyHnswSearcher {
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
     ) -> u32 {
-        let id = py_bindings::hnsw::insert_uniform_random(&self.0, &mut vector.0, &mut graph.0);
+        let id =
+            py_bindings::hnsw::insert_uniform_random(&self.0, &mut vector.0, &mut graph.0).unwrap();
         id.0
     }
 
@@ -77,7 +78,7 @@ impl PyHnswSearcher {
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
     ) {
-        py_bindings::hnsw::fill_uniform_random(num, &self.0, &mut vector.0, &mut graph.0);
+        py_bindings::hnsw::fill_uniform_random(num, &self.0, &mut vector.0, &mut graph.0).unwrap();
     }
 
     #[pyo3(signature = (filename, vector, graph, limit=None))]
@@ -94,7 +95,8 @@ impl PyHnswSearcher {
             &self.0,
             &mut vector.0,
             &mut graph.0,
-        );
+        )
+        .unwrap();
     }
 
     /// Search HNSW index and return nearest ID and its distance from query
@@ -105,7 +107,8 @@ impl PyHnswSearcher {
         graph: &mut PyGraphStore,
     ) -> (u32, f64) {
         let (id, dist) =
-            py_bindings::hnsw::search(query.0.clone(), &self.0, &mut vector.0, &mut graph.0);
+            py_bindings::hnsw::search(query.0.clone(), &self.0, &mut vector.0, &mut graph.0)
+                .unwrap();
         (id.0, dist)
     }
 

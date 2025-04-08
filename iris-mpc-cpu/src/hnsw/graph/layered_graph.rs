@@ -325,7 +325,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_from_another_naive() {
+    async fn test_from_another_naive() -> eyre::Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
@@ -338,7 +338,7 @@ mod tests {
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -357,10 +357,12 @@ mod tests {
         let different_graph_store: GraphMem<PlaintextStore> =
             migrate(graph_store.clone(), |v| PointId(v.0 * 2));
         assert_ne!(graph_store, different_graph_store);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_from_another() {
+    async fn test_from_another() -> eyre::Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
@@ -374,7 +376,7 @@ mod tests {
             let insertion_layer = searcher.select_layer(&mut rng);
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -414,5 +416,7 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
     }
 }

@@ -195,7 +195,7 @@ impl PlaintextStore {
                     &query,
                     &mut rng_searcher1,
                 )
-                .await;
+                .await?;
         }
 
         Ok((plaintext_vector_store, plaintext_graph_store))
@@ -248,7 +248,7 @@ impl PlaintextStore {
                     &i.into(),
                     &mut rng_searcher1,
                 )
-                .await;
+                .await?;
         }
 
         Ok(plaintext_graph_store)
@@ -346,7 +346,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_plaintext_hnsw_matcher() {
+    async fn test_plaintext_hnsw_matcher() -> eyre::Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::default();
@@ -357,12 +357,14 @@ mod tests {
         for i in 0..database_size {
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &mut ptxt_graph, &i.into(), 1)
-                .await;
+                .await?;
             assert!(
                 searcher
                     .is_match(&mut ptxt_vector, &[cleartext_neighbors])
                     .await,
             );
         }
+
+        Ok(())
     }
 }

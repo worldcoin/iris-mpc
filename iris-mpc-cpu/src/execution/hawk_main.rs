@@ -378,7 +378,7 @@ impl HawkActor {
 
             // Wait between chunks for determinism (not relying on mutex).
             for t in tasks {
-                plans.push(t.await?);
+                plans.push(t.await??);
             }
         }
 
@@ -390,7 +390,7 @@ impl HawkActor {
         graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
         query: QueryRef,
-    ) -> InsertPlan {
+    ) -> eyre::Result<InsertPlan> {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng);
 
         let (links, set_ep) = search_params
@@ -400,18 +400,18 @@ impl HawkActor {
                 &query,
                 insertion_layer,
             )
-            .await;
+            .await?;
 
         let match_count = search_params
             .match_count(&mut session.aby3_store, &links)
             .await;
 
-        InsertPlan {
+        Ok(InsertPlan {
             query,
             links,
             match_count,
             set_ep,
-        }
+        })
     }
 
     pub async fn insert(

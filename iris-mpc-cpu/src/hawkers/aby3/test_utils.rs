@@ -1,10 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
+use eyre::eyre;
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
@@ -90,16 +91,19 @@ pub async fn get_owner_index(store: &Aby3StoreRef) -> eyre::Result<usize> {
 
 /// Returns a trivial share of a distance.
 /// That is the additive sharing (distance, 0, 0)
-pub fn get_trivial_share(distance: u16, player_index: usize) -> Share<u32> {
+pub fn get_trivial_share(distance: u16, player_index: usize) -> eyre::Result<Share<u32>> {
     let distance_elem = RingElement(distance as u32);
     let zero_elem = RingElement(0_u32);
 
-    match player_index {
+    let res = match player_index {
         0 => Share::new(distance_elem, zero_elem),
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
-        _ => panic!("Invalid player index"),
-    }
+        _ => {
+            return Err(eyre!("Invalid player index: {player_index}"));
+        }
+    };
+    Ok(res)
 }
 
 /// Returns the distance between two vectors inserted into Aby3Store.
@@ -312,25 +316,33 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             .map(|id| prepare_query(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         let store = store.clone();
-        let task = tokio::spawn(async move {
-            let mut store_lock = store.lock().await;
-            let mut graph_store = GraphMem::new();
-            let searcher = HnswSearcher::default();
-            // insert queries
-            for query in queries.iter() {
-                searcher
-                    .insert(&mut *store_lock, &mut graph_store, query, &mut rng_searcher)
-                    .await;
-            }
-            (store.clone(), graph_store)
-        });
+        let task: JoinHandle<eyre::Result<(Aby3StoreRef, GraphMem<Aby3Store>)>> =
+            tokio::spawn(async move {
+                let mut store_lock = store.lock().await;
+                let mut graph_store = GraphMem::new();
+                let searcher = HnswSearcher::default();
+                // insert queries
+                for query in queries.iter() {
+                    searcher
+                        .insert(&mut *store_lock, &mut graph_store, query, &mut rng_searcher)
+                        .await?;
+                }
+                Ok((store.clone(), graph_store))
+            });
         jobs.push(task);
     }
-    join_all(jobs)
+    let res: Vec<_> = join_all(jobs)
         .await
         .into_iter()
         .map(|res| res.map_err(eyre::Report::new))
-        .collect()
+        .collect();
+
+    let mut unwrapped = Vec::with_capacity(res.len());
+    for r in res {
+        unwrapped.push(r??);
+    }
+
+    Ok(unwrapped)
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
