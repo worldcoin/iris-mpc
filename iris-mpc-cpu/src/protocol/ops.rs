@@ -130,7 +130,9 @@ pub async fn lift_and_compare_threshold(
 ) -> eyre::Result<Share<Bit>> {
     let y = mul_lift_2k::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
-    let mut x = x.pop().expect("Expected a single element in the VecShare");
+    let mut x = x
+        .pop()
+        .ok_or(eyre!("Expected a single element in the VecShare"))?;
     x *= A as u32;
     x -= y;
 

@@ -767,7 +767,7 @@ impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
             for plan in plans.into_iter().flatten() {
-                graph_tx.with_graph(side).insert_apply(plan).await;
+                graph_tx.with_graph(side).insert_apply(plan).await?;
             }
         }
         Ok(())

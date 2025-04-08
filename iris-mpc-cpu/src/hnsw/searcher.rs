@@ -13,7 +13,7 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
-use eyre::eyre;
+use eyre::{eyre, Result};
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -271,23 +271,23 @@ impl HnswSearcher {
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
-    ) -> eyre::Result<()> {
+    ) -> Result<()> {
         match ef {
             0 => {
                 return Err(eyre!("ef cannot be 0"));
             }
             1 => {
-                let start = W.get_nearest().expect("W cannot be empty");
+                let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
                 let nearest = Self::layer_search_greedy(store, graph, q, start, lc).await;
 
                 W.edges.clear();
                 W.edges.push(nearest);
             }
             2..32 => {
-                Self::layer_search_std(store, graph, q, W, ef, lc).await;
+                Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched(store, graph, q, W, ef, lc).await;
+                Self::layer_search_batched(store, graph, q, W, ef, lc).await?;
             }
         }
         Ok(())
@@ -312,7 +312,7 @@ impl HnswSearcher {
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
-    ) {
+    ) -> Result<()> {
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -320,7 +320,7 @@ impl HnswSearcher {
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // fq: The current furthest distance in W.
-        let (_, mut fq) = W.get_furthest().expect("W cannot be empty").clone();
+        let (_, mut fq) = W.get_furthest().ok_or(eyre!("W cannot be empty"))?.clone();
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -364,9 +364,11 @@ impl HnswSearcher {
                 W.insert(store, e, eq).instrument(insert_span.clone()).await;
 
                 // fq stays the furthest distance in W
-                (_, fq) = W.get_furthest().expect("W cannot be empty").clone();
+                (_, fq) = W.get_furthest().ok_or(eyre!("W cannot be empty"))?.clone();
             }
         }
+
+        Ok(())
     }
 
     /// Run an HNSW layer search with batched operation. The algorithm mutates
@@ -453,7 +455,7 @@ impl HnswSearcher {
         W: &mut SortedNeighborhoodV<V>,
         ef: usize,
         lc: usize,
-    ) {
+    ) -> Result<()> {
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -461,7 +463,7 @@ impl HnswSearcher {
         let mut opened = HashSet::<V::VectorRef>::new();
 
         // c: the current candidate to be opened, initialized to first entry of W
-        let (mut c, _cq) = W.get_nearest().expect("W cannot be empty").clone();
+        let (mut c, _cq) = W.get_nearest().ok_or(eyre!("W cannot be empty"))?.clone();
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -653,6 +655,8 @@ impl HnswSearcher {
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Variant of layer search using ef parameter of 1, which conducts a greedy search for the node
@@ -747,7 +751,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
-    ) -> eyre::Result<SortedNeighborhoodV<V>> {
+    ) -> Result<SortedNeighborhoodV<V>> {
         let (mut W, layer_count) = self.search_init(store, graph, query).await;
 
         // Search from the top layer down to layer 0
@@ -769,7 +773,7 @@ impl HnswSearcher {
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
         rng: &mut impl RngCore,
-    ) -> eyre::Result<V::VectorRef> {
+    ) -> Result<V::VectorRef> {
         let insertion_layer = self.select_layer(rng);
         let (neighbors, set_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
@@ -807,7 +811,7 @@ impl HnswSearcher {
         graph: &GraphMem<V>,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> eyre::Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
+    ) -> Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
         let mut links = vec![];
 
         let (mut W, n_layers) = self.search_init(store, graph, query).await;
@@ -1030,7 +1034,7 @@ mod tests {
     use tokio;
 
     #[tokio::test]
-    async fn test_hnsw_db() -> eyre::Result<()> {
+    async fn test_hnsw_db() -> Result<()> {
         let vector_store = &mut PlaintextStore::default();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);

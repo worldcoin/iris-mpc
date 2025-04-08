@@ -211,7 +211,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
+    if len == x2.len() && len == x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 16 {
+        return Err(eyre!("Input length should be at least 16: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -240,7 +251,7 @@ where
         .await?;
 
     // Keep the MSB of c to compute the carries
-    let mut c_msb = c.pop().expect("Enough elements present");
+    let mut c_msb = c.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute carry of the sum of 2*c without MSB and s
     for (s_, c_) in s.iter_mut().skip(2).zip(c.iter_mut().skip(1)) {
@@ -563,7 +574,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
+    if len == x2.len() && len == x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 32 {
+        return Err(eyre!("Input length should be at least 16: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -581,9 +603,9 @@ where
     let mut x1x3 = x1;
     transposed_pack_xor_assign(&mut x1x3, &x3);
     // Chop off the MSBs of these values as they are anyway removed by 2 * c later on.
-    x1x3.pop().expect("Enough elements present");
-    x2x3.pop().expect("Enough elements present");
-    x3.pop().expect("Enough elements present");
+    x1x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x2x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x3.pop().ok_or(eyre!("Not enough elements"))?;
     // (x1 XOR x3) AND (x2 XOR x3) = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) XOR x3
     let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
     // (x1 AND x2) XOR (x3 AND (x1 XOR x2))
@@ -599,8 +621,8 @@ where
         .await?;
 
     // To compute the MSB of the sum we have to add the MSB of s and c later
-    let s_msb = s.pop().expect("Enough elements present");
-    let c_msb = c.pop().expect("Enough elements present");
+    let s_msb = s.pop().ok_or(eyre!("Not enough elements"))?;
+    let c_msb = c.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute carry for the MSB of the sum
     for (s_, c_) in s.iter_mut().skip(2).zip(c.iter_mut().skip(1)) {
@@ -629,8 +651,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
-    debug_assert!(len == 32);
+    if len == x2.len() && len == x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 32 {
+        return Err(eyre!("Input length should be at least 16: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -648,9 +680,9 @@ where
     let mut x1x3 = x1;
     transposed_pack_xor_assign(&mut x1x3, &x3);
     // Chop off the MSBs of these values as they are anyway removed by 2 * c later on.
-    x1x3.pop().expect("No elements here");
-    x2x3.pop().expect("No elements here");
-    x3.pop().expect("No elements here");
+    x1x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x2x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x3.pop().ok_or(eyre!("Not enough elements"))?;
     // (x1 XOR x3) AND (x2 XOR x3) = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) XOR x3
     let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
     // (x1 AND x2) XOR (x3 AND (x1 XOR x2))
@@ -668,7 +700,7 @@ where
     b.pop();
     let g = transposed_pack_and(session, a, b).await?;
     // The MSB of p is needed to compute the MSB of the sum, but it doesn't needed for the carry computation
-    let msb_p = p.pop().expect("No elements here");
+    let msb_p = p.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute the carry for the MSB of the sum
     //

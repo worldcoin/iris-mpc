@@ -6,7 +6,7 @@ use crate::{
         GraphMem, VectorStore,
     },
 };
-use eyre::Result;
+use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
@@ -101,33 +101,42 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
-    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
+    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) -> Result<()> {
         // If required, set vector as new entry point
         if plan.set_ep {
             let insertion_layer = plan.layers.len() - 1;
             self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
-                .await;
+                .await?;
         }
 
         // Connect the new vector to its neighbors in each layer.
         for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
             self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
-                .await;
+                .await?;
         }
+
+        Ok(())
     }
 
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
-    async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
+    async fn connect_apply(
+        &mut self,
+        q: V::VectorRef,
+        lc: usize,
+        plan: ConnectPlanLayerV<V>,
+    ) -> Result<()> {
         // Connect all n -> q.
         for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(n.clone(), links, lc).await;
+            self.set_links(n.clone(), links, lc).await?;
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
+        self.set_links(q, plan.neighbors.edge_ids(), lc).await?;
+
+        Ok(())
     }
 
-    pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
+    pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
         let table = self.entry_table();
         sqlx::query(&format!(
             "SELECT entry_point FROM {table} WHERE graph_id = $1"
@@ -135,14 +144,16 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(self.graph_id())
         .fetch_optional(self.tx())
         .await
-        .expect("Failed to fetch entry point")
-        .map(|row: PgRow| {
-            let x: Json<EntryPoint<V::VectorRef>> = row.get("entry_point");
-            (x.point.clone(), x.layer)
+        .map_err(|e| eyre!("Failed to fetch entry point: {e}"))
+        .map(|row| {
+            row.map(|row: PgRow| {
+                let x: Json<EntryPoint<V::VectorRef>> = row.get("entry_point");
+                (x.point.clone(), x.layer)
+            })
         })
     }
 
-    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
         let table = self.entry_table();
         sqlx::query(&format!(
             "
@@ -154,14 +165,16 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(Json(&EntryPoint { point, layer }))
         .execute(self.tx())
         .await
-        .expect("Failed to set entry point");
+        .map_err(|e| eyre!("Failed to set entry point: {e}"))?;
+
+        Ok(())
     }
 
     pub async fn get_links(
         &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedEdgeIds<V::VectorRef> {
+    ) -> Result<SortedEdgeIds<V::VectorRef>> {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -174,12 +187,14 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(lc as i32)
         .fetch_optional(self.tx())
         .await
-        .expect("Failed to fetch links")
-        .map(|row: PgRow| {
-            let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
-            x.as_ref().clone()
+        .map_err(|e| eyre!("Failed to fetch links: {e}"))
+        .map(|row| {
+            row.map(|row: PgRow| {
+                let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
+                x.as_ref().clone()
+            })
+            .unwrap_or_default()
         })
-        .unwrap_or_else(SortedEdgeIds::default)
     }
 
     async fn set_links(
@@ -187,7 +202,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         base: V::VectorRef,
         links: SortedEdgeIds<V::VectorRef>,
         lc: usize,
-    ) {
+    ) -> Result<()> {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -203,7 +218,9 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(Json(&links))
         .execute(self.tx())
         .await
-        .expect("Failed to set links");
+        .map_err(|e| eyre!("Failed to set links: {e}"))?;
+
+        Ok(())
     }
 }
 
@@ -230,7 +247,7 @@ where
     pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
 
-        let ep = self.get_entry_point().await;
+        let ep = self.get_entry_point().await?;
 
         if let Some((point, layer)) = ep {
             graph_mem.set_entry_point(point, layer).await;
