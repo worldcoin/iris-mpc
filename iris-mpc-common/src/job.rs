@@ -153,6 +153,7 @@ pub struct ServerJobResult<A = ()> {
     // Reset Update specific fields
     pub reset_update_indices: Vec<u32>,
     pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]

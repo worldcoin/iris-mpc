@@ -1729,10 +1729,13 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reauth_or_rule_used,
             reset_update_indices,
             reset_update_request_ids,
+            reset_update_shares,
             mut modifications,
             actor_data: _,
         }) = rx.recv().await
         {
+            let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
+
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
@@ -1931,8 +1934,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 }
             }
 
-            // persist reauth results into db
             if !config_bg.disable_persistence {
+                // persist reauth results into db
                 for (i, success) in successful_reauths.iter().enumerate() {
                     if !success {
                         continue;
@@ -1955,6 +1958,44 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             &right_iris_requests.mask[i],
                         )
                         .await?;
+                }
+
+                // persist deletion results into db
+                for idx in deleted_ids.iter() {
+                    // overwrite postgres db with dummy shares.
+                    // note that both serial_id and postgres db are 1-indexed.
+                    let serial_id = *idx + 1;
+                    tracing::info!(
+                        "Persisting identity deletion into postgres on serial id {}",
+                        serial_id
+                    );
+                    store_bg.update_iris(
+                        Some(&mut tx),
+                        serial_id as i64,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                    );
+                }
+
+                // persist reset_update results into db
+                for (idx, shares) in izip!(reset_update_indices, reset_update_shares) {
+                    // overwrite postgres db with reset update shares.
+                    // note that both serial_id and postgres db are 1-indexed.
+                    let serial_id = idx + 1;
+                    tracing::info!(
+                        "Persisting reset update into postgres on serial id {}",
+                        serial_id
+                    );
+                    store_bg.update_iris(
+                        Some(&mut tx),
+                        serial_id as i64,
+                        &shares.code_left,
+                        &shares.mask_left,
+                        &shares.code_right,
+                        &shares.mask_right,
+                    );
                 }
             }
 
@@ -2180,17 +2221,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
 
-            // Persist deletions and updates to postgres db before the actor processes the batch.
-            // This way, there is no need to pass shares back from actor to the server
-            persist_identity_deletions(
-                &batch,
-                &store,
-                &dummy_shares_for_deletions.0,
-                &dummy_shares_for_deletions.1,
-            )
-            .await?;
-            persist_reset_updates(&batch, &store).await?;
-
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
             // parent.trace.id
@@ -2307,88 +2337,6 @@ async fn load_db_records<'a>(
         time_waiting_for_stream,
         time_loading_into_memory,
     );
-}
-
-async fn persist_identity_deletions(
-    batch: &BatchQuery,
-    store: &Store,
-    dummy_iris_share: &GaloisRingIrisCodeShare,
-    dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<()> {
-    if batch.deletion_requests_indices.is_empty() {
-        return Ok(());
-    }
-
-    for (&entry_idx, tracing_payload) in batch
-        .deletion_requests_indices
-        .iter()
-        .zip(batch.deletion_requests_metadata.iter())
-    {
-        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Started processing deletion request",
-        );
-
-        // overwrite postgres db with dummy values.
-        // note that both serial_id and postgres db are 1-indexed.
-        store
-            .update_iris(
-                None,
-                serial_id as i64,
-                dummy_iris_share,
-                dummy_mask_share,
-                dummy_iris_share,
-                dummy_mask_share,
-            )
-            .await?;
-
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Deleted identity with serial id {}",
-            serial_id,
-        );
-    }
-
-    Ok(())
-}
-
-async fn persist_reset_updates(batch: &BatchQuery, store: &Store) -> eyre::Result<()> {
-    if batch.reset_update_indices.is_empty() {
-        return Ok(());
-    }
-
-    assert_eq!(
-        batch.reset_update_shares.len(),
-        batch.reset_update_indices.len()
-    );
-    for (entry_idx, shares) in izip!(&batch.reset_update_indices, &batch.reset_update_shares) {
-        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
-
-        // overwrite postgres db with reset update shares.
-        // note that both serial_id and postgres db are 1-indexed.
-        store
-            .update_iris(
-                None,
-                serial_id as i64,
-                &shares.code_left,
-                &shares.mask_left,
-                &shares.code_right,
-                &shares.mask_right,
-            )
-            .await?;
-
-        tracing::info!(
-            "Updated ResetUpdate shares in Postgres on serial id {}",
-            serial_id,
-        );
-    }
-
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
