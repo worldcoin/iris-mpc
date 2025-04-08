@@ -55,6 +55,7 @@ pub async fn process_job_result(
         reauth_or_rule_used,
         modifications,
         actor_data: hawk_mutation,
+        ..
     } = job_result;
     let now = Instant::now();
 

@@ -27,6 +27,9 @@ use cudarc::{
 };
 use eyre::eyre;
 use futures::{Future, FutureExt};
+use iris_mpc_common::galois_engine::degree4::{
+    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+};
 use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
@@ -574,10 +577,11 @@ impl ServerActor {
             .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
             .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} deletion requests",
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests",
             batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
             n_reset_checks,
+            batch.reset_update_request_ids.len(),
             batch.deletion_requests_indices.len(),
         );
 
@@ -608,6 +612,14 @@ impl ServerActor {
                 && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
+
+        let n_reset_updates = batch.reset_update_request_ids.len();
+        assert!(
+            n_reset_updates == batch.reset_update_shares.len()
+                && n_reset_updates == batch.reset_update_indices.len(),
+            "Reset update batch sizes mismatch"
+        );
+
         if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
@@ -662,7 +674,9 @@ impl ServerActor {
         if !batch.deletion_requests_indices.is_empty() {
             tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
-            let (dummy_queries, dummy_sums) = self.prepare_deletion_shares()?;
+            let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
+            let (dummy_queries, dummy_sums) =
+                self.prepare_device_query_for_shares(&dummy_code_share, &dummy_mask_share)?;
 
             // Overwrite the in-memory db
             for deletion_index in batch.deletion_requests_indices.clone() {
@@ -689,6 +703,53 @@ impl ServerActor {
                     &dummy_sums,
                     &dummy_queries,
                     &dummy_sums,
+                    0,
+                    device_db_index as usize,
+                    device_index as usize,
+                    &self.streams[0],
+                );
+            }
+        }
+
+        ///////////////////////////////////////////////////////////////////
+        // PERFORM RESET UPDATES (IF ANY)
+        ///////////////////////////////////////////////////////////////////
+        if !batch.reset_update_request_ids.is_empty() {
+            tracing::info!("Performing reset updates");
+
+            // Overwrite the in-memory db
+            for (reset_index, shares) in izip!(
+                batch.reset_update_indices.clone(),
+                batch.reset_update_shares.clone()
+            ) {
+                let (queries_left, sums_left) =
+                    self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;
+                let (queries_right, sums_right) =
+                    self.prepare_device_query_for_shares(&shares.code_right, &shares.mask_right)?;
+
+                let device_index = reset_index % self.device_manager.device_count() as u32;
+                let device_db_index = reset_index / self.device_manager.device_count() as u32;
+                if device_db_index as usize >= self.current_db_sizes[device_index as usize] {
+                    tracing::warn!(
+                        "Reset index {} is out of bounds for device {}",
+                        reset_index,
+                        device_index
+                    );
+                    continue;
+                }
+                self.device_manager
+                    .device(device_index as usize)
+                    .bind_to_thread()
+                    .unwrap();
+                write_db_at_index(
+                    &self.left_code_db_slices,
+                    &self.left_mask_db_slices,
+                    &self.right_code_db_slices,
+                    &self.right_mask_db_slices,
+                    &queries_left,
+                    &sums_left,
+                    &queries_right,
+                    &sums_right,
                     0,
                     device_db_index as usize,
                     device_index as usize,
@@ -1278,6 +1339,8 @@ impl ServerActor {
                 successful_reauths,
                 reauth_target_indices: batch.reauth_target_indices,
                 reauth_or_rule_used: batch.reauth_use_or_rule,
+                reset_update_indices: batch.reset_update_indices,
+                reset_update_request_ids: batch.reset_update_request_ids,
                 modifications: batch.modifications,
                 actor_data: (),
             })
@@ -2236,18 +2299,21 @@ impl ServerActor {
         Ok(valid_merged)
     }
 
-    fn prepare_deletion_shares(&self) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
-        let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
+    fn prepare_device_query_for_shares(
+        &self,
+        code_share: &GaloisRingIrisCodeShare,
+        mask_share: &GaloisRingTrimmedMaskCodeShare,
+    ) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
         let compact_query = {
             let code = preprocess_query(
-                &dummy_code_share
+                &code_share
                     .all_rotations()
                     .into_iter()
                     .flat_map(|e| e.coefs)
                     .collect::<Vec<_>>(),
             );
             let mask = preprocess_query(
-                &dummy_mask_share
+                &mask_share
                     .all_rotations()
                     .into_iter()
                     .flat_map(|e| e.coefs)
@@ -2260,7 +2326,6 @@ impl ServerActor {
                 mask_query_insert: mask,
             }
         };
-
         let compact_device_queries = compact_query.htod_transfer(
             &self.device_manager,
             &self.streams[0],

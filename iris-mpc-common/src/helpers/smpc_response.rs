@@ -196,6 +196,23 @@ impl ResetCheckResult {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResetUpdateAckResult {
+    pub reset_id: String,
+    pub node_id: usize,
+    pub serial_id: u32,
+}
+
+impl ResetUpdateAckResult {
+    pub fn new(reset_id: String, node_id: usize, serial_id: u32) -> Self {
+        Self {
+            reset_id,
+            node_id,
+            serial_id,
+        }
+    }
+}
+
 pub fn create_message_type_attribute_map(
     message_type: &str,
 ) -> HashMap<String, MessageAttributeValue> {
