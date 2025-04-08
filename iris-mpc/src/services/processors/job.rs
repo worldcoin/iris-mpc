@@ -108,6 +108,7 @@ pub async fn process_job_result(
                     false => Some(partial_match_counters_right[i]),
                     true => None,
                 },
+                false, // not applicable for hnsw
             );
 
             serde_json::to_string(&result_event).wrap_err("failed to serialize result")
