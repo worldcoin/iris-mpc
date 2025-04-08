@@ -27,7 +27,29 @@ use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{info, warn};
 
-// Process input arguments.
+/// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
+/// Postgres databases. This binary iteratively builds up a graph in stages
+/// over multiple executions. On initial execution, a new GraphMem and
+/// PlaintextStore are constructed and initialized from plaintext iris codes,
+/// and then the GraphMem is persisted to each MPC party database, and all iris
+/// codes are secret shared and persisted to corresponding MPC party databases.
+/// PRNG state for HNSW graph construction is written to a file for future
+/// runs.
+///
+/// On subsequent runs, the previous HNSW graph is loaded from the first party's
+/// database (all party graphs should be identical), and corresponding
+/// plaintext iris codes are loaded from initial entries in the NDJSON file.
+/// (Note: not read from database, to avoid having to reconstitute secret
+/// shared data.) The full HNSW graphs for both iris sides are persisted to the
+/// MPC party databases, overwriting the previous contents of the corresponding
+/// tables, and newly inserted and secret shared irises are appended to the
+/// existing iris tables for the MPC parties.
+///
+/// Additionally, for runs after the first, the binary attempts to read the
+/// previous PRNG state for HNSW graph construction from file. This is done for
+/// reproducibility, so that a graph that is constructed from a given initial
+/// seed in one run of 10,000 entries is identical to that constructed from the
+/// same seed in two runs of 5,000 entries.
 #[allow(non_snake_case)]
 #[derive(Parser)]
 struct Args {
