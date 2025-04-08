@@ -13,7 +13,10 @@ use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
+use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -25,14 +28,16 @@ use iris_mpc_common::{
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
-            ResetCheckRequest, SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-            RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
+            ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
-            ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::{Modification, SyncResult, SyncState},
         task_monitor::TaskMonitor,
@@ -45,6 +50,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -167,7 +173,7 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let modifications = &mut batch_query.modifications;
+    let batch_modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -224,10 +230,11 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if modifications.contains_key(&identity_deletion_request.serial_id) {
+                        if batch_modifications.contains_key(&identity_deletion_request.serial_id) {
                             tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                identity_deletion_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                identity_deletion_request.serial_id,
+                                identity_deletion_request,
                             );
                             continue;
                         }
@@ -238,7 +245,8 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
-                        modifications.insert(identity_deletion_request.serial_id, modification);
+                        batch_modifications
+                            .insert(identity_deletion_request.serial_id, modification);
 
                         batch_query
                             .deletion_requests_indices
@@ -398,10 +406,11 @@ async fn receive_batch(
                                 continue;
                             }
 
-                            if modifications.contains_key(&reauth_request.serial_id) {
+                            if batch_modifications.contains_key(&reauth_request.serial_id) {
                                 tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                reauth_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reauth_request.serial_id,
+                                reauth_request,
                             );
                                 continue;
                             }
@@ -415,7 +424,7 @@ async fn receive_batch(
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            modifications.insert(reauth_request.serial_id, modification);
+                            batch_modifications.insert(reauth_request.serial_id, modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -528,6 +537,93 @@ async fn receive_batch(
                             )?;
 
                             handles.push(handle);
+                        }
+                    }
+
+                    RESET_UPDATE_MESSAGE_TYPE => {
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
+
+                        let reset_update_request: ResetUpdateRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("Reset update request", e)
+                            })?;
+                        metrics::counter!("request.received", "type" => "reset_update")
+                            .increment(1);
+
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        if config.enable_reset {
+                            // Fetch new iris shares from S3
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = s3_client.clone();
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reset_update_request.s3_key.clone();
+
+                            let task_handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                            )?;
+
+                            let (left_shares, right_shares) = match task_handle.await {
+                                Ok(result) => {
+                                    match result {
+                                        Ok(shares) => shares,
+                                        Err(e) => {
+                                            tracing::error!("Failed to process iris shares for reset update: {:?}", e);
+                                            continue;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to join task handle for reset update: {:?}",
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            if batch_modifications.contains_key(&reset_update_request.serial_id) {
+                                tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
+                            );
+                                continue;
+                            }
+
+                            let modification = store
+                                .insert_modification(
+                                    reset_update_request.serial_id as i64,
+                                    RESET_UPDATE_MESSAGE_TYPE,
+                                    Some(reset_update_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_modifications
+                                .insert(reset_update_request.serial_id, modification);
+
+                            batch_query
+                                .reset_update_indices
+                                .push(reset_update_request.serial_id - 1);
+                            batch_query
+                                .request_ids
+                                .push(reset_update_request.reset_id.clone());
+                            batch_query.reset_update_shares.push(GaloisSharesBothSides {
+                                code_left: left_shares.0,
+                                mask_left: left_shares.1,
+                                code_right: right_shares.0,
+                                mask_right: right_shares.1,
+                            });
                         }
                     }
 
@@ -832,6 +928,7 @@ async fn send_last_modifications_to_sns(
     config: &Config,
     reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
 ) -> eyre::Result<()> {
     // Fetch the last modifications from the database
@@ -849,6 +946,7 @@ async fn send_last_modifications_to_sns(
     // Collect messages by type
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
+    let mut reset_update_messages = Vec::new();
     for modification in &last_modifications {
         if modification.result_message_body.is_none() {
             tracing::error!("Missing modification result message body");
@@ -868,6 +966,9 @@ async fn send_last_modifications_to_sns(
             REAUTH_MESSAGE_TYPE => {
                 reauth_messages.push(body);
             }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                reset_update_messages.push(body);
+            }
             other => {
                 tracing::error!("Unknown message type: {}", other);
             }
@@ -875,10 +976,11 @@ async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} deletion, {} reauth",
+        "Sending {} last modifications to SNS. {} deletion, {} reauth, {} reset update",
         last_modifications.len(),
         deletion_messages.len(),
         reauth_messages.len(),
+        reset_update_messages.len(),
     );
 
     if !deletion_messages.is_empty() {
@@ -901,6 +1003,18 @@ async fn send_last_modifications_to_sns(
             config,
             reauth_message_attributes,
             REAUTH_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reset_update_messages.is_empty() {
+        send_results_to_sns(
+            reset_update_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            reset_update_message_attributes,
+            RESET_UPDATE_MESSAGE_TYPE,
         )
         .await?;
     }
@@ -963,8 +1077,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
+    let schema_name = format!(
+        "{}_{}_{}",
+        config.app_name, config.environment, config.party_id
+    );
+    let db_config = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?;
+
+    tracing::info!(
+        "Creating new iris storage from: {:?} with schema {}",
+        db_config,
+        schema_name
+    );
+    let postgres_client =
+        PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -990,7 +1119,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
-    let reset_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_check_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_result_attributes =
+        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -1070,6 +1201,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
+        common_config: CommonConfig::from(config.clone()),
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1353,6 +1485,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     }
     let sync_result = SyncResult::new(my_state.clone(), states);
 
+    // check if common part of the config is the same across all nodes
+    sync_result.check_common_config()?;
+
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
         let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
@@ -1431,7 +1566,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     dummy_shares_for_deletions.clone().0,
                     dummy_shares_for_deletions.clone().1,
                 ),
-                REAUTH_MESSAGE_TYPE => {
+                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE => {
                     let (left_shares, right_shares) = get_iris_shares_parse_task(
                         party_id,
                         shares_encryption_key_pair.clone(),
@@ -1463,6 +1598,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &config,
             &reauth_result_attributes,
             &identity_deletion_result_attributes,
+            &reset_update_result_attributes,
             max_modification_lookback,
         )
         .await
@@ -1591,10 +1727,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            reset_update_indices,
+            reset_update_request_ids,
+            reset_update_shares,
             mut modifications,
             actor_data: _,
         }) = rx.recv().await
         {
+            let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
+
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
                 .iter()
@@ -1745,6 +1886,25 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<Vec<String>>();
 
+            // reset update results
+            let reset_update_results = reset_update_request_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let reset_id = reset_update_request_ids[i].clone();
+                    let serial_id = reset_update_indices[i] + 1;
+                    let result_event =
+                        ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset update result");
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(true, &result_string);
+                    result_string
+                })
+                .collect::<Vec<String>>();
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
@@ -1774,8 +1934,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 }
             }
 
-            // persist reauth results into db
             if !config_bg.disable_persistence {
+                // persist reauth results into db
                 for (i, success) in successful_reauths.iter().enumerate() {
                     if !success {
                         continue;
@@ -1798,6 +1958,44 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             &right_iris_requests.mask[i],
                         )
                         .await?;
+                }
+
+                // persist deletion results into db
+                for idx in deleted_ids.iter() {
+                    // overwrite postgres db with dummy shares.
+                    // note that both serial_id and postgres db are 1-indexed.
+                    let serial_id = *idx + 1;
+                    tracing::info!(
+                        "Persisting identity deletion into postgres on serial id {}",
+                        serial_id
+                    );
+                    store_bg.update_iris(
+                        Some(&mut tx),
+                        serial_id as i64,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                    );
+                }
+
+                // persist reset_update results into db
+                for (idx, shares) in izip!(reset_update_indices, reset_update_shares) {
+                    // overwrite postgres db with reset update shares.
+                    // note that both serial_id and postgres db are 1-indexed.
+                    let serial_id = idx + 1;
+                    tracing::info!(
+                        "Persisting reset update into postgres on serial id {}",
+                        serial_id
+                    );
+                    store_bg.update_iris(
+                        Some(&mut tx),
+                        serial_id as i64,
+                        &shares.code_left,
+                        &shares.mask_left,
+                        &shares.code_right,
+                        &shares.mask_right,
+                    );
                 }
             }
 
@@ -1851,8 +2049,24 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     &metadata,
                     &sns_client_bg,
                     &config_bg,
-                    &reset_result_attributes,
+                    &reset_check_result_attributes,
                     RESET_CHECK_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            if !reset_update_results.is_empty() {
+                tracing::info!(
+                    "Sending {} reset update results",
+                    reset_update_results.len()
+                );
+                send_results_to_sns(
+                    reset_update_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &reset_update_result_attributes,
+                    RESET_UPDATE_MESSAGE_TYPE,
                 )
                 .await?;
             }
@@ -1953,7 +2167,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
-    let reset_error_result_attribute = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_check_error_result_attribute =
+        create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_error_result_attribute =
+        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
@@ -1986,7 +2203,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &shutdown_handler,
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
-            &reset_error_result_attribute,
+            &reset_check_error_result_attribute,
         );
 
         loop {
@@ -2003,14 +2220,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             tracing::info!("Received batch in {:?}", now.elapsed());
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
-
-            process_identity_deletions(
-                &batch,
-                &store,
-                &dummy_shares_for_deletions.0,
-                &dummy_shares_for_deletions.1,
-            )
-            .await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -2040,7 +2249,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &shutdown_handler,
                 &uniqueness_error_result_attribute,
                 &reauth_error_result_attribute,
-                &reset_error_result_attribute,
+                &reset_check_error_result_attribute,
             );
 
             // await the result
@@ -2128,54 +2337,6 @@ async fn load_db_records<'a>(
         time_waiting_for_stream,
         time_loading_into_memory,
     );
-}
-
-async fn process_identity_deletions(
-    batch: &BatchQuery,
-    store: &Store,
-    dummy_iris_share: &GaloisRingIrisCodeShare,
-    dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<()> {
-    if batch.deletion_requests_indices.is_empty() {
-        return Ok(());
-    }
-
-    for (&entry_idx, tracing_payload) in batch
-        .deletion_requests_indices
-        .iter()
-        .zip(batch.deletion_requests_metadata.iter())
-    {
-        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Started processing deletion request",
-        );
-
-        // overwrite postgres db with dummy values.
-        // note that both serial_id and postgres db are 1-indexed.
-        store
-            .update_iris(
-                None,
-                serial_id as i64,
-                dummy_iris_share,
-                dummy_mask_share,
-                dummy_iris_share,
-                dummy_mask_share,
-            )
-            .await?;
-
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Deleted identity with serial id {}",
-            serial_id,
-        );
-    }
-
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -26,6 +26,7 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -41,6 +42,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
+sqlx.workspace = true
 
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
@@ -49,7 +51,6 @@ hmac = "0.12"
 http = "1.1.0"
 percent-encoding = "2"
 sha2 = "0.10"
-tokio-retry = "0.3"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
 url = "2"
 hex.workspace = true
@@ -73,6 +74,10 @@ required-features = ["helpers"]
 [[bin]]
 name = "shares-encoding"
 path = "src/bin/shares_encoding.rs"
+
+[[bin]]
+name = "migrator"
+path = "src/bin/migrator.rs"
 
 [[bin]]
 name = "e2e-input-transform"

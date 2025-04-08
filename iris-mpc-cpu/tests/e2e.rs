@@ -24,6 +24,7 @@ const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
 const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
+const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
 
 fn install_tracing() {
     tracing_subscriber::registry()
@@ -141,6 +142,7 @@ async fn e2e_test() -> Result<()> {
             NUM_BATCHES,
             MAX_BATCH_SIZE,
             MAX_DELETIONS_PER_BATCH,
+            MAX_RESET_UPDATES_PER_BATCH,
             [&mut handle0, &mut handle1, &mut handle2],
         )
         .await?;
