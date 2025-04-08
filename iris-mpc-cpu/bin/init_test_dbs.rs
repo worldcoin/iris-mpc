@@ -82,14 +82,14 @@ struct Args {
     ///
     /// Specifies the base size of graph neighborhoods for newly inserted
     /// nodes in the graph.
-    #[clap(short, default_value = "384")]
+    #[clap(short, default_value = "256")]
     M: usize,
 
     /// `ef` parameter for HNSW insertion.
     ///
     /// Specifies the size of active search neighborhood for insertion layers
     /// during the HNSW insertion process.
-    #[clap(long("ef"), default_value = "512")]
+    #[clap(long("ef"), default_value = "320")]
     ef: usize,
 
     /// The probability that an inserted element is promoted to a higher layer
