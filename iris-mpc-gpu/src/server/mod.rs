@@ -1,10 +1,11 @@
-mod actor;
+pub(crate) mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
+use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::{
     helpers::sync::Modification,
-    job::{BatchMetadata, BatchQuery, IrisQueryBatchEntries},
+    job::{BatchMetadata, BatchQuery, Eye, IrisQueryBatchEntries},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -110,6 +111,11 @@ pub struct PreprocessedBatchQuery {
     // this one is not needed for the GPU actor
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
 
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
+
     // additional fields which are GPU specific
     pub left_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
     pub right_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
@@ -121,6 +127,42 @@ pub struct PreprocessedBatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+}
+
+impl PreprocessedBatchQuery {
+    pub fn get_iris_requests(&self, eye: Eye) -> &IrisQueryBatchEntries {
+        match eye {
+            Eye::Left => &self.left_iris_requests,
+            Eye::Right => &self.right_iris_requests,
+        }
+    }
+
+    pub fn get_iris_interpolated_requests_preprocessed(
+        &self,
+        eye: Eye,
+    ) -> &BatchQueryEntriesPreprocessed {
+        match eye {
+            Eye::Left => &self.left_iris_interpolated_requests_preprocessed,
+            Eye::Right => &self.right_iris_interpolated_requests_preprocessed,
+        }
+    }
+
+    pub fn get_iris_requests_rotated(&self, eye: Eye) -> &IrisQueryBatchEntries {
+        match eye {
+            Eye::Left => &self.left_iris_rotated_requests,
+            Eye::Right => &self.right_iris_rotated_requests,
+        }
+    }
+
+    pub fn get_iris_requests_rotated_preprocessed(
+        &self,
+        eye: Eye,
+    ) -> &BatchQueryEntriesPreprocessed {
+        match eye {
+            Eye::Left => &self.left_iris_rotated_requests_preprocessed,
+            Eye::Right => &self.right_iris_rotated_requests_preprocessed,
+        }
+    }
 }
 
 impl From<BatchQuery> for PreprocessedBatchQuery {
@@ -169,6 +211,9 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             valid_entries: value.valid_entries,
             reauth_target_indices: value.reauth_target_indices,
             reauth_use_or_rule: value.reauth_use_or_rule,
+            reset_update_indices: value.reset_update_indices,
+            reset_update_request_ids: value.reset_update_request_ids,
+            reset_update_shares: value.reset_update_shares,
             deletion_requests_indices: value.deletion_requests_indices,
             // deletion_requests_metadata: value.deletion_requests_metadata,
             left_iris_interpolated_requests_preprocessed:

@@ -106,7 +106,7 @@ impl ReAuthResult {
         node_id: usize,
         serial_id: u32,
         success: bool,
-        and_rule_matched_serial_ids: Vec<u32>,
+        matched_serial_ids: Vec<u32>,
         or_rule_used: bool,
     ) -> Self {
         Self {
@@ -114,7 +114,7 @@ impl ReAuthResult {
             node_id,
             serial_id,
             success,
-            matched_serial_ids: and_rule_matched_serial_ids,
+            matched_serial_ids,
             or_rule_used,
             error: None,
             error_reason: None,
@@ -136,6 +136,79 @@ impl ReAuthResult {
             or_rule_used: false,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResetCheckResult {
+    pub reset_id: String,
+    pub node_id: usize,
+    pub matched_serial_ids: Option<Vec<u32>>,
+    pub matched_serial_ids_left: Option<Vec<u32>>,
+    pub matched_serial_ids_right: Option<Vec<u32>>,
+    pub matched_batch_request_ids: Option<Vec<String>>,
+    pub partial_matches_count_right: Option<usize>,
+    pub partial_matches_count_left: Option<usize>,
+    pub error: Option<bool>,
+    pub error_reason: Option<String>,
+}
+
+impl ResetCheckResult {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        reset_id: String,
+        node_id: usize,
+        matched_serial_ids: Option<Vec<u32>>,
+        matched_serial_ids_left: Option<Vec<u32>>,
+        matched_serial_ids_right: Option<Vec<u32>>,
+        matched_batch_request_ids: Option<Vec<String>>,
+        partial_matches_count_right: Option<usize>,
+        partial_matches_count_left: Option<usize>,
+    ) -> Self {
+        Self {
+            reset_id,
+            node_id,
+            matched_serial_ids,
+            matched_serial_ids_left,
+            matched_serial_ids_right,
+            matched_batch_request_ids,
+            partial_matches_count_right,
+            partial_matches_count_left,
+            error: None,
+            error_reason: None,
+        }
+    }
+
+    pub fn new_error_result(reset_id: String, node_id: usize, error_reason: &str) -> Self {
+        Self {
+            reset_id,
+            node_id,
+            matched_serial_ids: None,
+            matched_serial_ids_left: None,
+            matched_serial_ids_right: None,
+            matched_batch_request_ids: None,
+            partial_matches_count_right: None,
+            partial_matches_count_left: None,
+            error: Some(true),
+            error_reason: Some(error_reason.to_string()),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ResetUpdateAckResult {
+    pub reset_id: String,
+    pub node_id: usize,
+    pub serial_id: u32,
+}
+
+impl ResetUpdateAckResult {
+    pub fn new(reset_id: String, node_id: usize, serial_id: u32) -> Self {
+        Self {
+            reset_id,
+            node_id,
+            serial_id,
         }
     }
 }

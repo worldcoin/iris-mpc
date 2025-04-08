@@ -106,6 +106,8 @@ pub const ANONYMIZED_STATISTICS_MESSAGE_TYPE: &str = "anonymized_statistics";
 pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
+pub const RESET_CHECK_MESSAGE_TYPE: &str = "reset_check";
+pub const RESET_UPDATE_MESSAGE_TYPE: &str = "reset_update";
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
@@ -133,6 +135,20 @@ pub struct ReAuthRequest {
     pub s3_key: String,
     pub serial_id: u32,
     pub use_or_rule: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResetCheckRequest {
+    pub reset_id: String,
+    pub batch_size: Option<usize>,
+    pub s3_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ResetUpdateRequest {
+    pub reset_id: String,
+    pub serial_id: u32,
+    pub s3_key: String,
 }
 
 #[derive(Error, Debug)]

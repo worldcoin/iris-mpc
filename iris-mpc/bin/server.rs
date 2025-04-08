@@ -15,6 +15,8 @@ use iris_mpc::services::processors::result_message::{
 };
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -26,13 +28,16 @@ use iris_mpc_common::{
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
-            SQSMessage, UniquenessRequest, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
+            ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
-            UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-            ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+            ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
+            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
+            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
         sync::{Modification, SyncResult, SyncState},
         task_monitor::TaskMonitor,
@@ -45,6 +50,7 @@ use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -153,6 +159,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
 ) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
@@ -166,7 +173,7 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let modifications = &mut batch_query.modifications;
+    let batch_modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -223,10 +230,11 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if modifications.contains_key(&identity_deletion_request.serial_id) {
+                        if batch_modifications.contains_key(&identity_deletion_request.serial_id) {
                             tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                identity_deletion_request.serial_id
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                identity_deletion_request.serial_id,
+                                identity_deletion_request,
                             );
                             continue;
                         }
@@ -237,7 +245,8 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
-                        modifications.insert(identity_deletion_request.serial_id, modification);
+                        batch_modifications
+                            .insert(identity_deletion_request.serial_id, modification);
 
                         batch_query
                             .deletion_requests_indices
@@ -386,34 +395,36 @@ async fn receive_batch(
 
                         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
-                        if reauth_request.use_or_rule
-                            && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
-                        {
-                            tracing::error!(
+                        if config.enable_reauth {
+                            if reauth_request.use_or_rule
+                                && !(config.luc_enabled && config.luc_serial_ids_from_smpc_request)
+                            {
+                                tracing::error!(
                                 "Received a reauth request with use_or_rule set to true, but LUC \
                                  is not enabled. Skipping request."
                             );
-                            continue;
-                        }
+                                continue;
+                            }
 
-                        if modifications.contains_key(&reauth_request.serial_id) {
-                            tracing::warn!(
-                                "Received another modification operation in batch: {}. Skipping",
-                                reauth_request.serial_id
+                            if batch_modifications.contains_key(&reauth_request.serial_id) {
+                                tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reauth_request.serial_id,
+                                reauth_request,
                             );
-                            continue;
-                        }
-                        let modification = store
-                            .insert_modification(
-                                reauth_request.serial_id as i64,
-                                REAUTH_MESSAGE_TYPE,
-                                Some(reauth_request.s3_key.as_str()),
-                            )
-                            .await?;
-                        modifications.insert(reauth_request.serial_id, modification);
+                                continue;
+                            }
 
-                        if config.enable_reauth {
                             msg_counter += 1;
+
+                            let modification = store
+                                .insert_modification(
+                                    reauth_request.serial_id as i64,
+                                    REAUTH_MESSAGE_TYPE,
+                                    Some(reauth_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_modifications.insert(reauth_request.serial_id, modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -468,6 +479,151 @@ async fn receive_batch(
                             handles.push(handle);
                         } else {
                             tracing::warn!("Reauth is disabled, skipping reauth request");
+                        }
+                    }
+
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
+
+                        let reset_check_request: ResetCheckRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("Reset check request", e)
+                            })?;
+                        metrics::counter!("request.received", "type" => "reset_check").increment(1);
+
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        if config.enable_reset {
+                            msg_counter += 1;
+
+                            if let Some(batch_size) = reset_check_request.batch_size {
+                                *CURRENT_BATCH_SIZE.lock().unwrap() =
+                                    batch_size.clamp(1, max_batch_size);
+                                tracing::info!("Updating batch size to {}", batch_size);
+                            }
+
+                            batch_query
+                                .request_ids
+                                .push(reset_check_request.reset_id.clone());
+                            batch_query
+                                .request_types
+                                .push(RESET_CHECK_MESSAGE_TYPE.to_string());
+                            batch_query.metadata.push(batch_metadata);
+                            batch_query.sns_message_ids.push(sns_message_id);
+
+                            // skip_persistence is only used for uniqueness requests
+                            batch_query.skip_persistence.push(false);
+
+                            // We need to use AND rule for reset check requests
+                            batch_query.or_rule_indices.push(vec![]);
+
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = s3_client.clone();
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reset_check_request.s3_key.clone();
+                            let handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                            )?;
+
+                            handles.push(handle);
+                        }
+                    }
+
+                    RESET_UPDATE_MESSAGE_TYPE => {
+                        let shares_encryption_key_pairs = shares_encryption_key_pairs.clone();
+
+                        let reset_update_request: ResetUpdateRequest =
+                            serde_json::from_str(&message.message).map_err(|e| {
+                                ReceiveRequestError::json_parse_error("Reset update request", e)
+                            })?;
+                        metrics::counter!("request.received", "type" => "reset_update")
+                            .increment(1);
+
+                        client
+                            .delete_message()
+                            .queue_url(queue_url)
+                            .receipt_handle(sqs_message.receipt_handle.unwrap())
+                            .send()
+                            .await
+                            .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
+
+                        if config.enable_reset {
+                            // Fetch new iris shares from S3
+                            let semaphore = Arc::clone(&semaphore);
+                            let s3_client_arc = s3_client.clone();
+                            let bucket_name = config.shares_bucket_name.clone();
+                            let s3_key = reset_update_request.s3_key.clone();
+
+                            let task_handle = get_iris_shares_parse_task(
+                                party_id,
+                                shares_encryption_key_pairs,
+                                semaphore,
+                                s3_client_arc,
+                                bucket_name,
+                                s3_key,
+                            )?;
+
+                            let (left_shares, right_shares) = match task_handle.await {
+                                Ok(result) => {
+                                    match result {
+                                        Ok(shares) => shares,
+                                        Err(e) => {
+                                            tracing::error!("Failed to process iris shares for reset update: {:?}", e);
+                                            continue;
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to join task handle for reset update: {:?}",
+                                        e
+                                    );
+                                    continue;
+                                }
+                            };
+
+                            if batch_modifications.contains_key(&reset_update_request.serial_id) {
+                                tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
+                            );
+                                continue;
+                            }
+
+                            let modification = store
+                                .insert_modification(
+                                    reset_update_request.serial_id as i64,
+                                    RESET_UPDATE_MESSAGE_TYPE,
+                                    Some(reset_update_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_modifications
+                                .insert(reset_update_request.serial_id, modification);
+
+                            batch_query
+                                .reset_update_indices
+                                .push(reset_update_request.serial_id - 1);
+                            batch_query
+                                .request_ids
+                                .push(reset_update_request.reset_id.clone());
+                            batch_query.reset_update_shares.push(GaloisSharesBothSides {
+                                code_left: left_shares.0,
+                                mask_left: left_shares.1,
+                                code_right: right_shares.0,
+                                mask_right: right_shares.1,
+                            });
                         }
                     }
 
@@ -541,6 +697,15 @@ async fn receive_batch(
                         );
                         let serialized = serde_json::to_string(&message).unwrap();
                         (reauth_error_result_attributes, serialized)
+                    }
+                    RESET_CHECK_MESSAGE_TYPE => {
+                        let message = ResetCheckResult::new_error_result(
+                            request_id.clone(),
+                            config.party_id,
+                            ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                        );
+                        let serialized = serde_json::to_string(&message).unwrap();
+                        (reset_error_result_attributes, serialized)
                     }
                     _ => unreachable!(), // we don't push a handle for unknown message types
                 };
@@ -763,6 +928,7 @@ async fn send_last_modifications_to_sns(
     config: &Config,
     reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
 ) -> eyre::Result<()> {
     // Fetch the last modifications from the database
@@ -780,6 +946,7 @@ async fn send_last_modifications_to_sns(
     // Collect messages by type
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
+    let mut reset_update_messages = Vec::new();
     for modification in &last_modifications {
         if modification.result_message_body.is_none() {
             tracing::error!("Missing modification result message body");
@@ -799,6 +966,9 @@ async fn send_last_modifications_to_sns(
             REAUTH_MESSAGE_TYPE => {
                 reauth_messages.push(body);
             }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                reset_update_messages.push(body);
+            }
             other => {
                 tracing::error!("Unknown message type: {}", other);
             }
@@ -806,10 +976,11 @@ async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} deletion, {} reauth",
+        "Sending {} last modifications to SNS. {} deletion, {} reauth, {} reset update",
         last_modifications.len(),
         deletion_messages.len(),
         reauth_messages.len(),
+        reset_update_messages.len(),
     );
 
     if !deletion_messages.is_empty() {
@@ -832,6 +1003,18 @@ async fn send_last_modifications_to_sns(
             config,
             reauth_message_attributes,
             REAUTH_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reset_update_messages.is_empty() {
+        send_results_to_sns(
+            reset_update_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            reset_update_message_attributes,
+            RESET_UPDATE_MESSAGE_TYPE,
         )
         .await?;
     }
@@ -894,8 +1077,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
-    tracing::info!("Creating new storage from: {:?}", config);
-    let store = Store::new_from_config(&config).await?;
+    let schema_name = format!(
+        "{}_{}_{}",
+        config.app_name, config.environment, config.party_id
+    );
+    let db_config = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?;
+
+    tracing::info!(
+        "Creating new iris storage from: {:?} with schema {}",
+        db_config,
+        schema_name
+    );
+    let postgres_client =
+        PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
@@ -921,6 +1119,9 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_check_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_result_attributes =
+        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -1365,7 +1566,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                     dummy_shares_for_deletions.clone().0,
                     dummy_shares_for_deletions.clone().1,
                 ),
-                REAUTH_MESSAGE_TYPE => {
+                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE => {
                     let (left_shares, right_shares) = get_iris_shares_parse_task(
                         party_id,
                         shares_encryption_key_pair.clone(),
@@ -1397,6 +1598,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &config,
             &reauth_result_attributes,
             &identity_deletion_result_attributes,
+            &reset_update_result_attributes,
             max_modification_lookback,
         )
         .await
@@ -1432,6 +1634,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
+            config.full_scan_side,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
@@ -1524,6 +1727,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            reset_update_indices,
+            reset_update_request_ids,
             mut modifications,
             actor_data: _,
         }) = rx.recv().await
@@ -1646,6 +1851,57 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 })
                 .collect::<Vec<String>>();
 
+            let reset_check_results = request_types
+                .iter()
+                .enumerate()
+                .filter(|(_, request_type)| *request_type == RESET_CHECK_MESSAGE_TYPE)
+                .map(|(i, _)| {
+                    let reset_id = request_ids[i].clone();
+                    let result_event = ResetCheckResult::new(
+                        reset_id.clone(),
+                        party_id,
+                        Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
+                        Some(
+                            partial_match_ids_left[i]
+                                .iter()
+                                .map(|x| x + 1)
+                                .collect::<Vec<_>>(),
+                        ),
+                        Some(
+                            partial_match_ids_right[i]
+                                .iter()
+                                .map(|x| x + 1)
+                                .collect::<Vec<_>>(),
+                        ),
+                        Some(matched_batch_request_ids[i].clone()),
+                        Some(partial_match_counters_right[i]),
+                        Some(partial_match_counters_left[i]),
+                    );
+
+                    serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset check result")
+                })
+                .collect::<Vec<String>>();
+
+            // reset update results
+            let reset_update_results = reset_update_request_ids
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let reset_id = reset_update_request_ids[i].clone();
+                    let serial_id = reset_update_indices[i] + 1;
+                    let result_event =
+                        ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset update result");
+                    modifications
+                        .get_mut(&serial_id)
+                        .unwrap()
+                        .mark_completed(true, &result_string);
+                    result_string
+                })
+                .collect::<Vec<String>>();
+
             let mut tx = store_bg.tx().await?;
 
             store_bg
@@ -1745,6 +2001,35 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             )
             .await?;
 
+            if !reset_check_results.is_empty() {
+                tracing::info!("Sending {} reset check results", reset_check_results.len());
+                send_results_to_sns(
+                    reset_check_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &reset_check_result_attributes,
+                    RESET_CHECK_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            if !reset_update_results.is_empty() {
+                tracing::info!(
+                    "Sending {} reset update results",
+                    reset_update_results.len()
+                );
+                send_results_to_sns(
+                    reset_update_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &reset_update_result_attributes,
+                    RESET_UPDATE_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
             if (config_bg.enable_sending_anonymized_stats_message)
                 && (!anonymized_bucket_statistics_left.buckets.is_empty()
                     || !anonymized_bucket_statistics_right.buckets.is_empty())
@@ -1841,6 +2126,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_check_error_result_attribute =
+        create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_error_result_attribute =
+        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
@@ -1873,6 +2162,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             &shutdown_handler,
             &uniqueness_error_result_attribute,
             &reauth_error_result_attribute,
+            &reset_check_error_result_attribute,
         );
 
         loop {
@@ -1890,13 +2180,16 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
 
-            process_identity_deletions(
+            // Persist deletions and updates to postgres db before the actor processes the batch.
+            // This way, there is no need to pass shares back from actor to the server
+            persist_identity_deletions(
                 &batch,
                 &store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
             )
             .await?;
+            persist_reset_updates(&batch, &store).await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
@@ -1926,6 +2219,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 &shutdown_handler,
                 &uniqueness_error_result_attribute,
                 &reauth_error_result_attribute,
+                &reset_check_error_result_attribute,
             );
 
             // await the result
@@ -2015,7 +2309,7 @@ async fn load_db_records<'a>(
     );
 }
 
-async fn process_identity_deletions(
+async fn persist_identity_deletions(
     batch: &BatchQuery,
     store: &Store,
     dummy_iris_share: &GaloisRingIrisCodeShare,
@@ -2056,6 +2350,40 @@ async fn process_identity_deletions(
             dd.trace_id = tracing_payload.trace_id,
             dd.span_id = tracing_payload.span_id,
             "Deleted identity with serial id {}",
+            serial_id,
+        );
+    }
+
+    Ok(())
+}
+
+async fn persist_reset_updates(batch: &BatchQuery, store: &Store) -> eyre::Result<()> {
+    if batch.reset_update_indices.is_empty() {
+        return Ok(());
+    }
+
+    assert_eq!(
+        batch.reset_update_shares.len(),
+        batch.reset_update_indices.len()
+    );
+    for (entry_idx, shares) in izip!(&batch.reset_update_indices, &batch.reset_update_shares) {
+        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
+
+        // overwrite postgres db with reset update shares.
+        // note that both serial_id and postgres db are 1-indexed.
+        store
+            .update_iris(
+                None,
+                serial_id as i64,
+                &shares.code_left,
+                &shares.mask_left,
+                &shares.code_right,
+                &shares.mask_right,
+            )
+            .await?;
+
+        tracing::info!(
+            "Updated ResetUpdate shares in Postgres on serial id {}",
             serial_id,
         );
     }

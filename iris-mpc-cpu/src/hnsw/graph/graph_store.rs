@@ -1,15 +1,14 @@
-use super::layered_graph::EntryPoint;
+use super::{layered_graph::EntryPoint, neighborhood::SortedEdgeIds};
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
-        graph::neighborhood::SortedNeighborhoodV,
         searcher::{ConnectPlanLayerV, ConnectPlanV},
         GraphMem, VectorStore,
     },
 };
 use eyre::Result;
 use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_store::Store;
+use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
 use sqlx::{
     error::BoxDynError,
@@ -22,7 +21,7 @@ use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    links: Json<SortedNeighborhoodV<V>>,
+    links: Json<SortedEdgeIds<V::VectorRef>>,
     layer: i32,
 }
 
@@ -33,12 +32,19 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl<V: VectorStore> GraphPg<V> {
-    pub fn from_iris_store(store: &Store) -> Self {
-        Self {
-            pool: store.pool.clone(),
-            schema_name: store.schema_name.clone(),
+    pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
+        tracing::info!(
+            "Created a graph store with schema: {}",
+            postgres_client.schema_name,
+        );
+
+        postgres_client.migrate().await;
+
+        Ok(Self {
+            pool: postgres_client.pool.clone(),
+            schema_name: postgres_client.schema_name.clone(),
             phantom: PhantomData,
-        }
+        })
     }
 
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
@@ -118,7 +124,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors, lc).await;
+        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
     }
 
     pub async fn get_entry_point(&mut self) -> Option<(V::VectorRef, usize)> {
@@ -155,7 +161,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         &mut self,
         base: &<V as VectorStore>::VectorRef,
         lc: usize,
-    ) -> SortedNeighborhoodV<V> {
+    ) -> SortedEdgeIds<V::VectorRef> {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -170,13 +176,18 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .await
         .expect("Failed to fetch links")
         .map(|row: PgRow| {
-            let x: Json<SortedNeighborhoodV<V>> = row.get("links");
+            let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
             x.as_ref().clone()
         })
-        .unwrap_or_else(SortedNeighborhoodV::<V>::new)
+        .unwrap_or_else(SortedEdgeIds::default)
     }
 
-    async fn set_links(&mut self, base: V::VectorRef, links: SortedNeighborhoodV<V>, lc: usize) {
+    async fn set_links(
+        &mut self,
+        base: V::VectorRef,
+        links: SortedEdgeIds<V::VectorRef>,
+        lc: usize,
+    ) {
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -239,6 +250,7 @@ where
 
 pub mod test_utils {
     use super::*;
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
     use std::ops::{Deref, DerefMut};
 
@@ -247,20 +259,24 @@ pub mod test_utils {
     ///
     /// Access the database with `&graph` or `graph.owned()`.
     pub struct TestGraphPg<V: VectorStore> {
-        store: Store,
+        postgres_client: PostgresClient,
         pub graph: GraphPg<V>,
     }
 
     impl<V: VectorStore> TestGraphPg<V> {
         pub async fn new() -> Result<Self> {
             let schema_name = temporary_name();
-            let store = Store::new(&test_db_url()?, &schema_name).await?;
-            let graph = GraphPg::from_iris_store(&store);
-            Ok(TestGraphPg { store, graph })
+            let postgres_client =
+                PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            let graph = GraphPg::new(&postgres_client).await?;
+            Ok(TestGraphPg {
+                postgres_client,
+                graph,
+            })
         }
 
         pub async fn cleanup(&self) -> Result<()> {
-            cleanup(&self.store, &self.store.schema_name).await
+            cleanup(&self.postgres_client, &self.postgres_client.schema_name).await
         }
 
         pub fn owned(&self) -> GraphPg<V> {
@@ -351,6 +367,7 @@ mod tests {
                     .insert(&mut vector_store, vectors[j], distances[j])
                     .await;
             }
+            let links = links.edge_ids();
 
             graph_ops.set_links(vectors[i], links.clone(), 0).await;
 
