@@ -541,10 +541,6 @@ impl ServerActor {
                         Some(mirrored_results),
                     ) {
                         Ok(combined_results) => {
-                            tracing::info!(
-                                "Combined_results.full_face_mirror_attack_detected: {:?}",
-                                combined_results.full_face_mirror_attack_detected
-                            );
                             // Send the combined results to the return channel
                             let _ = return_channel.send(combined_results);
                         }
@@ -1446,7 +1442,6 @@ impl ServerActor {
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
-            // TODO: if the bucket is not empty (from the mirrored case) then just place it here, for both
             anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
             anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
             successful_reauths,
