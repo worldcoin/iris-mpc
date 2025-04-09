@@ -229,7 +229,7 @@ mod e2e_test {
             let test_db = self.test_db.clone();
             let indices = indices.to_vec();
             Box::new(indices.into_iter().map(move |idx| {
-                let (mask, code) = &test_db[idx];
+                let (code, mask) = &test_db[idx];
                 (idx, code.coefs.to_vec(), mask.coefs.to_vec())
             }))
         }
