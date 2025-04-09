@@ -7,7 +7,10 @@ mod e2e_test {
         job::Eye,
         test::{generate_full_test_db, load_test_db, TestCaseGenerator},
     };
-    use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
+    use iris_mpc_gpu::{
+        helpers::device_manager::DeviceManager,
+        server::{InMemoryStoreType, ServerActor},
+    };
     use rand::random;
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
@@ -114,7 +117,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -148,7 +151,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -182,7 +185,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);

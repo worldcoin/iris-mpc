@@ -45,7 +45,7 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_gpu::server::{InMemoryStoreType, ServerActor};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -1654,7 +1654,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
-            false,
+            InMemoryStoreType::Full,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
