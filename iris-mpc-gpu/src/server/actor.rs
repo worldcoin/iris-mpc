@@ -1821,6 +1821,7 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compare_query_against_db_subset_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
