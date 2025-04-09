@@ -43,9 +43,7 @@ pub async fn intra_batch_is_match(
         .map(per_session)
         .map(tokio::spawn)
         .collect::<JoinAll<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<Result<_>>, JoinError>>()?;
+        .await;
 
     aggregate_results(n_requests, results)
 }
@@ -100,13 +98,13 @@ struct IsMatch {
 
 fn aggregate_results(
     n_requests: usize,
-    results: Vec<Result<Vec<IsMatch>>>,
+    results: Vec<std::result::Result<Result<Vec<IsMatch>>, JoinError>>,
 ) -> Result<VecRequests<Vec<usize>>> {
     let mut join = HashMap::new();
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
     for batch in results {
-        for match_result in batch? {
+        for match_result in batch?? {
             let request_pair = (match_result.task.i_request, match_result.earlier_request);
             let eyes_match = join.entry(request_pair).or_insert([false, false]);
             eyes_match[match_result.eye] = true;

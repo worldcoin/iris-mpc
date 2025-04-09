@@ -584,7 +584,7 @@ where
     };
 
     if len < 32 {
-        return Err(eyre!("Input length should be at least 16: {len}"));
+        return Err(eyre!("Input length should be at least 32: {len}"));
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -661,7 +661,7 @@ where
     };
 
     if len < 32 {
-        return Err(eyre!("Input length should be at least 16: {len}"));
+        return Err(eyre!("Input length should be at least 32: {len}"));
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
