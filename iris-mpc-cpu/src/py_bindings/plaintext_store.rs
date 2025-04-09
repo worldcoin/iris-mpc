@@ -44,12 +44,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     for json_pt in stream {
         let json_pt = json_pt?;
         vector.points.push(PlaintextPoint {
-            data: PlaintextIris((&json_pt).try_into().map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to convert IrisCode: {e}"),
-                )
-            })?),
+            data: PlaintextIris((&json_pt).into()),
             is_persistent: true,
         });
     }
@@ -75,12 +70,7 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     for pt in &vector.points {
-        let json_pt: Base64IrisCode = (&pt.data.0).try_into().map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("Failed to convert IrisCode: {e}"),
-            )
-        })?;
+        let json_pt: Base64IrisCode = (&pt.data.0).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }
