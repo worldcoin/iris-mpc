@@ -673,8 +673,12 @@ impl TestCaseGenerator {
             TestCase::NonMatchSkipPersistence,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
-            TestCase::FullFaceMirrorAttack,
         ];
+
+        if !self.is_cpu {
+            options.push(TestCase::FullFaceMirrorAttack);
+        }
+
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
         }
