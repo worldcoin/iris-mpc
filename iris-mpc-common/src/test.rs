@@ -22,7 +22,7 @@ use rand::{
 };
 use std::{
     collections::{HashMap, HashSet},
-    ops::Range,
+    ops::{Index, Range},
 };
 use uuid::Uuid;
 
@@ -1252,14 +1252,16 @@ pub struct TestDb {
     db: Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)>,
 }
 
-pub fn load_test_db(
-    party_id: usize,
-    db_size: usize,
-    db_rng_seed: u64,
-    loader: &mut impl InMemoryStore,
-) -> Result<TestDb> {
-    let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
-    for (idx, (code, mask)) in iris_shares.db.iter().enumerate() {
+impl Index<usize> for TestDb {
+    type Output = (GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare);
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.db[index]
+    }
+}
+
+pub fn load_test_db(test_db: &TestDb, loader: &mut impl InMemoryStore) -> Result<()> {
+    for (idx, (code, mask)) in test_db.db.iter().enumerate() {
         loader.load_single_record_from_db(
             idx,
             VectorId::from_0_index(idx as u32),
@@ -1270,6 +1272,19 @@ pub fn load_test_db(
         );
         loader.increment_db_size(idx);
     }
+
+    Ok(())
+}
+
+pub fn generate_and_load_test_db(
+    party_id: usize,
+    db_size: usize,
+    db_rng_seed: u64,
+    loader: &mut impl InMemoryStore,
+) -> Result<TestDb> {
+    let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
+
+    load_test_db(&iris_shares, loader)?;
 
     Ok(iris_shares)
 }

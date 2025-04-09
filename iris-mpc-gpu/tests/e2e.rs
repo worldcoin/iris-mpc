@@ -5,8 +5,9 @@ mod e2e_test {
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
         job::Eye,
-        test::{load_test_db, TestCaseGenerator},
+        test::{generate_test_db, load_test_db, TestCaseGenerator},
     };
+    use iris_mpc_common::{helpers::inmemory_store::OnDemandLoader, test::TestDb};
     use iris_mpc_gpu::{
         helpers::device_manager::DeviceManager,
         server::{InMemoryStoreType, ServerActor},
@@ -71,6 +72,10 @@ mod e2e_test {
             let comms0 = device_manager0
                 .instantiate_network_from_ids(0, &ids0)
                 .unwrap();
+            let test_db = generate_test_db(0, DB_SIZE, DB_RNG_SEED);
+            let test_db = OnDemandLoaderImpl {
+                test_db: Arc::new(test_db),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 0,
                 chacha_seeds0,
@@ -86,10 +91,10 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(0, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(&test_db.test_db, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx0.send(Ok(handle)).unwrap();
                     actor
@@ -105,6 +110,10 @@ mod e2e_test {
             let comms1 = device_manager1
                 .instantiate_network_from_ids(1, &ids1)
                 .unwrap();
+            let test_db = generate_test_db(1, DB_SIZE, DB_RNG_SEED);
+            let test_db = OnDemandLoaderImpl {
+                test_db: Arc::new(test_db),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 1,
                 chacha_seeds1,
@@ -120,10 +129,10 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(&test_db.test_db, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx1.send(Ok(handle)).unwrap();
                     actor
@@ -139,6 +148,10 @@ mod e2e_test {
             let comms2 = device_manager2
                 .instantiate_network_from_ids(2, &ids2)
                 .unwrap();
+            let test_db = generate_test_db(2, DB_SIZE, DB_RNG_SEED);
+            let test_db = OnDemandLoaderImpl {
+                test_db: Arc::new(test_db),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 2,
                 chacha_seeds2,
@@ -154,10 +167,10 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(&test_db.test_db, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx2.send(Ok(handle)).unwrap();
                     actor
@@ -200,5 +213,25 @@ mod e2e_test {
         actor2_task.await.unwrap();
 
         Ok(())
+    }
+    // On-DemandLoader
+    #[derive(Clone)]
+    struct OnDemandLoaderImpl {
+        test_db: Arc<TestDb>,
+    }
+
+    impl OnDemandLoader for OnDemandLoaderImpl {
+        fn stream_records(
+            &self,
+            _side: iris_mpc_common::job::Eye,
+            indices: &[usize],
+        ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>)>> {
+            let test_db = self.test_db.clone();
+            let indices = indices.to_vec();
+            Box::new(indices.into_iter().map(move |idx| {
+                let (mask, code) = &test_db[idx];
+                (idx, code.coefs.to_vec(), mask.coefs.to_vec())
+            }))
+        }
     }
 }
