@@ -628,7 +628,7 @@ impl ShareDB {
                     .cuMemcpyHtoDAsync_v2(
                         *buffers.sums.limb_0[idx].device_ptr(),
                         a0_sums.as_ptr() as *mut _,
-                        self.code_length * db[idx].len() * size_of::<u32>(),
+                        db[idx].len() * size_of::<u32>(),
                         streams[idx].stream,
                     )
                     .result()
@@ -638,7 +638,7 @@ impl ShareDB {
                     .cuMemcpyHtoDAsync_v2(
                         *buffers.sums.limb_1[idx].device_ptr(),
                         a1_sums.as_ptr() as *mut _,
-                        self.code_length * db[idx].len() * size_of::<u32>(),
+                        db[idx].len() * size_of::<u32>(),
                         streams[idx].stream,
                     )
                     .result()
