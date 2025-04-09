@@ -4,7 +4,7 @@ use super::{
         errors::IndexationError,
         messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
         types::IrisGaloisShares,
-        utils::{fetcher, logger},
+        utils::{self, fetcher, logger},
     },
 };
 use iris_mpc_common::config::Config;
@@ -59,12 +59,7 @@ impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
 
         // JIT set pointer to store.
         if self.iris_store.is_none() {
-            match IrisStore::new_from_config(&self.config).await {
-                Ok(store) => {
-                    self.iris_store = Some(store);
-                }
-                Err(_) => return Err(IndexationError::PostgresConnectionError),
-            }
+            self.iris_store = Some(utils::pgres::get_store_instance(&self.config).await);
         }
 
         // Fetch iris data.

@@ -3,7 +3,7 @@ use aws_sdk_sqs::Client as SQSClient;
 use eyre::{Result, WrapErr};
 use iris_mpc_common::helpers::sqs::get_next_sns_seq_num;
 use iris_mpc_common::{
-    config::Config,
+    config::{CommonConfig, Config},
     helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
         sync::SyncState,
@@ -59,6 +59,7 @@ pub(crate) async fn fetch_sync_state(
     max_sync_lookback: usize,
 ) -> Result<SyncState, String> {
     Ok(SyncState {
+        common_config: CommonConfig::from(config.clone()),
         db_len: store_len as u64,
         deleted_request_ids: iris_pg_store
             .last_deleted_requests(max_sync_lookback)

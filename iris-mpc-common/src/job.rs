@@ -2,8 +2,13 @@ use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{statistics::BucketStatistics, sync::Modification},
 };
+use core::fmt;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, future::Future};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    future::Future,
+};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -15,6 +20,14 @@ pub struct BatchMetadata {
     pub node_id: String,
     pub trace_id: String,
     pub span_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GaloisSharesBothSides {
+    pub code_left: GaloisRingIrisCodeShare,
+    pub mask_left: GaloisRingTrimmedMaskCodeShare,
+    pub code_right: GaloisRingIrisCodeShare,
+    pub mask_right: GaloisRingTrimmedMaskCodeShare,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
@@ -80,6 +93,11 @@ pub struct BatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -131,15 +149,37 @@ pub struct ServerJobResult<A = ()> {
     pub modifications: HashMap<u32, Modification>,
     /// Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
+
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Eye {
     #[default]
     Left,
     Right,
 }
 
+impl Eye {
+    pub fn other(&self) -> Self {
+        match self {
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
+        }
+    }
+}
+
+impl Display for Eye {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Left => write!(f, "left"),
+            Self::Right => write!(f, "right"),
+        }
+    }
+}
 pub trait JobSubmissionHandle {
     type A;
 

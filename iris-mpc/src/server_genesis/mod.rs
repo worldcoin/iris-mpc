@@ -13,10 +13,8 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
-use iris_mpc_cpu::execution::hawk_main::{
-    GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
-};
-use iris_mpc_store::{S3Store, Store};
+use iris_mpc_cpu::execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, ServerJobResult};
+use iris_mpc_store::S3Store;
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,8 +35,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     // Set external service client pointers.
     tracing::info!("Setting external service client pointers");
-    let iris_pg_store = Store::new_from_config(&config).await?;
-    let graph_pg_store = GraphStore::from_iris_store(&iris_pg_store);
+    let iris_pg_store = utils::get_iris_pg_store_instance(&config).await;
+    let graph_pg_store = utils::get_graph_pg_store_instance(&config).await;
     let aws_clients = AwsClients::new(&config.clone()).await?;
 
     // Set encryption keys.

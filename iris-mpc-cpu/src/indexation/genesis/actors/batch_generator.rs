@@ -6,11 +6,10 @@ use super::{
             OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
         },
         types::IrisSerialId,
-        utils::{fetcher, logger},
+        utils::{self, fetcher, logger},
     },
 };
 use iris_mpc_common::config::Config;
-use iris_mpc_store::Store as IrisStore;
 use kameo::{
     actor::ActorRef,
     mailbox::bounded::BoundedMailbox,
@@ -156,10 +155,7 @@ impl Actor for BatchGenerator {
         logger::log_lifecycle::<Self>("on_start", None);
 
         // Set store client.
-        let store = IrisStore::new_from_config(&self.config)
-            .await
-            .map_err(|_| IndexationError::PostgresConnectionError)
-            .unwrap();
+        let store = utils::pgres::get_store_instance(&self.config).await;
 
         // Set indexation exclusions.
         self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();

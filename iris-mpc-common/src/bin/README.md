@@ -21,4 +21,7 @@ This will:
 This key will be immediately valid, though the previous key will retain a validity of 24 hours (dictated by the cloudfront caching behavior, 
 and by application logic that checks against AWSCURRENT and AWSPREVIOUS version of the secret).
 
+# Migrator
 
+Minimal wrapper on top of the `sqlx` to migrate the database in dev mode. Was implemented because of issues with running `sqlx migrate run` 
+into a custom schema.

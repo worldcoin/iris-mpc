@@ -5,8 +5,9 @@ mod ops_store_consistency;
 mod ops_web_service;
 
 pub(crate) use fetcher::fetch_shares_encryption_key_pair;
-pub(crate) use misc::get_check_addresses;
-pub(crate) use misc::validate_config;
+pub(crate) use misc::{
+    get_check_addresses, get_graph_pg_store_instance, get_iris_pg_store_instance, validate_config,
+};
 pub(crate) use ops_net_healthcheck::do_unreadiness_check;
 pub(crate) use ops_web_service::get_spinup_web_service_future;
 pub(crate) use ops_web_service::ReadyProbeResponse;
