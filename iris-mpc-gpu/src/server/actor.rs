@@ -1163,6 +1163,44 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
+        // Check for mirror attack detection when we have previous results and are in normal orientation
+        let request_count = batch.request_ids.len();
+        let full_face_mirror_attack_detected: Vec<bool> =
+            if orientation == Orientation::Normal && previous_results.is_some() {
+                let mirror_results = previous_results.clone().unwrap();
+                let attack_detected = (0..request_count)
+                    .map(|i| {
+                        // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
+                        merged_results[i] == NON_MATCH_ID
+                            && mirror_results.merged_results[i] != NON_MATCH_ID
+                    })
+                    .collect();
+
+                // Edge case: when both normal and mirrored matches occur
+                // This happens when both merged_results and mirror_results.merged_results
+                // indicate a match (i.e. not equal to NON_MATCH_ID).
+                let both_matched_count = (0..request_count)
+                    .filter(|&i| {
+                        merged_results[i] != NON_MATCH_ID
+                            && mirror_results.merged_results[i] != NON_MATCH_ID
+                    })
+                    .count();
+
+                // Log and count the edge cases if any are detected
+                if both_matched_count > 0 {
+                    tracing::info!(
+                        "Detected {} cases where both normal and mirrored matches occurred",
+                        both_matched_count
+                    );
+                    metrics::counter!("mirror.attack.both_matched")
+                        .increment(both_matched_count as u64);
+                }
+
+                attack_detected
+            } else {
+                vec![false; request_count]
+            };
+
         // sync the results across nodes, since these are the ones which the insertions are based upon
         self.sync_match_results(self.max_batch_size, &merged_results)?;
 
@@ -1387,40 +1425,6 @@ impl ServerActor {
                 }
             );
         }
-
-        let request_count = batch.request_ids.len();
-
-        // Check for mirror attack detection when we have previous results and are in normal mode
-        let full_face_mirror_attack_detected: Vec<bool> =
-            if orientation == Orientation::Normal && previous_results.is_some() {
-                let mirror_results = previous_results.unwrap();
-                let attack_detected = (0..request_count)
-                    .map(|i| !matches[i] && mirror_results.matches[i])
-                    .collect();
-
-                // Edge case where both normal and mirrored matches occur
-                // Could be possible, but unlikely
-                // Its the case when a user:
-                // - Has already two unique accounts by having attempted to mirror attack us in the past
-                // - Tries to enroll again
-                let both_matched_count = (0..request_count)
-                    .filter(|&i| matches[i] && mirror_results.matches[i])
-                    .count();
-
-                // Increment counter for cases where both normal and mirrored matches occur
-                if both_matched_count > 0 {
-                    tracing::info!(
-                        "Detected {} cases where both normal and mirrored matches occurred",
-                        both_matched_count
-                    );
-                    metrics::counter!("mirror.attack.both_matched")
-                        .increment(both_matched_count as u64);
-                }
-
-                attack_detected
-            } else {
-                vec![false; request_count]
-            };
 
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
