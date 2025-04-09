@@ -13,25 +13,21 @@ pub struct Base64IrisCode {
     mask_codes: String,
 }
 
-impl TryFrom<&IrisCode> for Base64IrisCode {
-    type Error = eyre::Report;
-
-    fn try_from(value: &IrisCode) -> Result<Self, Self::Error> {
-        Ok(Self {
-            iris_codes: value.code.to_base64()?,
-            mask_codes: value.mask.to_base64()?,
-        })
+impl From<&IrisCode> for Base64IrisCode {
+    fn from(value: &IrisCode) -> Self {
+        Self {
+            iris_codes: value.code.to_base64().unwrap(),
+            mask_codes: value.mask.to_base64().unwrap(),
+        }
     }
 }
 
-impl TryFrom<&Base64IrisCode> for IrisCode {
-    type Error = eyre::Report;
-
-    fn try_from(value: &Base64IrisCode) -> Result<Self, Self::Error> {
-        Ok(IrisCode {
-            code: IrisCodeArray::from_base64(&value.iris_codes)?,
-            mask: IrisCodeArray::from_base64(&value.mask_codes)?,
-        })
+impl From<&Base64IrisCode> for IrisCode {
+    fn from(value: &Base64IrisCode) -> Self {
+        Self {
+            code: IrisCodeArray::from_base64(&value.iris_codes).unwrap(),
+            mask: IrisCodeArray::from_base64(&value.mask_codes).unwrap(),
+        }
     }
 }
 
