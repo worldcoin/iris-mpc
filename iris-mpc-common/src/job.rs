@@ -22,6 +22,14 @@ pub struct BatchMetadata {
     pub span_id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GaloisSharesBothSides {
+    pub code_left: GaloisRingIrisCodeShare,
+    pub mask_left: GaloisRingTrimmedMaskCodeShare,
+    pub code_right: GaloisRingIrisCodeShare,
+    pub mask_right: GaloisRingTrimmedMaskCodeShare,
+}
+
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct BatchQuery {
     // Enrollment and reauth specific fields
@@ -85,6 +93,11 @@ pub struct BatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -136,6 +149,11 @@ pub struct ServerJobResult<A = ()> {
     pub modifications: HashMap<u32, Modification>,
     /// Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
+
+    // Reset Update specific fields
+    pub reset_update_indices: Vec<u32>,
+    pub reset_update_request_ids: Vec<String>,
+    pub reset_update_shares: Vec<GaloisSharesBothSides>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
