@@ -1,4 +1,4 @@
-use crate::vector_id::VectorId;
+use crate::{job::Eye, vector_id::VectorId};
 
 /// A helper trait encapsulating the functionality to add iris codes to some
 /// form of in-memory store.
@@ -122,9 +122,10 @@ pub trait InMemoryStore {
 pub trait OnDemandLoader {
     /// Loads records from the source.
     /// The returned iterator yields tuples of the form:
-    /// `(index, left_code, left_mask, right_code, right_mask)`.
+    /// `(index, side_code, side_mask)`.
     fn stream_records(
         &self,
+        side: Eye,
         indices: &[usize],
-    ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)>>;
+    ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>)>>;
 }

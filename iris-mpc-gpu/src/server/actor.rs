@@ -1917,22 +1917,104 @@ impl ServerActor {
             return;
         }
 
-        // which database are we querying against
-        let (code_db_slices, mask_db_slices) = if eye_db == self.full_scan_side {
-            (
-                &self.active_side_code_db_slices,
-                &self.active_side_mask_db_slices,
-            )
+        if eye_db != self.full_scan_side && self.on_demand_loader.is_some() {
+            // load the database on demand
+            let on_demand_loader = self.on_demand_loader.as_mut().unwrap();
+
+            // map in-memory GPU indices to DB indices
+            let num_devices = db_subset_idx.len();
+            let db_indices = db_subset_idx
+                .iter()
+                .enumerate()
+                .flat_map(|(i, x)| x.iter().map(move |&y| y as usize * num_devices + i))
+                .collect::<Vec<_>>();
+
+            // fetch them from the DB
+            let iris_codes = on_demand_loader
+                .stream_records(eye_db, &db_indices)
+                .collect::<Vec<_>>();
+
+            // spread them to their respective devices
+            let mut iris_codes_split = db_subset_idx
+                .iter()
+                .map(|x| Vec::with_capacity(x.len()))
+                .collect::<Vec<_>>();
+            let mut iris_masks_split = db_subset_idx
+                .iter()
+                .map(|x| Vec::with_capacity(x.len()))
+                .collect::<Vec<_>>();
+            for (db_idx, code, mask) in iris_codes.into_iter() {
+                let device_index = db_idx % num_devices;
+                let device_db_index = db_idx / num_devices;
+                // sanity check: queried iris codes are returned in the same order as queried
+                assert!(
+                    device_db_index
+                        == db_subset_idx[device_index][iris_codes_split[device_index].len()]
+                            as usize
+                );
+                iris_codes_split[device_index].push(code);
+                iris_masks_split[device_index].push(mask);
+            }
+            // push the iris codes to the devices
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "prefetch_db_chunk_on_demand",
+                self.enable_debug_timing,
+                {
+                    self.codes_engine.load_host_db_subset_into_chunk_buffers(
+                        &iris_codes_split,
+                        &self.code_chunk_buffers[0],
+                        &self.streams[0],
+                    );
+                    self.codes_engine.load_host_db_subset_into_chunk_buffers(
+                        &iris_masks_split,
+                        &self.mask_chunk_buffers[0],
+                        &self.streams[0],
+                    );
+                }
+            );
         } else {
-            (
-                self.inactive_side_code_db_slices
-                    .as_ref()
-                    .expect("we cannot do sub compare against a side that is not loaded in memory"),
-                self.inactive_side_mask_db_slices
-                    .as_ref()
-                    .expect("we cannot do sub compare against a side that is not loaded in memory"),
-            )
-        };
+            // which database are we querying against
+            let (code_db_slices, mask_db_slices) = if eye_db == self.full_scan_side {
+                (
+                    &self.active_side_code_db_slices,
+                    &self.active_side_mask_db_slices,
+                )
+            } else {
+                (
+                    self.inactive_side_code_db_slices.as_ref().expect(
+                        "we cannot do sub compare against a side that is not loaded in memory",
+                    ),
+                    self.inactive_side_mask_db_slices.as_ref().expect(
+                        "we cannot do sub compare against a side that is not loaded in memory",
+                    ),
+                )
+            };
+
+            record_stream_time!(
+                &self.device_manager,
+                &self.streams[0],
+                events,
+                "prefetch_db_chunk",
+                self.enable_debug_timing,
+                {
+                    self.codes_engine.prefetch_db_subset_into_chunk_buffers(
+                        code_db_slices,
+                        &self.code_chunk_buffers[0],
+                        db_subset_idx,
+                        &self.streams[0],
+                    );
+                    self.masks_engine.prefetch_db_subset_into_chunk_buffers(
+                        mask_db_slices,
+                        &self.mask_chunk_buffers[0],
+                        db_subset_idx,
+                        &self.streams[0],
+                    );
+                }
+            );
+        }
 
         // We copied over a subset of the db, so we match against DB chunks of the given sizes
         let chunk_size = db_subset_idx.iter().map(|x| x.len()).collect::<Vec<_>>();
@@ -1940,28 +2022,6 @@ impl ServerActor {
             .iter()
             .map(|&s| (s.max(1).div_ceil(64) * 64))
             .collect::<Vec<_>>();
-
-        record_stream_time!(
-            &self.device_manager,
-            &self.streams[0],
-            events,
-            "prefetch_db_chunk",
-            self.enable_debug_timing,
-            {
-                self.codes_engine.prefetch_db_subset_into_chunk_buffers(
-                    code_db_slices,
-                    &self.code_chunk_buffers[0],
-                    db_subset_idx,
-                    &self.streams[0],
-                );
-                self.masks_engine.prefetch_db_subset_into_chunk_buffers(
-                    mask_db_slices,
-                    &self.mask_chunk_buffers[0],
-                    db_subset_idx,
-                    &self.streams[0],
-                );
-            }
-        );
 
         record_stream_time!(
             &self.device_manager,
