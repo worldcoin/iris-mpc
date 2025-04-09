@@ -117,6 +117,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
@@ -150,6 +151,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
