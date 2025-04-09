@@ -148,6 +148,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -181,6 +182,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);
