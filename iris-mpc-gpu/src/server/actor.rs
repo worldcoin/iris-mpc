@@ -99,8 +99,11 @@ pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
+// Orientation enum to indicate the orientation of the iris code during the batch processing.
+// Normal: Normal orientation of the iris code.
+// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Case {
+pub enum Orientation {
     Normal,
     Mirror,
 }
@@ -530,9 +533,13 @@ impl ServerActor {
                 return_channel,
             } = job;
 
-            match self.process_batch_query(batch.clone(), Case::Mirror, None) {
+            match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
                 Ok(mirrored_results) => {
-                    match self.process_batch_query(batch, Case::Normal, Some(mirrored_results)) {
+                    match self.process_batch_query(
+                        batch,
+                        Orientation::Normal,
+                        Some(mirrored_results),
+                    ) {
                         Ok(combined_results) => {
                             tracing::info!(
                                 "Combined_results.full_face_mirror_attack_detected: {:?}",
@@ -585,7 +592,7 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
-        case: Case,
+        orientation: Orientation,
         previous_results: Option<ServerJobResult>,
     ) -> eyre::Result<ServerJobResult> {
         let now = Instant::now();
@@ -808,11 +815,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side1 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, case)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, orientation)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, case)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, orientation)
                 .mask
                 .clone(),
             code_query_insert: batch
@@ -904,11 +911,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side2 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side, case)
+                .get_iris_interpolated_requests_preprocessed(other_side, orientation)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side, case)
+                .get_iris_interpolated_requests_preprocessed(other_side, orientation)
                 .mask
                 .clone(),
             code_query_insert: batch
@@ -1164,7 +1171,7 @@ impl ServerActor {
         // requests into the DB
         // Full face mirror attack detection additional check:
         // This is being executed for both mirrored and normal mode. In the second run(normal mode) we have the previous results(mirror_results) available
-        // We only add entries in the uniqueness_insertion_list if they did not match in the mirror case as well
+        // We only add entries in the uniqueness_insertion_list if they did not match in the mirror orientation as well
         let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
             merged_results
                 .iter()
@@ -1177,9 +1184,9 @@ impl ServerActor {
                         && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD;
 
                     // When in normal mode and we have mirrored results, only consider that
-                    // the entry was unique if it did not match in the mirror case as well
-                    match (case, &previous_results) {
-                        (Case::Normal, Some(mirror_results)) => {
+                    // the entry was unique if it did not match in the mirror orientation as well
+                    match (orientation, &previous_results) {
+                        (Orientation::Normal, Some(mirror_results)) => {
                             basic_condition && !mirror_results.matches_with_skip_persistence[idx]
                         }
                         _ => basic_condition, // In mirror mode or without previous results, just use basic condition (should not happen)
@@ -1244,8 +1251,8 @@ impl ServerActor {
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
 
-        // reauth_updates_per_device only used in the normal case during the db write, we can skip in mirrored case
-        if case == Case::Normal {
+        // reauth_updates_per_device only used in the normal orientation during the db write, we can skip in mirrored orientation
+        if orientation == Orientation::Normal {
             for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
                 if !*success {
                     continue;
@@ -1265,7 +1272,9 @@ impl ServerActor {
             .sum::<usize>();
 
         // Check if we actually have space left to write the new entries - only relevant for normal mode
-        if case == Case::Normal && previous_total_db_size + n_insertions > self.max_db_size {
+        if orientation == Orientation::Normal
+            && previous_total_db_size + n_insertions > self.max_db_size
+        {
             tracing::error!(
                 "Cannot write new entries, since DB size would be exceeded, current: {}, batch \
                  insertions: {}, max: {}",
@@ -1277,7 +1286,7 @@ impl ServerActor {
         }
 
         // Only persist in normal mode, never in mirror mode
-        if case == Case::Mirror {
+        if orientation == Orientation::Mirror {
             tracing::info!("Mirror mode - not persisting results to in-memory DB");
         } else if self.disable_persistence {
             tracing::info!("Persistence is disabled, not writing to DB");
@@ -1383,7 +1392,7 @@ impl ServerActor {
 
         // Check for mirror attack detection when we have previous results and are in normal mode
         let full_face_mirror_attack_detected: Vec<bool> =
-            if case == Case::Normal && previous_results.is_some() {
+            if orientation == Orientation::Normal && previous_results.is_some() {
                 let mirror_results = previous_results.unwrap();
                 let attack_detected = (0..request_count)
                     .map(|i| !matches[i] && mirror_results.matches[i])
@@ -1480,10 +1489,10 @@ impl ServerActor {
             / now.elapsed().as_secs_f64()
             / 1e6;
         tracing::info!(
-            "Batch took {:?} [{:.2} Melems/s] (case: {:?})",
+            "Batch took {:?} [{:.2} Melems/s] (orientation: {:?})",
             now.elapsed(),
             processed_mil_elements_per_second,
-            case
+            orientation
         );
 
         metrics::histogram!("batch_duration").record(now.elapsed().as_secs_f64());
