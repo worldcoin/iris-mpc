@@ -1985,7 +1985,7 @@ impl ServerActor {
                         &self.code_chunk_buffers[0],
                         &self.streams[0],
                     );
-                    self.codes_engine.load_host_db_subset_into_chunk_buffers(
+                    self.masks_engine.load_host_db_subset_into_chunk_buffers(
                         &iris_masks_split,
                         &self.mask_chunk_buffers[0],
                         &self.streams[0],
