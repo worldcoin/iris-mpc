@@ -333,8 +333,8 @@ mod tests {
     use tokio;
 
     #[tokio::test]
-    async fn test_db() {
-        let graph = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+    async fn test_db() -> eyre::Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
         let mut vector_store = PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
 
@@ -350,7 +350,7 @@ mod tests {
         let distances = {
             let mut d = vec![];
             for v in vectors.iter() {
-                d.push(vector_store.eval_distance(&vectors[0], v).await);
+                d.push(vector_store.eval_distance(&vectors[0], v).await?);
             }
             d
         };
@@ -358,7 +358,7 @@ mod tests {
         let mut tx = graph.tx().await.unwrap();
         let mut graph_ops = tx.with_graph(StoreId::Left);
 
-        let ep = graph_ops.get_entry_point().await;
+        let ep = graph_ops.get_entry_point().await?;
         assert!(ep.is_none());
 
         let ep2 = EntryPoint {
@@ -366,9 +366,9 @@ mod tests {
             layer: ep.map(|e| e.1).unwrap_or_default() + 1,
         };
 
-        graph_ops.set_entry_point(ep2.point, ep2.layer).await;
+        graph_ops.set_entry_point(ep2.point, ep2.layer).await?;
 
-        let (point3, layer3) = graph_ops.get_entry_point().await.unwrap();
+        let (point3, layer3) = graph_ops.get_entry_point().await?.unwrap();
         let ep3 = EntryPoint {
             point: point3,
             layer: layer3,
@@ -382,23 +382,25 @@ mod tests {
             for j in 4..7 {
                 links
                     .insert(&mut vector_store, vectors[j], distances[j])
-                    .await;
+                    .await?;
             }
             let links = links.edge_ids();
 
-            graph_ops.set_links(vectors[i], links.clone(), 0).await;
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
 
-            let links2 = graph_ops.get_links(&vectors[i], 0).await;
+            let links2 = graph_ops.get_links(&vectors[i], 0).await?;
             assert_eq!(*links, *links2);
         }
 
         tx.tx.commit().await.unwrap();
         graph.cleanup().await.unwrap();
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_hnsw_db() {
-        let graph_pg = TestGraphPg::<PlaintextStore>::new().await.unwrap();
+    async fn test_hnsw_db() -> eyre::Result<()> {
+        let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::default();
         let rng = &mut AesRng::seed_from_u64(0_u64);
@@ -413,31 +415,33 @@ mod tests {
         // Insert the codes.
         let mut tx = graph_pg.tx().await.unwrap();
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng);
+            let insertion_layer = db.select_layer(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
-                .await;
-            assert!(!db.is_match(vector_store, &neighbors).await);
+                .await?;
+            assert!(!db.is_match(vector_store, &neighbors).await?);
             // Insert the new vector into the store.
             let inserted = vector_store.insert(query).await;
             let plan = db
                 .insert_prepare(vector_store, graph_mem, inserted, neighbors, set_ep)
-                .await;
+                .await?;
 
             graph_mem.insert_apply(plan.clone()).await;
-            tx.with_graph(StoreId::Left).insert_apply(plan).await;
+            tx.with_graph(StoreId::Left).insert_apply(plan).await?;
         }
 
-        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await.unwrap();
+        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await?;
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = db.search(vector_store, graph_mem, query, 1).await;
-            assert!(db.is_match(vector_store, &[neighbors]).await);
+            let neighbors = db.search(vector_store, graph_mem, query, 1).await?;
+            assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
         tx.tx.commit().await.unwrap();
         graph_pg.cleanup().await.unwrap();
+
+        Ok(())
     }
 }
