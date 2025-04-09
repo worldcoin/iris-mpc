@@ -182,7 +182,7 @@ impl Aby3Store {
     pub(crate) async fn lift_distances(
         &mut self,
         distances: Vec<Share<u16>>,
-    ) -> eyre::Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<u32>>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
@@ -204,7 +204,7 @@ impl Aby3Store {
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<(&GaloisRingSharedIris, &GaloisRingSharedIris)>,
-    ) -> eyre::Result<Vec<Share<u16>>> {
+    ) -> Result<Vec<Share<u16>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
@@ -346,7 +346,7 @@ mod tests {
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_gr_hnsw() -> eyre::Result<()> {
+    async fn test_gr_hnsw() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
@@ -410,7 +410,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_premade_hnsw() -> eyre::Result<()> {
+    async fn test_gr_premade_hnsw() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
@@ -497,7 +497,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_aby3_store_plaintext() -> eyre::Result<()> {
+    async fn test_gr_aby3_store_plaintext() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_dim = 4;
         let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
@@ -596,7 +596,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_aby3_store_plaintext_batch() -> eyre::Result<()> {
+    async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
         let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;

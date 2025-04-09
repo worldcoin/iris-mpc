@@ -7,6 +7,8 @@
 //! - (<https://en.wikipedia.org/wiki/Batcher_odd%E2%80%93even_mergesort>)
 //! - (<https://math.mit.edu/~shor/18.310/batcher.pdf>)
 
+use eyre::Result;
+
 use super::swap_network::{SwapNetwork, SwapNetworkLayer};
 
 /// Generate swap network wire tuples for stage `stage` of the batcher merge
@@ -56,7 +58,7 @@ fn batcher_merger_network(deg: usize) -> SwapNetwork {
 ///
 /// For 2-power sizes, the network produced by this function is the standard
 /// Batcher odd-even merge sort network.
-pub fn batcher_network(size: usize) -> eyre::Result<SwapNetwork> {
+pub fn batcher_network(size: usize) -> Result<SwapNetwork> {
     partial_batcher_network(0, size)
 }
 
@@ -91,7 +93,7 @@ pub fn batcher_network(size: usize) -> eyre::Result<SwapNetwork> {
 pub fn partial_batcher_network(
     sorted_prefix_size: usize,
     unsorted_size: usize,
-) -> eyre::Result<SwapNetwork> {
+) -> Result<SwapNetwork> {
     let total_list_size = sorted_prefix_size + unsorted_size;
     assert_ne!(total_list_size, 0);
     let deg = match total_list_size {
@@ -129,7 +131,7 @@ pub fn batcher_recursive(
     offset: usize,
     unsorted_idx: usize,
     stable_idx: usize,
-) -> eyre::Result<SwapNetwork> {
+) -> Result<SwapNetwork> {
     assert!(unsorted_idx <= stable_idx);
 
     // Parameters of active index window
@@ -167,7 +169,7 @@ mod tests {
     use rand::Rng;
 
     #[test]
-    fn check_small_batcher_networks() -> eyre::Result<()> {
+    fn check_small_batcher_networks() -> Result<()> {
         let hardcoded_batchers = [
             vec![],
             vec![vec![(0usize, 1usize)]],
@@ -191,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_full_batcher_sorting() -> eyre::Result<()> {
+    fn test_full_batcher_sorting() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for deg in 0..6 {
@@ -213,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batcher_arbitrary_length() -> eyre::Result<()> {
+    fn test_batcher_arbitrary_length() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for _ in 0..10 {
@@ -234,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn test_batcher_insertion() -> eyre::Result<()> {
+    fn test_batcher_insertion() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for _ in 0..10 {

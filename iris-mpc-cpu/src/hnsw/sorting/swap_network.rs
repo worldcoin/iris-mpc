@@ -1,5 +1,5 @@
 use crate::hnsw::VectorStore;
-use eyre::eyre;
+use eyre::{eyre, Result};
 use itertools::Itertools;
 
 /// Type of a single layer in a non-adaptive comparator network represented by
@@ -34,9 +34,9 @@ impl SwapNetwork {
     }
 
     /// Apply a map to the indices of the swap network.
-    pub fn map_indices<F>(&mut self, map: F) -> eyre::Result<&mut Self>
+    pub fn map_indices<F>(&mut self, map: F) -> Result<&mut Self>
     where
-        F: Fn(usize) -> eyre::Result<usize>,
+        F: Fn(usize) -> Result<usize>,
     {
         for layer in self.layers.iter_mut() {
             for wire in layer.iter_mut() {
@@ -49,7 +49,7 @@ impl SwapNetwork {
 
     /// Uniformly shift indices of an input swap network. Panics if integer
     /// overflow occurs during a shift operation.
-    pub fn shift(&mut self, shift_amount: isize) -> eyre::Result<&mut Self> {
+    pub fn shift(&mut self, shift_amount: isize) -> Result<&mut Self> {
         self.map_indices(|x| {
             x.checked_add_signed(shift_amount)
                 .ok_or(eyre!("Integer overflow due to shifting"))
@@ -120,7 +120,7 @@ pub async fn apply_swap_network<V: VectorStore>(
     store: &mut V,
     list: &mut [(V::VectorRef, V::DistanceRef)],
     network: &SwapNetwork,
-) -> eyre::Result<()> {
+) -> Result<()> {
     for layer in network.layers.iter() {
         let distances: Vec<_> = layer
             .iter()

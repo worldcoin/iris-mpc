@@ -52,7 +52,7 @@ async fn per_session(
     search_queries: &VecRequests<VecRots<QueryRef>>,
     session: &mut HawkSession,
     batch: Batch,
-) -> eyre::Result<Vec<IsMatch>> {
+) -> Result<Vec<IsMatch>> {
     // Enumerate the pairs of requests.
     // These are unordered pairs: if we do (i, j) we skip (j, i).
     let pairs = batch

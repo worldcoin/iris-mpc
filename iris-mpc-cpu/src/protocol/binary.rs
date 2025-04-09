@@ -9,7 +9,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use eyre::{eyre, Error};
+use eyre::{eyre, Error, Result};
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
@@ -44,10 +44,7 @@ use tracing::{instrument, trace, trace_span, Instrument};
 /// |---------------|--------|---------|---------|
 /// |a              |0       |0        |x3       |
 /// |b              |x3      |0        |0        |
-fn a2b_pre<T: IntRing2k>(
-    session: &Session,
-    x: Share<T>,
-) -> eyre::Result<(Share<T>, Share<T>, Share<T>)> {
+fn a2b_pre<T: IntRing2k>(session: &Session, x: Share<T>) -> Result<(Share<T>, Share<T>, Share<T>)> {
     let (a, b) = x.get_ab();
 
     let mut x1 = Share::zero();
@@ -337,7 +334,7 @@ where
 async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> eyre::Result<VecShare<T>>
+) -> Result<VecShare<T>>
 where
     Standard: Distribution<T>,
 {
@@ -494,10 +491,7 @@ fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
 }
 
 /// Lifts the given shares of u16 to shares of u32.
-pub(crate) async fn lift(
-    session: &mut Session,
-    shares: VecShare<u16>,
-) -> eyre::Result<VecShare<u32>> {
+pub(crate) async fn lift(session: &mut Session, shares: VecShare<u16>) -> Result<VecShare<u32>> {
     let len = shares.len();
     let mut padded_len = (len + 63) / 64;
     padded_len *= 64;
@@ -833,7 +827,7 @@ pub(crate) async fn single_extract_msb_u32(
 pub(crate) async fn extract_msb_u32_batch(
     session: &mut Session,
     x: &[Share<u32>],
-) -> eyre::Result<Vec<Share<Bit>>> {
+) -> Result<Vec<Share<Bit>>> {
     let res_len = x.len();
     let mut res = Vec::with_capacity(res_len);
 
@@ -858,10 +852,7 @@ pub(crate) async fn extract_msb_u32_batch(
 /// Thus, the current party should send its `b` share to the next party and receive the `b` share from the previous party.
 /// `a XOR b XOR previous b` yields the opened bit.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn open_bin(
-    session: &mut Session,
-    shares: &[Share<Bit>],
-) -> eyre::Result<Vec<Bit>> {
+pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Result<Vec<Bit>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
         NetworkValue::RingElementBit(shares[0].b).to_network()
@@ -907,5 +898,5 @@ pub(crate) async fn open_bin(
     // XOR shares with the received shares
     izip!(shares.iter(), b_from_previous.iter())
         .map(|(s, prev_b)| Ok((s.a ^ s.b ^ prev_b).convert()))
-        .collect::<eyre::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>()
 }

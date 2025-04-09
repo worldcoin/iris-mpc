@@ -19,6 +19,7 @@ use std::{
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
+use eyre::Result;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
@@ -149,14 +150,14 @@ impl VectorStore for PlaintextStore {
         &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
-    ) -> eyre::Result<Self::DistanceRef> {
+    ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let query_code = &self.points[*query];
         let vector_code = &self.points[*vector];
         Ok(query_code.data.distance_fraction(&vector_code.data))
     }
 
-    async fn is_match(&mut self, distance: &Self::DistanceRef) -> eyre::Result<bool> {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         let (a, b) = *distance; // a/b
         Ok((a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO)
     }
@@ -165,7 +166,7 @@ impl VectorStore for PlaintextStore {
         &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
-    ) -> eyre::Result<bool> {
+    ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         let (a, b) = *distance1; // a/b
         let (c, d) = *distance2; // c/d
@@ -178,7 +179,7 @@ impl PlaintextStore {
         rng: &mut R,
         database_size: usize,
         searcher: &HnswSearcher,
-    ) -> eyre::Result<(Self, GraphMem<Self>)> {
+    ) -> Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
@@ -204,7 +205,7 @@ impl PlaintextStore {
     pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
         let mut plaintext_vector_store = PlaintextStore::default();
@@ -217,9 +218,7 @@ impl PlaintextStore {
         Ok(plaintext_vector_store)
     }
 
-    pub async fn create_random_store_with_db(
-        cleartext_database: Vec<IrisCode>,
-    ) -> eyre::Result<Self> {
+    pub async fn create_random_store_with_db(cleartext_database: Vec<IrisCode>) -> Result<Self> {
         let mut plaintext_vector_store = PlaintextStore::default();
 
         for raw_query in cleartext_database.iter() {
@@ -234,7 +233,7 @@ impl PlaintextStore {
         &mut self,
         rng: &mut R,
         graph_size: usize,
-    ) -> eyre::Result<GraphMem<Self>> {
+    ) -> Result<GraphMem<Self>> {
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
 
         let mut plaintext_graph_store = GraphMem::new();
@@ -274,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_basic_ops() -> eyre::Result<()> {
+    async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
         let formatted_database: Vec<_> = cleartext_database
@@ -348,7 +347,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_plaintext_hnsw_matcher() -> eyre::Result<()> {
+    async fn test_plaintext_hnsw_matcher() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::default();

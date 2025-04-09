@@ -9,6 +9,7 @@ use crate::{
         prf::{Prf, PrfSeed},
     },
 };
+use eyre::Result;
 use futures::future::join_all;
 use std::{
     collections::HashSet,
@@ -26,7 +27,7 @@ pub fn generate_local_identities() -> Vec<Identity> {
 
 static USED_PORTS: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-pub async fn get_free_local_addresses(num_ports: usize) -> eyre::Result<Vec<String>> {
+pub async fn get_free_local_addresses(num_ports: usize) -> Result<Vec<String>> {
     let mut addresses = vec![];
     let mut listeners = vec![];
     while addresses.len() < num_ports {
@@ -52,7 +53,7 @@ pub struct LocalRuntime {
 }
 
 impl LocalRuntime {
-    pub(crate) async fn mock_setup(network_t: NetworkType) -> eyre::Result<Self> {
+    pub(crate) async fn mock_setup(network_t: NetworkType) -> Result<Self> {
         let num_parties = 3;
         let identities = generate_local_identities();
         let mut seeds = Vec::new();
@@ -64,11 +65,11 @@ impl LocalRuntime {
         LocalRuntime::new_with_network_type(identities, seeds, network_t).await
     }
 
-    pub async fn mock_setup_with_channel() -> eyre::Result<Self> {
+    pub async fn mock_setup_with_channel() -> Result<Self> {
         Self::mock_setup(NetworkType::LocalChannel).await
     }
 
-    pub async fn mock_setup_with_grpc() -> eyre::Result<Self> {
+    pub async fn mock_setup_with_grpc() -> Result<Self> {
         Self::mock_setup(NetworkType::GrpcChannel).await
     }
 
@@ -76,7 +77,7 @@ impl LocalRuntime {
         identities: Vec<Identity>,
         seeds: Vec<PrfSeed>,
         network_type: NetworkType,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         let role_assignments: RoleAssignment = identities
             .iter()
             .enumerate()
@@ -111,7 +112,7 @@ impl LocalRuntime {
                     .await
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new)?)
-                    .collect::<eyre::Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?;
                 let network_sessions: Vec<NetworkSession> = grpc_sessions
                     .into_iter()
                     .enumerate()
@@ -129,7 +130,7 @@ impl LocalRuntime {
         let mut jobs = vec![];
         for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
             let player_seed = seeds[player_id];
-            let task: JoinHandle<eyre::Result<(NetworkSession, Prf)>> = tokio::spawn(async move {
+            let task: JoinHandle<Result<(NetworkSession, Prf)>> = tokio::spawn(async move {
                 let prf = setup_replicated_prf(&mut network_session, player_seed).await?;
                 Ok((network_session, prf))
             });
@@ -145,11 +146,11 @@ impl LocalRuntime {
                     prf,
                 })
             })
-            .collect::<eyre::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
         Ok(LocalRuntime { sessions })
     }
 
-    pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> eyre::Result<Self> {
+    pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Result<Self> {
         Self::new_with_network_type(identities, seeds, NetworkType::LocalChannel).await
     }
 
@@ -160,17 +161,17 @@ impl LocalRuntime {
             .collect()
     }
 
-    async fn mock_sessions(network_type: NetworkType) -> eyre::Result<Vec<SessionRef>> {
+    async fn mock_sessions(network_type: NetworkType) -> Result<Vec<SessionRef>> {
         Self::mock_setup(network_type)
             .await
             .map(|rt| rt.into_sessions())
     }
 
-    pub async fn mock_sessions_with_channel() -> eyre::Result<Vec<SessionRef>> {
+    pub async fn mock_sessions_with_channel() -> Result<Vec<SessionRef>> {
         Self::mock_sessions(NetworkType::LocalChannel).await
     }
 
-    pub async fn mock_sessions_with_grpc() -> eyre::Result<Vec<SessionRef>> {
+    pub async fn mock_sessions_with_grpc() -> Result<Vec<SessionRef>> {
         Self::mock_sessions(NetworkType::GrpcChannel).await
     }
 }

@@ -10,7 +10,7 @@ use crate::hnsw::{
     },
     VectorStore,
 };
-use eyre::eyre;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use tracing::{debug, instrument};
@@ -89,7 +89,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     ///
     /// Calls the `VectorStore` to find the insertion index.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance) -> eyre::Result<()>
+    pub async fn insert<V>(&mut self, store: &mut V, to: Vector, dist: Distance) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
@@ -118,7 +118,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         &mut self,
         store: &mut V,
         vals: &[(Vector, Distance)],
-    ) -> eyre::Result<()>
+    ) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
@@ -178,11 +178,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// Insert the given unsorted list `vals` of new weighted edges into this
     /// sorted neighborhood using the Batcher odd-even merge sort sorting
     /// network.
-    async fn batcher_insert<V>(
-        &mut self,
-        store: &mut V,
-        vals: &[(Vector, Distance)],
-    ) -> eyre::Result<()>
+    async fn batcher_insert<V>(&mut self, store: &mut V, vals: &[(Vector, Distance)]) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
@@ -197,7 +193,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
 
     /// Count the neighbors that match according to `store.is_match`.
     /// The nearest `count` elements are matches and the rest are non-matches.
-    pub async fn match_count<V>(&self, store: &mut V) -> eyre::Result<usize>
+    pub async fn match_count<V>(&self, store: &mut V) -> Result<usize>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
     {
@@ -241,7 +237,7 @@ mod tests {
     use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]
-    async fn test_neighborhood() -> eyre::Result<()> {
+    async fn test_neighborhood() -> Result<()> {
         let mut store = PlaintextStore::default();
         let query = store.prepare_query(IrisCode::default());
         let vector = store.insert(&query).await;

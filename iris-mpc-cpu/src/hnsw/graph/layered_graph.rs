@@ -256,6 +256,7 @@ mod tests {
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
+    use eyre::Result;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::{RngCore, SeedableRng};
 
@@ -293,14 +294,14 @@ mod tests {
             &mut self,
             query: &Self::QueryRef,
             vector: &Self::VectorRef,
-        ) -> eyre::Result<Self::DistanceRef> {
+        ) -> Result<Self::DistanceRef> {
             // Hamming distance
             let vector_0 = self.points[&(query.0 as usize)].data;
             let vector_1 = self.points[&(vector.0 as usize)].data;
             Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn is_match(&mut self, distance: &Self::DistanceRef) -> eyre::Result<bool> {
+        async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
             Ok(*distance == 0)
         }
 
@@ -308,7 +309,7 @@ mod tests {
             &mut self,
             distance1: &Self::DistanceRef,
             distance2: &Self::DistanceRef,
-        ) -> eyre::Result<bool> {
+        ) -> Result<bool> {
             Ok(*distance1 < *distance2)
         }
     }
@@ -325,7 +326,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_from_another_naive() -> eyre::Result<()> {
+    async fn test_from_another_naive() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
@@ -362,7 +363,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_from_another() -> eyre::Result<()> {
+    async fn test_from_another() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();

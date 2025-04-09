@@ -333,7 +333,7 @@ mod tests {
     use tokio;
 
     #[tokio::test]
-    async fn test_db() -> eyre::Result<()> {
+    async fn test_db() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await?;
         let mut vector_store = PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hnsw_db() -> eyre::Result<()> {
+    async fn test_hnsw_db() -> Result<()> {
         let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
         let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::default();

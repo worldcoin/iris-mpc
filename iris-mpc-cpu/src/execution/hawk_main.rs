@@ -390,7 +390,7 @@ impl HawkActor {
         graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
         query: QueryRef,
-    ) -> eyre::Result<InsertPlan> {
+    ) -> Result<InsertPlan> {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng)?;
 
         let (links, set_ep) = search_params

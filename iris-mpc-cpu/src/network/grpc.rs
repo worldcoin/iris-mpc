@@ -10,7 +10,7 @@ use crate::{
 };
 
 use backon::{ExponentialBuilder, Retryable};
-use eyre::eyre;
+use eyre::{eyre, Result};
 use futures::future::JoinAll;
 use std::{
     collections::{HashMap, HashSet},
@@ -54,7 +54,7 @@ pub struct GrpcSession {
 
 #[async_trait]
 impl Networking for GrpcSession {
-    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> eyre::Result<()> {
+    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()> {
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
@@ -67,7 +67,7 @@ impl Networking for GrpcSession {
         Ok(())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
         let incoming_stream = self.in_streams.get_mut(sender).ok_or(eyre!(
             "Incoming stream for {sender:?} in session {:?} not found",
             self.session_id
@@ -112,7 +112,7 @@ enum MessageResult {
 
 struct MessageJob {
     task: GrpcTask,
-    return_channel: oneshot::Sender<eyre::Result<MessageResult>>,
+    return_channel: oneshot::Sender<Result<MessageResult>>,
 }
 
 // Concurrency handler for networking operations
@@ -124,7 +124,7 @@ pub struct GrpcHandle {
 }
 
 impl GrpcHandle {
-    pub async fn new(mut grpc: GrpcNetworking) -> eyre::Result<Self> {
+    pub async fn new(mut grpc: GrpcNetworking) -> Result<Self> {
         let party_id = grpc.party_id.clone();
         let config = grpc.config.clone();
         let (tx, mut rx) = tokio::sync::mpsc::channel::<MessageJob>(1);
@@ -179,7 +179,7 @@ impl GrpcHandle {
     }
 
     // Send a task to the job queue and wait for the result
-    async fn submit(&self, task: GrpcTask) -> eyre::Result<MessageResult> {
+    async fn submit(&self, task: GrpcTask) -> Result<MessageResult> {
         let (tx, rx) = oneshot::channel();
         let job = MessageJob {
             task,
@@ -260,7 +260,7 @@ impl PartyNode for GrpcHandle {
 
 // Connection and session management
 impl GrpcHandle {
-    pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> eyre::Result<()> {
+    pub async fn connect_to_party(&self, party_id: Identity, address: &str) -> Result<()> {
         let task = ConnectToPartyTask {
             party_id,
             address: address.to_string(),
@@ -270,7 +270,7 @@ impl GrpcHandle {
         Ok(())
     }
 
-    pub async fn create_session(&self, session_id: SessionId) -> eyre::Result<GrpcSession> {
+    pub async fn create_session(&self, session_id: SessionId) -> Result<GrpcSession> {
         // Create outgoing streams and ask other parties to send incoming streams
         let task = GrpcTask::CreateOutgoingStreams(session_id);
         let res = self.submit(task).await?;
@@ -300,7 +300,7 @@ impl GrpcHandle {
     }
 
     // This function should be called after all parties have called `create_session`
-    pub async fn wait_for_session(&self, session_id: SessionId) -> eyre::Result<()> {
+    pub async fn wait_for_session(&self, session_id: SessionId) -> Result<()> {
         while matches!(
             self.submit(GrpcTask::IsSessionReady(session_id)).await?,
             MessageResult::IsSessionReady(false)
@@ -358,11 +358,7 @@ impl GrpcNetworking {
             .with_max_times(27) // about 60 seconds overall delay
     }
 
-    pub async fn connect_to_party(
-        &mut self,
-        party_id: Identity,
-        address: &str,
-    ) -> eyre::Result<()> {
+    pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             return Err(eyre!(
                 "Player {:?} has already connected to player {:?}",
@@ -392,10 +388,7 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    pub async fn create_outgoing_streams(
-        &mut self,
-        session_id: SessionId,
-    ) -> eyre::Result<OutStreams> {
+    pub async fn create_outgoing_streams(&mut self, session_id: SessionId) -> Result<OutStreams> {
         if self.active_sessions.contains(&session_id) {
             return Err(eyre!(
                 "Session {:?} has already been created by player {:?}",
@@ -451,10 +444,7 @@ impl GrpcNetworking {
         n_senders == self.clients.len()
     }
 
-    pub async fn create_incoming_streams(
-        &mut self,
-        session_id: SessionId,
-    ) -> eyre::Result<InStreams> {
+    pub async fn create_incoming_streams(&mut self, session_id: SessionId) -> Result<InStreams> {
         self.active_sessions.insert(session_id);
         self.instreams.remove(&session_id).ok_or(eyre!(format!(
             "Session {session_id:?} hasn't been added to message queues"
@@ -469,7 +459,7 @@ impl GrpcNetworking {
         sender_id: Identity,
         session_id: SessionId,
         stream: UnboundedReceiver<SendRequest>,
-    ) -> eyre::Result<()> {
+    ) -> Result<()> {
         if sender_id == self.party_id {
             return Err(eyre!(
                 "Sender ID coincides with receiver ID: {:?}",
@@ -505,7 +495,7 @@ impl GrpcNetworking {
     }
 }
 
-pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> eyre::Result<Vec<GrpcHandle>> {
+pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
         timeout_duration: Duration::from_secs(5),
         connection_parallelism: 1,
@@ -581,7 +571,7 @@ mod tests {
     async fn create_session_helper(
         session_id: SessionId,
         players: &[GrpcHandle],
-    ) -> eyre::Result<Vec<GrpcSession>> {
+    ) -> Result<Vec<GrpcSession>> {
         let mut jobs = vec![];
         for player in players.iter() {
             let player = player.clone();
@@ -599,12 +589,12 @@ mod tests {
             .await
             .into_iter()
             .map(|r| r.map_err(eyre::Report::new))
-            .collect::<eyre::Result<Vec<_>>>()
+            .collect::<Result<Vec<_>>>()
     }
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_grpc_comms_correct() -> eyre::Result<()> {
+    async fn test_grpc_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
         let players = setup_local_grpc_networking(identities.clone()).await?;
 
@@ -722,7 +712,7 @@ mod tests {
                     .await
                     .into_iter()
                     .map(|r| r.map_err(eyre::Report::new))
-                    .collect::<eyre::Result<Vec<_>>>()?
+                    .collect::<Result<Vec<_>>>()?
             };
 
             // Test that parties can send and receive messages
@@ -736,7 +726,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_grpc_comms_fail() -> eyre::Result<()> {
+    async fn test_grpc_comms_fail() -> Result<()> {
         let parties = generate_local_identities();
 
         let players = setup_local_grpc_networking(parties.clone()).await?;

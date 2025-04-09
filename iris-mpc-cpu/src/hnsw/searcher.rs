@@ -221,7 +221,7 @@ impl Default for HnswSearcher {
 impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
-    pub fn select_layer(&self, rng: &mut impl RngCore) -> eyre::Result<usize> {
+    pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom)?;
 
@@ -241,7 +241,7 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem<V>,
         query: &V::QueryRef,
-    ) -> eyre::Result<(SortedNeighborhoodV<V>, usize)> {
+    ) -> Result<(SortedNeighborhoodV<V>, usize)> {
         if let Some((entry_point, layer)) = graph.get_entry_point().await {
             let distance = store.eval_distance(query, &entry_point).await?;
 
@@ -684,7 +684,7 @@ impl HnswSearcher {
         q: &V::QueryRef,
         start: &(V::VectorRef, V::DistanceRef),
         lc: usize,
-    ) -> eyre::Result<(V::VectorRef, V::DistanceRef)> {
+    ) -> Result<(V::VectorRef, V::DistanceRef)> {
         // Current node of graph traversal
         let (mut c_vec, mut c_dist) = start.clone();
 
@@ -735,7 +735,7 @@ impl HnswSearcher {
         lc: usize,
         query: &V::QueryRef,
         visited: &mut HashSet<V::VectorRef>,
-    ) -> eyre::Result<Vec<(V::VectorRef, V::DistanceRef)>> {
+    ) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
         let neighbors = graph.get_links(node, lc).await;
 
         let unvisited_neighbors: Vec<_> = neighbors
@@ -878,7 +878,7 @@ impl HnswSearcher {
         inserted_vector: V::VectorRef,
         mut links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
-    ) -> eyre::Result<ConnectPlanV<V>> {
+    ) -> Result<ConnectPlanV<V>> {
         let mut plan = ConnectPlan {
             inserted_vector: inserted_vector.clone(),
             layers: vec![],
@@ -1004,7 +1004,7 @@ impl HnswSearcher {
         inserted_vector: V::VectorRef,
         links: Vec<SortedNeighborhoodV<V>>,
         set_ep: bool,
-    ) -> eyre::Result<()> {
+    ) -> Result<()> {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links, set_ep)
             .await?;
@@ -1016,7 +1016,7 @@ impl HnswSearcher {
         &self,
         store: &mut V,
         neighbors: &[SortedNeighborhoodV<V>],
-    ) -> eyre::Result<bool> {
+    ) -> Result<bool> {
         match neighbors
             .first()
             .and_then(|bottom_layer| bottom_layer.get_nearest())
@@ -1030,7 +1030,7 @@ impl HnswSearcher {
         &self,
         store: &mut V,
         neighbors: &[SortedNeighborhoodV<V>],
-    ) -> eyre::Result<usize> {
+    ) -> Result<usize> {
         match neighbors.first() {
             None => Ok(0), // Empty database.
             Some(bottom_layer) => bottom_layer.match_count(store).await,

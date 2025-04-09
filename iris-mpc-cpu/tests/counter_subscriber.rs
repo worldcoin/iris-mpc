@@ -161,7 +161,7 @@ async fn test_counter_subscriber() -> Result<()> {
 async fn init_hnsw(
     db_size: usize,
     rng: &mut AesRng,
-) -> eyre::Result<(
+) -> Result<(
     HnswSearcher,
     PlaintextStore,
     GraphMem<PlaintextStore>,
