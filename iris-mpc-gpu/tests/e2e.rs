@@ -1,4 +1,4 @@
-#[cfg(feature = "gpu_dependent")]
+//#[cfg(feature = "gpu_dependent")]
 mod e2e_test {
     use cudarc::nccl::Id;
     use eyre::Result;
@@ -7,6 +7,7 @@ mod e2e_test {
         job::Eye,
         test::{generate_full_test_db, load_test_db, TestCaseGenerator},
     };
+    use iris_mpc_common::{helpers::inmemory_store::OnDemandLoader, test::PartyDb};
     use iris_mpc_gpu::{
         helpers::device_manager::DeviceManager,
         server::{InMemoryStoreType, ServerActor},
@@ -102,6 +103,9 @@ mod e2e_test {
             let comms0 = device_manager0
                 .instantiate_network_from_ids(0, &ids0)
                 .unwrap();
+            let test_db = OnDemandLoaderImpl {
+                db: Arc::clone(&party_db0),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 0,
                 chacha_seeds0,
@@ -117,7 +121,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -136,6 +140,9 @@ mod e2e_test {
             let comms1 = device_manager1
                 .instantiate_network_from_ids(1, &ids1)
                 .unwrap();
+            let test_db = OnDemandLoaderImpl {
+                db: Arc::clone(&party_db1),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 1,
                 chacha_seeds1,
@@ -151,7 +158,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -170,6 +177,9 @@ mod e2e_test {
             let comms2 = device_manager2
                 .instantiate_network_from_ids(2, &ids2)
                 .unwrap();
+            let test_db = OnDemandLoaderImpl {
+                db: Arc::clone(&party_db2),
+            };
             let actor = match ServerActor::new_with_device_manager_and_comms(
                 2,
                 chacha_seeds2,
@@ -185,7 +195,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Full,
+                InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);
@@ -231,5 +241,29 @@ mod e2e_test {
         actor2_task.await.unwrap();
 
         Ok(())
+    }
+
+    /// On-DemandLoader implementation for the GPU E2E test
+    #[derive(Clone)]
+    struct OnDemandLoaderImpl {
+        db: Arc<PartyDb>,
+    }
+
+    impl OnDemandLoader for OnDemandLoaderImpl {
+        fn stream_records(
+            &self,
+            side: iris_mpc_common::job::Eye,
+            indices: &[usize],
+        ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>)>> {
+            let test_db = Arc::clone(&self.db);
+            let indices = indices.to_vec();
+            Box::new(indices.into_iter().map(move |idx| {
+                let share = match side {
+                    Eye::Left => test_db.db_left[idx].clone(),
+                    Eye::Right => test_db.db_right[idx].clone(),
+                };
+                (idx, share.code.coefs.to_vec(), share.mask.coefs.to_vec())
+            }))
+        }
     }
 }
