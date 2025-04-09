@@ -1485,6 +1485,16 @@ impl ServerActor {
                 }
             );
         }
+        tracing::info!(
+            "{} Partial Results: {:?}",
+            self.party_id,
+            partial_match_ids_left
+        );
+        tracing::info!(
+            "{} Partial Results: {:?}",
+            self.party_id,
+            partial_match_ids_right
+        );
 
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
