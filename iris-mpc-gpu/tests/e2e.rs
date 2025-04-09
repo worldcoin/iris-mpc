@@ -8,20 +8,20 @@ mod e2e_test {
         test::{load_test_db, TestCaseGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
+    use rand::random;
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     const DB_SIZE: usize = 8 * 1000;
     const DB_BUFFER: usize = 8 * 1000;
-    const DB_RNG_SEED: u64 = 0xdeadbeef;
-    const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
-    const NUM_BATCHES: usize = 30;
+    const NUM_BATCHES: usize = 40;
     const MAX_BATCH_SIZE: usize = 64;
     const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
+    const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -64,6 +64,32 @@ mod e2e_test {
         let ids1 = ids0.clone();
         let ids2 = ids0.clone();
 
+        let internal_seed = match env::var("INTERNAL_SEED") {
+            Ok(seed) => {
+                tracing::info!("Internal SEED was passed: {}", seed);
+                seed.parse::<u64>()?
+            }
+            Err(_) => {
+                tracing::info!("Internal SEED not set, using random seed");
+                random()
+            }
+        };
+        let db_seed = match env::var("DB_SEED") {
+            Ok(seed) => {
+                tracing::info!("DB SEED was passed: {}", seed);
+                seed.parse::<u64>()?
+            }
+            Err(_) => {
+                tracing::info!("DB SEED not set, using random seed");
+                random()
+            }
+        };
+        tracing::info!(
+            "Seeds for this test run. DB: {}, Internal: {}",
+            db_seed,
+            internal_seed
+        );
+
         let actor0_task = tokio::task::spawn_blocking(move || {
             let comms0 = device_manager0
                 .instantiate_network_from_ids(0, &ids0)
@@ -85,7 +111,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(0, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(0, DB_SIZE, db_seed, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx0.send(Ok(handle)).unwrap();
                     actor
@@ -118,7 +144,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(1, DB_SIZE, db_seed, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx1.send(Ok(handle)).unwrap();
                     actor
@@ -151,7 +177,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
+                    load_test_db(2, DB_SIZE, db_seed, &mut actor).unwrap();
                     actor.preprocess_db();
                     tx2.send(Ok(handle)).unwrap();
                     actor
@@ -168,7 +194,7 @@ mod e2e_test {
         let mut handle2 = rx2.await??;
 
         let mut test_case_generator =
-            TestCaseGenerator::new_seeded(DB_SIZE, DB_RNG_SEED, INTERNAL_RNG_SEED, false);
+            TestCaseGenerator::new_seeded(DB_SIZE, db_seed, internal_seed, false);
 
         test_case_generator.enable_bucket_statistic_checks(
             N_BUCKETS,
@@ -181,6 +207,7 @@ mod e2e_test {
                 NUM_BATCHES,
                 MAX_BATCH_SIZE,
                 MAX_DELETIONS_PER_BATCH,
+                MAX_RESET_UPDATES_PER_BATCH,
                 [&mut handle0, &mut handle1, &mut handle2],
             )
             .await?;

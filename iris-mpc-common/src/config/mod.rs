@@ -231,7 +231,7 @@ fn default_full_scan_side() -> Eye {
 }
 
 /// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModeOfCompute {
     /// Computation with standard CPUs (see HNSW graph).
     Cpu,
@@ -241,7 +241,7 @@ pub enum ModeOfCompute {
 }
 
 /// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModeOfDeployment {
     // shadow mode for when HSNW deployment does not read from the Gpu implementation
     // it should create and write its own shares DB
@@ -451,4 +451,168 @@ where
 {
     let value: String = Deserialize::deserialize(deserializer)?;
     serde_json::from_str(&value).map_err(serde::de::Error::custom)
+}
+
+/// This struct is used to extract the common configuration for all servers from their respective configs.
+/// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CommonConfig {
+    environment: String,
+    results_topic_arn: String,
+    processing_timeout_secs: u64,
+    startup_sync_timeout_secs: u64,
+    public_key_base_url: String,
+    shares_bucket_name: String,
+    clear_db_before_init: bool,
+    init_db_size: usize,
+    max_db_size: usize,
+    max_batch_size: usize,
+    heartbeat_interval_secs: u64,
+    heartbeat_initial_retries: u64,
+    fake_db_size: usize,
+    return_partial_results: bool,
+    disable_persistence: bool,
+    shutdown_last_results_sync_timeout_secs: u64,
+    image_name: String,
+    fixed_shared_secrets: bool,
+    luc_enabled: bool,
+    luc_lookback_records: usize,
+    luc_serial_ids_from_smpc_request: bool,
+    match_distances_buffer_size: usize,
+    match_distances_buffer_size_extra_percent: usize,
+    n_buckets: usize,
+    enable_sending_anonymized_stats_message: bool,
+    enable_reauth: bool,
+    hawk_request_parallelism: usize,
+    hawk_connection_parallelism: usize,
+    max_deletions_per_batch: usize,
+    mode_of_compute: ModeOfCompute,
+    mode_of_deployment: ModeOfDeployment,
+    enable_modifications_sync: bool,
+    enable_modifications_replay: bool,
+    enable_sync_queues_on_sns_sequence_number: bool,
+    sqs_sync_long_poll_seconds: i32,
+    hawk_server_deletions_enabled: bool,
+    hawk_server_reauths_enabled: bool,
+    app_name: String,
+    cpu_disable_persistence: bool,
+    enable_reset: bool,
+    hawk_server_resets_enabled: bool,
+    full_scan_side: Eye,
+}
+
+impl From<Config> for CommonConfig {
+    fn from(value: Config) -> Self {
+        // This is destructured here intentionally to cause a compile error if
+        // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
+        let Config {
+            environment,
+            party_id: _,           // party id is different for each server
+            requests_queue_url: _, // requests queue url is different for each server
+            results_topic_arn,
+            kms_key_arns: _, // kms key arns are different for each server
+            service: _,
+            database: _,     // database is different for each server
+            cpu_database: _, // cpu database is different for each server
+            aws: _,          // aws is different for each server
+            processing_timeout_secs,
+            startup_sync_timeout_secs,
+            public_key_base_url,
+            shares_bucket_name,
+            clear_db_before_init,
+            init_db_size,
+            max_db_size,
+            max_batch_size,
+            heartbeat_interval_secs,
+            heartbeat_initial_retries,
+            fake_db_size,
+            return_partial_results,
+            disable_persistence,
+            enable_debug_timing: _,
+            node_hostnames: _,    // Could be different for each server
+            service_ports: _,     // Could be different for each server
+            healthcheck_ports: _, // Could be different for each server
+            shutdown_last_results_sync_timeout_secs,
+            image_name,
+            enable_s3_importer: _, // it does not matter if this is synced or not between servers
+            db_chunks_bucket_name: _, // different for each server
+            load_chunks_parallelism: _, // could be different for each server
+            db_load_safety_overlap_seconds: _, // could be different for each server
+            db_chunks_folder_name: _, // different for each server
+            load_chunks_buffer_size: _, // could be different for each server
+            load_chunks_max_retries: _, // could be different for each server
+            load_chunks_initial_backoff_ms: _, // could be different for each server
+            fixed_shared_secrets,
+            luc_enabled,
+            luc_lookback_records,
+            luc_serial_ids_from_smpc_request,
+            match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
+            n_buckets,
+            enable_sending_anonymized_stats_message,
+            enable_reauth,
+            hawk_request_parallelism,
+            hawk_connection_parallelism,
+            hawk_server_healthcheck_port: _, // different for each server
+            max_deletions_per_batch,
+            mode_of_compute,
+            mode_of_deployment,
+            enable_modifications_sync,
+            enable_modifications_replay,
+            enable_sync_queues_on_sns_sequence_number,
+            sqs_sync_long_poll_seconds,
+            hawk_server_deletions_enabled,
+            hawk_server_reauths_enabled,
+            app_name,
+            cpu_disable_persistence,
+            enable_reset,
+            hawk_server_resets_enabled,
+            full_scan_side,
+        } = value;
+
+        Self {
+            environment,
+            results_topic_arn,
+            processing_timeout_secs,
+            startup_sync_timeout_secs,
+            public_key_base_url,
+            shares_bucket_name,
+            clear_db_before_init,
+            init_db_size,
+            max_db_size,
+            max_batch_size,
+            heartbeat_interval_secs,
+            heartbeat_initial_retries,
+            fake_db_size,
+            return_partial_results,
+            disable_persistence,
+            shutdown_last_results_sync_timeout_secs,
+            image_name,
+            fixed_shared_secrets,
+            luc_enabled,
+            luc_lookback_records,
+            luc_serial_ids_from_smpc_request,
+            match_distances_buffer_size,
+            match_distances_buffer_size_extra_percent,
+            n_buckets,
+            enable_sending_anonymized_stats_message,
+            enable_reauth,
+            hawk_request_parallelism,
+            hawk_connection_parallelism,
+            max_deletions_per_batch,
+            mode_of_compute,
+            mode_of_deployment,
+            enable_modifications_sync,
+            enable_modifications_replay,
+            enable_sync_queues_on_sns_sequence_number,
+            sqs_sync_long_poll_seconds,
+            hawk_server_deletions_enabled,
+            hawk_server_reauths_enabled,
+            app_name,
+            cpu_disable_persistence,
+            enable_reset,
+            hawk_server_resets_enabled,
+            full_scan_side,
+        }
+    }
 }
