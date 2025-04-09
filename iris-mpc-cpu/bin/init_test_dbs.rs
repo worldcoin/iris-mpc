@@ -56,6 +56,18 @@ use tracing::{info, warn};
 #[allow(non_snake_case)]
 #[derive(Parser)]
 struct Args {
+    /// Postgres db schema: party 1.
+    #[clap(long)]
+    db_schema_party1: String,
+
+    /// Postgres db schema: party 2.
+    #[clap(long)]
+    db_schema_party2: String,
+
+    /// Postgres db schema: party 3.
+    #[clap(long)]
+    db_schema_party3: String,
+
     /// Postgres db server url: party 1.
     /// Example URL format: `postgres://postgres:postgres@localhost:5432`
     #[clap(long)]
@@ -70,18 +82,6 @@ struct Args {
     /// Example URL format: `postgres://postgres:postgres@localhost:5432`
     #[clap(long)]
     db_url_party3: String,
-
-    /// Postgres db schema: party 1.
-    #[clap(long)]
-    db_schema_name_party1: String,
-
-    /// Postgres db schema: party 2.
-    #[clap(long)]
-    db_schema_name_party2: String,
-
-    /// Postgres db schema: party 3.
-    #[clap(long)]
-    db_schema_name_party3: String,
 
     /// The source file for plaintext iris codes, in NDJSON file format.
     #[clap(long = "source")]
@@ -132,9 +132,9 @@ impl Args {
     /// Postgres dB schema names.
     fn db_schemas(&self) -> Vec<String> {
         vec![
-            self.db_schema_name_party1.clone(),
-            self.db_schema_name_party2.clone(),
-            self.db_schema_name_party3.clone(),
+            self.db_schema_party1.clone(),
+            self.db_schema_party2.clone(),
+            self.db_schema_party3.clone(),
         ]
     }
 
