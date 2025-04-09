@@ -56,6 +56,33 @@ use tracing::{info, warn};
 #[allow(non_snake_case)]
 #[derive(Parser)]
 struct Args {
+    /// Postgres db server url: party 1.
+    /// Example URL format: `postgres://postgres:postgres@localhost:5432`
+    #[clap(long)]
+    db_url_party1: String,
+
+    /// Postgres db server url: party 2.
+    /// Example URL format: `postgres://postgres:postgres@localhost:5432`
+    #[clap(long)]
+    db_url_party2: String,
+
+    /// Postgres db server url: party 3.
+    /// Example URL format: `postgres://postgres:postgres@localhost:5432`
+    #[clap(long)]
+    db_url_party3: String,
+
+    /// Postgres db schema: party 1.
+    #[clap(long)]
+    db_schema_name_party1: String,
+
+    /// Postgres db schema: party 2.
+    #[clap(long)]
+    db_schema_name_party2: String,
+
+    /// Postgres db schema: party 3.
+    #[clap(long)]
+    db_schema_name_party3: String,
+
     /// The source file for plaintext iris codes, in NDJSON file format.
     #[clap(long = "source")]
     iris_codes_file: PathBuf,
@@ -69,16 +96,6 @@ struct Args {
     /// the plaintext HNSW graphs.
     #[clap(short = 'n')]
     num_irises: Option<usize>,
-
-    /// URLs for database access, per party.
-    ///
-    /// Example URL format: `postgres://postgres:postgres@localhost:5432/SMPC_dev_0`
-    #[clap(long, value_delimiter = ' ')]
-    db_urls: Vec<String>,
-
-    /// Database schemas for access, per party.
-    #[clap(long, value_delimiter = ' ')]
-    db_schemas: Vec<String>,
 
     // HNSW algorithm parameters
     /// `M` parameter for HNSW insertion.
@@ -109,6 +126,26 @@ struct Args {
     /// shares of iris codes.
     #[clap(default_value = "1")]
     aby3_prng_seed: u64,
+}
+
+impl Args {
+    /// Postgres dB schema names.
+    fn db_schemas(&self) -> Vec<String> {
+        vec![
+            self.db_schema_name_party1.clone(),
+            self.db_schema_name_party2.clone(),
+            self.db_schema_name_party3.clone(),
+        ]
+    }
+
+    /// Postgres dB server addresses.
+    fn db_urls(&self) -> Vec<String> {
+        vec![
+            self.db_url_party1.clone(),
+            self.db_url_party2.clone(),
+            self.db_url_party3.clone(),
+        ]
+    }
 }
 
 // Type: Random number generators used to transform plaintext into secret shares.
@@ -347,7 +384,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
     let mut dbs = Vec::new();
 
-    for (url, schema) in izip!(args.db_urls.iter(), args.db_schemas.iter()).take(N_PARTIES) {
+    for (url, schema) in izip!(args.db_urls().iter(), args.db_schemas().iter()).take(N_PARTIES) {
         let client = PostgresClient::new(url, schema, AccessMode::ReadWrite)
             .await
             .unwrap();
