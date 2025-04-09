@@ -1220,11 +1220,7 @@ fn check_bucket_statistics(
     Ok(())
 }
 
-pub fn generate_test_db(
-    party_id: usize,
-    db_size: usize,
-    db_rng_seed: u64,
-) -> Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+pub fn generate_test_db(party_id: usize, db_size: usize, db_rng_seed: u64) -> TestDb {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
     let mut db = IrisDB::new_random_par(db_size, &mut rng);
 
@@ -1249,7 +1245,11 @@ pub fn generate_test_db(
         result.push((code, mask));
     }
 
-    result
+    TestDb { db: result }
+}
+
+pub struct TestDb {
+    db: Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)>,
 }
 
 pub fn load_test_db(
@@ -1257,9 +1257,9 @@ pub fn load_test_db(
     db_size: usize,
     db_rng_seed: u64,
     loader: &mut impl InMemoryStore,
-) -> Result<()> {
+) -> Result<TestDb> {
     let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
-    for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
+    for (idx, (code, mask)) in iris_shares.db.iter().enumerate() {
         loader.load_single_record_from_db(
             idx,
             VectorId::from_0_index(idx as u32),
@@ -1271,5 +1271,5 @@ pub fn load_test_db(
         loader.increment_db_size(idx);
     }
 
-    Ok(())
+    Ok(iris_shares)
 }

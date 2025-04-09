@@ -7,7 +7,10 @@ mod e2e_test {
         job::Eye,
         test::{load_test_db, TestCaseGenerator},
     };
-    use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
+    use iris_mpc_gpu::{
+        helpers::device_manager::DeviceManager,
+        server::{InMemoryStoreType, ServerActor},
+    };
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -83,7 +86,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(0, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
@@ -117,7 +120,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(1, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();
@@ -151,7 +154,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                false,
+                InMemoryStoreType::Full,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(2, DB_SIZE, DB_RNG_SEED, &mut actor).unwrap();

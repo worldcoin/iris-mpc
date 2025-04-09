@@ -29,7 +29,7 @@ use eyre::eyre;
 use futures::{Future, FutureExt};
 use iris_mpc_common::{
     helpers::{
-        inmemory_store::InMemoryStore,
+        inmemory_store::{InMemoryStore, OnDemandLoader},
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
@@ -96,6 +96,13 @@ pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
 
+/// Do we load the full DB into memory or only the active side?
+/// In case we only load the active side, we pass an [OnDemandLoader] to load the inactive side on demand.
+pub enum InMemoryStoreType {
+    Full,
+    Half(Box<dyn OnDemandLoader>),
+}
+
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
     pub device_manager: Arc<DeviceManager>,
@@ -115,6 +122,7 @@ pub struct ServerActor {
     pub active_side_mask_db_slices: SlicedProcessedDatabase,
     pub inactive_side_code_db_slices: Option<SlicedProcessedDatabase>,
     pub inactive_side_mask_db_slices: Option<SlicedProcessedDatabase>,
+    on_demand_loader: Option<Box<dyn OnDemandLoader>>,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<CudaSlice<u32>>,
@@ -169,7 +177,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-        load_partial_side_on_demand: bool,
+        inmemory_store_type: InMemoryStoreType,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -187,7 +195,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
-            load_partial_side_on_demand,
+            inmemory_store_type,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -205,7 +213,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-        load_partial_side_on_demand: bool,
+        inmemory_store_type: InMemoryStoreType,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -225,7 +233,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
-            load_partial_side_on_demand,
+            inmemory_store_type,
         )
     }
 
@@ -245,7 +253,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-        load_partial_side_on_demand: bool,
+        inmemory_store_type: InMemoryStoreType,
     ) -> eyre::Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -263,7 +271,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
-            load_partial_side_on_demand,
+            inmemory_store_type,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -284,7 +292,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-        load_partial_side_on_demand: bool,
+        inmemory_store_type: InMemoryStoreType,
     ) -> eyre::Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
@@ -329,15 +337,17 @@ impl ServerActor {
 
         let active_side_code_db_slices = codes_engine.alloc_db(max_db_size);
         let active_side_mask_db_slices = masks_engine.alloc_db(max_db_size);
-        let inactive_side_code_db_slices = if load_partial_side_on_demand {
-            None
-        } else {
+        let inactive_side_code_db_slices = if matches!(inmemory_store_type, InMemoryStoreType::Full)
+        {
             Some(codes_engine.alloc_db(max_db_size))
-        };
-        let inactive_side_mask_db_slices = if load_partial_side_on_demand {
-            None
         } else {
+            None
+        };
+        let inactive_side_mask_db_slices = if matches!(inmemory_store_type, InMemoryStoreType::Full)
+        {
             Some(masks_engine.alloc_db(max_db_size))
+        } else {
+            None
         };
 
         tracing::info!("GPU actor: Allocated db in {:?}", now.elapsed());
@@ -526,6 +536,10 @@ impl ServerActor {
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
             full_scan_side,
+            on_demand_loader: match inmemory_store_type {
+                InMemoryStoreType::Full => None,
+                InMemoryStoreType::Half(loader) => Some(loader),
+            },
         })
     }
 

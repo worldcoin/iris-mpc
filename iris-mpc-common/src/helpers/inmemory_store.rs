@@ -117,3 +117,14 @@ pub trait InMemoryStore {
     /// unpredictable.
     fn fake_db(&mut self, size: usize);
 }
+
+/// A helper trait encapsulating the functionality to load iris codes on demand from some source (DB, File-backed, etc.).
+pub trait OnDemandLoader {
+    /// Loads records from the source.
+    /// The returned iterator yields tuples of the form:
+    /// `(index, left_code, left_mask, right_code, right_mask)`.
+    fn stream_records(
+        &self,
+        indices: &[usize],
+    ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)>>;
+}

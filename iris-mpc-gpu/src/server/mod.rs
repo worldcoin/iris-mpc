@@ -1,7 +1,10 @@
 pub(crate) mod actor;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
-pub use actor::{generate_luc_records, prepare_or_policy_bitmap, ServerActor, ServerActorHandle};
+pub use actor::{
+    generate_luc_records, prepare_or_policy_bitmap, InMemoryStoreType, ServerActor,
+    ServerActorHandle,
+};
 use iris_mpc_common::{
     helpers::sync::Modification,
     job::{BatchMetadata, BatchQuery, Eye, IrisQueryBatchEntries},
