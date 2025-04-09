@@ -1263,6 +1263,16 @@ impl ServerActor {
                 }
             );
         }
+        tracing::info!(
+            "{} Partial Results: {:?}",
+            self.party_id,
+            partial_match_ids_left
+        );
+        tracing::info!(
+            "{} Partial Results: {:?}",
+            self.party_id,
+            partial_match_ids_right
+        );
 
         // Pass to internal sender thread
         return_channel
