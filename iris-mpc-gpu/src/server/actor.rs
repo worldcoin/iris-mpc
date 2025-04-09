@@ -1935,7 +1935,11 @@ impl ServerActor {
                 .stream_records(eye_db, &db_indices)
                 .collect::<Vec<_>>();
 
-            tracing::info!("{} loaded indices: {:?},", self.party_id, iris_codes);
+            tracing::info!(
+                "{} loaded indices: {:?},",
+                self.party_id,
+                iris_codes.iter().map(|x| x.0).collect::<Vec<_>>()
+            );
 
             // spread them to their respective devices
             let mut iris_codes_split = db_subset_idx
