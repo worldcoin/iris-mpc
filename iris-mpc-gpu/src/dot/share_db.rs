@@ -592,6 +592,8 @@ impl ShareDB {
                 .flat_map(|record| record.iter().map(|&x: &u16| ((x >> 8) as i32 - 128) as i8))
                 .collect::<Vec<_>>();
 
+            assert_eq!(a1_host.len(), db[idx].len() * self.code_length);
+
             // SAFETY: We have valid buffers allocated and the source pointers are the two vectors above. We sync the streams at the end of this loop iteration, so the two vecs are still valid and in scope for the full duration of this copy call.
             unsafe {
                 cudarc::driver::sys::lib()
