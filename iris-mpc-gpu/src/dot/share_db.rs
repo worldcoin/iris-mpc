@@ -571,6 +571,85 @@ impl ShareDB {
         }
     }
 
+    pub fn load_host_db_subset_into_chunk_buffers(
+        &self,
+        db: &[Vec<Vec<u16>>],
+        buffers: &DBChunkBuffers,
+        streams: &[CudaStream],
+    ) {
+        // TODO: check if we should do all of them concurrently instead of one by one
+        for idx in 0..self.device_manager.device_count() {
+            let device = self.device_manager.device(idx);
+            device.bind_to_thread().unwrap();
+
+            let a0_host = db[idx]
+                .iter()
+                .flat_map(|record| record.iter().map(|&x| ((x as i8) as i32 - 128) as i8))
+                .collect::<Vec<_>>();
+
+            let a1_host = db[idx]
+                .iter()
+                .flat_map(|record| record.iter().map(|&x: &u16| ((x >> 8) as i32 - 128) as i8))
+                .collect::<Vec<_>>();
+
+            // SAFETY: We have valid buffers allocated and the source pointers are the two vectors above. We sync the streams at the end of this loop iteration, so the two vecs are still valid and in scope for the full duration of this copy call.
+            unsafe {
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_0[idx].device_ptr(),
+                        a0_host.as_ptr() as *mut _,
+                        self.code_length * db[idx].len(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_1[idx].device_ptr(),
+                        a1_host.as_ptr() as *mut _,
+                        self.code_length * db[idx].len(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+            }
+            let a0_sums: Vec<u32> = a0_host[..]
+                .chunks_exact(self.code_length)
+                .map(|chunk| chunk.iter().map(|&x| x as u32).sum::<u32>())
+                .collect();
+            let a1_sums: Vec<u32> = a1_host[..]
+                .chunks_exact(self.code_length)
+                .map(|chunk| chunk.iter().map(|&x| x as u32).sum::<u32>())
+                .collect();
+
+            unsafe {
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.sums.limb_0[idx].device_ptr(),
+                        a0_sums.as_ptr() as *mut _,
+                        self.code_length * db[idx].len() * size_of::<u32>(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.sums.limb_1[idx].device_ptr(),
+                        a1_sums.as_ptr() as *mut _,
+                        self.code_length * db[idx].len() * size_of::<u32>(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+                cudarc::driver::result::stream::synchronize(streams[idx].stream).unwrap();
+            }
+        }
+
+        // prepare the sums with preprocessing
+    }
+
     pub fn prefetch_db_subset_into_chunk_buffers(
         &self,
         db: &SlicedProcessedDatabase,
