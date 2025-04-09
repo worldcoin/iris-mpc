@@ -868,6 +868,7 @@ impl ServerActor {
             &mut events,
             self.full_scan_side,
             batch_size,
+            orientation,
         );
 
         ///////////////////////////////////////////////////////////////////
@@ -972,6 +973,7 @@ impl ServerActor {
                 &mut events,
                 other_side,
                 batch_size,
+                orientation,
             );
         } else {
             tracing::info!("Comparing right eye queries against DB subset");
@@ -982,6 +984,7 @@ impl ServerActor {
                 other_side,
                 batch_size,
                 &partial_matches_side1,
+                orientation,
             );
         }
 
@@ -1826,6 +1829,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
+        orientation: Orientation,
     ) {
         assert!(
             eye_db == Eye::Right,
@@ -1833,7 +1837,9 @@ impl ServerActor {
         );
 
         // we try to calculate the bucket stats here if we have collected enough of them
-        self.try_calculate_bucket_stats(eye_db);
+        if orientation == Orientation::Normal {
+            self.try_calculate_bucket_stats(eye_db);
+        }
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2007,9 +2013,12 @@ impl ServerActor {
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
+        orientation: Orientation,
     ) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        self.try_calculate_bucket_stats(eye_db);
+        if orientation == Orientation::Normal {
+            self.try_calculate_bucket_stats(eye_db);
+        }
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(

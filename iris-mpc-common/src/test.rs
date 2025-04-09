@@ -1510,9 +1510,9 @@ fn prepare_batch(
 
 fn check_bucket_statistics(
     bucket_statistics: &BucketStatistics,
-    _num_gpus_per_party: usize,
+    num_gpus_per_party: usize,
     num_buckets: usize,
-    _match_distances_buffer_size: usize,
+    match_distances_buffer_size: usize,
 ) -> Result<()> {
     if bucket_statistics.is_empty() {
         assert_eq!(bucket_statistics.buckets.len(), 0);
@@ -1528,11 +1528,10 @@ fn check_bucket_statistics(
         .map(|b| b.count)
         .sum::<usize>();
     tracing::info!("Total count for bucket: {}", total_count);
-    // TODO: reenable when I fix the bucket statistics
-    // assert_eq!(
-    //     total_count,
-    //     match_distances_buffer_size * num_gpus_per_party
-    // );
+    assert_eq!(
+        total_count,
+        match_distances_buffer_size * num_gpus_per_party
+    );
     Ok(())
 }
 
