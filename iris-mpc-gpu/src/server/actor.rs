@@ -1928,11 +1928,14 @@ impl ServerActor {
                 .enumerate()
                 .flat_map(|(i, x)| x.iter().map(move |&y| y as usize * num_devices + i))
                 .collect::<Vec<_>>();
+            tracing::info!("{} DB indices: {:?},", self.party_id, db_indices);
 
             // fetch them from the DB
             let iris_codes = on_demand_loader
                 .stream_records(eye_db, &db_indices)
                 .collect::<Vec<_>>();
+
+            tracing::info!("{} loaded indices: {:?},", self.party_id, iris_codes);
 
             // spread them to their respective devices
             let mut iris_codes_split = db_subset_idx
