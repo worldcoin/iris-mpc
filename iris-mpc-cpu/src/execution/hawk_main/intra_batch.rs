@@ -13,7 +13,7 @@ use tokio::task::JoinError;
 
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    search_queries: &Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
 ) -> Result<VecRequests<Vec<usize>>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
@@ -23,15 +23,9 @@ pub async fn intra_batch_is_match(
 
     let batches = schedule(n_sessions, n_eyes, n_requests, ROTATIONS).batches;
 
-    // TODO: move this up to the caller.
-    let search_queries = [
-        Arc::new(search_queries[LEFT].clone()),
-        Arc::new(search_queries[RIGHT].clone()),
-    ];
-
     let per_session = |batch: Batch| {
-        let search_queries = search_queries[batch.i_eye].clone();
         let session = sessions[batch.i_eye][batch.i_session].clone();
+        let search_queries = search_queries.clone();
         async move {
             let mut session = session.write().await;
             per_session(&search_queries, &mut session, batch).await
@@ -49,7 +43,7 @@ pub async fn intra_batch_is_match(
 }
 
 async fn per_session(
-    search_queries: &VecRequests<VecRots<QueryRef>>,
+    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
     session: &mut HawkSession,
     batch: Batch,
 ) -> Vec<IsMatch> {
@@ -72,8 +66,11 @@ async fn per_session(
         .iter()
         .map(|pair| {
             (
-                &search_queries[pair.task.i_request][pair.task.i_rotation].processed_query,
-                &search_queries[pair.earlier_request].center().query,
+                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
+                    .processed_query,
+                &search_queries[batch.i_eye][pair.earlier_request]
+                    .center()
+                    .query,
             )
         })
         .collect_vec();

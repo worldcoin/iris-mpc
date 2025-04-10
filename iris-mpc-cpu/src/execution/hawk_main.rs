@@ -455,15 +455,15 @@ struct HawkJob {
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    queries: BothEyes<VecRequests<VecRots<QueryRef>>>,
+    queries: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
-        Self {
-            queries: [
+        let queries = Arc::new(
+            [
                 // For left and right eyes.
                 (
                     &batch.left_iris_rotated_requests.code,
@@ -505,15 +505,12 @@ impl From<&BatchQuery> for HawkRequest {
                     })
                     .collect_vec()
             }),
-        }
+        );
+        Self { queries }
     }
 }
 
 impl HawkRequest {
-    fn search_queries(&self) -> &BothEyes<VecRequests<VecRots<QueryRef>>> {
-        &self.queries
-    }
-
     fn filter_for_insertion<T>(
         &self,
         both_insert_plans: BothEyes<VecRequests<T>>,
@@ -726,8 +723,7 @@ impl HawkHandle {
                 tracing::info!("Processing an Hawk job…");
                 let now = Instant::now();
 
-                let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
-                    job.request.search_queries();
+                let search_queries = &job.request.queries;
 
                 let intra_results = intra_batch_is_match(&sessions, search_queries)
                     .await

@@ -18,7 +18,7 @@ use tokio::{
 
 pub async fn search(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    search_queries: &Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
     search_params: Arc<HnswSearcher>,
 ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
     let n_sessions = sessions[LEFT].len();
@@ -26,9 +26,6 @@ pub async fn search(
     let n_eyes = 2;
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
-
-    // TODO: move this up to the caller.
-    let search_queries = Arc::new(search_queries.clone());
 
     let (tx, rx) = unbounded_channel::<(TaskId, InsertPlan)>();
 
