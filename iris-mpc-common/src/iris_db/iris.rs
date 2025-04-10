@@ -208,17 +208,6 @@ impl IrisCode {
         res
     }
 
-    pub fn flipped_codes_and_mask(&self) -> IrisCode {
-        let mut flipped = self.clone();
-        flipped.code = self.code;
-        flipped.mask = self.mask;
-        for i in 0..IrisCode::IRIS_CODE_SIZE {
-            flipped.code.flip_bit(i);
-            flipped.mask.flip_bit(i);
-        }
-        flipped
-    }
-
     pub fn mirrored(&mut self) -> IrisCode {
         let mut mirrored = IrisCode::default();
 
