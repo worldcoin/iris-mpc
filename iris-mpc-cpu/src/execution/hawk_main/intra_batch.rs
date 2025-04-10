@@ -6,7 +6,6 @@ use super::{
 use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
 use eyre::Result;
 use futures::future::JoinAll;
-use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, vec};
 use tokio::task::JoinError;
@@ -17,11 +16,10 @@ pub async fn intra_batch_is_match(
 ) -> Result<VecRequests<Vec<usize>>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
-    let n_eyes = 2;
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
-    let batches = schedule(n_sessions, n_eyes, n_requests, ROTATIONS).batches;
+    let batches = schedule(n_sessions, n_requests).batches;
 
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();

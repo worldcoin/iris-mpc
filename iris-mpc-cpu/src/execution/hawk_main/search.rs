@@ -9,7 +9,6 @@ use crate::{
     hnsw::{GraphMem, HnswSearcher},
 };
 use eyre::Result;
-use iris_mpc_common::ROTATIONS;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
@@ -20,7 +19,6 @@ pub async fn search(
 ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
-    let n_eyes = 2;
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
@@ -37,7 +35,7 @@ pub async fn search(
         }
     };
 
-    let sched = schedule(n_sessions, n_eyes, n_requests, ROTATIONS);
+    let sched = schedule(n_sessions, n_requests);
 
     parallelize(sched.batches.iter().cloned().map(per_session)).await?;
 
