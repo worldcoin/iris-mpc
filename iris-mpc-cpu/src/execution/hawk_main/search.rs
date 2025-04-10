@@ -50,14 +50,16 @@ async fn per_session(
     search_params: &HnswSearcher,
     tx: UnboundedSender<(TaskId, InsertPlan)>,
     batch: Batch,
-) {
+) -> Result<()> {
     let graph_store = session.graph_store.clone().read_owned().await;
 
     for task in batch.tasks {
         let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
         let result = per_query(session, query, search_params, &graph_store).await;
-        tx.send((task.id(), result)).expect("infallible send");
+        tx.send((task.id(), result))?;
     }
+
+    Ok(())
 }
 
 async fn per_query(

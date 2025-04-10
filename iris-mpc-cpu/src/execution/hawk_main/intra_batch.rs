@@ -3,12 +3,14 @@ use super::{
     scheduler::{schedule, Batch, Task},
     BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
 };
-use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{
+    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::QueryRef,
+    hnsw::VectorStore,
+};
 use eyre::Result;
-use futures::future::JoinAll;
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, vec};
-use tokio::task::JoinError;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
@@ -21,30 +23,29 @@ pub async fn intra_batch_is_match(
 
     let batches = schedule(n_sessions, n_requests).batches;
 
+    let (tx, rx) = unbounded_channel::<IsMatch>();
+
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
+        let tx = tx.clone();
         async move {
             let mut session = session.write().await;
-            per_session(&search_queries, &mut session, batch).await
+            per_session(&search_queries, &mut session, batch, tx).await
         }
     };
 
-    let results = batches
-        .into_iter()
-        .map(per_session)
-        .map(tokio::spawn)
-        .collect::<JoinAll<_>>()
-        .await;
+    parallelize(batches.into_iter().map(per_session)).await?;
 
-    aggregate_results(n_requests, results)
+    aggregate_results(n_requests, rx).await
 }
 
 async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
     session: &mut HawkSession,
     batch: Batch,
-) -> Vec<IsMatch> {
+    tx: UnboundedSender<IsMatch>,
+) -> Result<()> {
     // Enumerate the pairs of requests.
     // These are unordered pairs: if we do (i, j) we skip (j, i).
     let pairs = batch
@@ -80,9 +81,13 @@ async fn per_session(
     let distances = session.aby3_store.lift_distances(distances).await.unwrap();
     let is_matches = session.aby3_store.is_match_batch(&distances).await;
 
-    izip!(pairs, is_matches)
-        .filter_map(|(pair, is_match)| is_match.then_some(pair))
-        .collect_vec()
+    for (pair, is_match) in izip!(pairs, is_matches) {
+        if is_match {
+            tx.send(pair)?;
+        }
+    }
+
+    Ok(())
 }
 
 struct IsMatch {
@@ -91,19 +96,18 @@ struct IsMatch {
     earlier_request: usize,
 }
 
-fn aggregate_results(
+async fn aggregate_results(
     n_requests: usize,
-    results: Vec<Result<Vec<IsMatch>, JoinError>>,
+    mut rx: UnboundedReceiver<IsMatch>,
 ) -> Result<VecRequests<Vec<usize>>> {
+    rx.close();
     let mut join = HashMap::new();
 
     // For each pair of request, reduce the result of all rotations with boolean ANY.
-    for batch in results {
-        for match_result in batch? {
-            let request_pair = (match_result.task.i_request, match_result.earlier_request);
-            let eyes_match = join.entry(request_pair).or_insert([false, false]);
-            eyes_match[match_result.eye] = true;
-        }
+    while let Some(match_result) = rx.recv().await {
+        let request_pair = (match_result.task.i_request, match_result.earlier_request);
+        let eyes_match = join.entry(request_pair).or_insert([false, false]);
+        eyes_match[match_result.eye] = true;
     }
 
     let mut match_lists = vec![Vec::new(); n_requests];

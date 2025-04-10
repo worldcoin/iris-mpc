@@ -105,9 +105,9 @@ impl Schedule {
     }
 }
 
-pub async fn parallelize<F>(tasks: impl Iterator<Item = F>) -> Result<Vec<F::Output>, JoinError>
+pub async fn parallelize<F, T>(tasks: impl Iterator<Item = F>) -> Result<Vec<T>>
 where
-    F: Future + Send + 'static,
+    F: Future<Output = Result<T>> + Send + 'static,
     F::Output: Send + 'static,
 {
     tasks
@@ -115,7 +115,7 @@ where
         .collect::<JoinAll<_>>()
         .await
         .into_iter()
-        .collect::<Result<Vec<_>, _>>()
+        .collect::<Result<Result<Vec<T>>, JoinError>>()?
 }
 
 pub async fn collect_results<T>(
