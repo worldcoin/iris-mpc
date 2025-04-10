@@ -1,5 +1,5 @@
 use super::{rot::VecRots, BothEyes, VecRequests};
-use eyre::Result;
+use eyre::{eyre, Result};
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
@@ -82,7 +82,7 @@ impl Schedule {
         &self,
         mut results: HashMap<TaskId, T>,
     ) -> Result<BothEyes<VecRequests<VecRots<T>>>> {
-        Ok([0, 1].map(|i_eye| {
+        let [l, r] = [0, 1].map(|i_eye| {
             (0..self.n_requests)
                 .map(|i_request| {
                     (0..ROTATIONS)
@@ -92,13 +92,16 @@ impl Schedule {
                                 i_request,
                                 i_rotation,
                             };
-                            results.remove(&task.id()).expect("missing result")
+                            results
+                                .remove(&task.id())
+                                .ok_or_else(|| eyre!("missing result {:?}", task))
                         })
-                        .collect_vec()
-                        .into()
+                        .collect::<Result<Vec<_>>>()
+                        .map(VecRots::from)
                 })
-                .collect_vec()
-        }))
+                .collect::<Result<Vec<_>>>()
+        });
+        Ok([l?, r?])
     }
 }
 
