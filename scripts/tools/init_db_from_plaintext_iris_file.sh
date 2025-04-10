@@ -48,24 +48,24 @@ function get_default_path_to_prng_state() {
 # Execute binary.
 cargo run --bin init-test-dbs -- \
     -m \
-        "${SMPC_DB_HNSW_PARAM_M:-"$DEFAULT_HNSW_PARAM_M"}" \
+        "${SMPC_INIT_DB_HNSW_PARAM_M:-"$DEFAULT_HNSW_PARAM_M"}" \
     -n \
-        "${SMPC_NUM_IRISES:-"$DEFAULT_NUM_IRISES"}" \
+        "${SMPC_INIT_NUM_IRISES:-"$DEFAULT_NUM_IRISES"}" \
     --db-schema-party1 \
-        "${SMPC_DB_SCHEMA_PARTY_1:-$(get_default_db_schema 1)}" \
+        "${SMPC_INIT_DB_SCHEMA_PARTY_1:-$(get_default_db_schema 1)}" \
     --db-schema-party2 \
-        "${SMPC_DB_SCHEMA_PARTY_2:-$(get_default_db_schema 2)}" \
+        "${SMPC_INIT_DB_SCHEMA_PARTY_2:-$(get_default_db_schema 2)}" \
     --db-schema-party3 \
-        "${SMPC_DB_SCHEMA_PARTY_3:-$(get_default_db_schema 3)}" \
+        "${SMPC_INIT_DB_SCHEMA_PARTY_3:-$(get_default_db_schema 3)}" \
     --db-url-party1 \
-        "${SMPC_DB_URL_PARTY_1:-$(get_default_db_url 1)}" \
+        "${SMPC_INIT_DB_URL_PARTY_1:-$(get_default_db_url 1)}" \
     --db-url-party2 \
-        "${SMPC_DB_URL_PARTY_2:-$(get_default_db_url 2)}" \
+        "${SMPC_INIT_DB_URL_PARTY_2:-$(get_default_db_url 2)}" \
     --db-url-party3 \
-        "${SMPC_DB_URL_PARTY_3:-$(get_default_db_url 3)}" \
+        "${SMPC_INIT_DB_URL_PARTY_3:-$(get_default_db_url 3)}" \
     --ef \
-        "${SMPC_HNSW_PARAM_EF:-"$DEFAULT_HNSW_PARAM_EF"}" \
+        "${SMPC_INIT_HNSW_PARAM_EF:-"$DEFAULT_HNSW_PARAM_EF"}" \
     --prng-state-file \
-        "${SMPC_PATH_TO_PRNG_STATE:-$(get_default_path_to_prng_state)}" \
+        "${SMPC_INIT_PATH_TO_PRNG_STATE:-$(get_default_path_to_prng_state)}" \
     --source \
-        "${SMPC_PATH_TO_IRIS_PLAINTEXT:-$(get_default_path_to_iris_plaintext)}"
+        "${SMPC_INIT_PATH_TO_IRIS_PLAINTEXT:-$(get_default_path_to_iris_plaintext)}"
