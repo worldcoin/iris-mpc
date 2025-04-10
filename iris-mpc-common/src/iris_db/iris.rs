@@ -208,13 +208,13 @@ impl IrisCode {
         res
     }
 
-    pub fn mirrored(&mut self) -> IrisCode {
+    pub fn mirrored(&self) -> IrisCode {
         let mut mirrored = IrisCode::default();
 
         // Process each bit position
         for i in 0..IrisCode::IRIS_CODE_SIZE {
             let mirrored_new_i = GaloisRingIrisCodeShare::remap_new_to_mirrored_index(i);
-            self.mask.set_bit(mirrored_new_i, self.mask.get_bit(i));
+            mirrored.mask.set_bit(mirrored_new_i, self.mask.get_bit(i));
             let w = (i % 4) / 2; // channel
             let code_bit = self.code.get_bit(i);
             mirrored
@@ -308,7 +308,7 @@ mod tests {
 
         // Create IrisCode objects
         let original_iris = IrisCode { code, mask };
-        let mut flipped_iris = IrisCode {
+        let flipped_iris = IrisCode {
             code: flipped_code,
             mask: flipped_mask,
         };
