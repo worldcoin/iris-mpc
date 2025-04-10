@@ -4,17 +4,14 @@ use super::{
     BothEyes, HawkSession, HawkSessionRef, InsertPlan, VecRequests, LEFT, RIGHT,
 };
 use crate::{
+    execution::hawk_main::scheduler::{collect_results, parallelize},
     hawkers::aby3::aby3_store::{Aby3Store, QueryRef},
     hnsw::{GraphMem, HnswSearcher},
 };
 use eyre::Result;
-use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
-use std::{collections::HashMap, future::Future, sync::Arc};
-use tokio::{
-    sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
-    task::JoinError,
-};
+use std::sync::Arc;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub async fn search(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
@@ -92,27 +89,4 @@ async fn per_query(
         match_count,
         set_ep,
     }
-}
-
-async fn parallelize<F>(tasks: impl Iterator<Item = F>) -> Result<Vec<F::Output>, JoinError>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    tasks
-        .map(tokio::spawn)
-        .collect::<JoinAll<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-}
-
-async fn collect_results<T>(mut rx: UnboundedReceiver<(TaskId, T)>) -> Result<HashMap<TaskId, T>> {
-    rx.close();
-
-    let mut results = HashMap::new();
-    while let Some((task_id, result)) = rx.recv().await {
-        results.insert(task_id, result);
-    }
-    Ok(results)
 }

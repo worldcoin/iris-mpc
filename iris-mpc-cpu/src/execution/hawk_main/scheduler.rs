@@ -1,6 +1,8 @@
 use eyre::Result;
+use futures::future::JoinAll;
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future};
+use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError};
 
 use super::{rot::VecRots, BothEyes, VecRequests};
 
@@ -108,6 +110,31 @@ impl Schedule {
                 .collect_vec()
         }))
     }
+}
+
+pub async fn parallelize<F>(tasks: impl Iterator<Item = F>) -> Result<Vec<F::Output>, JoinError>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tasks
+        .map(tokio::spawn)
+        .collect::<JoinAll<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+}
+
+pub async fn collect_results<T>(
+    mut rx: UnboundedReceiver<(TaskId, T)>,
+) -> Result<HashMap<TaskId, T>> {
+    rx.close();
+
+    let mut results = HashMap::new();
+    while let Some((task_id, result)) = rx.recv().await {
+        results.insert(task_id, result);
+    }
+    Ok(results)
 }
 
 /// Like (0..n) but alternating between forward and backward iteration.
