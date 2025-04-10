@@ -48,6 +48,11 @@ criterion = "0.5"
 default = []
 
 
+[[bench]]
+name = "hawk"
+harness = false
+
+
 [[bin]]
 name = "iris-mpc-gpu"
 path = "bin/server.rs"
