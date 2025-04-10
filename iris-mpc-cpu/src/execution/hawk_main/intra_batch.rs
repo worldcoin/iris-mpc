@@ -1,6 +1,6 @@
 use super::{
     rot::VecRots,
-    scheduler::{schedule, Batch, Task},
+    scheduler::{Batch, Schedule, Task},
     BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
 };
 use crate::{
@@ -21,7 +21,7 @@ pub async fn intra_batch_is_match(
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
-    let batches = schedule(n_sessions, n_requests).batches;
+    let batches = Schedule::new(n_sessions, n_requests).batches();
 
     let (tx, rx) = unbounded_channel::<IsMatch>();
 

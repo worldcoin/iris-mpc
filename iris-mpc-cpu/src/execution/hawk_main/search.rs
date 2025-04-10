@@ -1,6 +1,6 @@
 use super::{
     rot::VecRots,
-    scheduler::{schedule, Batch, TaskId},
+    scheduler::{Batch, Schedule, TaskId},
     BothEyes, HawkSession, HawkSessionRef, InsertPlan, VecRequests, LEFT, RIGHT,
 };
 use crate::{
@@ -35,13 +35,13 @@ pub async fn search(
         }
     };
 
-    let sched = schedule(n_sessions, n_requests);
+    let schedule = Schedule::new(n_sessions, n_requests);
 
-    parallelize(sched.batches.iter().cloned().map(per_session)).await?;
+    parallelize(schedule.batches().into_iter().map(per_session)).await?;
 
     let results = collect_results(rx).await?;
 
-    sched.organize_results(results)
+    schedule.organize_results(results)
 }
 
 async fn per_session(

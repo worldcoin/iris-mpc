@@ -10,8 +10,8 @@ const N_EYES: usize = 2;
 
 /// A schedule is a collections of batches to process in parallel.
 pub struct Schedule {
+    n_sessions: usize,
     n_requests: usize,
-    pub batches: Vec<Batch>,
 }
 
 /// A batch is a list of tasks to do within the same unit of parallelism.
@@ -39,45 +39,47 @@ impl Task {
 
 pub type TaskId = (usize, usize, usize);
 
-/// Enumerate all combinations of eye sides, requests, and rotations.
-/// Distribute the tasks over a number of sessions.
-pub fn schedule(n_sessions: usize, n_requests: usize) -> Schedule {
-    let n_tasks = n_requests * ROTATIONS;
-    let batch_size = n_tasks / n_sessions;
-    let rest_size = n_tasks % n_sessions;
-
-    let batches = (0..N_EYES)
-        .flat_map(|i_eye| {
-            let mut task_iter = (0..ROTATIONS).flat_map(move |i_rotation| {
-                range_forward_backward(n_requests).map(move |i_request| Task {
-                    i_eye,
-                    i_request,
-                    i_rotation,
-                })
-            });
-
-            (0..n_sessions).map(move |i_session| {
-                // Some sessions get one more task if n_sessions does not divide n_tasks.
-                let one_more = (i_session < rest_size) as usize;
-
-                let tasks = task_iter.by_ref().take(batch_size + one_more).collect_vec();
-
-                Batch {
-                    i_eye,
-                    i_session,
-                    tasks,
-                }
-            })
-        })
-        .collect_vec();
-
-    Schedule {
-        n_requests,
-        batches,
-    }
-}
-
 impl Schedule {
+    pub fn new(n_sessions: usize, n_requests: usize) -> Self {
+        Self {
+            n_sessions,
+            n_requests,
+        }
+    }
+
+    /// Enumerate all combinations of eye sides, requests, and rotations.
+    /// Distribute the tasks over a number of sessions.
+    pub fn batches(&self) -> Vec<Batch> {
+        let n_tasks = self.n_requests * ROTATIONS;
+        let batch_size = n_tasks / self.n_sessions;
+        let rest_size = n_tasks % self.n_sessions;
+
+        (0..N_EYES)
+            .flat_map(|i_eye| {
+                let mut task_iter = (0..ROTATIONS).flat_map(move |i_rotation| {
+                    range_forward_backward(self.n_requests).map(move |i_request| Task {
+                        i_eye,
+                        i_request,
+                        i_rotation,
+                    })
+                });
+
+                (0..self.n_sessions).map(move |i_session| {
+                    // Some sessions get one more task if n_sessions does not divide n_tasks.
+                    let one_more = (i_session < rest_size) as usize;
+
+                    let tasks = task_iter.by_ref().take(batch_size + one_more).collect_vec();
+
+                    Batch {
+                        i_eye,
+                        i_session,
+                        tasks,
+                    }
+                })
+            })
+            .collect_vec()
+    }
+
     pub fn organize_results<T>(
         &self,
         mut results: HashMap<TaskId, T>,
@@ -162,7 +164,7 @@ mod test {
         let n_rotations = ROTATIONS;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
-        let batches = schedule(n_sessions, n_requests).batches;
+        let batches = Schedule::new(n_sessions, n_requests).batches();
         assert_eq!(batches.len(), n_batches);
 
         let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();
