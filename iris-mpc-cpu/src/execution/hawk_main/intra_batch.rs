@@ -21,7 +21,7 @@ pub async fn intra_batch_is_match(
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
-    let batches = schedule(n_sessions, n_eyes, n_requests, ROTATIONS);
+    let batches = schedule(n_sessions, n_eyes, n_requests, ROTATIONS).batches;
 
     // TODO: move this up to the caller.
     let search_queries = [

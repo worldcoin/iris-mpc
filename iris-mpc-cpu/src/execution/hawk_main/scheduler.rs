@@ -1,4 +1,17 @@
+use eyre::Result;
 use itertools::Itertools;
+use std::collections::HashMap;
+
+use super::{rot::VecRots, BothEyes, VecRequests};
+
+/// A schedule is a collections of batches to process in parallel.
+pub struct Schedule {
+    n_eyes: usize,
+    n_requests: usize,
+    n_rotations: usize,
+
+    pub batches: Vec<Batch>,
+}
 
 /// A batch is a list of tasks to do within the same unit of parallelism.
 /// Our unit of parallelism is one session of one eye side.
@@ -12,9 +25,18 @@ pub struct Batch {
 /// A task within a batch is something to do with one rotation of one request.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Task {
+    i_eye: usize,
     pub i_request: usize,
     pub i_rotation: usize,
 }
+
+impl Task {
+    pub fn id(&self) -> TaskId {
+        (self.i_eye, self.i_request, self.i_rotation)
+    }
+}
+
+pub type TaskId = (usize, usize, usize);
 
 /// Enumerate all combinations of eye sides, requests, and rotations.
 /// Distribute the tasks over a number of sessions.
@@ -23,15 +45,16 @@ pub fn schedule(
     n_eyes: usize,
     n_requests: usize,
     n_rotations: usize,
-) -> Vec<Batch> {
+) -> Schedule {
     let n_tasks = n_requests * n_rotations;
     let batch_size = n_tasks / n_sessions;
     let rest_size = n_tasks % n_sessions;
 
-    (0..n_eyes)
+    let batches = (0..n_eyes)
         .flat_map(|i_eye| {
-            let mut task_iter = (0..n_rotations).flat_map(|i_rotation| {
+            let mut task_iter = (0..n_rotations).flat_map(move |i_rotation| {
                 range_forward_backward(n_requests).map(move |i_request| Task {
+                    i_eye,
                     i_request,
                     i_rotation,
                 })
@@ -50,7 +73,41 @@ pub fn schedule(
                 }
             })
         })
-        .collect_vec()
+        .collect_vec();
+
+    Schedule {
+        n_eyes,
+        n_requests,
+        n_rotations,
+        batches,
+    }
+}
+
+impl Schedule {
+    pub fn organize_results<T>(
+        &self,
+        mut results: HashMap<TaskId, T>,
+    ) -> Result<BothEyes<VecRequests<VecRots<T>>>> {
+        assert_eq!(self.n_eyes, 2);
+
+        Ok([0, 1].map(|i_eye| {
+            (0..self.n_requests)
+                .map(|i_request| {
+                    (0..self.n_rotations)
+                        .map(|i_rotation| {
+                            let task = Task {
+                                i_eye,
+                                i_request,
+                                i_rotation,
+                            };
+                            results.remove(&task.id()).expect("missing result")
+                        })
+                        .collect_vec()
+                        .into()
+                })
+                .collect_vec()
+        }))
+    }
 }
 
 /// Like (0..n) but alternating between forward and backward iteration.
@@ -85,7 +142,7 @@ mod test {
         let n_rotations = ROTATIONS;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
-        let batches = schedule(n_sessions, n_eyes, n_requests, n_rotations);
+        let batches = schedule(n_sessions, n_eyes, n_requests, n_rotations).batches;
         assert_eq!(batches.len(), n_batches);
 
         let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();
