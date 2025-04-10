@@ -206,6 +206,37 @@ impl IrisCode {
 
         res
     }
+
+    pub fn mirrored(&self) -> IrisCode {
+        let mut mirrored = IrisCode::default();
+
+        // The iris code is conceptually a 4D array (16, 200, 2, 2)
+        // We need to flip along the second dimension and invert the second channel
+
+        // Process each bit position
+        for i in 0..IrisCode::IRIS_CODE_SIZE {
+            // Calculate the conceptual coordinates
+            let row = i / 800; // 200*2*2 bits per row
+            let col = (i % 800) / 4; // 4 bits per column position
+            let channel = (i % 4) / 2; // 2 bits per channel
+            let bit = i % 2; // Individual bit
+
+            // Calculate flipped position
+            let flipped_col = if col < 100 { 99 - col } else { 299 - col };
+            let flipped_i = row * 800 + flipped_col * 4 + channel * 2 + bit;
+
+            // Copy mask bit directly
+            mirrored.mask.set_bit(flipped_i, self.mask.get_bit(i));
+
+            // For code, invert bit if it's in the second channel (channel == 1)
+            let code_bit = self.code.get_bit(i);
+            mirrored
+                .code
+                .set_bit(flipped_i, if channel == 1 { !code_bit } else { code_bit });
+        }
+
+        mirrored
+    }
 }
 
 pub struct Bits<'a> {

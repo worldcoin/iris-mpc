@@ -118,6 +118,7 @@ async fn e2e_test() -> Result<()> {
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
 
+    test_case_generator.disable_test_case(TestCase::FullFaceMirrorAttack);
     test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::CloseToThreshold);

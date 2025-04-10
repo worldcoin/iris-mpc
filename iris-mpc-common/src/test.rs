@@ -35,24 +35,19 @@ pub struct E2ETemplate {
     right: IrisCode,
 }
 impl E2ETemplate {
-    fn to_shared_template(
-        &self,
-        is_valid: bool,
-        rng: &mut StdRng,
-        mirror_attack_hack: bool,
-    ) -> E2ESharedTemplate {
+    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
         let (
             left_shared_code,
             left_shared_mask,
             left_mirrored_shared_code,
             left_mirrored_shared_mask,
-        ) = get_shared_template(is_valid, &self.left, rng, mirror_attack_hack);
+        ) = get_shared_template(is_valid, &self.left, rng);
         let (
             right_shared_code,
             right_shared_mask,
             right_mirrored_shared_code,
             right_mirrored_shared_mask,
-        ) = get_shared_template(is_valid, &self.right, rng, mirror_attack_hack);
+        ) = get_shared_template(is_valid, &self.right, rng);
         E2ESharedTemplate {
             left_shared_code,
             left_shared_mask,
@@ -70,7 +65,6 @@ fn get_shared_template(
     is_valid: bool,
     template: &IrisCode,
     rng: &mut StdRng,
-    mirror_attack_testcase_hack: bool,
 ) -> (
     [GaloisRingIrisCodeShare; 3],
     [GaloisRingTrimmedMaskCodeShare; 3],
@@ -80,28 +74,7 @@ fn get_shared_template(
     let mut shared_code =
         GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, rng);
 
-    // ugly hack to accomodate the mirror attack test case
-    // we need to simulate an incoming mirror attack iris code and mask
-    // generate_query() will return an already existing iris code from the test database and will set the mirror_attack_testcase_hack flag
-    // in this case we need to mirror the input so we can simulate the attack
-    // end result = mirrored code as input and the normal code existing in the test db
-    if mirror_attack_testcase_hack {
-        shared_code = [
-            shared_code[0].mirrored(),
-            shared_code[1].mirrored(),
-            shared_code[2].mirrored(),
-        ]
-    }
-
-    let mut shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
-
-    if mirror_attack_testcase_hack {
-        shared_mask = [
-            shared_mask[0].mirrored(),
-            shared_mask[1].mirrored(),
-            shared_mask[2].mirrored(),
-        ]
-    }
+    let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
 
     // Create mirrored versions of the shares (before trimming for masks)
     let mut mirrored_shared_code = [
@@ -474,14 +447,8 @@ impl TestCaseGenerator {
         self.or_rule_matches.clear();
 
         for idx in 0..batch_size {
-            let (
-                request_id,
-                e2e_template,
-                or_rule_indices,
-                skip_persistence,
-                message_type,
-                mirror_attack_hack,
-            ) = self.generate_query(idx);
+            let (request_id, e2e_template, or_rule_indices, skip_persistence, message_type) =
+                self.generate_query(idx);
 
             // Invalidate 10% of the queries, but ignore the batch duplicates
             // TODO: remove the check for cpu once batch deduplication is implemented
@@ -491,8 +458,7 @@ impl TestCaseGenerator {
             }
 
             let maybe_reauth_target_index = self.reauth_target_indices.get(&request_id.to_string());
-            let shared_template =
-                e2e_template.to_shared_template(is_valid, &mut self.rng, mirror_attack_hack);
+            let shared_template = e2e_template.to_shared_template(is_valid, &mut self.rng);
 
             prepare_batch(
                 &mut batch0,
@@ -572,7 +538,7 @@ impl TestCaseGenerator {
                     left: code.clone(),
                     right: code,
                 };
-                let shared_template = template.to_shared_template(true, &mut self.rng, false);
+                let shared_template = template.to_shared_template(true, &mut self.rng);
                 let shares0 = GaloisSharesBothSides {
                     code_left: shared_template.left_shared_code[0].clone(),
                     mask_left: shared_template.left_shared_mask[0].clone(),
@@ -655,7 +621,7 @@ impl TestCaseGenerator {
     fn generate_query(
         &mut self,
         internal_batch_idx: usize,
-    ) -> (Uuid, E2ETemplate, OrRuleSerialIds, bool, String, bool) {
+    ) -> (Uuid, E2ETemplate, OrRuleSerialIds, bool, String) {
         let request_id = Uuid::new_v4();
         let mut skip_persistence = false;
         let mut message_type = UNIQUENESS_MESSAGE_TYPE.to_string();
@@ -674,10 +640,6 @@ impl TestCaseGenerator {
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
         ];
-
-        if !self.is_cpu {
-            options.push(TestCase::FullFaceMirrorAttack);
-        }
 
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
@@ -700,9 +662,7 @@ impl TestCaseGenerator {
         // deduplication mechanism
         // TODO: remove the check for cpu once batch deduplication is implemented
         let pick_from_batch = !self.is_cpu && self.rng.gen_bool(0.10);
-        let (e2e_template, mirror_attack_hack) = if pick_from_batch
-            && !self.new_templates_in_batch.is_empty()
-        {
+        let e2e_template = if pick_from_batch && !self.new_templates_in_batch.is_empty() {
             let random_idx = self.rng.gen_range(0..self.new_templates_in_batch.len());
             let (batch_idx, duplicate_request_id, template) =
                 self.new_templates_in_batch[random_idx].clone();
@@ -716,13 +676,10 @@ impl TestCaseGenerator {
             self.batch_duplicates
                 .insert(request_id.to_string(), duplicate_request_id);
             self.skip_invalidate = true;
-            (
-                E2ETemplate {
-                    left: template.clone(),
-                    right: template.clone(),
-                },
-                false,
-            )
+            E2ETemplate {
+                left: template.clone(),
+                right: template.clone(),
+            }
         } else {
             // otherwise we pick from the valid test case options
             let option = options
@@ -741,13 +698,10 @@ impl TestCaseGenerator {
                         template.clone(),
                     ));
                     self.skip_invalidate = true;
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template.clone(),
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template.clone(),
+                    }
                 }
                 TestCase::NonMatchSkipPersistence => {
                     tracing::info!("Sending new iris code with skip persistence");
@@ -759,13 +713,10 @@ impl TestCaseGenerator {
                             .build(),
                     );
                     let template = IrisCode::random_rng(&mut self.rng);
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template.clone(),
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template.clone(),
+                    }
                 }
                 TestCase::Match => {
                     tracing::info!("Sending iris code from db");
@@ -777,13 +728,10 @@ impl TestCaseGenerator {
                             .with_db_index(db_index as u32)
                             .build(),
                     );
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::MatchSkipPersistence => {
                     tracing::info!("Sending iris code from db with skip persistence");
@@ -798,13 +746,10 @@ impl TestCaseGenerator {
                             .with_skip_persistence(true)
                             .build(),
                     );
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::CloseToThreshold => {
                     tracing::info!("Sending iris code on the threshold");
@@ -832,13 +777,10 @@ impl TestCaseGenerator {
                     for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
                         template.code.flip_bit(i);
                     }
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::PreviouslyInserted => {
                     tracing::info!("Sending freshly inserted iris code");
@@ -852,13 +794,10 @@ impl TestCaseGenerator {
                         ExpectedResult::builder().with_db_index(*idx).build(),
                     );
                     self.db_indices_used_in_current_batch.insert(*idx as usize);
-                    (
-                        E2ETemplate {
-                            left: e2e_template.left.clone(),
-                            right: e2e_template.right.clone(),
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: e2e_template.left.clone(),
+                        right: e2e_template.right.clone(),
+                    }
                 }
                 TestCase::PreviouslyDeleted => {
                     tracing::info!("Sending deleted iris code");
@@ -868,13 +807,10 @@ impl TestCaseGenerator {
                     self.deleted_indices_buffer.remove(idx);
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
-                    (
-                        E2ETemplate {
-                            right: self.initial_db_state.db[deleted_idx as usize].clone(),
-                            left: self.initial_db_state.db[deleted_idx as usize].clone(),
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        right: self.initial_db_state.db[deleted_idx as usize].clone(),
+                        left: self.initial_db_state.db[deleted_idx as usize].clone(),
+                    }
                 }
                 TestCase::WithOrRuleSet => {
                     tracing::info!(
@@ -932,7 +868,7 @@ impl TestCaseGenerator {
                         self.expected_results
                             .insert(request_id.to_string(), ExpectedResult::builder().build());
                     }
-                    (template, false)
+                    template
                 }
                 TestCase::ReauthMatchingTarget => {
                     tracing::info!(
@@ -949,13 +885,10 @@ impl TestCaseGenerator {
                             .with_reauth_successful(true)
                             .build(),
                     );
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::ReauthNonMatchingTarget => {
                     tracing::info!(
@@ -980,7 +913,7 @@ impl TestCaseGenerator {
                             .with_reauth_successful(false)
                             .build(),
                     );
-                    (template, false)
+                    template
                 }
                 TestCase::ReauthOrRuleMatchingTarget => {
                     tracing::info!("Sending reauth request with OR rule matching the target index");
@@ -1001,7 +934,7 @@ impl TestCaseGenerator {
                             .with_reauth_successful(true)
                             .build(),
                     );
-                    (template, false)
+                    template
                 }
                 TestCase::ReauthOrRuleNonMatchingTarget => {
                     tracing::info!(
@@ -1021,7 +954,7 @@ impl TestCaseGenerator {
                             .with_reauth_successful(false)
                             .build(),
                     );
-                    (template, false)
+                    template
                 }
                 TestCase::ResetCheckMatch => {
                     tracing::info!("Sending reset check request with an existing iris code");
@@ -1035,13 +968,10 @@ impl TestCaseGenerator {
                             .build(),
                     );
                     message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::ResetCheckNonMatch => {
                     tracing::info!("Sending reset check request with fresh iris code");
@@ -1051,13 +981,10 @@ impl TestCaseGenerator {
                         ExpectedResult::builder().with_reset_check(true).build(),
                     );
                     message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
-                    (
-                        E2ETemplate {
-                            left: template.clone(),
-                            right: template,
-                        },
-                        false,
-                    )
+                    E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    }
                 }
                 TestCase::EnrollmentAfterResetCheckNonMatch => {
                     tracing::info!("Sending enrollment request using iris codes used during reset check non match");
@@ -1076,7 +1003,7 @@ impl TestCaseGenerator {
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
                     self.skip_invalidate = true;
-                    (e2e_template, false)
+                    e2e_template
                 }
                 TestCase::FullFaceMirrorAttack => {
                     tracing::info!("Sending iris code crafted for mirror attack detection");
@@ -1094,15 +1021,13 @@ impl TestCaseGenerator {
                             .build(),
                     );
 
-                    // send the original template as our test case and set the mirror_attack_hack to true
-                    // this will ensure that the original template will be mirrored in the next step = to_shared_template()
-                    (
-                        E2ETemplate {
-                            left: original_template.clone(),
-                            right: original_template,
-                        },
-                        true,
-                    )
+                    // send a mirrored template as our test case
+                    // this will ensure that the original template will be mirrored
+                    // let mirrored_template = original_template.clone().mirrored();
+                    E2ETemplate {
+                        left: original_template.clone().mirrored(),
+                        right: original_template.clone().mirrored(),
+                    }
                 }
                 TestCase::MatchAfterResetUpdate => {
                     tracing::info!(
@@ -1120,7 +1045,7 @@ impl TestCaseGenerator {
                         ExpectedResult::builder().with_db_index(db_idx).build(),
                     );
                     self.skip_invalidate = true;
-                    (e2e_template, false)
+                    e2e_template
                 }
             }
         };
@@ -1130,7 +1055,6 @@ impl TestCaseGenerator {
             or_rule_indices,
             skip_persistence,
             message_type,
-            mirror_attack_hack,
         )
     }
 
