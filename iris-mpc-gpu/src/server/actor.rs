@@ -2279,6 +2279,7 @@ impl ServerActor {
                                 * (100 + self.match_distances_buffer_size_extra_percent)
                                 / 100,
                             request_streams,
+                            orientation == Orientation::Mirror,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2532,6 +2533,7 @@ fn open(
     batch_size: usize,
     max_bucket_distances: usize,
     streams: &[CudaStream],
+    is_mirror_orientation: bool,
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -2576,6 +2578,7 @@ fn open(
         batch_size,
         max_bucket_distances,
         streams,
+        is_mirror_orientation,
     );
 }
 
