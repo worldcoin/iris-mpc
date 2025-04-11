@@ -38,7 +38,7 @@ fn install_tracing() {
 async fn create_graph_from_plain_db(
     player_index: usize,
     db: &IrisDB,
-) -> eyre::Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
