@@ -39,11 +39,21 @@ tokio-stream = "0.1"
 tonic = "0.12.3"
 metrics = "0.22.1"
 tracing.workspace = true
-tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = ["uuid", "chrono", "smallvec", "tokio", "serde", "env-filter"] }
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
+    "uuid",
+    "chrono",
+    "smallvec",
+    "tokio",
+    "serde",
+    "env-filter",
+] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
-backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
+backon = { version = "1.4.0", default-features = false, features = [
+    "tokio-sleep",
+] }
+rand_chacha = { version = "0.3", features = ["serde1"] }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
@@ -66,14 +76,6 @@ harness = false
 name = "hnsw-ex"
 
 [[bin]]
-name = "local_hnsw"
-path = "bin/local_hnsw.rs"
-
-[[bin]]
-name = "hnsw_algorithm_metrics"
-path = "bin/hnsw_algorithm_metrics.rs"
-
-[[bin]]
 name = "generate_benchmark_data"
 path = "bin/generate_benchmark_data.rs"
 
@@ -82,5 +84,17 @@ name = "hawk_main"
 path = "bin/hawk_main.rs"
 
 [[bin]]
+name = "hnsw_algorithm_metrics"
+path = "bin/hnsw_algorithm_metrics.rs"
+
+[[bin]]
 name = "hnsw_network_stats_example"
 path = "bin/hnsw_network_stats_example.rs"
+
+[[bin]]
+name = "init-test-dbs"
+path = "bin/init_test_dbs.rs"
+
+[[bin]]
+name = "local_hnsw"
+path = "bin/local_hnsw.rs"
