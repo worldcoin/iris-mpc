@@ -43,7 +43,7 @@ pub async fn get_next_sns_seq_num(
         }
     } else {
         tracing::info!("Timeout while waiting for a message in the queue. Queue is clean.");
-        Ok(None)
+        Ok(Some(0))
     }
 }
 
