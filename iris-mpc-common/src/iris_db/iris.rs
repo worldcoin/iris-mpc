@@ -315,10 +315,7 @@ mod tests {
 
         // Check that the mirrored flipped iris matches the original
         let mirrored_iris = flipped_iris.mirrored();
-        let combined_mask = original_iris.mask & mirrored_iris.mask;
-        let code_distance =
-            ((original_iris.code ^ mirrored_iris.code) & combined_mask).count_ones();
-        let distance = code_distance as f64 / combined_mask.count_ones() as f64;
+        let distance = original_iris.get_distance(&mirrored_iris);
         assert_float_eq!(distance, 0.0, abs <= 1e-6);
     }
     pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
