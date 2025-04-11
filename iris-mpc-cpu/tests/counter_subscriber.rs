@@ -32,7 +32,7 @@ use tracing_subscriber::prelude::*;
 #[tokio::test]
 async fn test_counter_subscriber() -> Result<()> {
     let rng = &mut AesRng::seed_from_u64(0_u64);
-    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await;
+    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await?;
 
     // Set up tracing Subscriber for counting operations
 
@@ -72,7 +72,7 @@ async fn test_counter_subscriber() -> Result<()> {
             query1,
             query2,
         )
-        .await;
+        .await?;
 
         let end = (
             dist_evaluations_counter.load(Ordering::Relaxed),
@@ -125,7 +125,7 @@ async fn test_counter_subscriber() -> Result<()> {
             query1,
             query2,
         )
-        .await;
+        .await?;
         let end = clone_counter_map(&param_openings_map).await;
 
         map_diffs(&end, &start)
@@ -161,23 +161,22 @@ async fn test_counter_subscriber() -> Result<()> {
 async fn init_hnsw(
     db_size: usize,
     rng: &mut AesRng,
-) -> (
+) -> Result<(
     HnswSearcher,
     PlaintextStore,
     GraphMem<PlaintextStore>,
     PointId,
     PointId,
-) {
+)> {
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
-    let (mut vector_store, graph_store) = PlaintextStore::create_random(rng, db_size, &searcher)
-        .await
-        .unwrap();
+    let (mut vector_store, graph_store) =
+        PlaintextStore::create_random(rng, db_size, &searcher).await?;
     let queries: Vec<_> = (0..=1)
         .map(|_| vector_store.prepare_query(IrisCode::random_rng(rng)))
         .collect();
-    (searcher, vector_store, graph_store, queries[0], queries[1])
+    Ok((searcher, vector_store, graph_store, queries[0], queries[1]))
 }
 
 async fn hnsw_search_queries_seq(
@@ -186,10 +185,12 @@ async fn hnsw_search_queries_seq(
     graph_store: &mut GraphMem<PlaintextStore>,
     query1: PointId,
     query2: PointId,
-) {
+) -> Result<()> {
     for q in [query1, query2].into_iter() {
-        searcher.search(vector_store, graph_store, &q, 1).await;
+        searcher.search(vector_store, graph_store, &q, 1).await?;
     }
+
+    Ok(())
 }
 
 async fn hnsw_search_queries_par(
@@ -199,7 +200,7 @@ async fn hnsw_search_queries_par(
     query1: PointId,
     query2: PointId,
 ) {
-    let mut jobs = JoinSet::new();
+    let mut jobs: JoinSet<Result<()>> = JoinSet::new();
     for q in [query1, query2].into_iter() {
         let searcher = searcher.clone();
         let mut vector_store = vector_store.clone();
@@ -207,7 +208,9 @@ async fn hnsw_search_queries_par(
         jobs.spawn(async move {
             searcher
                 .search(&mut vector_store, &mut graph_store, &q, 1)
-                .await;
+                .await?;
+
+            Ok(())
         });
     }
     jobs.join_all().await;

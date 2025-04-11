@@ -21,7 +21,7 @@ pub fn search(
 
     rt.block_on(async move {
         let query = vector.prepare_query(query);
-        let neighbors = searcher.search(vector, graph, &query, 1).await;
+        let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
@@ -43,7 +43,10 @@ pub fn insert(
         let mut rng = ThreadRng::default();
 
         let query = vector.prepare_query(iris);
-        searcher.insert(vector, graph, &query, &mut rng).await
+        searcher
+            .insert(vector, graph, &query, &mut rng)
+            .await
+            .unwrap()
     })
 }
 
@@ -75,7 +78,10 @@ pub fn fill_uniform_random(
         for idx in 0..num {
             let raw_query = IrisCode::random_rng(&mut rng);
             let query = vector.prepare_query(raw_query.clone());
-            searcher.insert(vector, graph, &query, &mut rng).await;
+            searcher
+                .insert(vector, graph, &query, &mut rng)
+                .await
+                .unwrap();
             if idx % 100 == 99 {
                 println!("{}", idx + 1);
             }
@@ -109,7 +115,10 @@ pub fn fill_from_ndjson_file(
         for json_pt in stream {
             let raw_query = (&json_pt.unwrap()).into();
             let query = vector.prepare_query(raw_query);
-            searcher.insert(vector, graph, &query, &mut rng).await;
+            searcher
+                .insert(vector, graph, &query, &mut rng)
+                .await
+                .unwrap();
         }
     })
 }

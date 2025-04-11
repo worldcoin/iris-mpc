@@ -1,4 +1,5 @@
 use aes_prng::AesRng;
+use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
@@ -8,7 +9,7 @@ use rand::SeedableRng;
 
 const DATABASE_SIZE: usize = 1_000;
 
-fn main() {
+fn main() -> Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -25,11 +26,13 @@ fn main() {
             let query = vector.prepare_query(raw_query.clone());
             searcher
                 .insert(&mut vector, &mut graph, &query, &mut rng)
-                .await;
+                .await?;
             if idx % 100 == 99 {
                 println!("{}", idx + 1);
             }
         }
-        (vector, graph)
-    });
+        Ok::<_, eyre::Report>((vector, graph))
+    })?;
+
+    Ok(())
 }
