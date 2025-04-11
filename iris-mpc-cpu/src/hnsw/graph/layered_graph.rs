@@ -256,7 +256,7 @@ mod tests {
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
     use rand::{RngCore, SeedableRng};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -354,8 +354,9 @@ mod tests {
         let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
         assert_eq!(graph_store, equal_graph_store);
 
-        let different_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| PointId(v.0 * 2));
+        let different_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| {
+            VectorId::from_0_index(v.index() * 2)
+        });
         assert_ne!(graph_store, different_graph_store);
     }
 

@@ -43,7 +43,7 @@ async fn create_graph_from_plain_db(
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
 
-    let mpc_graph: GraphMem<Aby3Store> = migrate(graph, |v| v.into());
+    let mpc_graph: GraphMem<Aby3Store> = migrate(graph, |v| v);
 
     let mut shared_irises = HashMap::new();
 
