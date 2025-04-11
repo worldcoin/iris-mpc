@@ -183,6 +183,7 @@ impl DistanceComparator {
         batch_size: usize,
         max_bucket_distances: usize,
         streams: &[CudaStream],
+        is_mirror_orientation: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -227,6 +228,7 @@ impl DistanceComparator {
                             &mask_dots[i].a,
                             &mask_dots[i].b,
                             max_bucket_distances,
+                            is_mirror_orientation,
                         ),
                     )
                     .unwrap();

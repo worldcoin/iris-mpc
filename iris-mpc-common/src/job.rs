@@ -114,7 +114,6 @@ pub struct ServerJobResult<A = ()> {
     // Boolean array to indicate if the query was unique which includes the matches that were not
     // entered into the DB
     pub matches_with_skip_persistence: Vec<bool>,
-
     // For each query, the serial ids to which the query matched to
     pub match_ids: Vec<Vec<u32>>,
     // For each query, the serial ids to which the query partially matched to
@@ -147,13 +146,14 @@ pub struct ServerJobResult<A = ()> {
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     // Used for roll forward in the case of needing to r-run mutations
     pub modifications: HashMap<u32, Modification>,
-    /// Actor-specific data (e.g. graph mutations).
+    // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
-
     // Reset Update specific fields
     pub reset_update_indices: Vec<u32>,
     pub reset_update_request_ids: Vec<String>,
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
+    // Boolean array to indicate if the query is a full face mirror attack attempt.
+    pub full_face_mirror_attack_detected: Vec<bool>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
