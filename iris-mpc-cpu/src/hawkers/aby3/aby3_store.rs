@@ -10,6 +10,7 @@ use crate::{
     },
     shares::share::{DistanceShare, Share},
 };
+use eyre::Result;
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
@@ -181,7 +182,7 @@ impl Aby3Store {
     pub(crate) async fn lift_distances(
         &mut self,
         distances: Vec<Share<u16>>,
-    ) -> eyre::Result<Vec<DistanceShare<u32>>> {
+    ) -> Result<Vec<DistanceShare<u32>>> {
         if distances.is_empty() {
             return Ok(vec![]);
         }
@@ -203,16 +204,12 @@ impl Aby3Store {
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<(&GaloisRingSharedIris, &GaloisRingSharedIris)>,
-    ) -> Vec<Share<u16>> {
+    ) -> Result<Vec<Share<u16>>> {
         if pairs.is_empty() {
-            return vec![];
+            return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, &pairs)
-            .await
-            .unwrap();
-        galois_ring_to_rep3(&mut self.session, ds_and_ts)
-            .await
-            .unwrap()
+        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, &pairs).await;
+        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
     }
 }
 
@@ -238,18 +235,21 @@ impl VectorStore for Aby3Store {
         &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
-    ) -> Self::DistanceRef {
+    ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = vec![(&query.processed_query, &*vector_point)];
-        let dist = self.eval_pairwise_distances(pairs).await;
-        self.lift_distances(dist).await.unwrap()[0].clone()
+        let dist = self.eval_pairwise_distances(pairs).await?;
+        Ok(self.lift_distances(dist).await?[0].clone())
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
     async fn eval_distance_pairs(
         &mut self,
         pairs: &[(Self::QueryRef, Self::VectorRef)],
-    ) -> Vec<Self::DistanceRef> {
+    ) -> Result<Vec<Self::DistanceRef>> {
+        if pairs.is_empty() {
+            return Ok(vec![]);
+        }
         let vectors = self
             .storage
             .iter_vectors(pairs.iter().map(|(_, v)| v))
@@ -259,8 +259,8 @@ impl VectorStore for Aby3Store {
             .map(|((q, _), v)| (&q.processed_query, &**v))
             .collect_vec();
 
-        let dist = self.eval_pairwise_distances(pairs).await;
-        self.lift_distances(dist).await.unwrap()
+        let dist = self.eval_pairwise_distances(pairs).await?;
+        self.lift_distances(dist).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
@@ -268,9 +268,9 @@ impl VectorStore for Aby3Store {
         &mut self,
         queries: &[Self::QueryRef],
         vectors: &[Self::VectorRef],
-    ) -> Vec<Self::DistanceRef> {
+    ) -> Result<Vec<Self::DistanceRef>> {
         if vectors.is_empty() {
-            return vec![];
+            return Ok(vec![]);
         }
         let vectors = self.storage.iter_vectors(vectors).await;
         let pairs = queries
@@ -278,14 +278,12 @@ impl VectorStore for Aby3Store {
             .flat_map(|q| vectors.iter().map(|vector| (&q.processed_query, &**vector)))
             .collect::<Vec<_>>();
 
-        let dist = self.eval_pairwise_distances(pairs).await;
-        self.lift_distances(dist).await.unwrap()
+        let dist = self.eval_pairwise_distances(pairs).await?;
+        self.lift_distances(dist).await
     }
 
-    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-        compare_threshold_and_open(&mut self.session, &[distance.clone()])
-            .await
-            .unwrap()[0]
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+        Ok(compare_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -293,31 +291,27 @@ impl VectorStore for Aby3Store {
         &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
-    ) -> bool {
-        cross_compare(&mut self.session, &[(distance1.clone(), distance2.clone())])
-            .await
-            .unwrap()[0]
+    ) -> Result<bool> {
+        Ok(cross_compare(&mut self.session, &[(distance1.clone(), distance2.clone())]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn less_than_batch(
         &mut self,
         distances: &[(Self::DistanceRef, Self::DistanceRef)],
-    ) -> Vec<bool> {
+    ) -> Result<Vec<bool>> {
         if distances.is_empty() {
-            return vec![];
+            return Ok(vec![]);
         }
-        cross_compare(&mut self.session, distances).await.unwrap()
+        cross_compare(&mut self.session, distances).await
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
-    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Vec<bool> {
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
         if distances.is_empty() {
-            return vec![];
+            return Ok(vec![]);
         }
-        compare_threshold_and_open(&mut self.session, distances)
-            .await
-            .unwrap()
+        compare_threshold_and_open(&mut self.session, distances).await
     }
 }
 
@@ -352,7 +346,7 @@ mod tests {
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_gr_hnsw() -> eyre::Result<()> {
+    async fn test_gr_hnsw() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let cleartext_database = IrisDB::new_random_rng(database_size, &mut rng).db;
@@ -381,7 +375,8 @@ mod tests {
                 for query in queries.iter() {
                     let inserted_vector = db
                         .insert(&mut *store, &mut aby3_graph, query, &mut rng)
-                        .await;
+                        .await
+                        .unwrap();
                     inserted.push(inserted_vector)
                 }
                 tracing::debug!("FINISHED INSERTING");
@@ -390,9 +385,12 @@ mod tests {
                 for v in inserted.into_iter() {
                     let query = store.storage.get_vector(&v).await;
                     let query = prepare_query((*query).clone());
-                    let neighbors = db.search(&mut *store, &mut aby3_graph, &query, 1).await;
+                    let neighbors = db
+                        .search(&mut *store, &mut aby3_graph, &query, 1)
+                        .await
+                        .unwrap();
                     tracing::debug!("Finished checking query");
-                    matching_results.push(db.is_match(&mut *store, &[neighbors]).await)
+                    matching_results.push(db.is_match(&mut *store, &[neighbors]).await.unwrap())
                 }
                 matching_results
             });
@@ -412,7 +410,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_premade_hnsw() -> eyre::Result<()> {
+    async fn test_gr_premade_hnsw() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
         let network_t = NetworkType::LocalChannel;
@@ -439,11 +437,11 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
-                .await;
+                .await?;
             assert!(
                 hawk_searcher
                     .is_match(&mut cleartext_data.0, &[cleartext_neighbors])
-                    .await,
+                    .await?,
             );
 
             let mut jobs = JoinSet::new();
@@ -456,7 +454,10 @@ mod tests {
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let secret_neighbors = hawk_searcher.search(&mut *v_lock, &mut g, &q, 1).await;
+                    let secret_neighbors = hawk_searcher
+                        .search(&mut *v_lock, &mut g, &q, 1)
+                        .await
+                        .unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -474,8 +475,10 @@ mod tests {
                     let mut v_lock = v.lock().await;
                     let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
-                    let secret_neighbors =
-                        hawk_searcher.search(&mut *v_lock, &mut g, &query, 1).await;
+                    let secret_neighbors = hawk_searcher
+                        .search(&mut *v_lock, &mut g, &query, 1)
+                        .await
+                        .unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -484,8 +487,8 @@ mod tests {
             }
             let premade_results = jobs.join_all().await;
 
-            for (premade_res, scratch_res) in scratch_results.iter().zip(premade_results.iter()) {
-                assert!(*premade_res && *scratch_res);
+            for (premade_res, scratch_res) in izip!(scratch_results, premade_results) {
+                assert!(premade_res? && scratch_res?);
             }
         }
 
@@ -494,7 +497,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_aby3_store_plaintext() -> eyre::Result<()> {
+    async fn test_gr_aby3_store_plaintext() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_dim = 4;
         let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
@@ -523,11 +526,13 @@ mod tests {
                 // compute distances in plaintext
                 let dist1_plain = plaintext_store
                     .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
-                    .await;
+                    .await?;
                 let dist2_plain = plaintext_store
                     .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
-                    .await;
-                let bit = plaintext_store.less_than(&dist1_plain, &dist2_plain).await;
+                    .await?;
+                let bit = plaintext_store
+                    .less_than(&dist1_plain, &dist2_plain)
+                    .await?;
                 plain_results.insert((comb1.clone(), comb2.clone()), bit);
             }
         }
@@ -564,20 +569,20 @@ mod tests {
                             &player_inserts[index10],
                             &player_inserts[index11],
                         )
-                        .await;
+                        .await?;
                         let dist2_aby3 = eval_vector_distance(
                             &mut store,
                             &player_inserts[index20],
                             &player_inserts[index21],
                         )
-                        .await;
+                        .await?;
                         store.less_than(&dist1_aby3, &dist2_aby3).await
                     });
                 }
                 let res = jobs.join_all().await;
                 for bit in res {
                     assert_eq!(
-                        bit,
+                        bit?,
                         plain_results[&(comb1.clone(), comb2.clone())],
                         "Failed at combo: {:?}, {:?}",
                         comb1,
@@ -591,7 +596,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
-    async fn test_gr_aby3_store_plaintext_batch() {
+    async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
         let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
@@ -599,9 +604,7 @@ mod tests {
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
-        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel)
-            .await
-            .unwrap();
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_size)
@@ -615,20 +618,20 @@ mod tests {
         // compute distances in plaintext
         let dist1_plain = plaintext_store
             .eval_distance_batch(&[plaintext_inserts[0]], &plaintext_inserts)
-            .await;
+            .await?;
         let dist2_plain = plaintext_store
             .eval_distance_batch(&[plaintext_inserts[1]], &plaintext_inserts)
-            .await;
+            .await?;
         let dist_plain = dist1_plain
             .into_iter()
             .zip(dist2_plain.into_iter())
             .collect::<Vec<_>>();
-        let bits_plain = plaintext_store.less_than_batch(&dist_plain).await;
+        let bits_plain = plaintext_store.less_than_batch(&dist_plain).await?;
 
         let mut aby3_inserts = vec![];
         let mut queries = vec![];
         for store in local_stores.iter_mut() {
-            let player_index = get_owner_index(store).await.unwrap();
+            let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_size)
                 .map(|id| prepare_query(shared_irises[id][player_index].clone()))
                 .collect();
@@ -643,7 +646,7 @@ mod tests {
 
         let mut jobs = JoinSet::new();
         for store in local_stores.iter() {
-            let player_index = get_owner_index(store).await.unwrap();
+            let player_index = get_owner_index(store).await?;
             let player_inserts = aby3_inserts[player_index].clone();
             let player_preps = queries[player_index].clone();
             let store = store.clone();
@@ -651,10 +654,10 @@ mod tests {
                 let mut store_lock = store.lock().await;
                 let dist1_aby3 = store_lock
                     .eval_distance_batch(&[player_preps[0].clone()], &player_inserts)
-                    .await;
+                    .await?;
                 let dist2_aby3 = store_lock
                     .eval_distance_batch(&[player_preps[1].clone()], &player_inserts)
-                    .await;
+                    .await?;
                 let dist_aby3 = dist1_aby3
                     .into_iter()
                     .zip(dist2_aby3.into_iter())
@@ -662,11 +665,17 @@ mod tests {
                 store_lock.less_than_batch(&dist_aby3).await
             });
         }
-        let bits_aby3 = jobs.join_all().await;
+        let bits_aby3 = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
 
         assert_eq!(bits_aby3[0], bits_aby3[1]);
         assert_eq!(bits_aby3[0], bits_aby3[2]);
         assert_eq!(bits_aby3[0], bits_plain);
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -691,12 +700,18 @@ mod tests {
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
-                    let secret_neighbors = searcher.search(&mut *store, &mut graph, &q, 1).await;
-                    searcher.is_match(&mut *store, &[secret_neighbors]).await
+                    let secret_neighbors = searcher
+                        .search(&mut *store, &mut graph, &q, 1)
+                        .await
+                        .unwrap();
+                    searcher
+                        .is_match(&mut *store, &[secret_neighbors])
+                        .await
+                        .unwrap()
                 });
             }
             let res = jobs.join_all().await;
-            for (party_index, r) in res.iter().enumerate() {
+            for (party_index, r) in res.into_iter().enumerate() {
                 assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
             }
         }
