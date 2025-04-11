@@ -30,6 +30,9 @@ use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{info, warn};
 
+/// Default party ordinal identifer.
+const DEFAULT_PARTY_IDX: usize = 0;
+
 /// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
 /// Postgres databases. This binary iteratively builds up a graph in stages
 /// over multiple executions. On initial execution, a new GraphMem and
@@ -85,7 +88,7 @@ struct Args {
 
     /// The source file for plaintext iris codes, in NDJSON file format.
     #[clap(long = "source")]
-    iris_codes_file: PathBuf,
+    path_to_iris_codes: PathBuf,
 
     /// Location of temporary file storing PRNG intermediate state between runs
     /// of this binary.
@@ -94,7 +97,7 @@ struct Args {
 
     /// The number of left/right iris pairs to read from file and insert into
     /// the plaintext HNSW graphs.
-    #[clap(short = 'n')]
+    #[clap(long, short('n'))]
     num_irises: Option<usize>,
 
     // HNSW algorithm parameters
@@ -102,19 +105,19 @@ struct Args {
     ///
     /// Specifies the base size of graph neighborhoods for newly inserted
     /// nodes in the graph.
-    #[clap(short, default_value = "256")]
+    #[clap(short, long("hnsw-m"), default_value = "256")]
     M: usize,
 
     /// `ef` parameter for HNSW insertion.
     ///
     /// Specifies the size of active search neighborhood for insertion layers
     /// during the HNSW insertion process.
-    #[clap(long("ef"), default_value = "320")]
+    #[clap(long("hnsw-ef"), short, default_value = "320")]
     ef: usize,
 
     /// The probability that an inserted element is promoted to a higher layer
     /// of the HNSW graph hierarchy.
-    #[clap(short('p'))]
+    #[clap(long("hnsw-p"), short('p'))]
     layer_probability: Option<f64>,
 
     /// PRNG seed for HNSW insertion, used to select the layer at which new
@@ -187,15 +190,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let params = HnswParams::from(&args);
 
-    info!("Establishing connections with databases");
+    info!("Setting database connections");
     let dbs = init_dbs(&args).await;
 
-    let n_existing_irises = dbs[0].store.get_max_serial_id().await?;
+    info!("Setting count of previously indexed irises");
+    let n_existing_irises = dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await?;
     info!("Found {} existing database irises", n_existing_irises);
+    warn!("TODO: Escape if count of persisted irises is not equivalent across all parties");
 
+    info!("Setting hnsw pseudo-random number generators");
     let (mut hnsw_rng_l, mut hnsw_rng_r, mut aby3_rng) = Rngs::from(&args);
     let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
-
     if n_existing_irises > 0 {
         if let Ok((rng_l, rng_r)) = read_json(&prng_state_filename) {
             info!(
@@ -215,12 +220,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         info!("Initialized PRNGs from explicit seeds");
     }
 
-    info!("Initializing in-memory vector and graph stores");
-
+    info!("Initializing in-memory vectors from NDJSON file");
     let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
-
     if n_existing_irises > 0 {
-        let file = File::open(args.iris_codes_file.as_path()).unwrap();
+        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
         let reader = BufReader::new(file);
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
@@ -235,10 +238,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    info!("Initializing in-memory graphs from databases");
     let graphs = if n_existing_irises > 0 {
         // read graph store from party 0
-        let graph_l = dbs[0].load_graph_to_mem(StoreId::Left).await?;
-        let graph_r = dbs[0].load_graph_to_mem(StoreId::Right).await?;
+        let graph_l = dbs[DEFAULT_PARTY_IDX]
+            .load_graph_to_mem(StoreId::Left)
+            .await?;
+        let graph_r = dbs[DEFAULT_PARTY_IDX]
+            .load_graph_to_mem(StoreId::Right)
+            .await?;
         [graph_l, graph_r]
     } else {
         // new graphs
@@ -247,19 +255,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!(
         "Reading NDJSON file of plaintext iris codes: {:?}",
-        args.iris_codes_file
+        args.path_to_iris_codes
     );
 
     let (tx_l, rx_l) = mpsc::channel::<IrisCode>(256);
     let (tx_r, rx_r) = mpsc::channel::<IrisCode>(256);
-
     let processors = [tx_l, tx_r];
     let receivers = [rx_l, rx_r];
-
     let mut jobs = JoinSet::new();
 
+    info!("Initializing I/O thread upon which plaintext iris codes will be read");
     let io_thread = tokio::task::spawn_blocking(move || {
-        let file = File::open(args.iris_codes_file.as_path()).unwrap();
+        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
         let reader = BufReader::new(file);
 
         let stream = Deserializer::from_reader(reader)
@@ -280,6 +287,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         count
     });
 
+    info!("Initializing jobs to process plaintext iris codes");
     let hnsw_rngs = [hnsw_rng_l, hnsw_rng_r];
     for (side, mut rx, mut vector, mut graph, mut hnsw_rng) in izip!(
         STORE_IDS,
