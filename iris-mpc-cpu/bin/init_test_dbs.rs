@@ -339,37 +339,37 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map(|_| Vec::with_capacity(BATCH_SIZE))
         .collect();
 
-    for (idx, (left, right)) in izip!(&vector_l.points, &vector_r.points)
-        .enumerate()
+    for (batch_idx, vectors_batch) in izip!(&vector_l.points, &vector_r.points)
         .skip(n_existing_irises)
+        .chunks(BATCH_SIZE)
+        .into_iter()
+        .enumerate()
     {
-        let left_shares =
-            GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.data.0.clone());
-        let right_shares =
-            GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
+        for (left, right) in vectors_batch {
+            let left_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.data.0.clone());
+            let right_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
 
-        for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-            batch[party].push((shares_l, shares_r));
-        }
-
-        if (idx - n_existing_irises + 1) % BATCH_SIZE == 0 {
-            for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-                #[allow(clippy::drain_collect)]
-                let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
-                assert_eq!(end_serial_id, idx + 1);
+            for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
+                batch[party].push((shares_l, shares_r));
             }
-            info!(
-                "Persisted {} locally generated shares",
-                idx - n_existing_irises + 1
-            );
         }
+
+        let cur_batch_len = batch[0].len();
+        let last_idx = batch_idx * BATCH_SIZE + cur_batch_len + n_existing_irises;
+
+        for (db, shares) in izip!(&dbs, batch.iter_mut()) {
+            #[allow(clippy::drain_collect)]
+            let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
+            assert_eq!(end_serial_id, last_idx);
+        }
+        info!(
+            "Persisted {} locally generated shares",
+            last_idx - n_existing_irises
+        );
     }
 
-    for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-        #[allow(clippy::drain_collect)]
-        let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
-        assert_eq!(end_serial_id, vector_l.points.len());
-    }
     info!(
         "Finished persisting {} locally generated shares",
         n_read / 2
@@ -456,23 +456,20 @@ impl DbContext {
         let end_serial_id = start_serial_id + shares.len() - 1;
 
         for batch in &shares.iter().enumerate().chunks(1000) {
-            let iris_refs: Vec<_> = batch.map(|(idx, (iris_l, iris_r))| {
-                StoredIrisRef {
+            let iris_refs: Vec<_> = batch
+                .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
                     id: (start_serial_id + idx) as i64,
                     left_code: &iris_l.code.coefs,
                     left_mask: &iris_l.mask.coefs,
                     right_code: &iris_r.code.coefs,
                     right_mask: &iris_r.mask.coefs,
-                }
-            })
+                })
                 .collect();
 
             self.store.insert_irises(&mut tx, &iris_refs).await?;
             tx.commit().await?;
             tx = self.store.tx().await?;
         }
-
-        info!("start: {}, end: {}", start_serial_id, end_serial_id);
 
         Ok((start_serial_id, end_serial_id))
     }
