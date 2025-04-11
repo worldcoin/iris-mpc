@@ -32,6 +32,7 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, SeedableRng};
+use std::slice::Iter;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -329,22 +330,15 @@ impl HawkActor {
         })
     }
 
-    pub fn handle_bucket_results_from_search(
+    pub fn generate_buckets_from_insert_plans(
         &mut self,
-        intra_buckets: BothEyes<VecRequests<VecBuckets>>,
+        intra_buckets: BothEyes<VecBuckets>,
     ) -> Result<()> {
         self.update_buckets_statistics_cache(LEFT, intra_buckets[LEFT].clone());
         self.update_buckets_statistics_cache(RIGHT, intra_buckets[RIGHT].clone());
 
-        self.match_distance_counters[LEFT] += intra_buckets[LEFT]
-            .iter()
-            .map(|buckets| buckets.iter().sum::<u32>())
-            .sum::<u32>();
-
-        self.match_distance_counters[RIGHT] += intra_buckets[RIGHT]
-            .iter()
-            .map(|buckets| buckets.iter().sum::<u32>())
-            .sum::<u32>();
+        self.match_distance_counters[LEFT] += intra_buckets[LEFT].iter().sum::<u32>();
+        self.match_distance_counters[RIGHT] += intra_buckets[RIGHT].iter().sum::<u32>();
 
         if self.match_distance_counters[LEFT] > self.args.match_distances_buffer_size {
             self.anonymized_bucket_statistics[LEFT].fill_buckets(
@@ -365,15 +359,9 @@ impl HawkActor {
         Ok(())
     }
 
-    pub fn update_buckets_statistics_cache(
-        &mut self,
-        side: usize,
-        intra_buckets: VecRequests<VecBuckets>,
-    ) {
-        for intra_bucket in intra_buckets {
-            for (i, bucket) in intra_bucket.iter().enumerate() {
-                self.anonymized_bucket_statistics_cache[side][i] += bucket;
-            }
+    pub fn update_buckets_statistics_cache(&mut self, side: usize, intra_buckets: VecBuckets) {
+        for (i, bucket) in intra_buckets.iter().enumerate() {
+            self.anonymized_bucket_statistics_cache[side][i] += bucket;
         }
     }
 
@@ -381,45 +369,36 @@ impl HawkActor {
         &self,
         sessions: &BothEyes<Vec<HawkSessionRef>>,
         queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    ) -> Result<(
-        BothEyes<VecRequests<VecRots<InsertPlan>>>,
-        BothEyes<VecRequests<VecBuckets>>,
-    )> {
+    ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
         let (left, right) = futures::join!(
             self.search_rotations(&sessions[LEFT], &queries[LEFT]),
             self.search_rotations(&sessions[RIGHT], &queries[RIGHT]),
         );
-        let (left, right) = (left?, right?);
-        let (left_insert_plans, left_buckets) = left;
-        let (right_insert_plans, right_buckets) = right;
-        Ok((
-            [left_insert_plans, right_insert_plans],
-            [left_buckets, right_buckets],
-        ))
+        Ok([left?, right?])
     }
 
     async fn search_rotations(
         &self,
         sessions: &[HawkSessionRef],
         queries: &VecRequests<VecRots<QueryRef>>,
-    ) -> Result<(VecRequests<VecRots<InsertPlan>>, VecRequests<VecBuckets>)> {
+    ) -> Result<VecRequests<VecRots<InsertPlan>>> {
         // Flatten the rotations from all requests.
         let flat_queries = VecRots::flatten(queries);
         // Do it all in parallel.
         let flat_results = self.search_parallel(sessions, flat_queries).await?;
-        let (insert_plans, bucket_vectors): (Vec<InsertPlan>, Vec<VecBuckets>) =
-            flat_results.into_iter().unzip();
+        // let (insert_plans, bucket_vectors): (Vec<InsertPlan>, Vec<VecBuckets>) =
+        //     flat_results.into_iter().unzip();
 
         // Nest the results per request again.
-        let insert_plans = VecRots::unflatten(insert_plans);
-        Ok((insert_plans, bucket_vectors))
+        let insert_plans = VecRots::unflatten(flat_results);
+        Ok(insert_plans)
     }
 
     async fn search_parallel(
         &self,
         sessions: &[HawkSessionRef],
         queries: Vec<QueryRef>,
-    ) -> Result<Vec<(InsertPlan, VecBuckets)>> {
+    ) -> Result<Vec<InsertPlan>> {
         let mut plans = vec![];
 
         // Distribute the requests over the given sessions in parallel.
@@ -428,7 +407,6 @@ impl HawkActor {
                 .map(|(query, session)| {
                     let search_params = Arc::clone(&self.search_params);
                     let session = Arc::clone(session);
-                    let hawk_args = Arc::clone(&self.args);
                     let query = query.clone();
 
                     tokio::spawn(async move {
@@ -436,7 +414,6 @@ impl HawkActor {
                         let graph_store = Arc::clone(&session.graph_store);
                         let graph_store = graph_store.read().await;
                         Self::search_to_insert_one(
-                            hawk_args.n_buckets,
                             &search_params,
                             &graph_store,
                             &mut session,
@@ -452,17 +429,15 @@ impl HawkActor {
                 plans.push(t.await??);
             }
         }
-
         Ok(plans)
     }
 
     async fn search_to_insert_one(
-        n_buckets: usize,
         search_params: &HnswSearcher,
         graph_store: &GraphMem<Aby3Store>,
         session: &mut HawkSession,
         query: QueryRef,
-    ) -> Result<(InsertPlan, VecBuckets)> {
+    ) -> Result<InsertPlan> {
         let insertion_layer = search_params.select_layer(&mut session.shared_rng)?;
 
         let (links, set_ep) = search_params
@@ -474,21 +449,16 @@ impl HawkActor {
             )
             .await?;
 
-        let buckets = Self::calculate_buckets(n_buckets, session, links.clone()).await?;
-
         let match_count = search_params
             .match_count(&mut session.aby3_store, &links)
             .await?;
 
-        Ok((
-            InsertPlan {
-                query,
-                links,
-                match_count,
-                set_ep,
-            },
-            buckets,
-        ))
+        Ok(InsertPlan {
+            query,
+            links,
+            match_count,
+            set_ep,
+        })
     }
 
     pub async fn insert(
@@ -539,15 +509,24 @@ impl HawkActor {
             .collect::<Vec<_>>()
     }
 
-    async fn calculate_buckets(
-        n_buckets: usize,
+    pub async fn calculate_buckets(
+        &self,
         session: &mut HawkSession,
-        links: Vec<SortedNeighborhoodV<Aby3Store>>,
+        search_results: Iter<'_, VecRots<InsertPlan>>,
     ) -> Result<VecBuckets> {
-        let translated_thresholds = Self::calculate_threshold_a(n_buckets).await;
+        let mut neighbors: Vec<&SortedNeighborhoodV<Aby3Store>> = vec![];
+        for result in search_results {
+            let n = result
+                .iter()
+                .flat_map(|plan| plan.links.iter())
+                .collect_vec();
+            neighbors.extend(n);
+        }
+
+        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets).await;
         let mut buckets = vec![];
-        for neighbors in links.iter() {
-            let distances = neighbors.distances_cloned();
+        for neighbor in neighbors.iter() {
+            let distances = neighbor.distances_cloned();
             let bucket_result_shares = compare_threshold_buckets(
                 &mut session.aby3_store.session,
                 translated_thresholds.as_slice(),
@@ -567,7 +546,7 @@ impl HawkActor {
                 acc
             })
             // Default to a zero vector if `buckets` is empty
-            .unwrap_or_else(|| vec![0; n_buckets]);
+            .unwrap_or_else(|| vec![0; self.args.n_buckets]);
         Ok(aggregated_buckets)
     }
 
@@ -943,14 +922,28 @@ impl HawkHandle {
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
 
-                let search_results_with_buckets = hawk_actor
+                let search_results = hawk_actor
                     .search_both_eyes(&sessions, search_queries)
                     .await?;
 
-                let (search_results, intra_buckets) = search_results_with_buckets;
+                let left_search_results = search_results[LEFT].iter().clone();
+                let right_search_results = search_results[RIGHT].iter().clone();
+
+                let hawk_session_left = sessions[LEFT][0].clone();
+                let hawk_session_right = sessions[RIGHT][0].clone();
+
+                let mut left_session = hawk_session_left.write().await;
+                let mut right_session = hawk_session_right.write().await;
+
+                let left_buckets = hawk_actor
+                    .calculate_buckets(&mut left_session, left_search_results)
+                    .await?;
+                let right_buckets = hawk_actor
+                    .calculate_buckets(&mut right_session, right_search_results)
+                    .await?;
 
                 hawk_actor
-                    .handle_bucket_results_from_search(intra_buckets.clone())
+                    .generate_buckets_from_insert_plans([left_buckets, right_buckets])
                     .unwrap();
 
                 let match_result = {
