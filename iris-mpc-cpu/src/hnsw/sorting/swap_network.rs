@@ -47,7 +47,7 @@ impl SwapNetwork {
         Ok(self)
     }
 
-    /// Uniformly shift indices of an input swap network. Panics if integer
+    /// Uniformly shift indices of an input swap network. Returns an error if integer
     /// overflow occurs during a shift operation.
     pub fn shift(&mut self, shift_amount: isize) -> Result<&mut Self> {
         self.map_indices(|x| {
