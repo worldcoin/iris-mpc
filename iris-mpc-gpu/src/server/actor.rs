@@ -1226,7 +1226,7 @@ impl ServerActor {
                         (Orientation::Normal, Some(mirror_results)) => {
                             basic_condition && !mirror_results.matches_with_skip_persistence[idx]
                         }
-                        _ => basic_condition, // In mirror mode or without previous results, just use basic condition (should not happen)
+                        _ => basic_condition, // In mirror mode or without previous results
                     }
                 })
                 .map(|(idx, _num)| idx)

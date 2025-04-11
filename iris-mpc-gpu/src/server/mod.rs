@@ -149,6 +149,10 @@ impl PreprocessedBatchQuery {
         orientation: Orientation,
     ) -> &BatchQueryEntriesPreprocessed {
         if orientation == Orientation::Mirror {
+            // To handle the full-face mirror attack, we want to use:
+            // left_mirrored VS right_db
+            // right_mirrored VS left_db
+            // Hence we need to swap the left and right iris interpolated requests
             match eye {
                 Eye::Left => &self.right_mirrored_iris_interpolated_requests_preprocessed,
                 Eye::Right => &self.left_mirrored_iris_interpolated_requests_preprocessed,
