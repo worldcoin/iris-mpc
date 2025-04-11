@@ -22,7 +22,7 @@ use iris_mpc_cpu::{
     },
 };
 use iris_mpc_store::{Store, StoredIrisRef};
-use itertools::izip;
+use itertools::{izip, Itertools};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
@@ -339,7 +339,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .map(|_| Vec::with_capacity(BATCH_SIZE))
         .collect();
 
-    for (idx, (left, right)) in izip!(vector_l.points, vector_r.points)
+    for (idx, (left, right)) in izip!(&vector_l.points, &vector_r.points)
         .enumerate()
         .skip(n_existing_irises)
     {
@@ -355,7 +355,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         if (idx - n_existing_irises + 1) % BATCH_SIZE == 0 {
             for (db, shares) in izip!(&dbs, batch.iter_mut()) {
                 #[allow(clippy::drain_collect)]
-                db.persist_vector_shares(shares.drain(..).collect()).await?;
+                let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
+                assert_eq!(end_serial_id, idx + 1);
             }
             info!(
                 "Persisted {} locally generated shares",
@@ -366,7 +367,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for (db, shares) in izip!(&dbs, batch.iter_mut()) {
         #[allow(clippy::drain_collect)]
-        db.persist_vector_shares(shares.drain(..).collect()).await?;
+        let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
+        assert_eq!(end_serial_id, vector_l.points.len());
     }
     info!(
         "Finished persisting {} locally generated shares",
@@ -441,46 +443,38 @@ impl DbContext {
 
     /// Extends iris shares table by inserting irises following the current
     /// maximum serial id.
+    ///
+    /// Returns tuple `(start, end)` giving the first and last serial ids
+    /// assigned to the inserted shares.
     async fn persist_vector_shares(
         &self,
         shares: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(usize, usize), Box<dyn Error>> {
         let mut tx = self.store.tx().await?;
 
-        let last_serial_id = self.store.get_max_serial_id().await.unwrap_or(0);
+        let start_serial_id = self.store.get_max_serial_id().await.unwrap_or(0) + 1;
+        let end_serial_id = start_serial_id + shares.len() - 1;
 
-        for (idx, (iris_l, iris_r)) in shares.into_iter().enumerate() {
-            let GaloisRingSharedIris {
-                code: code_l,
-                mask: mask_l,
-            } = iris_l;
-            let GaloisRingSharedIris {
-                code: code_r,
-                mask: mask_r,
-            } = iris_r;
+        for batch in &shares.iter().enumerate().chunks(1000) {
+            let iris_refs: Vec<_> = batch.map(|(idx, (iris_l, iris_r))| {
+                StoredIrisRef {
+                    id: (start_serial_id + idx) as i64,
+                    left_code: &iris_l.code.coefs,
+                    left_mask: &iris_l.mask.coefs,
+                    right_code: &iris_r.code.coefs,
+                    right_mask: &iris_r.mask.coefs,
+                }
+            })
+                .collect();
 
-            // Insert shares and masks in the db.
-            self.store
-                .insert_irises(
-                    &mut tx,
-                    &[StoredIrisRef {
-                        id: (last_serial_id + idx + 1) as i64,
-                        left_code: &code_l.coefs,
-                        left_mask: &mask_l.coefs,
-                        right_code: &code_r.coefs,
-                        right_mask: &mask_r.coefs,
-                    }],
-                )
-                .await?;
-
-            if (idx % 1000) == 999 {
-                tx.commit().await?;
-                tx = self.store.tx().await?;
-            }
+            self.store.insert_irises(&mut tx, &iris_refs).await?;
+            tx.commit().await?;
+            tx = self.store.tx().await?;
         }
-        tx.commit().await?;
 
-        Ok(())
+        info!("start: {}, end: {}", start_serial_id, end_serial_id);
+
+        Ok((start_serial_id, end_serial_id))
     }
 
     async fn load_graph_to_mem(
