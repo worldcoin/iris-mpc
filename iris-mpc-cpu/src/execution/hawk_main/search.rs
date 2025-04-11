@@ -55,7 +55,7 @@ async fn per_session(
 
     for task in batch.tasks {
         let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
-        let result = per_query(session, query, search_params, &graph_store).await;
+        let result = per_query(session, query, search_params, &graph_store).await?;
         tx.send((task.id(), result))?;
     }
 
@@ -67,8 +67,8 @@ async fn per_query(
     query: QueryRef,
     search_params: &HnswSearcher,
     graph_store: &GraphMem<Aby3Store>,
-) -> InsertPlan {
-    let insertion_layer = search_params.select_layer(&mut session.shared_rng);
+) -> Result<InsertPlan> {
+    let insertion_layer = search_params.select_layer(&mut session.shared_rng)?;
 
     let (links, set_ep) = search_params
         .search_to_insert(
@@ -77,16 +77,16 @@ async fn per_query(
             &query,
             insertion_layer,
         )
-        .await;
+        .await?;
 
     let match_count = search_params
         .match_count(&mut session.aby3_store, &links)
-        .await;
+        .await?;
 
-    InsertPlan {
+    Ok(InsertPlan {
         query,
         links,
         match_count,
         set_ep,
-    }
+    })
 }

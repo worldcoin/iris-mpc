@@ -20,7 +20,7 @@ use crate::{
         IntRing2k,
     },
 };
-use eyre::eyre;
+use eyre::{eyre, Result};
 use itertools::{izip, Itertools};
 use tracing::instrument;
 
@@ -34,10 +34,7 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
 #[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_role), skip_all)]
-pub async fn setup_replicated_prf(
-    session: &mut NetworkSession,
-    my_seed: PrfSeed,
-) -> eyre::Result<Prf> {
+pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
     // send my_seed to the next party
     session
         .send_next(NetworkValue::PrfKey(my_seed).to_network())
@@ -64,7 +61,7 @@ pub async fn setup_replicated_prf(
 pub async fn compare_threshold(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
-) -> eyre::Result<Vec<Share<Bit>>> {
+) -> Result<Vec<Share<Bit>>> {
     let diffs: Vec<Share<u32>> = distances
         .iter()
         .map(|d| {
@@ -91,7 +88,7 @@ pub async fn compare_threshold_buckets(
     session: &mut Session,
     threshold_a_terms: &[u32],
     distances: &[DistanceShare<u32>],
-) -> eyre::Result<Vec<Share<u32>>> {
+) -> Result<Vec<Share<u32>>> {
     let diffs = threshold_a_terms
         .iter()
         .flat_map(|a| {
@@ -127,10 +124,12 @@ pub async fn lift_and_compare_threshold(
     session: &mut Session,
     code_dist: Share<u16>,
     mask_dist: Share<u16>,
-) -> eyre::Result<Share<Bit>> {
+) -> Result<Share<Bit>> {
     let y = mul_lift_2k::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
-    let mut x = x.pop().expect("Expected a single element in the VecShare");
+    let mut x = x
+        .pop()
+        .ok_or(eyre!("Expected a single element in the VecShare"))?;
     x *= A as u32;
     x -= y;
 
@@ -142,7 +141,7 @@ pub async fn lift_and_compare_threshold(
 pub async fn batch_signed_lift(
     session: &mut Session,
     mut pre_lift: VecShare<u16>,
-) -> eyre::Result<VecShare<u32>> {
+) -> Result<VecShare<u32>> {
     // Compute (v + 2^{15}) % 2^{16}, to make values positive.
     for v in pre_lift.iter_mut() {
         v.add_assign_const_role(1_u16 << 15, session.own_role());
@@ -162,7 +161,7 @@ pub async fn batch_signed_lift(
 pub async fn batch_signed_lift_vec(
     session: &mut Session,
     pre_lift: Vec<Share<u16>>,
-) -> eyre::Result<Vec<Share<u32>>> {
+) -> Result<Vec<Share<u32>>> {
     let pre_lift = VecShare::new_vec(pre_lift);
     Ok(batch_signed_lift(session, pre_lift).await?.inner())
 }
@@ -175,7 +174,7 @@ pub async fn batch_signed_lift_vec(
 pub(crate) async fn cross_mul(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> eyre::Result<Vec<Share<u32>>> {
+) -> Result<Vec<Share<u32>>> {
     let res_a: Vec<RingElement<u32>> = distances
         .iter()
         .map(|(d1, d2)| {
@@ -215,7 +214,7 @@ pub(crate) async fn cross_mul(
 pub async fn cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
-) -> eyre::Result<Vec<bool>> {
+) -> Result<Vec<bool>> {
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
@@ -231,7 +230,7 @@ pub async fn cross_compare(
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
     pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
-) -> eyre::Result<Vec<RingElement<u16>>> {
+) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (x, y) = pair;
@@ -243,7 +242,7 @@ pub async fn galois_ring_pairwise_distance(
         // the elements that a full GaloisRingMask has.
         additive_shares.push(RingElement(2) * RingElement(mask_dist));
     }
-    Ok(additive_shares)
+    additive_shares
 }
 
 /// Converts additive sharing (from trick_dot output) to a replicated sharing by
@@ -251,7 +250,7 @@ pub async fn galois_ring_pairwise_distance(
 pub async fn galois_ring_to_rep3(
     session: &mut Session,
     items: Vec<RingElement<u16>>,
-) -> eyre::Result<Vec<Share<u16>>> {
+) -> Result<Vec<Share<u16>>> {
     let network = &mut session.network_session;
 
     // make sure we mask the input with a zero sharing
@@ -286,7 +285,7 @@ pub async fn galois_ring_to_rep3(
 pub async fn compare_threshold_and_open(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
-) -> eyre::Result<Vec<bool>> {
+) -> Result<Vec<bool>> {
     let bits = compare_threshold(session, distances).await?;
     open_bin(session, &bits)
         .await
@@ -297,7 +296,7 @@ pub async fn compare_threshold_and_open(
 pub async fn open_ring<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     shares: &[Share<T>],
-) -> eyre::Result<Vec<T>> {
+) -> Result<Vec<T>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
         T::new_network_element(shares[0].b)
@@ -317,7 +316,7 @@ pub async fn open_ring<T: IntRing2k + NetworkInt>(
     // ADD shares with the received shares
     izip!(shares.iter(), c.iter())
         .map(|(s, c)| Ok((s.a + s.b + c).convert()))
-        .collect::<eyre::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>()
 }
 
 #[cfg(test)]
@@ -341,7 +340,7 @@ mod tests {
     use tracing::trace;
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_single(session: &mut Session, x: Share<u32>) -> eyre::Result<RingElement<u32>> {
+    async fn open_single(session: &mut Session, x: Share<u32>) -> Result<RingElement<u32>> {
         let network = &mut session.network_session;
         network.send_next(RingElement32(x.b).to_network()).await?;
         let serialized_reply = network.receive_prev().await;
@@ -354,7 +353,7 @@ mod tests {
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> eyre::Result<Vec<T>>
+    async fn open_t_many<T>(session: &mut Session, shares: Vec<Share<T>>) -> Result<Vec<T>>
     where
         T: IntRing2k + NetworkInt,
     {
@@ -650,10 +649,7 @@ mod tests {
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    async fn open_additive(
-        session: &mut Session,
-        x: Vec<RingElement<u16>>,
-    ) -> eyre::Result<Vec<u16>> {
+    async fn open_additive(session: &mut Session, x: Vec<RingElement<u16>>) -> Result<Vec<u16>> {
         let prev_role = session.prev_identity()?;
         let network = &mut session.network_session;
 
@@ -712,9 +708,7 @@ mod tests {
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
                 let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
-                let x = galois_ring_pairwise_distance(&mut player_session, &own_shares)
-                    .await
-                    .unwrap();
+                let x = galois_ring_pairwise_distance(&mut player_session, &own_shares).await;
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();

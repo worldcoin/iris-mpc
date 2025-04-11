@@ -1,7 +1,7 @@
 use crate::{execution::player::Identity, network::Networking};
 use async_trait::async_trait;
 use dashmap::DashMap;
-use eyre::eyre;
+use eyre::{eyre, Result};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ pub struct LocalNetworking {
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(&self, val: Vec<u8>, receiver: &Identity) -> eyre::Result<(), eyre::Error> {
+    async fn send(&self, val: Vec<u8>, receiver: &Identity) -> Result<()> {
         let (tx, _) = self
             .p2p_channels
             .get(&(self.owner.clone(), receiver.clone()))
@@ -73,7 +73,7 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> eyre::Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))

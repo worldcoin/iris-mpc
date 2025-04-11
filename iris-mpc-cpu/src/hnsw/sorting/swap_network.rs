@@ -1,4 +1,5 @@
 use crate::hnsw::VectorStore;
+use eyre::{eyre, Result};
 use itertools::Itertools;
 
 /// Type of a single layer in a non-adaptive comparator network represented by
@@ -33,23 +34,26 @@ impl SwapNetwork {
     }
 
     /// Apply a map to the indices of the swap network.
-    pub fn map_indices<F>(&mut self, map: F) -> &mut Self
+    pub fn map_indices<F>(&mut self, map: F) -> Result<&mut Self>
     where
-        F: Fn(usize) -> usize,
+        F: Fn(usize) -> Result<usize>,
     {
-        self.layers.iter_mut().for_each(|layer| {
-            layer.iter_mut().for_each(|wire| {
-                let (idx1, idx2) = wire;
-                *wire = (map(*idx1), map(*idx2))
-            })
-        });
-        self
+        for layer in self.layers.iter_mut() {
+            for wire in layer.iter_mut() {
+                let (idx1, idx2) = *wire;
+                *wire = (map(idx1)?, map(idx2)?);
+            }
+        }
+        Ok(self)
     }
 
-    /// Uniformly shift indices of an input swap network. Panics if integer
+    /// Uniformly shift indices of an input swap network. Returns an error if integer
     /// overflow occurs during a shift operation.
-    pub fn shift(&mut self, shift_amount: isize) -> &mut Self {
-        self.map_indices(|x| x.checked_add_signed(shift_amount).unwrap())
+    pub fn shift(&mut self, shift_amount: isize) -> Result<&mut Self> {
+        self.map_indices(|x| {
+            x.checked_add_signed(shift_amount)
+                .ok_or(eyre!("Integer overflow due to shifting"))
+        })
     }
 
     /// Apply a filter to wires of the swap network, removing any layers
@@ -116,7 +120,7 @@ pub async fn apply_swap_network<V: VectorStore>(
     store: &mut V,
     list: &mut [(V::VectorRef, V::DistanceRef)],
     network: &SwapNetwork,
-) {
+) -> Result<()> {
     for layer in network.layers.iter() {
         let distances: Vec<_> = layer
             .iter()
@@ -128,11 +132,13 @@ pub async fn apply_swap_network<V: VectorStore>(
                 },
             )
             .collect();
-        let comp_results = store.less_than_batch(&distances).await;
+        let comp_results = store.less_than_batch(&distances).await?;
         for ((idx1, idx2), is_gt) in layer.iter().zip(comp_results) {
             if is_gt {
                 list.swap(*idx1, *idx2)
             }
         }
     }
+
+    Ok(())
 }

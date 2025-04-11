@@ -393,6 +393,7 @@ impl Rem for Bit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eyre::Result;
     use rand::Rng;
 
     #[test]
@@ -476,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn test_conversion() -> eyre::Result<()> {
+    fn test_conversion() -> Result<()> {
         let expected = vec![Bit::new(false), Bit::new(true)];
 
         let a: Vec<Bit> = [0_u8, 1_u8]

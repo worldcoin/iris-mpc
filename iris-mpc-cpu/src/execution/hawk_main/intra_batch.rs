@@ -77,9 +77,9 @@ async fn per_session(
     let distances = session
         .aby3_store
         .eval_pairwise_distances(query_pairs)
-        .await;
-    let distances = session.aby3_store.lift_distances(distances).await.unwrap();
-    let is_matches = session.aby3_store.is_match_batch(&distances).await;
+        .await?;
+    let distances = session.aby3_store.lift_distances(distances).await?;
+    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
 
     for (pair, is_match) in izip!(pairs, is_matches) {
         if is_match {
