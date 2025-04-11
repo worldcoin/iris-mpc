@@ -210,16 +210,16 @@ impl IrisCode {
 
     pub fn mirrored(&self) -> IrisCode {
         let mut mirrored = IrisCode::default();
-
-        // Process each bit position
         for i in 0..IrisCode::IRIS_CODE_SIZE {
-            let mirrored_new_i = GaloisRingIrisCodeShare::remap_new_to_mirrored_index(i);
-            mirrored.mask.set_bit(mirrored_new_i, self.mask.get_bit(i));
-            let w = (i % 4) / 2; // channel
+            let new_i = GaloisRingIrisCodeShare::remap_old_to_new_index(i);
+            let mirrored_new_i = GaloisRingIrisCodeShare::remap_new_to_mirrored_index(new_i);
+            let mirrored_i = GaloisRingIrisCodeShare::remap_new_to_old_index(mirrored_new_i);
+            mirrored.mask.set_bit(mirrored_i, self.mask.get_bit(i));
+            let b = i % 2;
             let code_bit = self.code.get_bit(i);
             mirrored
                 .code
-                .set_bit(mirrored_new_i, if w == 1 { !code_bit } else { code_bit });
+                .set_bit(mirrored_i, if b == 0 { code_bit } else { !code_bit });
         }
         mirrored
     }
@@ -313,25 +313,13 @@ mod tests {
             mask: flipped_mask,
         };
 
-        // Mirror the flipped iris
-        let mirrored_iris = flipped_iris.mirrored();
-
         // Check that the mirrored flipped iris matches the original
+        let mirrored_iris = flipped_iris.mirrored();
         let combined_mask = original_iris.mask & mirrored_iris.mask;
         let code_distance =
             ((original_iris.code ^ mirrored_iris.code) & combined_mask).count_ones();
         let distance = code_distance as f64 / combined_mask.count_ones() as f64;
-
-        // The mirrored code should have 0.5 distance
-        assert_float_eq!(distance, 0.5, abs <= 1e-6);
-
-        // Also check that the original and flipped code should be the same
-        let combined_mask_orig = original_iris.mask & flipped_iris.mask;
-        let code_distance_orig =
-            ((original_iris.code ^ flipped_iris.code) & combined_mask_orig).count_ones();
-        let distance_orig = code_distance_orig as f64 / combined_mask_orig.count_ones() as f64;
-
-        assert_float_eq!(distance_orig, 0.0, abs <= 0.1);
+        assert_float_eq!(distance, 0.0, abs <= 1e-6);
     }
     pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
         let lines = s.lines();
