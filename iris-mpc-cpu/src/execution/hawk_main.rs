@@ -91,7 +91,7 @@ pub struct HawkArgs {
 /// HawkActor manages the state of the HNSW database and connections to other
 /// MPC nodes.
 pub struct HawkActor {
-    args: Arc<HawkArgs>,
+    args: HawkArgs,
 
     // ---- Shared setup ----
     search_params: Arc<HnswSearcher>,
@@ -156,7 +156,7 @@ pub type InsertPlan = InsertPlanV<Aby3Store>;
 /// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     query: V::QueryRef,
     links: Vec<SortedNeighborhoodV<V>>,
@@ -264,7 +264,7 @@ impl HawkActor {
         );
 
         Ok(HawkActor {
-            args: Arc::new(args.clone()),
+            args: args.clone(),
             search_params,
             db_size: 0,
             iris_store,
@@ -350,12 +350,9 @@ impl HawkActor {
         let flat_queries = VecRots::flatten(queries);
         // Do it all in parallel.
         let flat_results = self.search_parallel(sessions, flat_queries).await?;
-        // let (insert_plans, bucket_vectors): (Vec<InsertPlan>, Vec<VecBuckets>) =
-        //     flat_results.into_iter().unzip();
 
         // Nest the results per request again.
-        let insert_plans = VecRots::unflatten(flat_results);
-        Ok(insert_plans)
+        Ok(VecRots::unflatten(flat_results))
     }
 
     async fn search_parallel(
