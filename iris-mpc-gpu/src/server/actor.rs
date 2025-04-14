@@ -1426,6 +1426,7 @@ impl ServerActor {
         }
 
         // Instead of sending to return_channel, we'll return this at the end
+
         let result = ServerJobResult {
             merged_results,
             request_ids: batch.request_ids,
@@ -1454,6 +1455,21 @@ impl ServerActor {
             actor_data: (),
             full_face_mirror_attack_detected,
         };
+        tracing::info!(
+            "Result for orientation {:?}: {:#?}",
+            orientation,
+            result.merged_results
+        );
+        tracing::info!(
+            "Matches for orientation {:?}: {:#?}",
+            orientation,
+            result.matches
+        );
+        tracing::info!(
+            "Matches for mirror attack detected for orientation {:?}: {:#?}",
+            orientation,
+            result.full_face_mirror_attack_detected
+        );
 
         self.anonymized_bucket_statistics_left.buckets.clear();
         self.anonymized_bucket_statistics_right.buckets.clear();
