@@ -32,7 +32,7 @@ use uuid::Uuid;
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 375 / 1000; // 0.375 * 12800
 
 const LEFT: usize = 0;
-const RIGHT: usize = 0;
+const RIGHT: usize = 1;
 
 #[derive(Clone)]
 pub struct E2ETemplate {
