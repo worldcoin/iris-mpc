@@ -359,7 +359,7 @@ pub struct TestCaseGenerator {
     // info for current batch, will be cleared at the start of a new batch
     /// New templates that have been inserted in the current batch.
     /// (position in batch, request_id, template)
-    new_templates_in_batch: Vec<(usize, String, IrisCode)>,
+    new_templates_in_batch: Vec<(usize, String, E2ETemplate)>,
     /// skip invalidating requests in the current batch, since we expect
     /// them to be processed
     skip_invalidate: bool,
@@ -612,8 +612,8 @@ impl TestCaseGenerator {
         (
             db_index,
             [
-                self.initial_db_state.plain_dbs[0].db[db_index].clone(),
-                self.initial_db_state.plain_dbs[1].db[db_index].clone(),
+                self.initial_db_state.plain_dbs[LEFT].db[db_index].clone(),
+                self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone(),
             ],
         )
     }
@@ -676,10 +676,7 @@ impl TestCaseGenerator {
             self.batch_duplicates
                 .insert(request_id.to_string(), duplicate_request_id);
             self.skip_invalidate = true;
-            E2ETemplate {
-                left: template.clone(),
-                right: template.clone(),
-            }
+            template.clone()
         } else {
             // otherwise we pick from the valid test case options
             let option = options
@@ -692,16 +689,17 @@ impl TestCaseGenerator {
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
                     let template = IrisCode::random_rng(&mut self.rng);
+                    self.skip_invalidate = true;
+                    let template = E2ETemplate {
+                        left: template.clone(),
+                        right: template,
+                    };
                     self.new_templates_in_batch.push((
                         internal_batch_idx,
                         request_id.to_string(),
                         template.clone(),
                     ));
-                    self.skip_invalidate = true;
-                    E2ETemplate {
-                        left: template.clone(),
-                        right: template.clone(),
-                    }
+                    template
                 }
                 TestCase::NonMatchSkipPersistence => {
                     tracing::info!("Sending new iris code with skip persistence");
@@ -1174,18 +1172,33 @@ impl TestCaseGenerator {
 
         // if the request is a reauth, we only check the reauth success
         if let Some(is_reauth_successful) = is_reauth_successful {
-            assert_eq!(is_reauth_successful, was_reauth_success);
+            assert_eq!(
+                is_reauth_successful, was_reauth_success,
+                "expected reauth success status to be as expected"
+            );
             return;
         }
 
         if let Some(expected_idx) = expected_idx {
-            assert!(was_match);
+            assert!(
+                was_match,
+                "expected this request to be a match, but it was not"
+            );
             assert!(was_skip_persistence_match);
             if !is_batch_match {
-                assert_eq!(expected_idx, idx);
+                assert_eq!(
+                    expected_idx, idx,
+                    "expected matched index to be as expected"
+                );
             } else {
-                assert!(self.batch_duplicates.contains_key(req_id));
-                assert!(matched_batch_req_ids.contains(self.batch_duplicates.get(req_id).unwrap()));
+                assert!(
+                    self.batch_duplicates.contains_key(req_id),
+                    "expected this request to be a batch duplicate"
+                );
+                assert!(
+                    matched_batch_req_ids.contains(self.batch_duplicates.get(req_id).unwrap()),
+                    "expected the batch match index to be in the batch duplicates"
+                );
             }
         } else {
             assert!(!was_skip_persistence_match);
@@ -1494,6 +1507,7 @@ impl TestDb {
     pub fn plain_dbs(&self, side: usize) -> &IrisDB {
         &self.plain_dbs[side]
     }
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         // sanity check to ensure that the databases are of the same size
         assert!(self.plain_dbs[0].len() == self.plain_dbs[1].len());

@@ -120,9 +120,9 @@ async fn e2e_test() -> Result<()> {
         ..args0.clone()
     };
     let (handle0, handle1, handle2) = tokio::join!(
-        start_hawk_node(&args0, &db_left, &db_right),
-        start_hawk_node(&args1, &db_left, &db_right),
-        start_hawk_node(&args2, &db_left, &db_right),
+        start_hawk_node(&args0, db_left, db_right),
+        start_hawk_node(&args1, db_left, db_right),
+        start_hawk_node(&args2, db_left, db_right),
     );
     let mut handle0 = handle0?;
     let mut handle1 = handle1?;
