@@ -1388,11 +1388,11 @@ fn prepare_batch(
     batch
         .right_iris_rotated_requests
         .code
-        .extend(e2e_shared_template.left_shared_code[batch_idx].all_rotations());
+        .extend(e2e_shared_template.right_shared_code[batch_idx].all_rotations());
     batch
         .right_iris_rotated_requests
         .mask
-        .extend(e2e_shared_template.left_shared_mask[batch_idx].all_rotations());
+        .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
 
     GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
         &mut e2e_shared_template.left_shared_code[batch_idx],
