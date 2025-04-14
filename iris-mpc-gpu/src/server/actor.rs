@@ -1171,7 +1171,7 @@ impl ServerActor {
                     .map(|i| {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
                         merged_results[i] == NON_MATCH_ID
-                            && mirror_results.merged_results[i] != NON_MATCH_ID
+                            && mirror_results.matches_with_skip_persistence[i]
                     })
                     .collect();
 
@@ -1181,7 +1181,7 @@ impl ServerActor {
                 let both_matched_count = (0..request_count)
                     .filter(|&i| {
                         merged_results[i] != NON_MATCH_ID
-                            && mirror_results.merged_results[i] != NON_MATCH_ID
+                            && mirror_results.matches_with_skip_persistence[i]
                     })
                     .count();
 
