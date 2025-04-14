@@ -5,7 +5,7 @@ mod e2e_test {
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
         job::Eye,
-        test::{load_test_db, TestCaseGenerator},
+        test::{generate_full_test_db, load_test_db, TestCaseGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use rand::random;
@@ -90,6 +90,11 @@ mod e2e_test {
             internal_seed
         );
 
+        let test_db = generate_full_test_db(DB_SIZE, db_seed);
+        let party_db0 = test_db.party_db(0);
+        let party_db1 = test_db.party_db(1);
+        let party_db2 = test_db.party_db(2);
+
         let actor0_task = tokio::task::spawn_blocking(move || {
             let comms0 = device_manager0
                 .instantiate_network_from_ids(0, &ids0)
@@ -111,7 +116,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(0, DB_SIZE, db_seed, &mut actor).unwrap();
+                    load_test_db(&party_db0, &mut actor);
                     actor.preprocess_db();
                     tx0.send(Ok(handle)).unwrap();
                     actor
@@ -144,7 +149,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(1, DB_SIZE, db_seed, &mut actor).unwrap();
+                    load_test_db(&party_db1, &mut actor);
                     actor.preprocess_db();
                     tx1.send(Ok(handle)).unwrap();
                     actor
@@ -177,7 +182,7 @@ mod e2e_test {
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(2, DB_SIZE, db_seed, &mut actor).unwrap();
+                    load_test_db(&party_db2, &mut actor);
                     actor.preprocess_db();
                     tx2.send(Ok(handle)).unwrap();
                     actor
@@ -193,8 +198,7 @@ mod e2e_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        let mut test_case_generator =
-            TestCaseGenerator::new_seeded(DB_SIZE, db_seed, internal_seed, false);
+        let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, internal_seed, false);
 
         test_case_generator.enable_bucket_statistic_checks(
             N_BUCKETS,
