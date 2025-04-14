@@ -38,7 +38,7 @@ fn install_tracing() {
 async fn create_graph_from_plain_db(
     player_index: usize,
     db: &IrisDB,
-) -> eyre::Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let mut store = PlaintextStore::create_random_store_with_db(db.db.clone()).await?;
     let graph = store.create_graph(&mut rng, DB_SIZE).await?;
@@ -118,6 +118,7 @@ async fn e2e_test() -> Result<()> {
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
 
+    test_case_generator.disable_test_case(TestCase::FullFaceMirrorAttack);
     test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::CloseToThreshold);

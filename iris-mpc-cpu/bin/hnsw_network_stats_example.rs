@@ -75,7 +75,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             searcher
                 .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
                 .instrument(party_span)
-                .await;
+                .await
+                .unwrap();
         });
     }
     jobs.join_all().await;

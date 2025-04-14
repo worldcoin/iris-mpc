@@ -9,7 +9,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use eyre::{eyre, Error};
+use eyre::{eyre, Error, Result};
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
@@ -44,10 +44,7 @@ use tracing::{instrument, trace, trace_span, Instrument};
 /// |---------------|--------|---------|---------|
 /// |a              |0       |0        |x3       |
 /// |b              |x3      |0        |0        |
-fn a2b_pre<T: IntRing2k>(
-    session: &Session,
-    x: Share<T>,
-) -> eyre::Result<(Share<T>, Share<T>, Share<T>)> {
+fn a2b_pre<T: IntRing2k>(session: &Session, x: Share<T>) -> Result<(Share<T>, Share<T>, Share<T>)> {
     let (a, b) = x.get_ab();
 
     let mut x1 = Share::zero();
@@ -211,7 +208,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
+    if len != x2.len() || len != x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 16 {
+        return Err(eyre!("Input length should be at least 16: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -240,7 +248,7 @@ where
         .await?;
 
     // Keep the MSB of c to compute the carries
-    let mut c_msb = c.pop().expect("Enough elements present");
+    let mut c_msb = c.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute carry of the sum of 2*c without MSB and s
     for (s_, c_) in s.iter_mut().skip(2).zip(c.iter_mut().skip(1)) {
@@ -326,7 +334,7 @@ where
 async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
-) -> Result<VecShare<T>, Error>
+) -> Result<VecShare<T>>
 where
     Standard: Distribution<T>,
 {
@@ -335,7 +343,7 @@ where
 
     let (m0, m1, wc) = {
         let reply_m0_and_m1 = network.receive_next().await;
-        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1).unwrap();
+        let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1)?;
         if m0_and_m1.len() != 2 {
             return Err(eyre!(
                 "Deserialized vec in bit inject is wrong length: {}",
@@ -346,7 +354,7 @@ where
             .into_iter()
             .map(T::into_vec)
             .collect_tuple()
-            .unwrap();
+            .ok_or(eyre!("Cannot deserialize m0 and m1 into tuple"))?;
 
         let reply_wc = network.receive_prev().await;
         let wc = match NetworkValue::from_network(reply_wc) {
@@ -483,10 +491,7 @@ fn mul_lift_2k_many<const K: u64>(vals: SliceShare<u16>) -> VecShare<u32> {
 }
 
 /// Lifts the given shares of u16 to shares of u32.
-pub(crate) async fn lift(
-    session: &mut Session,
-    shares: VecShare<u16>,
-) -> eyre::Result<VecShare<u32>> {
+pub(crate) async fn lift(session: &mut Session, shares: VecShare<u16>) -> Result<VecShare<u32>> {
     let len = shares.len();
     let mut padded_len = (len + 63) / 64;
     padded_len *= 64;
@@ -563,7 +568,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
+    if len != x2.len() || len != x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 32 {
+        return Err(eyre!("Input length should be at least 32: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -581,9 +597,9 @@ where
     let mut x1x3 = x1;
     transposed_pack_xor_assign(&mut x1x3, &x3);
     // Chop off the MSBs of these values as they are anyway removed by 2 * c later on.
-    x1x3.pop().expect("Enough elements present");
-    x2x3.pop().expect("Enough elements present");
-    x3.pop().expect("Enough elements present");
+    x1x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x2x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x3.pop().ok_or(eyre!("Not enough elements"))?;
     // (x1 XOR x3) AND (x2 XOR x3) = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) XOR x3
     let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
     // (x1 AND x2) XOR (x3 AND (x1 XOR x2))
@@ -599,8 +615,8 @@ where
         .await?;
 
     // To compute the MSB of the sum we have to add the MSB of s and c later
-    let s_msb = s.pop().expect("Enough elements present");
-    let c_msb = c.pop().expect("Enough elements present");
+    let s_msb = s.pop().ok_or(eyre!("Not enough elements"))?;
+    let c_msb = c.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute carry for the MSB of the sum
     for (s_, c_) in s.iter_mut().skip(2).zip(c.iter_mut().skip(1)) {
@@ -629,8 +645,18 @@ where
     Standard: Distribution<T>,
 {
     let len = x1.len();
-    debug_assert!(len == x2.len() && len == x3.len());
-    debug_assert!(len == 32);
+    if len != x2.len() || len != x3.len() {
+        return Err(eyre!(
+            "Inputs have different length {} {} {}",
+            len,
+            x2.len(),
+            x3.len()
+        ));
+    };
+
+    if len < 32 {
+        return Err(eyre!("Input length should be at least 32: {len}"));
+    }
 
     // Let x1, x2, x3 are integers modulo 2^k.
     //
@@ -648,9 +674,9 @@ where
     let mut x1x3 = x1;
     transposed_pack_xor_assign(&mut x1x3, &x3);
     // Chop off the MSBs of these values as they are anyway removed by 2 * c later on.
-    x1x3.pop().expect("No elements here");
-    x2x3.pop().expect("No elements here");
-    x3.pop().expect("No elements here");
+    x1x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x2x3.pop().ok_or(eyre!("Not enough elements"))?;
+    x3.pop().ok_or(eyre!("Not enough elements"))?;
     // (x1 XOR x3) AND (x2 XOR x3) = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) XOR x3
     let mut c = transposed_pack_and(session, x1x3, x2x3).await?;
     // (x1 AND x2) XOR (x3 AND (x1 XOR x2))
@@ -668,7 +694,7 @@ where
     b.pop();
     let g = transposed_pack_and(session, a, b).await?;
     // The MSB of p is needed to compute the MSB of the sum, but it doesn't needed for the carry computation
-    let msb_p = p.pop().expect("No elements here");
+    let msb_p = p.pop().ok_or(eyre!("Not enough elements"))?;
 
     // Compute the carry for the MSB of the sum
     //
@@ -730,7 +756,10 @@ where
         }
     }
     // a_msb XOR b_msb XOR top carry
-    let msb = msb_p ^ temp_g.pop().unwrap();
+    let msb = msb_p
+        ^ temp_g
+            .pop()
+            .ok_or(eyre!("Should contain exactly 1 carry"))?;
     Ok(msb)
 }
 
@@ -798,20 +827,19 @@ pub(crate) async fn single_extract_msb_u32(
 pub(crate) async fn extract_msb_u32_batch(
     session: &mut Session,
     x: &[Share<u32>],
-) -> eyre::Result<Vec<Share<Bit>>> {
+) -> Result<Vec<Share<Bit>>> {
     let res_len = x.len();
     let mut res = Vec::with_capacity(res_len);
 
     let packed_bits = extract_msb_u32(session, VecShare::new_vec(x.to_vec())).await?;
-    let mut packed_bits_iter = packed_bits.into_iter();
 
-    while res.len() < res_len {
-        let (a, b) = packed_bits_iter.next().unwrap().get_ab_ref();
+    'outer: for bit_batch in packed_bits.into_iter() {
+        let (a, b) = bit_batch.get_ab();
         for i in 0..64 {
-            if res.len() == res_len {
-                break;
-            }
             res.push(Share::new(a.get_bit_as_bit(i), b.get_bit_as_bit(i)));
+            if res.len() == res_len {
+                break 'outer;
+            }
         }
     }
 
@@ -824,10 +852,7 @@ pub(crate) async fn extract_msb_u32_batch(
 /// Thus, the current party should send its `b` share to the next party and receive the `b` share from the previous party.
 /// `a XOR b XOR previous b` yields the opened bit.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-pub(crate) async fn open_bin(
-    session: &mut Session,
-    shares: &[Share<Bit>],
-) -> eyre::Result<Vec<Bit>> {
+pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Result<Vec<Bit>> {
     let network = &mut session.network_session;
     let message = if shares.len() == 1 {
         NetworkValue::RingElementBit(shares[0].b).to_network()
@@ -873,5 +898,5 @@ pub(crate) async fn open_bin(
     // XOR shares with the received shares
     izip!(shares.iter(), b_from_previous.iter())
         .map(|(s, prev_b)| Ok((s.a ^ s.b ^ prev_b).convert()))
-        .collect::<eyre::Result<Vec<_>>>()
+        .collect::<Result<Vec<_>>>()
 }

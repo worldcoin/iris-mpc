@@ -1,5 +1,5 @@
 use crate::shares::{bit::Bit, ring_impl::RingElement, IntRing2k};
-use eyre::eyre;
+use eyre::{eyre, Result};
 
 /// Size of a PRF key in bytes
 const PRF_KEY_SIZE: usize = 16;
@@ -89,7 +89,7 @@ impl NetworkValue {
         res
     }
 
-    pub fn from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Self> {
+    pub fn from_network(serialized: Result<Vec<u8>>) -> Result<Self> {
         let serialized = serialized?;
         if serialized.is_empty() {
             return Err(eyre!("Empty serialized data"));
@@ -208,7 +208,7 @@ impl NetworkValue {
         res
     }
 
-    pub fn vec_from_network(serialized: eyre::Result<Vec<u8>>) -> eyre::Result<Vec<Self>> {
+    pub fn vec_from_network(serialized: Result<Vec<u8>>) -> Result<Vec<Self>> {
         let serialized = serialized?;
         if serialized.len() < 4 {
             return Err(eyre!("Can't parse vector length"));
@@ -274,7 +274,7 @@ where
 {
     fn new_network_element(element: RingElement<Self>) -> NetworkValue;
     fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue;
-    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>>;
+    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>>;
 }
 
 impl NetworkInt for u16 {
@@ -286,7 +286,7 @@ impl NetworkInt for u16 {
         NetworkValue::VecRing16(elements)
     }
 
-    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
+    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
         match value {
             NetworkValue::VecRing16(x) => Ok(x),
             NetworkValue::RingElement16(x) => Ok(vec![x]),
@@ -303,7 +303,7 @@ impl NetworkInt for u32 {
         NetworkValue::VecRing32(elements)
     }
 
-    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
+    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
         match value {
             NetworkValue::VecRing32(x) => Ok(x),
             NetworkValue::RingElement32(x) => Ok(vec![x]),
@@ -320,7 +320,7 @@ impl NetworkInt for u64 {
         NetworkValue::VecRing64(elements)
     }
 
-    fn into_vec(value: NetworkValue) -> eyre::Result<Vec<RingElement<Self>>> {
+    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
         match value {
             NetworkValue::VecRing64(x) => Ok(x),
             NetworkValue::RingElement64(x) => Ok(vec![x]),
@@ -334,7 +334,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_from_vec() -> eyre::Result<()> {
+    fn test_from_vec() -> Result<()> {
         let values = (0..2).map(RingElement).collect::<Vec<_>>();
         let network_values = values
             .iter()
@@ -349,7 +349,7 @@ mod tests {
 
     /// Test from_network with empty data
     #[test]
-    fn test_from_network_empty() -> eyre::Result<()> {
+    fn test_from_network_empty() -> Result<()> {
         let result = NetworkValue::from_network(Ok(vec![]));
         assert_eq!(result.unwrap_err().to_string(), "Empty serialized data");
         Ok(())

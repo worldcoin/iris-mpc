@@ -36,14 +36,27 @@ pub struct E2ETemplate {
 }
 impl E2ETemplate {
     fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
-        let (left_shared_code, left_shared_mask) = get_shared_template(is_valid, &self.left, rng);
-        let (right_shared_code, right_shared_mask) =
-            get_shared_template(is_valid, &self.right, rng);
+        let (
+            left_shared_code,
+            left_shared_mask,
+            left_mirrored_shared_code,
+            left_mirrored_shared_mask,
+        ) = get_shared_template(is_valid, &self.left, rng);
+        let (
+            right_shared_code,
+            right_shared_mask,
+            right_mirrored_shared_code,
+            right_mirrored_shared_mask,
+        ) = get_shared_template(is_valid, &self.right, rng);
         E2ESharedTemplate {
             left_shared_code,
             left_shared_mask,
             right_shared_code,
             right_shared_mask,
+            left_mirrored_shared_code,
+            left_mirrored_shared_mask,
+            right_mirrored_shared_code,
+            right_mirrored_shared_mask,
         }
     }
 }
@@ -55,22 +68,55 @@ fn get_shared_template(
 ) -> (
     [GaloisRingIrisCodeShare; 3],
     [GaloisRingTrimmedMaskCodeShare; 3],
+    [GaloisRingIrisCodeShare; 3],
+    [GaloisRingTrimmedMaskCodeShare; 3],
 ) {
     let mut shared_code =
         GaloisRingIrisCodeShare::encode_iris_code(&template.code, &template.mask, rng);
 
     let shared_mask = GaloisRingIrisCodeShare::encode_mask_code(&template.mask, rng);
+
+    // Create mirrored versions of the shares (before trimming for masks)
+    let mut mirrored_shared_code = [
+        shared_code[0].mirrored(),
+        shared_code[1].mirrored(),
+        shared_code[2].mirrored(),
+    ];
+
+    let mirrored_shared_mask = [
+        shared_mask[0].mirrored(),
+        shared_mask[1].mirrored(),
+        shared_mask[2].mirrored(),
+    ];
+
+    // Now trim the masks
     let shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> =
         shared_mask.iter().map(|x| x.clone().into()).collect();
+
+    let mirrored_shared_mask_vector: Vec<GaloisRingTrimmedMaskCodeShare> = mirrored_shared_mask
+        .iter()
+        .map(|x| x.clone().into())
+        .collect();
 
     let mut shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
         shared_mask_vector.try_into().unwrap();
 
+    let mut mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3] =
+        mirrored_shared_mask_vector.try_into().unwrap();
+
     if !is_valid {
         shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
-        shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1)
+        shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1);
+        mirrored_shared_code[0] = GaloisRingIrisCodeShare::default_for_party(1);
+        mirrored_shared_mask[0] = GaloisRingTrimmedMaskCodeShare::default_for_party(1);
     }
-    (shared_code, shared_mask)
+
+    (
+        shared_code,
+        shared_mask,
+        mirrored_shared_code,
+        mirrored_shared_mask,
+    )
 }
 
 type OrRuleSerialIds = Vec<u32>;
@@ -81,6 +127,10 @@ pub struct E2ESharedTemplate {
     pub left_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
     pub right_shared_code: [GaloisRingIrisCodeShare; 3],
     pub right_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
+    pub left_mirrored_shared_code: [GaloisRingIrisCodeShare; 3],
+    pub left_mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
+    pub right_mirrored_shared_code: [GaloisRingIrisCodeShare; 3],
+    pub right_mirrored_shared_mask: [GaloisRingTrimmedMaskCodeShare; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +180,10 @@ pub enum TestCase {
     EnrollmentAfterResetCheckNonMatch,
     /// Send an enrollment request using the iris codes used during ResetUpdate and expect a match result
     MatchAfterResetUpdate,
+    /// Send an iris code crafted for full face mirror attack detection:
+    /// - Normal flow won't match anything in the database
+    /// - But when the code is mirrored, it will match(mirrored version will be pre-inserted in the test db)
+    FullFaceMirrorAttack,
 }
 
 impl TestCase {
@@ -154,6 +208,7 @@ impl TestCase {
             TestCase::ResetCheckNonMatch,
             TestCase::EnrollmentAfterResetCheckNonMatch,
             TestCase::MatchAfterResetUpdate,
+            TestCase::FullFaceMirrorAttack,
         ]
     }
 }
@@ -184,6 +239,8 @@ pub struct ExpectedResult {
     is_reauth_successful: Option<bool>,
     /// Whether this is a RESET_CHECK_MESSAGE_TYPE request
     is_reset_check: bool,
+    /// Whether this is a FULL_FACE_MIRROR_ATTACK request
+    is_full_face_mirror_attack: bool,
 }
 
 impl ExpectedResult {
@@ -201,6 +258,7 @@ pub struct ExpectedResultBuilder {
     is_batch_match: bool,
     is_reauth_successful: Option<bool>,
     is_reset_check: bool,
+    is_full_face_mirror_attack: bool,
 }
 
 impl ExpectedResultBuilder {
@@ -234,6 +292,12 @@ impl ExpectedResultBuilder {
         self
     }
 
+    /// Sets is_full_face_mirror_attack
+    pub fn with_full_face_mirror_attack(mut self, is_full_face_mirror_attack: bool) -> Self {
+        self.is_full_face_mirror_attack = is_full_face_mirror_attack;
+        self
+    }
+
     /// Builds the ExpectedResult
     pub fn build(self) -> ExpectedResult {
         ExpectedResult {
@@ -242,6 +306,7 @@ impl ExpectedResultBuilder {
             is_batch_match: self.is_batch_match,
             is_reauth_successful: self.is_reauth_successful,
             is_reset_check: self.is_reset_check,
+            is_full_face_mirror_attack: self.is_full_face_mirror_attack,
         }
     }
 }
@@ -575,6 +640,7 @@ impl TestCaseGenerator {
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
         ];
+
         if !self.inserted_responses.is_empty() {
             options.push(TestCase::PreviouslyInserted);
         }
@@ -939,6 +1005,30 @@ impl TestCaseGenerator {
                     self.skip_invalidate = true;
                     e2e_template
                 }
+                TestCase::FullFaceMirrorAttack => {
+                    tracing::info!("Sending iris code crafted for mirror attack detection");
+
+                    // Get an existing template from the database
+                    let (db_index, original_template) =
+                        self.get_iris_code_in_db(DatabaseRange::Full);
+                    tracing::info!("db_index used for the mirror attack: {}", db_index);
+                    self.db_indices_used_in_current_batch.insert(db_index);
+
+                    self.expected_results.insert(
+                        request_id.to_string(),
+                        ExpectedResult::builder()
+                            .with_full_face_mirror_attack(true)
+                            .build(),
+                    );
+
+                    // send a mirrored template as our test case
+                    // this will ensure that the original template will be mirrored
+                    // let mirrored_template = original_template.clone().mirrored();
+                    E2ETemplate {
+                        left: original_template.clone().mirrored(),
+                        right: original_template.clone().mirrored(),
+                    }
+                }
                 TestCase::MatchAfterResetUpdate => {
                     tracing::info!(
                         "Sending enrollment request using iris codes used during reset update"
@@ -1023,6 +1113,7 @@ impl TestCaseGenerator {
         matched_batch_req_ids: &[String],
         requests: &HashMap<String, E2ETemplate>,
         was_reauth_success: bool,
+        full_face_mirror_attack_detected: bool,
     ) {
         tracing::info!(
             "Checking result for request_id: {}, idx: {}, was_match: {}, matched_batch_req_ids: \
@@ -1040,10 +1131,17 @@ impl TestCaseGenerator {
             is_reauth_successful,
             is_skip_persistence_request,
             is_reset_check,
+            is_full_face_mirror_attack,
         } = self
             .expected_results
             .get(req_id)
             .expect("request id not found");
+
+        if is_full_face_mirror_attack {
+            assert!(was_match);
+            assert!(full_face_mirror_attack_detected);
+            return;
+        }
 
         if is_reset_check {
             // assert that the reset_check requests are not reported as unique. match fields are only used for enrollment requests
@@ -1141,6 +1239,7 @@ impl TestCaseGenerator {
                     successful_reauths,
                     reset_update_indices,
                     reset_update_request_ids,
+                    full_face_mirror_attack_detected,
                     ..
                 } = res;
 
@@ -1166,13 +1265,15 @@ impl TestCaseGenerator {
                     &was_reauth_success,
                     &idx,
                     matched_batch_req_ids,
+                    &full_face_mirror_attack_detected,
                 ) in izip!(
                     thread_request_ids,
                     matches,
                     matches_with_skip_persistence,
                     successful_reauths,
                     merged_results,
-                    matched_batch_request_ids
+                    matched_batch_request_ids,
+                    full_face_mirror_attack_detected,
                 ) {
                     assert!(requests.contains_key(req_id));
 
@@ -1186,6 +1287,7 @@ impl TestCaseGenerator {
                         matched_batch_req_ids,
                         &requests,
                         was_reauth_success,
+                        full_face_mirror_attack_detected,
                     );
                 }
 
@@ -1298,6 +1400,38 @@ fn prepare_batch(
         .right_iris_interpolated_requests
         .mask
         .extend(e2e_shared_template.right_shared_mask[batch_idx].all_rotations());
+
+    // Also preprocess the mirrored codes and masks
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+        &mut e2e_shared_template.left_mirrored_shared_code[batch_idx],
+    );
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+        &mut e2e_shared_template.left_mirrored_shared_mask[batch_idx],
+    );
+    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(
+        &mut e2e_shared_template.right_mirrored_shared_code[batch_idx],
+    );
+    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+        &mut e2e_shared_template.right_mirrored_shared_mask[batch_idx],
+    );
+
+    // Add the mirrored iris data
+    batch
+        .left_mirrored_iris_interpolated_requests
+        .code
+        .extend(e2e_shared_template.left_mirrored_shared_code[batch_idx].all_rotations());
+    batch
+        .left_mirrored_iris_interpolated_requests
+        .mask
+        .extend(e2e_shared_template.left_mirrored_shared_mask[batch_idx].all_rotations());
+    batch
+        .right_mirrored_iris_interpolated_requests
+        .code
+        .extend(e2e_shared_template.right_mirrored_shared_code[batch_idx].all_rotations());
+    batch
+        .right_mirrored_iris_interpolated_requests
+        .mask
+        .extend(e2e_shared_template.right_mirrored_shared_mask[batch_idx].all_rotations());
 
     Ok(())
 }

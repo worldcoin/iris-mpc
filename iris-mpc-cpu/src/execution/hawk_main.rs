@@ -20,7 +20,7 @@ use crate::{
 };
 use aes_prng::AesRng;
 use clap::Parser;
-use eyre::Result;
+use eyre::{Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
@@ -55,6 +55,7 @@ mod is_match_batch;
 mod matching;
 mod rot;
 mod scheduler;
+mod search;
 pub mod state_check;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
@@ -321,99 +322,6 @@ impl HawkActor {
         })
     }
 
-    pub async fn search_both_eyes(
-        &self,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
-        queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    ) -> Result<BothEyes<VecRequests<VecRots<InsertPlan>>>> {
-        let (left, right) = futures::join!(
-            self.search_rotations(&sessions[LEFT], &queries[LEFT]),
-            self.search_rotations(&sessions[RIGHT], &queries[RIGHT]),
-        );
-        Ok([left?, right?])
-    }
-
-    async fn search_rotations(
-        &self,
-        sessions: &[HawkSessionRef],
-        queries: &VecRequests<VecRots<QueryRef>>,
-    ) -> Result<VecRequests<VecRots<InsertPlan>>> {
-        // Flatten the rotations from all requests.
-        let flat_queries = VecRots::flatten(queries);
-        // Do it all in parallel.
-        let flat_results = self.search_parallel(sessions, flat_queries).await?;
-        // Nest the results per request again.
-        Ok(VecRots::unflatten(flat_results))
-    }
-
-    async fn search_parallel(
-        &self,
-        sessions: &[HawkSessionRef],
-        queries: Vec<QueryRef>,
-    ) -> Result<Vec<InsertPlan>> {
-        let mut plans = vec![];
-
-        // Distribute the requests over the given sessions in parallel.
-        for chunk in queries.chunks(sessions.len()) {
-            let tasks = izip!(chunk, sessions)
-                .map(|(query, session)| {
-                    let search_params = Arc::clone(&self.search_params);
-                    let session = Arc::clone(session);
-                    let query = query.clone();
-
-                    tokio::spawn(async move {
-                        let mut session = session.write().await;
-                        let graph_store = Arc::clone(&session.graph_store);
-                        let graph_store = graph_store.read().await;
-                        Self::search_to_insert_one(
-                            &search_params,
-                            &graph_store,
-                            &mut session,
-                            query,
-                        )
-                        .await
-                    })
-                })
-                .collect_vec();
-
-            // Wait between chunks for determinism (not relying on mutex).
-            for t in tasks {
-                plans.push(t.await?);
-            }
-        }
-
-        Ok(plans)
-    }
-
-    async fn search_to_insert_one(
-        search_params: &HnswSearcher,
-        graph_store: &GraphMem<Aby3Store>,
-        session: &mut HawkSession,
-        query: QueryRef,
-    ) -> InsertPlan {
-        let insertion_layer = search_params.select_layer(&mut session.shared_rng);
-
-        let (links, set_ep) = search_params
-            .search_to_insert(
-                &mut session.aby3_store,
-                graph_store,
-                &query,
-                insertion_layer,
-            )
-            .await;
-
-        let match_count = search_params
-            .match_count(&mut session.aby3_store, &links)
-            .await;
-
-        InsertPlan {
-            query,
-            links,
-            match_count,
-            set_ep,
-        }
-    }
-
     pub async fn insert(
         &mut self,
         sessions: &[HawkSessionRef],
@@ -447,7 +355,7 @@ impl HawkActor {
                 insert_plan.links,
                 insert_plan.set_ep,
             )
-            .await;
+            .await?;
 
         graph_store.insert_apply(connect_plan.clone()).await;
 
@@ -547,15 +455,15 @@ struct HawkJob {
 /// HawkRequest contains a batch of items to search.
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
-    queries: BothEyes<VecRequests<VecRots<QueryRef>>>,
+    queries: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<&BatchQuery> for HawkRequest {
     fn from(batch: &BatchQuery) -> Self {
-        Self {
-            queries: [
+        let queries = Arc::new(
+            [
                 // For left and right eyes.
                 (
                     &batch.left_iris_rotated_requests.code,
@@ -597,15 +505,12 @@ impl From<&BatchQuery> for HawkRequest {
                     })
                     .collect_vec()
             }),
-        }
+        );
+        Self { queries }
     }
 }
 
 impl HawkRequest {
-    fn search_queries(&self) -> &BothEyes<VecRequests<VecRots<QueryRef>>> {
-        &self.queries
-    }
-
     fn filter_for_insertion<T>(
         &self,
         both_insert_plans: BothEyes<VecRequests<T>>,
@@ -757,6 +662,7 @@ impl HawkResult {
             reset_update_shares: vec![],                 // TODO.
             modifications: batch.modifications,
             actor_data: self.connect_plans,
+            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
         }
     }
 }
@@ -770,7 +676,7 @@ impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
             for plan in plans.into_iter().flatten() {
-                graph_tx.with_graph(side).insert_apply(plan).await;
+                graph_tx.with_graph(side).insert_apply(plan).await?;
             }
         }
         Ok(())
@@ -818,19 +724,15 @@ impl HawkHandle {
                 tracing::info!("Processing an Hawk job…");
                 let now = Instant::now();
 
-                let search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>> =
-                    job.request.search_queries();
+                let search_queries = &job.request.queries;
 
-                let intra_results = intra_batch_is_match(&sessions, search_queries)
-                    .await
-                    .unwrap();
+                let intra_results = intra_batch_is_match(&sessions, search_queries).await?;
 
                 // Search for nearest neighbors.
                 // For both eyes, all requests, and rotations.
-                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> = hawk_actor
-                    .search_both_eyes(&sessions, search_queries)
-                    .await
-                    .unwrap();
+                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
+                    search::search(&sessions, search_queries, hawk_actor.search_params.clone())
+                        .await?;
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
@@ -840,7 +742,7 @@ impl HawkHandle {
                         step1.missing_vector_ids(),
                         &sessions,
                     )
-                    .await;
+                    .await?;
                     step1.step2(&missing_is_match)
                 };
 
@@ -867,7 +769,7 @@ impl HawkHandle {
                             .collect();
 
                         // Insert in memory, and return the plans to update the persistent database.
-                        let plans = hawk_actor.insert(sessions, insert_plans).await.unwrap();
+                        let plans = hawk_actor.insert(sessions, insert_plans).await?;
 
                         // Convert to Vec<Option> matching the request order.
                         for (i, plan) in izip!(&insert_indices, plans) {
@@ -894,6 +796,7 @@ impl HawkHandle {
 
                 let _ = job.return_channel.send(Ok(results));
             }
+            Ok::<_, Report>(())
         });
 
         Ok(Self { job_queue: tx })
