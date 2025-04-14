@@ -1032,6 +1032,7 @@ impl TestCaseGenerator {
                     // this will ensure that the original template will be mirrored
                     // let mirrored_template = original_template.clone().mirrored();
                     E2ETemplate {
+                        // This is swapped on purpose due to the mirror attack flow
                         left: original_template[RIGHT].mirrored(),
                         right: original_template[LEFT].mirrored(),
                     }
@@ -1586,60 +1587,4 @@ pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
         );
         loader.increment_db_size(idx);
     }
-}
-
-// Old methods for completeness
-
-pub fn generate_test_db_old(
-    party_id: usize,
-    db_size: usize,
-    db_rng_seed: u64,
-) -> Vec<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
-    let mut rng = StdRng::seed_from_u64(db_rng_seed);
-    let mut db = IrisDB::new_random_par(db_size, &mut rng);
-
-    // Set the masks to all 1s for the first 10%
-    for i in 0..db_size / 10 {
-        db.db[i].mask = IrisCodeArray::ONES;
-    }
-
-    let mut share_rng = StdRng::from_rng(rng).unwrap();
-
-    let mut result = Vec::new();
-
-    for iris in db.db.into_iter() {
-        let code =
-            GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, &mut share_rng)
-                [party_id]
-                .clone();
-        let mask: GaloisRingTrimmedMaskCodeShare =
-            GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, &mut share_rng)[party_id]
-                .clone()
-                .into();
-        result.push((code, mask));
-    }
-
-    result
-}
-
-pub fn load_test_db_old(
-    party_id: usize,
-    db_size: usize,
-    db_rng_seed: u64,
-    loader: &mut impl InMemoryStore,
-) -> Result<()> {
-    let iris_shares = generate_test_db_old(party_id, db_size, db_rng_seed);
-    for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
-        loader.load_single_record_from_db(
-            idx,
-            VectorId::from_0_index(idx as u32),
-            &code.coefs,
-            &mask.coefs,
-            &code.coefs,
-            &mask.coefs,
-        );
-        loader.increment_db_size(idx);
-    }
-
-    Ok(())
 }
