@@ -1,3 +1,4 @@
+use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
 use crate::job::GaloisSharesBothSides;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -21,6 +22,7 @@ use rand::{
     seq::{IteratorRandom, SliceRandom},
     Rng, SeedableRng,
 };
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -28,6 +30,9 @@ use std::{
 use uuid::Uuid;
 
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 375 / 1000; // 0.375 * 12800
+
+const LEFT: usize = 0;
+const RIGHT: usize = 0;
 
 #[derive(Clone)]
 pub struct E2ETemplate {
@@ -321,7 +326,7 @@ pub struct TestCaseGenerator {
     /// enabled TestCases
     enabled_test_cases: Vec<TestCase>,
     /// initial state of the Iris Database
-    initial_db_state: IrisDB,
+    initial_db_state: TestDb,
     /// full_mask_range
     full_mask_range: Range<usize>,
     /// expected results for all of the queries we send
@@ -369,16 +374,13 @@ pub struct TestCaseGenerator {
 }
 
 impl TestCaseGenerator {
-    pub fn new_with_db(db: &mut IrisDB, internal_rng_seed: u64, is_cpu: bool) -> Self {
+    pub fn new_with_db(db: TestDb, internal_rng_seed: u64, is_cpu: bool) -> Self {
         // Set the masks to all 1s for the first 10%
-        let db_len = db.db.len();
-        for i in 0..db_len / 10 {
-            db.db[i].mask = IrisCodeArray::ONES;
-        }
         let rng = StdRng::seed_from_u64(internal_rng_seed);
+        let db_len = db.len();
         Self {
             enabled_test_cases: TestCase::default_test_set(),
-            initial_db_state: db.clone(),
+            initial_db_state: db,
             full_mask_range: 0..db_len / 10,
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
@@ -397,18 +399,6 @@ impl TestCaseGenerator {
             or_rule_matches: Vec::new(),
             is_cpu,
         }
-    }
-
-    pub fn new_seeded(
-        db_size: usize,
-        db_rng_seed: u64,
-        internal_rng_seed: u64,
-        is_cpu: bool,
-    ) -> Self {
-        // create a copy of the plain database for the test case generator, this needs
-        // to be in sync with `generate_db`
-        let mut db = IrisDB::new_random_par(db_size, &mut StdRng::seed_from_u64(db_rng_seed));
-        Self::new_with_db(&mut db, internal_rng_seed, is_cpu)
     }
 
     pub fn disable_test_case(&mut self, test_case: TestCase) {
@@ -505,7 +495,9 @@ impl TestCaseGenerator {
         // for non-empty batches also add some deletions
         if max_deletions_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
-                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                let idx = self
+                    .rng
+                    .gen_range(0..self.initial_db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
@@ -526,7 +518,9 @@ impl TestCaseGenerator {
         // for non-empty batches also add some reset updates
         if max_reset_updates_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_reset_updates_per_batch) {
-                let idx = self.rng.gen_range(0..self.initial_db_state.db.len());
+                let idx = self
+                    .rng
+                    .gen_range(0..self.initial_db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
@@ -588,11 +582,11 @@ impl TestCaseGenerator {
     /// Get an Iris code known to be in the database, and return it and its
     /// index. The `DatabaseRange` parameter is used to chose which portion
     /// of the DB the item is chosen from.
-    fn get_iris_code_in_db(&mut self, db_range: DatabaseRange) -> (usize, IrisCode) {
+    fn get_iris_code_in_db(&mut self, db_range: DatabaseRange) -> (usize, [IrisCode; 2]) {
         let mut db_index = None;
         let range = match db_range {
             DatabaseRange::FullMaskOnly => self.full_mask_range.clone(),
-            DatabaseRange::Full => 0..self.initial_db_state.db.len(),
+            DatabaseRange::Full => 0..self.initial_db_state.initial_db_len(),
         };
         for _ in 0..100 {
             let potential_db_index = self.rng.gen_range(range.clone());
@@ -615,7 +609,13 @@ impl TestCaseGenerator {
             break;
         }
         let db_index = db_index.expect("could not find a valid DB item in 100 random drawings");
-        (db_index, self.initial_db_state.db[db_index].clone())
+        (
+            db_index,
+            [
+                self.initial_db_state.plain_dbs[0].db[db_index].clone(),
+                self.initial_db_state.plain_dbs[1].db[db_index].clone(),
+            ],
+        )
     }
 
     fn generate_query(
@@ -720,7 +720,8 @@ impl TestCaseGenerator {
                 }
                 TestCase::Match => {
                     tracing::info!("Sending iris code from db");
-                    let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    let (db_index, [template_left, template_right]) =
+                        self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.expected_results.insert(
                         request_id.to_string(),
@@ -729,13 +730,14 @@ impl TestCaseGenerator {
                             .build(),
                     );
                     E2ETemplate {
-                        left: template.clone(),
-                        right: template,
+                        left: template_left,
+                        right: template_right,
                     }
                 }
                 TestCase::MatchSkipPersistence => {
                     tracing::info!("Sending iris code from db with skip persistence");
-                    let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    let (db_index, [template_left, template_right]) =
+                        self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     skip_persistence = true;
                     self.disallowed_queries.push(db_index as u32);
@@ -747,8 +749,8 @@ impl TestCaseGenerator {
                             .build(),
                     );
                     E2ETemplate {
-                        left: template.clone(),
-                        right: template,
+                        left: template_left,
+                        right: template_right,
                     }
                 }
                 TestCase::CloseToThreshold => {
@@ -773,13 +775,16 @@ impl TestCaseGenerator {
                                 .build()
                         },
                     );
-                    assert_eq!(template.mask, IrisCodeArray::ONES);
-                    for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
-                        template.code.flip_bit(i);
+                    for dir in [LEFT, RIGHT] {
+                        assert_eq!(template[dir].mask, IrisCodeArray::ONES);
+                        for i in 0..(THRESHOLD_ABSOLUTE as i32 + variation) as usize {
+                            template[dir].code.flip_bit(i);
+                        }
                     }
+                    let [template_left, template_right] = template;
                     E2ETemplate {
-                        left: template.clone(),
-                        right: template,
+                        left: template_left,
+                        right: template_right,
                     }
                 }
                 TestCase::PreviouslyInserted => {
@@ -808,8 +813,10 @@ impl TestCaseGenerator {
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
                     E2ETemplate {
-                        right: self.initial_db_state.db[deleted_idx as usize].clone(),
-                        left: self.initial_db_state.db[deleted_idx as usize].clone(),
+                        left: self.initial_db_state.plain_dbs[LEFT].db[deleted_idx as usize]
+                            .clone(),
+                        right: self.initial_db_state.plain_dbs[RIGHT].db[deleted_idx as usize]
+                            .clone(),
                     }
                 }
                 TestCase::WithOrRuleSet => {
@@ -875,7 +882,8 @@ impl TestCaseGenerator {
                         "Sending reauth request with AND rule matching the target index"
                     );
                     message_type = REAUTH_MESSAGE_TYPE.to_string();
-                    let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    let (db_index, [template_left, template_right]) =
+                        self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.reauth_target_indices
                         .insert(request_id.to_string(), db_index as u32);
@@ -886,8 +894,8 @@ impl TestCaseGenerator {
                             .build(),
                     );
                     E2ETemplate {
-                        left: template.clone(),
-                        right: template,
+                        left: template_left,
+                        right: template_right,
                     }
                 }
                 TestCase::ReauthNonMatchingTarget => {
@@ -958,7 +966,8 @@ impl TestCaseGenerator {
                 }
                 TestCase::ResetCheckMatch => {
                     tracing::info!("Sending reset check request with an existing iris code");
-                    let (db_index, template) = self.get_iris_code_in_db(DatabaseRange::Full);
+                    let (db_index, [template_left, template_right]) =
+                        self.get_iris_code_in_db(DatabaseRange::Full);
                     self.db_indices_used_in_current_batch.insert(db_index);
                     self.expected_results.insert(
                         request_id.to_string(),
@@ -969,8 +978,8 @@ impl TestCaseGenerator {
                     );
                     message_type = RESET_CHECK_MESSAGE_TYPE.to_string();
                     E2ETemplate {
-                        left: template.clone(),
-                        right: template,
+                        left: template_left,
+                        right: template_right,
                     }
                 }
                 TestCase::ResetCheckNonMatch => {
@@ -1025,8 +1034,8 @@ impl TestCaseGenerator {
                     // this will ensure that the original template will be mirrored
                     // let mirrored_template = original_template.clone().mirrored();
                     E2ETemplate {
-                        left: original_template.clone().mirrored(),
-                        right: original_template.clone().mirrored(),
+                        left: original_template[RIGHT].mirrored(),
+                        right: original_template[LEFT].mirrored(),
                     }
                 }
                 TestCase::MatchAfterResetUpdate => {
@@ -1069,8 +1078,8 @@ impl TestCaseGenerator {
         will_match: bool,
         flip_right: Option<bool>,
     ) -> E2ETemplate {
-        let mut code_left = self.initial_db_state.db[db_index].clone();
-        let mut code_right = self.initial_db_state.db[db_index].clone();
+        let mut code_left = self.initial_db_state.plain_dbs[LEFT].db[db_index].clone();
+        let mut code_right = self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone();
 
         assert_eq!(code_left.mask, IrisCodeArray::ONES);
         assert_eq!(code_right.mask, IrisCodeArray::ONES);
@@ -1463,7 +1472,111 @@ fn check_bucket_statistics(
     Ok(())
 }
 
-pub fn generate_test_db(
+pub struct PartyDb {
+    pub party_id: usize,
+    pub db_left: Vec<FullGaloisRingIrisCodeShare>,
+    pub db_right: Vec<FullGaloisRingIrisCodeShare>,
+}
+
+pub struct TestDb {
+    /// A plain iris database for LEFT & RIGHT eyes
+    plain_dbs: [IrisDB; 2],
+    /// A shared iris database for each parties
+    shared_dbs: [Arc<PartyDb>; 3],
+    /// initial db len
+    initial_db_len: usize,
+}
+
+impl TestDb {
+    pub fn party_db(&self, party_id: usize) -> Arc<PartyDb> {
+        Arc::clone(&self.shared_dbs[party_id])
+    }
+    pub fn plain_dbs(&self, side: usize) -> &IrisDB {
+        &self.plain_dbs[side]
+    }
+    pub fn len(&self) -> usize {
+        // sanity check to ensure that the databases are of the same size
+        assert!(self.plain_dbs[0].len() == self.plain_dbs[1].len());
+        self.plain_dbs[0].len()
+    }
+    pub fn initial_db_len(&self) -> usize {
+        self.initial_db_len
+    }
+}
+
+pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
+    let mut rng = StdRng::seed_from_u64(db_rng_seed);
+    let mut db_left = IrisDB::new_random_par(db_size, &mut rng);
+    let mut db_right = IrisDB::new_random_par(db_size, &mut rng);
+
+    // Set the masks to all 1s for the first 10%
+    for i in 0..db_size / 10 {
+        db_left.db[i].mask = IrisCodeArray::ONES;
+        db_right.db[i].mask = IrisCodeArray::ONES;
+    }
+
+    let mut share_rng = StdRng::from_rng(rng).unwrap();
+
+    let mut party_dbs = [
+        PartyDb {
+            party_id: 0,
+            db_left: Vec::with_capacity(db_size),
+            db_right: Vec::with_capacity(db_size),
+        },
+        PartyDb {
+            party_id: 1,
+            db_left: Vec::with_capacity(db_size),
+            db_right: Vec::with_capacity(db_size),
+        },
+        PartyDb {
+            party_id: 2,
+            db_left: Vec::with_capacity(db_size),
+            db_right: Vec::with_capacity(db_size),
+        },
+    ];
+
+    for (left_iris, right_iris) in db_left.db.iter().zip(db_right.db.iter()) {
+        let [left0, left1, left2] =
+            FullGaloisRingIrisCodeShare::encode_iris_code(left_iris, &mut share_rng);
+        let [right0, right1, right2] =
+            FullGaloisRingIrisCodeShare::encode_iris_code(right_iris, &mut share_rng);
+        party_dbs[0].db_left.push(left0);
+        party_dbs[0].db_right.push(right0);
+        party_dbs[1].db_left.push(left1);
+        party_dbs[1].db_right.push(right1);
+        party_dbs[2].db_left.push(left2);
+        party_dbs[2].db_right.push(right2);
+    }
+
+    TestDb {
+        plain_dbs: [db_left, db_right],
+        shared_dbs: party_dbs.map(Arc::new),
+        initial_db_len: db_size,
+    }
+}
+
+pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
+    for (idx, (left, right)) in party_db
+        .db_left
+        .iter()
+        .zip(party_db.db_right.iter())
+        .enumerate()
+    {
+        loader.load_single_record_from_db(
+            idx,
+            VectorId::from_0_index(idx as u32),
+            &left.code.coefs,
+            &left.mask.coefs,
+            &right.code.coefs,
+            &right.mask.coefs,
+        );
+        loader.increment_db_size(idx);
+    }
+}
+
+// Old methods for completeness
+
+pub fn generate_test_db_old(
     party_id: usize,
     db_size: usize,
     db_rng_seed: u64,
@@ -1495,13 +1608,13 @@ pub fn generate_test_db(
     result
 }
 
-pub fn load_test_db(
+pub fn load_test_db_old(
     party_id: usize,
     db_size: usize,
     db_rng_seed: u64,
     loader: &mut impl InMemoryStore,
 ) -> Result<()> {
-    let iris_shares = generate_test_db(party_id, db_size, db_rng_seed);
+    let iris_shares = generate_test_db_old(party_id, db_size, db_rng_seed);
     for (idx, (code, mask)) in iris_shares.into_iter().enumerate() {
         loader.load_single_record_from_db(
             idx,
