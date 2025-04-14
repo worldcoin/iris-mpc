@@ -639,6 +639,7 @@ impl TestCaseGenerator {
             TestCase::NonMatchSkipPersistence,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
+            TestCase::FullFaceMirrorAttack,
         ];
 
         if !self.inserted_responses.is_empty() {
