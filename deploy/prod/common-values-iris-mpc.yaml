@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.14.19"
+image: "ghcr.io/worldcoin/iris-mpc@sha256:53cbb3dfa1a46eb757cedbb5b094e3e397e8f45512855c13c916d82df34fe0cf"
 
 environment: prod
 replicaCount: 1
