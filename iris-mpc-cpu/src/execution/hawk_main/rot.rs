@@ -37,18 +37,6 @@ impl<R> VecRots<R> {
     }
 
     /// Flatten a batch of something with rotations into a concatenated Vec.
-    pub fn flatten(batch: &[VecRots<R>]) -> Vec<R>
-    where
-        R: Clone,
-    {
-        batch
-            .iter()
-            .flat_map(|x| &x.rotations)
-            .cloned()
-            .collect_vec()
-    }
-
-    /// Flatten a batch of something with rotations into a concatenated Vec.
     /// Attach a copy of the corresponding `B` to each rotation.
     pub fn flatten_broadcast<'a, B>(
         batch: impl IntoIterator<Item = (&'a VecRots<R>, B)>,

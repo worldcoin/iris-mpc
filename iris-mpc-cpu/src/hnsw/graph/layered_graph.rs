@@ -256,6 +256,7 @@ mod tests {
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
+    use eyre::Result;
     use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
     use rand::{RngCore, SeedableRng};
 
@@ -293,23 +294,23 @@ mod tests {
             &mut self,
             query: &Self::QueryRef,
             vector: &Self::VectorRef,
-        ) -> Self::DistanceRef {
+        ) -> Result<Self::DistanceRef> {
             // Hamming distance
             let vector_0 = self.points[&(query.0 as usize)].data;
             let vector_1 = self.points[&(vector.0 as usize)].data;
-            hamming_distance(vector_0, vector_1)
+            Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-            *distance == 0
+        async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+            Ok(*distance == 0)
         }
 
         async fn less_than(
             &mut self,
             distance1: &Self::DistanceRef,
             distance2: &Self::DistanceRef,
-        ) -> bool {
-            *distance1 < *distance2
+        ) -> Result<bool> {
+            Ok(*distance1 < *distance2)
         }
     }
 
@@ -325,7 +326,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_from_another_naive() {
+    async fn test_from_another_naive() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
@@ -335,10 +336,10 @@ mod tests {
 
         for raw_query in raw_queries.db {
             let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -348,7 +349,7 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
         }
 
         let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
@@ -358,10 +359,12 @@ mod tests {
             VectorId::from_0_index(v.index() * 2)
         });
         assert_ne!(graph_store, different_graph_store);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_from_another() {
+    async fn test_from_another() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
         let searcher = HnswSearcher::default();
@@ -372,10 +375,10 @@ mod tests {
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -385,7 +388,7 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
 
             point_ids_map.insert(query, PointId(rng.next_u32()));
         }
@@ -415,5 +418,7 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
     }
 }

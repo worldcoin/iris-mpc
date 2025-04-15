@@ -1732,6 +1732,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reset_update_shares,
             mut modifications,
             actor_data: _,
+            full_face_mirror_attack_detected,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1773,14 +1774,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
-                        match partial_match_counters_left.is_empty() {
-                            false => Some(partial_match_counters_left[i]),
-                            true => None,
-                        },
                         match partial_match_counters_right.is_empty() {
                             false => Some(partial_match_counters_right[i]),
                             true => None,
                         },
+                        match partial_match_counters_left.is_empty() {
+                            false => Some(partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        full_face_mirror_attack_detected[i],
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
@@ -1793,7 +1795,27 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .enumerate()
                 .filter_map(
                     // Find the indices of non-matching queries in the batch.
-                    |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                    // BUT ALSO filter out any detected full face mirror attacks.
+                    |(query_idx, is_match)| {
+                        if !is_match {
+                            // Check for full face mirror attack (only for UNIQUENESS requests)
+                            if request_types[query_idx] == UNIQUENESS_MESSAGE_TYPE && full_face_mirror_attack_detected[query_idx]
+                            {
+                                tracing::warn!(
+                                    "Mirror attack detected for request_id {} - Not persisting to database",
+                                    request_ids[query_idx]
+                                );
+                                metrics::counter!("mirror.attack.rejected").increment(1);
+                                None
+                            } else {
+                                // Otherwise it's a legitimate non-match, include it.
+                                Some(query_idx)
+                            }
+                        } else {
+                            // It matched, don't include.
+                            None
+                        }
+                    },
                 )
                 .map(|query_idx| {
                     let serial_id = (merged_results[query_idx] + 1) as i64;

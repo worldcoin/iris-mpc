@@ -99,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let query = vector.prepare_query(raw_query.clone());
         searcher
             .insert(&mut vector, &mut graph, &query, &mut rng)
-            .await;
+            .await?;
 
         if idx % 1000 == 999 {
             println!(

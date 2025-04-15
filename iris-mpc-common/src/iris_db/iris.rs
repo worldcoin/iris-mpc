@@ -1,3 +1,4 @@
+use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use eyre::bail;
 use rand::{
@@ -206,6 +207,22 @@ impl IrisCode {
 
         res
     }
+
+    pub fn mirrored(&self) -> IrisCode {
+        let mut mirrored = IrisCode::default();
+        for i in 0..IrisCode::IRIS_CODE_SIZE {
+            let new_i = GaloisRingIrisCodeShare::remap_old_to_new_index(i);
+            let mirrored_new_i = GaloisRingIrisCodeShare::remap_new_to_mirrored_index(new_i);
+            let mirrored_i = GaloisRingIrisCodeShare::remap_new_to_old_index(mirrored_new_i);
+            mirrored.mask.set_bit(mirrored_i, self.mask.get_bit(i));
+            let b = i % 2;
+            let code_bit = self.code.get_bit(i);
+            mirrored
+                .code
+                .set_bit(mirrored_i, if b == 0 { code_bit } else { !code_bit });
+        }
+        mirrored
+    }
 }
 
 pub struct Bits<'a> {
@@ -243,8 +260,9 @@ impl ExactSizeIterator for Bits<'_> {}
 
 #[cfg(test)]
 mod tests {
-    use super::IrisCodeArray;
+    use super::{IrisCode, IrisCodeArray};
     use eyre::{Context, ContextCompat};
+    use float_eq::assert_float_eq;
     use std::collections::HashMap;
 
     #[test]
@@ -272,7 +290,34 @@ mod tests {
         );
         assert_eq!(code_str, code.to_base64().unwrap());
     }
+    #[test]
+    fn test_mirrored_iris_code() {
+        // Use the same test data as in match_mirrored_codes
+        let lines = include_str!("../example-data/flipped_codes.txt")
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
 
+        // Parse the original and flipped iris codes
+        let code = IrisCodeArray::from_base64(lines[0]).unwrap();
+        let mask = IrisCodeArray::from_base64(lines[1]).unwrap();
+
+        let flipped_code = IrisCodeArray::from_base64(lines[2]).unwrap();
+        let flipped_mask = IrisCodeArray::from_base64(lines[3]).unwrap();
+
+        // Create IrisCode objects
+        let original_iris = IrisCode { code, mask };
+        let flipped_iris = IrisCode {
+            code: flipped_code,
+            mask: flipped_mask,
+        };
+
+        // Check that the mirrored flipped iris matches the original
+        let mirrored_iris = flipped_iris.mirrored();
+        let distance = original_iris.get_distance(&mirrored_iris);
+        assert_float_eq!(distance, 0.0, abs <= 1e-6);
+    }
     pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
         let lines = s.lines();
         let mut lines = lines.map(|s| s.trim()).filter(|s| !s.is_empty());

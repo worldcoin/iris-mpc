@@ -64,7 +64,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                 let query = vector.prepare_query(raw_query.clone());
                 searcher
                     .insert(&mut vector, &mut graph, &query, &mut rng)
-                    .await;
+                    .await
+                    .unwrap();
             }
             (vector, graph)
         });
@@ -79,7 +80,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let query = db_vectors.prepare_query(on_the_fly_query);
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, &mut rng)
-                        .await;
+                        .await
+                        .unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             )
@@ -166,9 +168,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
                     let pairs = [(&x1, &y1), (&x2, &y2)];
-                    let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
-                        .await
-                        .unwrap();
+                    let ds_and_ts =
+                        galois_ring_pairwise_distance(&mut player_session, &pairs).await;
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
@@ -251,7 +252,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 searcher
                                     .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
-                                    .await;
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;
@@ -286,8 +288,12 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
                                     .search(&mut *vector_store, &mut graph_store, &query, 1)
-                                    .await;
-                                searcher.is_match(&mut *vector_store, &[neighbors]).await;
+                                    .await
+                                    .unwrap();
+                                searcher
+                                    .is_match(&mut *vector_store, &[neighbors])
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;

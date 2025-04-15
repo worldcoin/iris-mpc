@@ -7,6 +7,8 @@
 //! - (<https://en.wikipedia.org/wiki/Batcher_odd%E2%80%93even_mergesort>)
 //! - (<https://math.mit.edu/~shor/18.310/batcher.pdf>)
 
+use eyre::Result;
+
 use super::swap_network::{SwapNetwork, SwapNetworkLayer};
 
 /// Generate swap network wire tuples for stage `stage` of the batcher merge
@@ -56,7 +58,7 @@ fn batcher_merger_network(deg: usize) -> SwapNetwork {
 ///
 /// For 2-power sizes, the network produced by this function is the standard
 /// Batcher odd-even merge sort network.
-pub fn batcher_network(size: usize) -> SwapNetwork {
+pub fn batcher_network(size: usize) -> Result<SwapNetwork> {
     partial_batcher_network(0, size)
 }
 
@@ -88,7 +90,10 @@ pub fn batcher_network(size: usize) -> SwapNetwork {
 /// Indices which fall into this category are identified during the recursive
 /// network construction provided by the `batcher_recursive` function call. See
 /// documentation there for more details.
-pub fn partial_batcher_network(sorted_prefix_size: usize, unsorted_size: usize) -> SwapNetwork {
+pub fn partial_batcher_network(
+    sorted_prefix_size: usize,
+    unsorted_size: usize,
+) -> Result<SwapNetwork> {
     let total_list_size = sorted_prefix_size + unsorted_size;
     assert_ne!(total_list_size, 0);
     let deg = match total_list_size {
@@ -126,7 +131,7 @@ pub fn batcher_recursive(
     offset: usize,
     unsorted_idx: usize,
     stable_idx: usize,
-) -> SwapNetwork {
+) -> Result<SwapNetwork> {
     assert!(unsorted_idx <= stable_idx);
 
     // Parameters of active index window
@@ -137,10 +142,10 @@ pub fn batcher_recursive(
     if end_idx <= unsorted_idx || start_idx >= stable_idx || deg == 0 {
         // Cases where no sorting occurs. Note that this frequently handles
         // larger values of deg without requiring additional levels of recursion.
-        Default::default()
+        Ok(Default::default())
     } else {
-        let prefix_1 = batcher_recursive(deg - 1, 2 * offset, unsorted_idx, stable_idx);
-        let prefix_2 = batcher_recursive(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx);
+        let prefix_1 = batcher_recursive(deg - 1, 2 * offset, unsorted_idx, stable_idx)?;
+        let prefix_2 = batcher_recursive(deg - 1, 2 * offset + 1, unsorted_idx, stable_idx)?;
         let prefix = SwapNetwork::merge_parallel(prefix_1, prefix_2);
 
         // Compute how many trailing indices can be ignored in the merging network
@@ -151,10 +156,10 @@ pub fn batcher_recursive(
 
         let mut merger = batcher_merger_network(deg);
         merger
-            .shift(start_idx as isize)
+            .shift(start_idx as isize)?
             .filter_wires(|(_, idx2)| *idx2 < end_idx - total_stable_amount);
 
-        SwapNetwork::merge_series(prefix, merger)
+        Ok(SwapNetwork::merge_series(prefix, merger))
     }
 }
 
@@ -164,7 +169,7 @@ mod tests {
     use rand::Rng;
 
     #[test]
-    fn check_small_batcher_networks() {
+    fn check_small_batcher_networks() -> Result<()> {
         let hardcoded_batchers = [
             vec![],
             vec![vec![(0usize, 1usize)]],
@@ -181,17 +186,19 @@ mod tests {
 
         for (deg, hardcoded_network) in hardcoded_batchers.iter().enumerate() {
             let size = 1usize << deg;
-            assert_eq!(batcher_network(size).layers, *hardcoded_network);
+            assert_eq!(batcher_network(size)?.layers, *hardcoded_network);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_full_batcher_sorting() {
+    fn test_full_batcher_sorting() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for deg in 0..6 {
             let size = 1usize << deg;
-            let network = batcher_network(size);
+            let network = batcher_network(size)?;
 
             for _ in 0..50 {
                 let mut vals1: Vec<u64> = (0..size).map(|_| rng.gen_range(0..100)).collect();
@@ -203,15 +210,17 @@ mod tests {
                 assert_eq!(vals1, vals2);
             }
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_batcher_arbitrary_length() {
+    fn test_batcher_arbitrary_length() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for _ in 0..10 {
             let length = rng.gen_range(16..1024);
-            let network = partial_batcher_network(0, length);
+            let network = partial_batcher_network(0, length)?;
 
             for _ in 0..20 {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
@@ -223,17 +232,18 @@ mod tests {
                 assert_eq!(vals1, vals2);
             }
         }
+        Ok(())
     }
 
     #[test]
-    fn test_batcher_insertion() {
+    fn test_batcher_insertion() -> Result<()> {
         let mut rng = rand::thread_rng();
 
         for _ in 0..10 {
             let sorted_length = rng.gen_range(128..512);
             let unsorted_length = rng.gen_range(128..512);
             let length = sorted_length + unsorted_length;
-            let network = partial_batcher_network(sorted_length, unsorted_length);
+            let network = partial_batcher_network(sorted_length, unsorted_length)?;
 
             for _ in 0..20 {
                 let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
@@ -246,5 +256,7 @@ mod tests {
                 assert_eq!(vals1, vals2);
             }
         }
+
+        Ok(())
     }
 }

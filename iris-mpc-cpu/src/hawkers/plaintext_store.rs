@@ -19,6 +19,7 @@ use std::{
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
+use eyre::Result;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextIris(pub IrisCode);
@@ -149,27 +150,27 @@ impl VectorStore for PlaintextStore {
         &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
-    ) -> Self::DistanceRef {
+    ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let query_code = &self.points[query.index() as usize];
         let vector_code = &self.points[vector.index() as usize];
-        query_code.data.distance_fraction(&vector_code.data)
+        Ok(query_code.data.distance_fraction(&vector_code.data))
     }
 
-    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
         let (a, b) = *distance; // a/b
-        (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
+        Ok((a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO)
     }
 
     async fn less_than(
         &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
-    ) -> bool {
+    ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         let (a, b) = *distance1; // a/b
         let (c, d) = *distance2; // c/d
-        (a as i32) * (d as i32) - (b as i32) * (c as i32) < 0
+        Ok((a as i32) * (d as i32) - (b as i32) * (c as i32) < 0)
     }
 }
 
@@ -178,7 +179,7 @@ impl PlaintextStore {
         rng: &mut R,
         database_size: usize,
         searcher: &HnswSearcher,
-    ) -> eyre::Result<(Self, GraphMem<Self>)> {
+    ) -> Result<(Self, GraphMem<Self>)> {
         // makes sure the searcher produces same graph structure by having the same rng
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
@@ -195,7 +196,7 @@ impl PlaintextStore {
                     &query,
                     &mut rng_searcher1,
                 )
-                .await;
+                .await?;
         }
 
         Ok((plaintext_vector_store, plaintext_graph_store))
@@ -204,7 +205,7 @@ impl PlaintextStore {
     pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
         rng: &mut R,
         database_size: usize,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
         let mut plaintext_vector_store = PlaintextStore::default();
@@ -217,9 +218,7 @@ impl PlaintextStore {
         Ok(plaintext_vector_store)
     }
 
-    pub async fn create_random_store_with_db(
-        cleartext_database: Vec<IrisCode>,
-    ) -> eyre::Result<Self> {
+    pub async fn create_random_store_with_db(cleartext_database: Vec<IrisCode>) -> Result<Self> {
         let mut plaintext_vector_store = PlaintextStore::default();
 
         for raw_query in cleartext_database.iter() {
@@ -234,7 +233,7 @@ impl PlaintextStore {
         &mut self,
         rng: &mut R,
         graph_size: usize,
-    ) -> eyre::Result<GraphMem<Self>> {
+    ) -> Result<GraphMem<Self>> {
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
 
         let mut plaintext_graph_store = GraphMem::new();
@@ -244,7 +243,7 @@ impl PlaintextStore {
             let id = VectorId::from_0_index(i as u32);
             searcher
                 .insert(self, &mut plaintext_graph_store, &id, &mut rng_searcher1)
-                .await;
+                .await?;
         }
 
         Ok(plaintext_graph_store)
@@ -270,7 +269,7 @@ mod tests {
 
     #[tokio::test]
     #[traced_test]
-    async fn test_basic_ops() {
+    async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
         let formatted_database: Vec<_> = cleartext_database
@@ -289,15 +288,15 @@ mod tests {
         let q2 = plaintext_store.insert(&pid2).await;
         let q3 = plaintext_store.insert(&pid3).await;
 
-        let d01 = plaintext_store.eval_distance(&q0, &q1).await;
-        let d02 = plaintext_store.eval_distance(&q0, &q2).await;
-        let d03 = plaintext_store.eval_distance(&q0, &q3).await;
-        let d12 = plaintext_store.eval_distance(&q1, &q2).await;
-        let d13 = plaintext_store.eval_distance(&q1, &q3).await;
-        let d23 = plaintext_store.eval_distance(&q2, &q3).await;
+        let d01 = plaintext_store.eval_distance(&q0, &q1).await?;
+        let d02 = plaintext_store.eval_distance(&q0, &q2).await?;
+        let d03 = plaintext_store.eval_distance(&q0, &q3).await?;
+        let d12 = plaintext_store.eval_distance(&q1, &q2).await?;
+        let d13 = plaintext_store.eval_distance(&q1, &q3).await?;
+        let d23 = plaintext_store.eval_distance(&q2, &q3).await?;
 
-        let d10 = plaintext_store.eval_distance(&q1, &q0).await;
-        let d30 = plaintext_store.eval_distance(&q3, &q0).await;
+        let d10 = plaintext_store.eval_distance(&q1, &q0).await?;
+        let d30 = plaintext_store.eval_distance(&q3, &q0).await?;
 
         let db0 = &formatted_database[0].0;
         let db1 = &formatted_database[1].0;
@@ -305,61 +304,63 @@ mod tests {
         let db3 = &formatted_database[3].0;
 
         assert_eq!(
-            plaintext_store.less_than(&d01, &d23).await,
+            plaintext_store.less_than(&d01, &d23).await?,
             db0.get_distance(db1) < db2.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d23, &d01).await,
+            plaintext_store.less_than(&d23, &d01).await?,
             db2.get_distance(db3) < db0.get_distance(db1)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d13).await,
+            plaintext_store.less_than(&d02, &d13).await?,
             db0.get_distance(db2) < db1.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d03, &d12).await,
+            plaintext_store.less_than(&d03, &d12).await?,
             db0.get_distance(db3) < db1.get_distance(db2)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d10, &d23).await,
+            plaintext_store.less_than(&d10, &d23).await?,
             db1.get_distance(db0) < db2.get_distance(db3)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d12, &d30).await,
+            plaintext_store.less_than(&d12, &d30).await?,
             db1.get_distance(db2) < db3.get_distance(db0)
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d01).await,
+            plaintext_store.less_than(&d02, &d01).await?,
             db0.get_distance(db2) < db0.get_distance(db1)
         );
+
+        Ok(())
     }
 
     #[tokio::test]
     #[traced_test]
-    async fn test_plaintext_hnsw_matcher() {
+    async fn test_plaintext_hnsw_matcher() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::default();
         let (mut ptxt_vector, mut ptxt_graph) =
-            PlaintextStore::create_random(&mut rng, database_size, &searcher)
-                .await
-                .unwrap();
+            PlaintextStore::create_random(&mut rng, database_size, &searcher).await?;
         for i in 0..database_size {
             let id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &mut ptxt_graph, &id, 1)
-                .await;
+                .await?;
             assert!(
                 searcher
                     .is_match(&mut ptxt_vector, &[cleartext_neighbors])
-                    .await,
+                    .await?,
             );
         }
+
+        Ok(())
     }
 }

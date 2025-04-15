@@ -1,4 +1,4 @@
-use std::{error::Error, fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf};
 
 use aes_prng::AesRng;
 use clap::Parser;
@@ -29,6 +29,8 @@ use rand_chacha::ChaCha8Rng;
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{info, warn};
+
+use eyre::Result;
 
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
@@ -182,7 +184,7 @@ const N_PARTIES: usize = 3;
 
 #[allow(non_snake_case)]
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt().init();
     info!("Initialized tracing subscriber");
 
@@ -262,7 +264,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (tx_r, rx_r) = mpsc::channel::<IrisCode>(256);
     let processors = [tx_l, tx_r];
     let receivers = [rx_l, rx_r];
-    let mut jobs = JoinSet::new();
+    let mut jobs: JoinSet<Result<_>> = JoinSet::new();
 
     info!("Initializing I/O thread upon which plaintext iris codes will be read");
     let io_thread = tokio::task::spawn_blocking(move || {
@@ -306,7 +308,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let query = vector_store.prepare_query(raw_query);
                 searcher
                     .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
-                    .await;
+                    .await?;
 
                 counter += 1;
                 if counter % 1000 == 0 {
@@ -314,13 +316,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            (side, vector_store, graph, hnsw_rng)
+            Ok((side, vector_store, graph, hnsw_rng))
         });
     }
 
     info!("Building in-memory plaintext vector stores and HNSW graphs");
 
-    let mut results = jobs.join_all().await;
+    let mut results: Vec<_> = jobs
+        .join_all()
+        .await
+        .into_iter()
+        .collect::<Result<_, _>>()?;
     results.sort_by_key(|x| x.0 as usize);
 
     let n_read = io_thread.await?;
@@ -413,11 +419,7 @@ struct DbContext {
 }
 
 impl DbContext {
-    async fn persist_graph_db(
-        &self,
-        graph: GraphMem<PlaintextStore>,
-        side: StoreId,
-    ) -> Result<(), Box<dyn Error>> {
+    async fn persist_graph_db(&self, graph: GraphMem<PlaintextStore>, side: StoreId) -> Result<()> {
         let mut graph_tx = self.graph_pg.tx().await.unwrap();
 
         let GraphMem {
@@ -427,14 +429,14 @@ impl DbContext {
 
         if let Some(EntryPoint { point, layer }) = entry_point {
             let mut graph_ops = graph_tx.with_graph(side);
-            graph_ops.set_entry_point(point, layer).await;
+            graph_ops.set_entry_point(point, layer).await?;
         }
 
         for (lc, layer) in layers.into_iter().enumerate() {
             for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
                 {
                     let mut graph_ops = graph_tx.with_graph(side);
-                    graph_ops.set_links(pt, links, lc).await;
+                    graph_ops.set_links(pt, links, lc).await?;
                 }
 
                 if (idx % 1000) == 999 {
@@ -457,7 +459,7 @@ impl DbContext {
     async fn persist_vector_shares(
         &self,
         shares: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
-    ) -> Result<(usize, usize), Box<dyn Error>> {
+    ) -> Result<(usize, usize)> {
         let mut tx = self.store.tx().await?;
 
         let start_serial_id = self.store.get_max_serial_id().await.unwrap_or(0) + 1;
