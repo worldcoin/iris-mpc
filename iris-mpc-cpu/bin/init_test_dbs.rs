@@ -289,7 +289,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     info!("Initializing jobs to process plaintext iris codes");
     let hnsw_rngs = [hnsw_rng_l, hnsw_rng_r];
-    for (side, mut rx, mut vector, mut graph, mut hnsw_rng) in izip!(
+    for (side, mut rx, mut vector_store, mut graph, mut hnsw_rng) in izip!(
         STORE_IDS,
         receivers.into_iter(),
         vectors.into_iter(),
@@ -303,9 +303,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                let query = vector.prepare_query(raw_query);
+                let query = vector_store.prepare_query(raw_query);
                 searcher
-                    .insert(&mut vector, &mut graph, &query, &mut hnsw_rng)
+                    .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
                     .await;
 
                 counter += 1;
@@ -314,7 +314,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
             }
 
-            (side, vector, graph, hnsw_rng)
+            (side, vector_store, graph, hnsw_rng)
         });
     }
 
