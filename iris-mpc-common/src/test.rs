@@ -1126,13 +1126,14 @@ impl TestCaseGenerator {
     ) {
         tracing::info!(
             "Checking result for request_id: {}, idx: {}, was_match: {}, matched_batch_req_ids: \
-             {:?}, was_reauth_success: {}, was_skip_persistence_match: {}",
+             {:?}, was_reauth_success: {}, was_skip_persistence_match: {}, full_face_mirror_attack: {}",
             req_id,
             idx,
             was_match,
             matched_batch_req_ids,
             was_reauth_success,
-            was_skip_persistence_match
+            was_skip_persistence_match,
+            full_face_mirror_attack_detected
         );
         let &ExpectedResult {
             db_index: expected_idx,
@@ -1157,6 +1158,7 @@ impl TestCaseGenerator {
             assert!(was_match);
             assert!(was_skip_persistence_match);
             assert!(!was_reauth_success);
+            assert!(!full_face_mirror_attack_detected);
 
             // assert that we report correct matched indices upon reset_check requests
             if expected_idx.is_some() {
@@ -1174,6 +1176,7 @@ impl TestCaseGenerator {
 
         // if the request is a reauth, we only check the reauth success
         if let Some(is_reauth_successful) = is_reauth_successful {
+            assert!(!full_face_mirror_attack_detected);
             assert_eq!(
                 is_reauth_successful, was_reauth_success,
                 "expected reauth success status to be as expected"
@@ -1182,6 +1185,7 @@ impl TestCaseGenerator {
         }
 
         if let Some(expected_idx) = expected_idx {
+            assert!(!full_face_mirror_attack_detected);
             assert!(
                 was_match,
                 "expected this request to be a match, but it was not"
