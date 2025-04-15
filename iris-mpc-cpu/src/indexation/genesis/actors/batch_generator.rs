@@ -12,7 +12,6 @@ use super::{
 use iris_mpc_common::config::Config;
 use kameo::{
     actor::ActorRef,
-    mailbox::bounded::BoundedMailbox,
     message::{Context, Message},
     Actor,
 };
@@ -140,7 +139,6 @@ impl Message<OnEndIndexationOfBatch> for BatchGenerator {
 
 impl Actor for BatchGenerator {
     // By default mailbox is limited to 1000 messages.
-    type Mailbox = BoundedMailbox<Self>;
     type Error = IndexationError;
 
     /// Actor name - overrides auto-derived name.

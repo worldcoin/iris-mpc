@@ -14,7 +14,6 @@ use crate::hawkers::aby3::aby3_store::SharedIrisesRef;
 use iris_mpc_common::config::Config;
 use kameo::{
     actor::ActorRef,
-    mailbox::bounded::BoundedMailbox,
     message::{Context, Message},
     Actor,
 };
@@ -141,7 +140,6 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
 
 impl Actor for GraphIndexer {
     // By default mailbox is limited to 1000 messages.
-    type Mailbox = BoundedMailbox<Self>;
     type Error = IndexationError;
 
     /// Actor name - overrides auto-derived name.
