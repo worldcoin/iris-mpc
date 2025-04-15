@@ -834,15 +834,18 @@ impl HawkHandle {
                     .cache_distances(RIGHT, right_search_results)
                     .await?;
 
-                let mut left_session = hawk_session_left.write().await;
-                let mut right_session = hawk_session_right.write().await;
+                // This scope releases the below locks ASAP.
+                {
+                    let mut left_session = hawk_session_left.write().await;
+                    let mut right_session = hawk_session_right.write().await;
 
-                hawk_actor
-                    .fill_anonymized_statistics_buckets(&mut left_session)
-                    .await?;
-                hawk_actor
-                    .fill_anonymized_statistics_buckets(&mut right_session)
-                    .await?;
+                    hawk_actor
+                        .fill_anonymized_statistics_buckets(&mut left_session)
+                        .await?;
+                    hawk_actor
+                        .fill_anonymized_statistics_buckets(&mut right_session)
+                        .await?;
+                }
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
