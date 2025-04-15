@@ -1774,12 +1774,12 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
-                        match partial_match_counters_left.is_empty() {
-                            false => Some(partial_match_counters_left[i]),
-                            true => None,
-                        },
                         match partial_match_counters_right.is_empty() {
                             false => Some(partial_match_counters_right[i]),
+                            true => None,
+                        },
+                        match partial_match_counters_left.is_empty() {
+                            false => Some(partial_match_counters_left[i]),
                             true => None,
                         },
                         full_face_mirror_attack_detected[i],
