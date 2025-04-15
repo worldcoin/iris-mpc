@@ -1183,7 +1183,8 @@ impl ServerActor {
                 let attack_detected = (0..request_count)
                     .map(|i| {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
-                        merged_results[i] == NON_MATCH_ID
+                        batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
+                            && merged_results[i] == NON_MATCH_ID
                             && mirror_results.matches_with_skip_persistence[i]
                     })
                     .collect();

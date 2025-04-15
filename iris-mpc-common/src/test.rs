@@ -1031,7 +1031,6 @@ impl TestCaseGenerator {
 
                     // send a mirrored template as our test case
                     // this will ensure that the original template will be mirrored
-                    // let mirrored_template = original_template.clone().mirrored();
                     E2ETemplate {
                         // This is swapped on purpose due to the mirror attack flow
                         left: original_template[RIGHT].mirrored(),
