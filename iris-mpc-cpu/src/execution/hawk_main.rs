@@ -35,7 +35,7 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng};
-use std::slice::Iter;
+use scheduler::parallelize;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -45,6 +45,7 @@ use std::{
     time::Instant,
     vec,
 };
+use std::{future::Future, slice::Iter};
 use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
@@ -290,47 +291,62 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub async fn new_session(&mut self, store_id: StoreId) -> Result<HawkSession> {
-        let session_id = self.consensus.next_session_id();
-        self.create_session(store_id, session_id).await
+    pub fn new_sessions(
+        &mut self,
+        count: usize,
+        store_id: StoreId,
+    ) -> impl Future<Output = Result<Vec<HawkSessionRef>>> {
+        let tasks = (0..count)
+            .map(|_| {
+                let session_id = self.consensus.next_session_id();
+                self.create_session(store_id, session_id)
+            })
+            .collect_vec();
+        parallelize(tasks.into_iter())
     }
 
-    async fn create_session(
+    fn create_session(
         &self,
         store_id: StoreId,
         session_id: SessionId,
-    ) -> Result<HawkSession> {
-        // TODO: cleanup of dropped sessions.
-        let grpc_session = self.networking.create_session(session_id).await?;
+    ) -> impl Future<Output = Result<HawkSessionRef>> {
+        let networking = self.networking.clone();
+        let role_assignments = self.role_assignments.clone();
+        let storage = self.iris_store(store_id);
+        let graph_store = self.graph_store(store_id);
+        let party_id = self.party_id;
 
-        let mut network_session = NetworkSession {
-            session_id,
-            role_assignments: self.role_assignments.clone(),
-            networking: Box::new(grpc_session),
-            own_role: Role::new(self.party_id),
-        };
+        async move {
+            // TODO: cleanup of dropped sessions.
+            let grpc_session = networking.create_session(session_id).await?;
 
-        let my_session_seed = thread_rng().gen();
-        let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let mut network_session = NetworkSession {
+                session_id,
+                role_assignments,
+                networking: Box::new(grpc_session),
+                own_role: Role::new(party_id),
+            };
 
-        let my_rng_seed = thread_rng().gen();
-        let shared_rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+            let my_session_seed = thread_rng().gen();
+            let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
-        let session = Session {
-            network_session,
-            prf,
-        };
+            let my_rng_seed = thread_rng().gen();
+            let shared_rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
 
-        let aby3_store = Aby3Store {
-            session,
-            storage: self.iris_store(store_id),
-        };
+            let hawk_session = HawkSession {
+                aby3_store: Aby3Store {
+                    session: Session {
+                        network_session,
+                        prf,
+                    },
+                    storage,
+                },
+                graph_store,
+                shared_rng,
+            };
 
-        Ok(HawkSession {
-            aby3_store,
-            graph_store: self.graph_store(store_id),
-            shared_rng,
-        })
+            Ok(Arc::new(RwLock::new(hawk_session)))
+        }
     }
 
     pub async fn insert(
@@ -796,10 +812,12 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
-        let sessions = [
-            Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
-            Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
-        ];
+        let sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
+            hawk_actor.new_sessions(request_parallelism, StoreId::Left),
+            hawk_actor.new_sessions(request_parallelism, StoreId::Right),
+        )?
+        .into();
+        tracing::debug!("Created {} MPC sessions.", request_parallelism);
 
         // Validate the common state before starting.
         try_join!(
@@ -917,21 +935,6 @@ impl HawkHandle {
         });
 
         Ok(Self { job_queue: tx })
-    }
-
-    pub async fn new_sessions(
-        hawk_actor: &mut HawkActor,
-        request_parallelism: usize,
-        store_id: StoreId,
-    ) -> Result<Vec<HawkSessionRef>> {
-        tracing::debug!("Creating {} MPC sessions…", request_parallelism);
-        let mut sessions = vec![];
-        for _ in 0..request_parallelism {
-            let session = hawk_actor.new_session(store_id).await?;
-            sessions.push(Arc::new(RwLock::new(session)));
-        }
-        tracing::debug!("…created {} MPC sessions.", request_parallelism);
-        Ok(sessions)
     }
 
     pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
