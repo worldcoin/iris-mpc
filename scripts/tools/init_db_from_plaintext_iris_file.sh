@@ -11,7 +11,7 @@ declare DEFAULT_HNSW_PARAM_M=256
 declare DEFAULT_HNSW_PARAM_P=256
 
 # Default number of iris pairs to read from file.
-declare DEFAULT_NUM_IRISES=5000
+declare DEFAULT_TARGET_DB_SIZE=5000
 
 # Returns default db schema for an MPC participant.
 function get_default_db_schema() {
@@ -23,7 +23,10 @@ function get_default_db_schema() {
 # Returns default db url for an MPC participant.
 function get_default_db_url() {
     # Assumes standard postgres setup for all parties.
-    echo "postgres://postgres:postgres@localhost:5432"
+    local party_idx=$((${1} - 1))
+    local party_db="SMPC_dev_$party_idx"
+
+    echo "postgres://postgres:postgres@localhost:5432/$party_db"
 }
 
 # Returns default db schema for an MPC participant.
@@ -46,11 +49,11 @@ function get_default_path_to_iris_plaintext() {
 
 # Returns default path to prng state file utilised between runs.
 function get_default_path_to_prng_state() {
-    echo ".pnrg_state"
+    echo ".prng_state"
 }
 
 # Execute binary.
-cargo run --bin init-test-dbs -- \
+cargo run --release --bin init-test-dbs -- \
     --db-schema-party1 \
         "${SMPC_INIT_DB_SCHEMA_PARTY_1:-$(get_default_db_schema 1)}" \
     --db-schema-party2 \
@@ -67,8 +70,8 @@ cargo run --bin init-test-dbs -- \
         "${SMPC_INIT_HNSW_PARAM_EF:-"$DEFAULT_HNSW_PARAM_EF"}" \
     --hnsw-m \
         "${SMPC_INIT_DB_HNSW_PARAM_M:-"$DEFAULT_HNSW_PARAM_M"}" \
-    --num-irises \
-        "${SMPC_INIT_NUM_IRISES:-"$DEFAULT_NUM_IRISES"}" \
+    --target-db-size \
+        "${SMPC_INIT_TARGET_DB_SIZE:-"$DEFAULT_TARGET_DB_SIZE"}" \
     --prng-state-file \
         "${SMPC_INIT_PATH_TO_PRNG_STATE:-$(get_default_path_to_prng_state)}" \
     --source \

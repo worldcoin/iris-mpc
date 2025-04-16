@@ -97,10 +97,17 @@ struct Args {
     #[clap(long, default_value = ".prng_state")]
     prng_state_file: PathBuf,
 
-    /// The number of left/right iris pairs to read from file and insert into
-    /// the plaintext HNSW graphs.
-    #[clap(long, short('n'))]
-    num_irises: Option<usize>,
+    /// The target number of left/right iris pairs to build the databases from.
+    /// If existing entries are already in the database, then additional entries
+    /// are added only to increase the total database size to this value.
+    ///
+    /// If the persisted databases already have more entries than this number,
+    /// then the binary will do nothing, rather than shrinking the databases.
+    ///
+    /// If this parameter is omitted, then all entries in the source iris code
+    /// file will be used.
+    #[clap(short('s'), long)]
+    target_db_size: Option<usize>,
 
     // HNSW algorithm parameters
     /// `M` parameter for HNSW insertion.
@@ -200,6 +207,11 @@ async fn main() -> Result<()> {
     info!("Found {} existing database irises", n_existing_irises);
     warn!("TODO: Escape if count of persisted irises is not equivalent across all parties");
 
+    // number of iris pairs that need to be inserted to increase the DB size to at least the target
+    let num_irises = args
+        .target_db_size
+        .map(|target| target.saturating_sub(n_existing_irises));
+
     info!("Setting hnsw pseudo-random number generators");
     let (mut hnsw_rng_l, mut hnsw_rng_r, mut aby3_rng) = Rngs::from(&args);
     let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
@@ -274,7 +286,7 @@ async fn main() -> Result<()> {
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
             .skip(2 * n_existing_irises);
-        let stream = limited_iterator(stream, args.num_irises.map(|x| 2 * x));
+        let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
 
         let mut count = 0usize;
         for json_pt in stream {
