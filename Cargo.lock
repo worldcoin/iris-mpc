@@ -1841,9 +1841,9 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 
 [[package]]
 name = "glob"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 
 [[package]]
 name = "group"
@@ -2388,6 +2388,7 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "kameo",
+ "kameo_actors",
  "metrics 0.22.3",
  "num-traits",
  "prost",
@@ -2601,8 +2602,6 @@ dependencies = [
 [[package]]
 name = "kameo"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57f6e65513e125b82d368f59e4099aed7552969f78699b02512c666449c64a0d"
 dependencies = [
  "downcast-rs",
  "dyn-clone",
@@ -2615,10 +2614,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "kameo_actors"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "glob",
+ "kameo",
+ "tokio",
+]
+
+[[package]]
 name = "kameo_macros"
 version = "0.16.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6b32f8aacc9cc1c7d1ff111415d2172dd8c3659902c63b993b79417b7eb8971"
 dependencies = [
  "heck",
  "proc-macro2",
