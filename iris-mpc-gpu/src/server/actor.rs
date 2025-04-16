@@ -666,7 +666,9 @@ impl ServerActor {
             "Reset update batch sizes mismatch"
         );
 
-        if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
+        if (!batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0)
+            && orientation == Orientation::Normal
+        {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
@@ -717,7 +719,8 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.deletion_requests_indices.is_empty() {
+        // TODO: once we have a config to turn on and off mirror - we should run deletions based for the first flow
+        if !batch.deletion_requests_indices.is_empty() && orientation == Orientation::Mirror {
             tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
             let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
@@ -760,7 +763,8 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.reset_update_request_ids.is_empty() {
+        // TODO: once we have a config to turn on and off mirror - we should run deletions based for the first flow
+        if !batch.reset_update_request_ids.is_empty() && orientation == Orientation::Mirror {
             tracing::info!("Performing reset updates");
 
             // Overwrite the in-memory db
