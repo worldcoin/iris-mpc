@@ -98,6 +98,9 @@ pub struct BatchQuery {
     pub reset_update_indices: Vec<u32>,
     pub reset_update_request_ids: Vec<String>,
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
+
+    // Boolean value for mirror attack detection enabled
+    pub full_mirror_attack_detection_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -320,10 +320,25 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if let Some(enable_mirror_attacks) =
+                            uniqueness_request.full_face_mirror_attacks_enabled
+                        {
+                            if enable_mirror_attacks
+                                != batch_query.full_mirror_attack_detection_enabled
+                            {
+                                batch_query.full_mirror_attack_detection_enabled =
+                                    enable_mirror_attacks;
+                                tracing::info!(
+                                    "Setting mirror attack to {} for batch due to request from {}",
+                                    enable_mirror_attacks,
+                                    uniqueness_request.signup_id
+                                );
+                            }
+                        }
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
                             batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(
-                                "Setting skip_persistence to {} for requuest id {}",
+                                "Setting skip_persistence to {} for request id {}",
                                 skip_persistence,
                                 uniqueness_request.signup_id
                             );
