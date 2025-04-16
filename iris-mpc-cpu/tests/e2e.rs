@@ -46,8 +46,8 @@ async fn create_graph_from_plain_dbs(
     let left_graph = left_store.create_graph(&mut rng, DB_SIZE).await?;
     let right_graph = right_store.create_graph(&mut rng, DB_SIZE).await?;
 
-    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v.into());
-    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v.into());
+    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
+    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();

@@ -121,6 +121,19 @@ const LEFT: usize = 0;
 const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+impl std::fmt::Display for StoreId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            StoreId::Left => {
+                write!(f, "Left")
+            }
+            StoreId::Right => {
+                write!(f, "Right")
+            }
+        }
+    }
+}
+
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.

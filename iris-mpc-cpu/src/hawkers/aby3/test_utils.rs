@@ -119,6 +119,9 @@ pub async fn eval_vector_distance(
     Ok(store.lift_distances(dist).await?[0].clone())
 }
 
+// TODO Since GraphMem no longer caches distances, this function is now just a
+// no-op.  Should refactor it as a call to clone.
+
 /// Converts a plaintext graph store to a secret-shared graph store.
 ///
 /// If recompute_distance is true, distances are recomputed from scratch via
@@ -127,8 +130,6 @@ pub async fn eval_vector_distance(
 /// i.e., the sharing of a value x is a triple (x, 0, 0).
 async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Aby3Store> {
     let ep = graph_store.get_entry_point().await;
-    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId::from(vector_ref), layer_count));
-
     let layers = graph_store.get_layers();
 
     let mut shared_layers = vec![];
@@ -136,17 +137,15 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Ab
         let links = layer.get_links_map();
         let mut shared_layer = Layer::new();
         for (source_v, queue) in links {
-            let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
             for target_v in queue.iter() {
-                let target_v = VectorId::from(*target_v);
-                shared_queue.push(target_v);
+                shared_queue.push(*target_v);
             }
-            shared_layer.set_links(source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
+            shared_layer.set_links(*source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
         }
         shared_layers.push(shared_layer);
     }
-    GraphMem::from_precomputed(new_ep, shared_layers)
+    GraphMem::from_precomputed(ep, shared_layers)
 }
 
 /// Generates 3 pairs of vector stores and graphs from a plaintext

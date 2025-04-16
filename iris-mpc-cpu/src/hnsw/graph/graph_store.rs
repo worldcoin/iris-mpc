@@ -153,7 +153,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         })
     }
 
-    async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
+    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
         let table = self.entry_table();
         sqlx::query(&format!(
             "
@@ -197,7 +197,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         })
     }
 
-    async fn set_links(
+    pub async fn set_links(
         &mut self,
         base: V::VectorRef,
         links: SortedEdgeIds<V::VectorRef>,
