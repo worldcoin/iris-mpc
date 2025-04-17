@@ -321,12 +321,12 @@ async fn receive_batch(
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
                         if let Some(enable_mirror_attacks) =
-                            uniqueness_request.full_face_mirror_attacks_enabled
+                            uniqueness_request.full_face_mirror_attacks_detection_enabled
                         {
                             if enable_mirror_attacks
-                                != batch_query.full_mirror_attack_detection_enabled
+                                != batch_query.full_face_mirror_attacks_detection_enabled
                             {
-                                batch_query.full_mirror_attack_detection_enabled =
+                                batch_query.full_face_mirror_attacks_detection_enabled =
                                     enable_mirror_attacks;
                                 tracing::info!(
                                     "Setting mirror attack to {} for batch due to request from {}",

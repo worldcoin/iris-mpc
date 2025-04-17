@@ -100,7 +100,7 @@ pub struct BatchQuery {
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
 
     // Boolean value for mirror attack detection enabled
-    pub full_mirror_attack_detection_enabled: bool,
+    pub full_face_mirror_attacks_detection_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

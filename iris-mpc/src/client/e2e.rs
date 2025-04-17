@@ -516,7 +516,7 @@ impl E2EClient {
             s3_key: bucket_key,
             or_rule_serial_ids: None,
             skip_persistence: None,
-            full_face_mirror_attacks_enabled: Some(true),
+            full_face_mirror_attacks_detection_enabled: Some(true),
         };
 
         let message_attributes = {

@@ -428,9 +428,9 @@ impl TestCaseGenerator {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
-        batch0.full_mirror_attack_detection_enabled = true;
-        batch1.full_mirror_attack_detection_enabled = true;
-        batch2.full_mirror_attack_detection_enabled = true;
+        batch0.full_face_mirror_attacks_detection_enabled = true;
+        batch1.full_face_mirror_attacks_detection_enabled = true;
+        batch2.full_face_mirror_attacks_detection_enabled = true;
         let batch_size = self.rng.gen_range(1..max_batch_size);
 
         self.batch_duplicates.clear();

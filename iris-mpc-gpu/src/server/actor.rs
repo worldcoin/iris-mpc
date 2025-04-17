@@ -532,7 +532,7 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-            if batch.full_mirror_attack_detection_enabled {
+            if batch.full_face_mirror_attacks_detection_enabled {
                 tracing::info!("Full face mirror attack detection enabled");
                 match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
                     Ok(mirrored_results) => {
