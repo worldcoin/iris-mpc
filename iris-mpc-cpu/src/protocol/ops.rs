@@ -54,21 +54,20 @@ pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed
 }
 
 /// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-///
-/// Security: honest-but-curious, i.e. a malicious party can influence the RNG outcomes.
 pub async fn setup_shared_rng(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<AesRng> {
     let my_msg = NetworkValue::PrfKey(my_seed).to_network();
-
-    // send my_seed to the other parties
-    session.send_prev(my_msg.clone()).await?;
-    session.send_next(my_msg).await?;
 
     let decode = |msg| match NetworkValue::from_network(msg) {
         Ok(NetworkValue::PrfKey(seed)) => Ok(seed),
         _ => Err(eyre!("Could not deserialize PrfKey")),
     };
 
+    // Round 1: Send to the next party and receive from the previous party.
+    session.send_next(my_msg.clone()).await?;
     let prev_seed = decode(session.receive_prev().await)?;
+
+    // Round 2: Send/receive in the opposite direction.
+    session.send_prev(my_msg).await?;
     let next_seed = decode(session.receive_next().await)?;
 
     let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
