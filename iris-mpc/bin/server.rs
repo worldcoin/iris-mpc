@@ -323,6 +323,10 @@ async fn receive_batch(
                         if let Some(enable_mirror_attacks) =
                             uniqueness_request.full_face_mirror_attacks_enabled
                         {
+                            tracing::info!(
+                                "Received request to enable mirror attack detection: {}",
+                                enable_mirror_attacks
+                            );
                             if enable_mirror_attacks
                                 != batch_query.full_mirror_attack_detection_enabled
                             {
@@ -335,6 +339,7 @@ async fn receive_batch(
                                 );
                             }
                         }
+
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
                             batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(

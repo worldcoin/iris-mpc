@@ -558,6 +558,7 @@ impl ServerActor {
                     }
                 }
             } else {
+                tracing::info!("Full face mirror attack detection disabled");
                 let result = self.process_batch_query(batch, Orientation::Normal, None);
                 match result {
                     Ok(results) => {
