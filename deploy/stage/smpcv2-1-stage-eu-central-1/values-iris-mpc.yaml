@@ -1,3 +1,17 @@
+resources:
+  limits:
+    cpu: 96
+    memory: 1100Gi
+    nvidia.com/gpu: 8
+    hugepages-2Mi: 5Gi
+    vpc.amazonaws.com/efa: 4
+  requests:
+    cpu: 94
+    memory: 1100Gi
+    nvidia.com/gpu: 8
+    hugepages-2Mi: 5Gi
+    vpc.amazonaws.com/efa: 4
+
 env:
   - name: RUST_LOG
     value: "info"
