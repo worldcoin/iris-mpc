@@ -32,12 +32,12 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     /// Starting vector and layer for HNSW search
-    entry_point: Option<EntryPoint<V::VectorRef>>,
+    pub entry_point: Option<EntryPoint<V::VectorRef>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
-    layers: Vec<Layer<V>>,
+    pub layers: Vec<Layer<V>>,
 }
 
 impl<V: VectorStore> Clone for GraphMem<V> {
@@ -168,7 +168,7 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
+    pub links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
     set_hash: SetHash,
 }
 
@@ -257,7 +257,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
     use rand::{RngCore, SeedableRng};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -355,8 +355,9 @@ mod tests {
         let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
         assert_eq!(graph_store, equal_graph_store);
 
-        let different_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| PointId(v.0 * 2));
+        let different_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| {
+            VectorId::from_0_index(v.index() * 2)
+        });
         assert_ne!(graph_store, different_graph_store);
 
         Ok(())

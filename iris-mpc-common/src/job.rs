@@ -116,6 +116,8 @@ pub struct ServerJobResult<A = ()> {
     pub matches_with_skip_persistence: Vec<bool>,
     // For each query, the serial ids to which the query matched to
     pub match_ids: Vec<Vec<u32>>,
+    // For each query, the serial ids to which the query matched to for full face mirror attacks
+    pub full_face_mirror_match_ids: Vec<Vec<u32>>,
     // For each query, the serial ids to which the query partially matched to
     // on the left eye. These include also potential match ids - note that a match
     // is included in the match_ids if it matches on both side (AND rule)
@@ -123,12 +125,18 @@ pub struct ServerJobResult<A = ()> {
     pub partial_match_ids_left: Vec<Vec<u32>>,
     // same, but for the right side
     pub partial_match_ids_right: Vec<Vec<u32>>,
+    // same but for full face mirror attacks
+    pub full_face_mirror_partial_match_ids_left: Vec<Vec<u32>>,
+    pub full_face_mirror_partial_match_ids_right: Vec<Vec<u32>>,
     // The total count of matches for each query on the left eye. This is included
     // because taking the len(partial_match_ids_left) is not enough: we truncate the
     // partial matches to 2048 entries, so we want to know how many total matches there are
     pub partial_match_counters_left: Vec<usize>,
     // Same, but for the right side
     pub partial_match_counters_right: Vec<usize>,
+    // Same, but for mirror attacks
+    pub full_face_mirror_partial_match_counters_left: Vec<usize>,
+    pub full_face_mirror_partial_match_counters_right: Vec<usize>,
     // Original iris shares left for storage
     pub left_iris_requests: IrisQueryBatchEntries,
     pub right_iris_requests: IrisQueryBatchEntries,

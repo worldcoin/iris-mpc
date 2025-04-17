@@ -108,6 +108,11 @@ pub async fn process_job_result(
                     false => Some(partial_match_counters_right[i]),
                     true => None,
                 },
+                None,  // not applicable for hnsw
+                None,  // not applicable for hnsw
+                None,  // not applicable for hnsw
+                None,  // not applicable for hnsw
+                None,  // not applicable for hnsw
                 false, // not applicable for hnsw
             );
 

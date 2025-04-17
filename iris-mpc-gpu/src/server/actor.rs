@@ -1168,6 +1168,15 @@ impl ServerActor {
 
         // Check for mirror attack detection when we have previous results and are in normal orientation
         let request_count = batch.request_ids.len();
+        let mut full_face_mirror_match_ids: Vec<Vec<u32>> = vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_left: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_right: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_counters_left: Vec<usize> =
+            vec![0usize; request_count];
+        let mut full_face_mirror_partial_match_counters_right: Vec<usize> =
+            vec![0usize; request_count];
         let full_face_mirror_attack_detected: Vec<bool> =
             if orientation == Orientation::Normal && previous_results.is_some() {
                 let mirror_results = previous_results.clone().unwrap();
@@ -1178,6 +1187,13 @@ impl ServerActor {
                             && mirror_results.matches_with_skip_persistence[i]
                     })
                     .collect();
+                full_face_mirror_match_ids = mirror_results.match_ids;
+                full_face_mirror_partial_match_ids_left = mirror_results.partial_match_ids_left;
+                full_face_mirror_partial_match_ids_right = mirror_results.partial_match_ids_right;
+                full_face_mirror_partial_match_counters_left =
+                    mirror_results.partial_match_counters_left;
+                full_face_mirror_partial_match_counters_right =
+                    mirror_results.partial_match_counters_right;
 
                 // Edge case: when both normal and mirrored matches occur
                 // This happens when both merged_results and mirror_results.merged_results
@@ -1438,10 +1454,15 @@ impl ServerActor {
             matches,
             matches_with_skip_persistence,
             match_ids: match_ids_filtered,
+            full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
