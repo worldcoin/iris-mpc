@@ -45,7 +45,7 @@ impl HawkSession {
 
         if prev_state != my_state || next_state != my_state {
             return Err(eyre!(
-                "Out-of-sync: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
+                "Party states have diverged: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
             ));
         }
         Ok(())
