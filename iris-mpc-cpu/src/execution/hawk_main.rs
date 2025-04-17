@@ -332,6 +332,8 @@ impl HawkActor {
         let my_session_seed = thread_rng().gen();
         let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
+        // PRNG seed is either statically injected via configuration in TEST environments or
+        // mutually derived with other MPC parties in PROD environments.
         let shared_rng: Box<dyn RngCore + Send + Sync> =
             if let Some(base_seed) = self.args.hnsw_prng_seed {
                 let rng = session_seeded_rng(base_seed, store_id, session_id);
