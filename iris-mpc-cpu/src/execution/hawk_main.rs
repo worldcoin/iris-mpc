@@ -124,6 +124,19 @@ const LEFT: usize = 0;
 const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+impl std::fmt::Display for StoreId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            StoreId::Left => {
+                write!(f, "Left")
+            }
+            StoreId::Right => {
+                write!(f, "Right")
+            }
+        }
+    }
+}
+
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
@@ -735,10 +748,15 @@ impl HawkResult {
             matches: self.is_matches().to_vec(),
             matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
             match_ids,
+            full_face_mirror_match_ids: vec![vec![]; n_requests], // TODO.
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left: vec![vec![]; n_requests], // TODO.
+            full_face_mirror_partial_match_ids_right: vec![vec![]; n_requests], // TODO.
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left: vec![0; n_requests], // TODO.
+            full_face_mirror_partial_match_counters_right: vec![0; n_requests], // TODO.
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![], // TODO.
