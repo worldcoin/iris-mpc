@@ -1,9 +1,9 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::{
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{GraphMem, HnswSearcher},
 };
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
 use std::{fs::File, io::BufReader};
@@ -13,7 +13,7 @@ pub fn search(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> (PointId, f64) {
+) -> (VectorId, f64) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -33,7 +33,7 @@ pub fn insert(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> PointId {
+) -> VectorId {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -54,7 +54,7 @@ pub fn insert_uniform_random(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> PointId {
+) -> VectorId {
     let mut rng = ThreadRng::default();
     let raw_query = IrisCode::random_rng(&mut rng);
 

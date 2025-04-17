@@ -320,10 +320,26 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if let Some(enable_mirror_attacks) =
+                            uniqueness_request.full_face_mirror_attacks_detection_enabled
+                        {
+                            if enable_mirror_attacks
+                                != batch_query.full_face_mirror_attacks_detection_enabled
+                            {
+                                batch_query.full_face_mirror_attacks_detection_enabled =
+                                    enable_mirror_attacks;
+                                tracing::info!(
+                                    "Setting mirror attack to {} for batch due to request from {}",
+                                    enable_mirror_attacks,
+                                    uniqueness_request.signup_id
+                                );
+                            }
+                        }
+
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
                             batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(
-                                "Setting skip_persistence to {} for requuest id {}",
+                                "Setting skip_persistence to {} for request id {}",
                                 skip_persistence,
                                 uniqueness_request.signup_id
                             );
@@ -1714,10 +1730,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matches,
             matches_with_skip_persistence,
             match_ids,
+            full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_counters_right,
             left_iris_requests,
             right_iris_requests,
             deleted_ids,
@@ -1774,12 +1795,47 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
+                        match partial_match_counters_right.is_empty() {
+                            false => Some(partial_match_counters_right[i]),
+                            true => None,
+                        },
                         match partial_match_counters_left.is_empty() {
                             false => Some(partial_match_counters_left[i]),
                             true => None,
                         },
-                        match partial_match_counters_right.is_empty() {
-                            false => Some(partial_match_counters_right[i]),
+                        match full_face_mirror_match_ids[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_match_ids[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_ids_left[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_partial_match_ids_left[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_ids_right[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_partial_match_ids_right[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_counters_left.is_empty() {
+                            false => Some(full_face_mirror_partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_counters_right.is_empty() {
+                            false => Some(full_face_mirror_partial_match_counters_right[i]),
                             true => None,
                         },
                         full_face_mirror_attack_detected[i],

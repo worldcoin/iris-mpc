@@ -1,13 +1,10 @@
-use super::{
-    super::{
-        errors::IndexationError,
-        messages::{
-            OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
-        },
-        types::IrisSerialId,
-        utils::{self, fetcher, logger},
+use super::super::{
+    errors::IndexationError,
+    messages::{
+        OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
     },
-    supervisor::Supervisor,
+    types::IrisSerialId,
+    utils::{self, fetcher, logger},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
@@ -15,7 +12,7 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::message_bus::{MessageBus, Publish, Register};
+use kameo_actors::message_bus::MessageBus;
 use std::{iter::Peekable, ops::Range};
 
 // ------------------------------------------------------------------------
@@ -23,6 +20,7 @@ use std::{iter::Peekable, ops::Range};
 // ------------------------------------------------------------------------
 
 // Actor: Generates batches of Iris identifiers for processing.
+#[allow(dead_code)]
 pub struct BatchGenerator {
     // Count of generated batches.
     batch_count: usize,

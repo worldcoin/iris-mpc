@@ -2393,6 +2393,7 @@ dependencies = [
  "num-traits",
  "prost",
  "rand",
+ "rand_chacha",
  "rand_distr",
  "rstest",
  "serde",
@@ -2602,6 +2603,7 @@ dependencies = [
 [[package]]
 name = "kameo"
 version = "0.16.0"
+source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
 dependencies = [
  "downcast-rs",
  "dyn-clone",
@@ -2616,6 +2618,7 @@ dependencies = [
 [[package]]
 name = "kameo_actors"
 version = "0.1.0"
+source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
 dependencies = [
  "futures",
  "glob",
@@ -2626,6 +2629,7 @@ dependencies = [
 [[package]]
 name = "kameo_macros"
 version = "0.16.0"
+source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -3648,6 +3652,7 @@ checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
  "rand_core",
+ "serde",
 ]
 
 [[package]]

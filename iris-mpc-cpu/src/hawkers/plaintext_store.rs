@@ -132,14 +132,14 @@ impl PlaintextStore {
             is_persistent: false,
         });
 
-        let point_id = self.points.len() - 1;
-        point_id.into()
+        let idx = (self.points.len() - 1) as u32;
+        VectorId::from_0_index(idx)
     }
 }
 
 impl VectorStore for PlaintextStore {
-    type QueryRef = PointId; // Vector ID, pending insertion.
-    type VectorRef = PointId; // Vector ID, inserted.
+    type QueryRef = VectorId; // Vector ID, pending insertion.
+    type VectorRef = VectorId; // Vector ID, inserted.
     type DistanceRef = (u16, u16);
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
@@ -152,8 +152,8 @@ impl VectorStore for PlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        let query_code = &self.points[*query];
-        let vector_code = &self.points[*vector];
+        let query_code = &self.points[query.index() as usize];
+        let vector_code = &self.points[vector.index() as usize];
         Ok(query_code.data.distance_fraction(&vector_code.data))
     }
 
@@ -240,13 +240,9 @@ impl PlaintextStore {
         let searcher = HnswSearcher::default();
 
         for i in 0..graph_size {
+            let id = VectorId::from_0_index(i as u32);
             searcher
-                .insert(
-                    self,
-                    &mut plaintext_graph_store,
-                    &i.into(),
-                    &mut rng_searcher1,
-                )
+                .insert(self, &mut plaintext_graph_store, &id, &mut rng_searcher1)
                 .await?;
         }
 
@@ -257,7 +253,7 @@ impl PlaintextStore {
 impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         // The query is now accepted in the store. It keeps the same ID.
-        self.points[*query].is_persistent = true;
+        self.points[query.index() as usize].is_persistent = true;
         *query
     }
 }
@@ -354,8 +350,9 @@ mod tests {
         let (mut ptxt_vector, mut ptxt_graph) =
             PlaintextStore::create_random(&mut rng, database_size, &searcher).await?;
         for i in 0..database_size {
+            let id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = searcher
-                .search(&mut ptxt_vector, &mut ptxt_graph, &i.into(), 1)
+                .search(&mut ptxt_vector, &mut ptxt_graph, &id, 1)
                 .await?;
             assert!(
                 searcher

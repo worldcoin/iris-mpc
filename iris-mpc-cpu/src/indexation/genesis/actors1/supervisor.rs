@@ -4,10 +4,7 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::{
-    message_bus::{MessageBus, Publish, Register},
-    DeliveryStrategy,
-};
+use kameo_actors::{message_bus::MessageBus, DeliveryStrategy};
 use {
     super::super::{
         errors::IndexationError,
@@ -181,7 +178,7 @@ impl Actor for Supervisor {
     ///
     /// * `actor_ref` - Self referential kameo actor pointer.
     ///
-    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
         let mbus = MessageBus::new(DeliveryStrategy::Guaranteed);

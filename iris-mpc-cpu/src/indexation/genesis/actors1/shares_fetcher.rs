@@ -1,11 +1,8 @@
-use super::{
-    super::{
-        errors::IndexationError,
-        messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
-        types::IrisGaloisShares,
-        utils::{self, fetcher, logger},
-    },
-    supervisor::Supervisor,
+use super::super::{
+    errors::IndexationError,
+    messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
+    types::IrisGaloisShares,
+    utils::{self, fetcher, logger},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
@@ -14,7 +11,7 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::message_bus::{MessageBus, Publish, Register};
+use kameo_actors::message_bus::MessageBus;
 
 // ------------------------------------------------------------------------
 // Actor name + state + ctor + methods.
@@ -22,6 +19,7 @@ use kameo_actors::message_bus::{MessageBus, Publish, Register};
 
 // Fetches Iris shares from remote store.
 #[derive(Actor, Clone)]
+#[allow(dead_code)]
 pub struct SharesFetcher {
     // System configuration information.
     config: Config,

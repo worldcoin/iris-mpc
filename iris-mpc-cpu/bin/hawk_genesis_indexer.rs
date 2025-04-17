@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let a_ref = kameo::spawn(Supervisor::new(config));
 
     // Run supervisor until shutdown or killed.
-    a_ref.wait_for_stop().await;
+    a_ref.wait_for_shutdown().await;
 
     Ok(())
 }

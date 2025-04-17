@@ -116,6 +116,7 @@ pub struct UniquenessRequest {
     pub s3_key: String,
     pub or_rule_serial_ids: Option<Vec<u32>>,
     pub skip_persistence: Option<bool>,
+    pub full_face_mirror_attacks_detection_enabled: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

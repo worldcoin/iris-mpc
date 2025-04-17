@@ -781,6 +781,11 @@ pub mod tests {
             None,
             None,
             None,
+            None,
+            None,
+            None,
+            None,
+            None,
             false,
         ))?;
         let result_events = vec![result_event; count];

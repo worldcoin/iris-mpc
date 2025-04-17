@@ -1,14 +1,10 @@
-use super::{
-    super::{
-        errors::IndexationError,
-        messages::{
-            OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch,
-            OnFetchIrisShares,
-        },
-        types::IrisGaloisShares,
-        utils::logger,
+use super::super::{
+    errors::IndexationError,
+    messages::{
+        OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch, OnFetchIrisShares,
     },
-    supervisor::Supervisor,
+    types::IrisGaloisShares,
+    utils::logger,
 };
 use crate::hawkers::aby3::aby3_store::SharedIrisesRef;
 use iris_mpc_common::config::Config;
@@ -17,7 +13,7 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::message_bus::{MessageBus, Publish, Register};
+use kameo_actors::message_bus::MessageBus;
 
 // ------------------------------------------------------------------------
 // Actor name + state + ctor + methods.
