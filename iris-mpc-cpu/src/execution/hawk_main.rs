@@ -35,6 +35,7 @@ use iris_mpc_common::{
 use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -45,7 +46,7 @@ use std::{
     vec,
 };
 use std::{
-    hash::{DefaultHasher, Hash, Hasher},
+    hash::{Hash, Hasher},
     slice::Iter,
 };
 use tokio::{
@@ -501,7 +502,7 @@ impl HawkActor {
 }
 
 pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: SessionId) -> ChaCha8Rng {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = SipHasher13::new();
     (base_seed, store_id, session_id).hash(&mut hasher);
     let seed = hasher.finish();
     ChaCha8Rng::seed_from_u64(seed)
