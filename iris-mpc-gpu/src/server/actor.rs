@@ -532,25 +532,42 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-
-            match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
-                Ok(mirrored_results) => {
-                    match self.process_batch_query(
-                        batch,
-                        Orientation::Normal,
-                        Some(mirrored_results),
-                    ) {
-                        Ok(combined_results) => {
-                            // Send the combined results to the return channel
-                            let _ = return_channel.send(combined_results);
-                        }
-                        Err(e) => {
-                            tracing::error!("Error processing batch query (normal flow): {:?}", e);
+            if batch.full_face_mirror_attacks_detection_enabled {
+                tracing::info!("Full face mirror attack detection enabled");
+                match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
+                    Ok(mirrored_results) => {
+                        match self.process_batch_query(
+                            batch,
+                            Orientation::Normal,
+                            Some(mirrored_results),
+                        ) {
+                            Ok(combined_results) => {
+                                // Send the combined results to the return channel
+                                let _ = return_channel.send(combined_results);
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error processing batch query (normal flow): {:?}",
+                                    e
+                                );
+                            }
                         }
                     }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query (mirror flow): {:?}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error processing batch query (mirror flow): {:?}", e);
+            } else {
+                tracing::info!("Full face mirror attack detection disabled");
+                let result = self.process_batch_query(batch, Orientation::Normal, None);
+                match result {
+                    Ok(results) => {
+                        // Send the results to the return channel
+                        let _ = return_channel.send(results);
+                    }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query: {:?}", e);
+                    }
                 }
             }
         }
@@ -592,6 +609,9 @@ impl ServerActor {
         previous_results: Option<ServerJobResult>,
     ) -> eyre::Result<ServerJobResult> {
         let now = Instant::now();
+        // we only want to perform deletions and reset updates for the first query
+        // this ensures we do not perform the same request twice and enables faster processing
+        let is_first_query = previous_results.is_none();
 
         let batch = PreprocessedBatchQuery::from(batch);
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
@@ -719,8 +739,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        // TODO: once we have a config to turn on and off mirror - we should run deletions based for the first flow
-        if !batch.deletion_requests_indices.is_empty() && orientation == Orientation::Mirror {
+        if !batch.deletion_requests_indices.is_empty() && is_first_query {
             tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
             let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
@@ -763,8 +782,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        // TODO: once we have a config to turn on and off mirror - we should run deletions based for the first flow
-        if !batch.reset_update_request_ids.is_empty() && orientation == Orientation::Mirror {
+        if !batch.reset_update_request_ids.is_empty() && is_first_query {
             tracing::info!("Performing reset updates");
 
             // Overwrite the in-memory db
