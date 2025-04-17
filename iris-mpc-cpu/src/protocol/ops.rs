@@ -20,8 +20,11 @@ use crate::{
         IntRing2k,
     },
 };
+use aes_prng::AesRng;
 use eyre::{eyre, Result};
 use itertools::{izip, Itertools};
+use rand::SeedableRng;
+use std::array;
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -48,6 +51,27 @@ pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed
     };
     // creating the two PRFs
     Ok(Prf::new(my_seed, other_seed))
+}
+
+/// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
+pub async fn setup_shared_rng(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<AesRng> {
+    let my_msg = NetworkValue::PrfKey(my_seed).to_network();
+
+    let decode = |msg| match NetworkValue::from_network(msg) {
+        Ok(NetworkValue::PrfKey(seed)) => Ok(seed),
+        _ => Err(eyre!("Could not deserialize PrfKey")),
+    };
+
+    // Round 1: Send to the next party and receive from the previous party.
+    session.send_next(my_msg.clone()).await?;
+    let prev_seed = decode(session.receive_prev().await)?;
+
+    // Round 2: Send/receive in the opposite direction.
+    session.send_prev(my_msg).await?;
+    let next_seed = decode(session.receive_next().await)?;
+
+    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
+    Ok(AesRng::from_seed(shared_seed))
 }
 
 /// Compares the distance between two iris pairs to a threshold.

@@ -16,7 +16,10 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
+    protocol::{
+        ops::{setup_replicated_prf, setup_shared_rng},
+        shared_iris::GaloisRingSharedIris,
+    },
 };
 use aes_prng::AesRng;
 use clap::Parser;
@@ -31,7 +34,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{thread_rng, Rng};
 use std::slice::Iter;
 use std::{
     collections::HashMap,
@@ -323,6 +326,9 @@ impl HawkActor {
         let my_session_seed = thread_rng().gen();
         let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
+        let my_rng_seed = thread_rng().gen();
+        let shared_rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+
         let session = Session {
             network_session,
             prf,
@@ -332,9 +338,6 @@ impl HawkActor {
             session,
             storage: self.iris_store(store_id),
         };
-
-        // TODO: Use a better seed?
-        let shared_rng = AesRng::seed_from_u64(session_id.0);
 
         Ok(HawkSession {
             aby3_store,
@@ -1020,6 +1023,7 @@ mod tests {
         iris_db::db::IrisDB,
         job::{BatchMetadata, IrisQueryBatchEntries},
     };
+    use rand::SeedableRng;
     use std::ops::Not;
     use tokio::time::sleep;
 
