@@ -50,9 +50,7 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
-backon = { version = "1.4.0", default-features = false, features = [
-    "tokio-sleep",
-] }
+backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
 rand_chacha = { version = "0.3", features = ["serde1"] }
 
 [dev-dependencies]
