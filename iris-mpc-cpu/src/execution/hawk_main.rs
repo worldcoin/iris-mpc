@@ -39,13 +39,13 @@ use scheduler::parallelize;
 use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
+    f32::consts::E,
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
     sync::Arc,
-    time::Duration,
-    time::Instant,
+    time::{Duration, Instant},
     vec,
 };
 use tokio::{
@@ -846,7 +846,7 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
-        let sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
+        let mut sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
             hawk_actor.new_sessions(request_parallelism, StoreId::Left),
             hawk_actor.new_sessions(request_parallelism, StoreId::Right),
         )?
@@ -864,8 +864,29 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let results = Self::handle_job(&mut hawk_actor, &sessions, &job.request).await;
-                let _ = job.return_channel.send(results);
+                let job_result =
+                    Self::handle_job(&mut hawk_actor, &mut sessions, &job.request).await;
+
+                let health = Self::maybe_recover(
+                    &mut hawk_actor,
+                    &mut sessions,
+                    request_parallelism,
+                    job_result.is_err(),
+                )
+                .await;
+                let stop = health.is_err();
+
+                let _ = job.return_channel.send(health.and(job_result));
+
+                if stop {
+                    tracing::error!("Stopping HawkActor in inconsistent state.");
+                    break;
+                }
+            }
+
+            rx.close();
+            while let Some(job) = rx.recv().await {
+                let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
             }
         });
 
@@ -933,12 +954,6 @@ impl HawkHandle {
             tracing::info!("Persistence is disabled, not writing to DB");
         }
 
-        // Validate the common state after processing the requests.
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
-
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
         let left_query_count = search_queries[LEFT].len();
@@ -947,6 +962,30 @@ impl HawkHandle {
         metrics::gauge!("search_queries_right").set(right_query_count as f64);
 
         Ok(results)
+    }
+
+    async fn maybe_recover(
+        hawk_actor: &mut HawkActor,
+        sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+        request_parallelism: usize,
+        job_failed: bool,
+    ) -> Result<()> {
+        if job_failed {
+            // There is some error so the sessions may be somehow invalid. Make new ones.
+            *sessions = try_join!(
+                hawk_actor.new_sessions(request_parallelism, StoreId::Left),
+                hawk_actor.new_sessions(request_parallelism, StoreId::Right),
+            )?
+            .into();
+        }
+
+        // Validate the common state after processing the requests.
+        try_join!(
+            HawkSession::state_check(&sessions[LEFT][0]),
+            HawkSession::state_check(&sessions[RIGHT][0]),
+        )?;
+
+        Ok(())
     }
 
     pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
