@@ -7,7 +7,10 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{StoreId, STORE_IDS},
+    execution::{
+        hawk_main::{session_seeded_rng, StoreId, STORE_IDS},
+        session::SessionId,
+    },
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::{graph_store::GraphPg, layered_graph::EntryPoint},
@@ -23,7 +26,6 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
-use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
 use serde_json::Deserializer;
@@ -131,12 +133,12 @@ struct Args {
 
     /// PRNG seed for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
-    #[clap(default_value = "0")]
+    #[clap(long, default_value = "0")]
     hnsw_prng_seed: u64,
 
     /// PRNG seed for ABY3 MPC protocols, used for locally generating secret
     /// shares of iris codes.
-    #[clap(default_value = "1")]
+    #[clap(long, default_value = "1")]
     aby3_prng_seed: u64,
 }
 
@@ -178,10 +180,9 @@ impl From<&Args> for HnswParams {
 // Convertor: Args -> Rngs.
 impl From<&Args> for Rngs {
     fn from(value: &Args) -> Self {
-        let mut hnsw_base_rng = ChaCha8Rng::seed_from_u64(value.hnsw_prng_seed);
         (
-            ChaCha8Rng::from_rng(&mut hnsw_base_rng).unwrap(),
-            ChaCha8Rng::from_rng(&mut hnsw_base_rng).unwrap(),
+            session_seeded_rng(value.hnsw_prng_seed, StoreId::Left, SessionId(0)),
+            session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(0)),
             <AesRng as rand::SeedableRng>::seed_from_u64(value.aby3_prng_seed),
         )
     }
