@@ -309,7 +309,16 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub fn new_sessions(
+    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        let (l, r) = try_join!(
+            self.new_sessions_side(self.args.request_parallelism, StoreId::Left),
+            self.new_sessions_side(self.args.request_parallelism, StoreId::Right),
+        )?;
+        tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
+        Ok([l, r])
+    }
+
+    fn new_sessions_side(
         &mut self,
         count: usize,
         store_id: StoreId,
@@ -336,7 +345,6 @@ impl HawkActor {
         let hnsw_prng_seed = self.args.hnsw_prng_seed;
 
         async move {
-            // TODO: cleanup of dropped sessions.
             let grpc_session = networking.create_session(session_id).await?;
 
             let mut network_session = NetworkSession {
@@ -846,15 +854,7 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        let mut sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
-            hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Left),
-            hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Right),
-        )?
-        .into();
-        tracing::debug!(
-            "Created {} MPC sessions.",
-            hawk_actor.args.request_parallelism
-        );
+        let mut sessions = hawk_actor.new_sessions().await?;
 
         // Validate the common state before starting.
         try_join!(
@@ -872,8 +872,8 @@ impl HawkHandle {
 
                 let health =
                     Self::maybe_recover(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
-                let stop = health.is_err();
 
+                let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
 
                 if stop {
@@ -969,11 +969,7 @@ impl HawkHandle {
     ) -> Result<()> {
         if job_failed {
             // There is some error so the sessions may be somehow invalid. Make new ones.
-            *sessions = try_join!(
-                hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Left),
-                hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Right),
-            )?
-            .into();
+            *sessions = hawk_actor.new_sessions().await?;
         }
 
         // Validate the common state after processing the requests.
@@ -981,7 +977,6 @@ impl HawkHandle {
             HawkSession::state_check(&sessions[LEFT][0]),
             HawkSession::state_check(&sessions[RIGHT][0]),
         )?;
-
         Ok(())
     }
 
