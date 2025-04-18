@@ -21,7 +21,6 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
-use aes_prng::AesRng;
 use clap::Parser;
 use eyre::{Report, Result};
 use futures::try_join;
@@ -34,18 +33,22 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use rand::{thread_rng, Rng};
+use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
+use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
+    future::Future,
+    hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
+    slice::Iter,
     sync::Arc,
     time::Duration,
     time::Instant,
     vec,
 };
-use std::{future::Future, slice::Iter};
 use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
@@ -83,6 +86,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
+    #[clap(long)]
+    pub hnsw_prng_seed: Option<u64>,
+
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 
@@ -116,7 +122,7 @@ pub struct HawkActor {
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -155,7 +161,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: AesRng,
+    shared_rng: Box<dyn RngCore + Send + Sync>,
 }
 
 type HawkSessionRef = Arc<RwLock<HawkSession>>;
@@ -328,6 +334,7 @@ impl HawkActor {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let party_id = self.party_id;
+        let hnsw_prng_seed = self.args.hnsw_prng_seed;
 
         async move {
             // TODO: cleanup of dropped sessions.
@@ -343,8 +350,17 @@ impl HawkActor {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
-            let my_rng_seed = thread_rng().gen();
-            let shared_rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+            // PRNG seed is either statically injected via configuration in TEST environments or
+            // mutually derived with other MPC parties in PROD environments.
+            let shared_rng: Box<dyn RngCore + Send + Sync> = if let Some(base_seed) = hnsw_prng_seed
+            {
+                let rng = session_seeded_rng(base_seed, store_id, session_id);
+                Box::new(rng)
+            } else {
+                let my_rng_seed = thread_rng().gen();
+                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+                Box::new(rng)
+            };
 
             let hawk_session = HawkSession {
                 aby3_store: Aby3Store {
@@ -499,6 +515,13 @@ impl HawkActor {
             ]),
         )
     }
+}
+
+pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: SessionId) -> ChaCha8Rng {
+    let mut hasher = SipHasher13::new();
+    (base_seed, store_id, session_id).hash(&mut hasher);
+    let seed = hasher.finish();
+    ChaCha8Rng::seed_from_u64(seed)
 }
 
 pub struct IrisLoader<'a> {
@@ -1019,6 +1042,7 @@ mod tests {
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
+    use aes_prng::AesRng;
     use futures::future::JoinAll;
     use iris_mpc_common::{
         galois_engine::degree4::preprocess_iris_message_shares,
@@ -1286,6 +1310,7 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            hnsw_prng_seed: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
