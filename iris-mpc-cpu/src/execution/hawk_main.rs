@@ -844,11 +844,12 @@ impl JobSubmissionHandle for HawkHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl std::future::Future<Output = ServerJobResult> {
-        let request = HawkRequest::from(&batch);
-        let result = self.submit(request).await.unwrap();
-
-        async move { result.job_result(batch) }
+    ) -> impl Future<Output = Result<ServerJobResult>> {
+        async move {
+            let request = HawkRequest::from(&batch);
+            let result = self.submit(request).await?;
+            Ok(result.job_result(batch))
+        }
     }
 }
 
@@ -1138,8 +1139,7 @@ mod tests {
                     ],
                     ..BatchQuery::default()
                 };
-                let res = handle.submit_batch_query(batch).await.await;
-                Ok(res)
+                handle.submit_batch_query(batch).await.await
             })
             .collect::<JoinSet<_>>()
             .join_all()

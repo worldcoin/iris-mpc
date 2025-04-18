@@ -787,7 +787,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             // await the result
             let result = timeout(processing_timeout, result_future.await)
                 .await
-                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))??;
 
             tx.send(result).await?;
 
