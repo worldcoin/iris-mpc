@@ -845,13 +845,16 @@ impl JobSubmissionHandle for HawkHandle {
 }
 
 impl HawkHandle {
-    pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
+    pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
         let mut sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
-            hawk_actor.new_sessions(request_parallelism, StoreId::Left),
-            hawk_actor.new_sessions(request_parallelism, StoreId::Right),
+            hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Left),
+            hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Right),
         )?
         .into();
-        tracing::debug!("Created {} MPC sessions.", request_parallelism);
+        tracing::debug!(
+            "Created {} MPC sessions.",
+            hawk_actor.args.request_parallelism
+        );
 
         // Validate the common state before starting.
         try_join!(
@@ -867,13 +870,8 @@ impl HawkHandle {
                 let job_result =
                     Self::handle_job(&mut hawk_actor, &mut sessions, &job.request).await;
 
-                let health = Self::maybe_recover(
-                    &mut hawk_actor,
-                    &mut sessions,
-                    request_parallelism,
-                    job_result.is_err(),
-                )
-                .await;
+                let health =
+                    Self::maybe_recover(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
                 let stop = health.is_err();
 
                 let _ = job.return_channel.send(health.and(job_result));
@@ -967,14 +965,13 @@ impl HawkHandle {
     async fn maybe_recover(
         hawk_actor: &mut HawkActor,
         sessions: &mut BothEyes<Vec<HawkSessionRef>>,
-        request_parallelism: usize,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
             // There is some error so the sessions may be somehow invalid. Make new ones.
             *sessions = try_join!(
-                hawk_actor.new_sessions(request_parallelism, StoreId::Left),
-                hawk_actor.new_sessions(request_parallelism, StoreId::Right),
+                hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Left),
+                hawk_actor.new_sessions(hawk_actor.args.request_parallelism, StoreId::Right),
             )?
             .into();
         }
@@ -1043,7 +1040,7 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
     let hawk_actor = HawkActor::from_cli(&args).await?;
-    HawkHandle::new(hawk_actor, args.request_parallelism).await
+    HawkHandle::new(hawk_actor).await
 }
 
 #[cfg(test)]
