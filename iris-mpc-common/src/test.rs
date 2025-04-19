@@ -1247,9 +1247,9 @@ impl TestCaseGenerator {
                 handle2.submit_batch_query(batch2)
             );
 
-            let res0 = res0_fut.await;
-            let res1 = res1_fut.await;
-            let res2 = res2_fut.await;
+            let res0 = res0_fut.await?;
+            let res1 = res1_fut.await?;
+            let res2 = res2_fut.await?;
 
             let mut resp_counters = HashMap::new();
             for req in requests.keys() {

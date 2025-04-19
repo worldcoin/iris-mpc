@@ -83,7 +83,7 @@ async fn start_hawk_node(
         create_graph_from_plain_dbs(args.party_index, left_db, right_db).await?;
     let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
 
-    let handle = HawkHandle::new(hawk_actor, HAWK_REQUEST_PARALLELISM).await?;
+    let handle = HawkHandle::new(hawk_actor).await?;
 
     Ok(handle)
 }

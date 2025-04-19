@@ -388,7 +388,7 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    pub async fn create_outgoing_streams(&mut self, session_id: SessionId) -> Result<OutStreams> {
+    pub async fn create_outgoing_streams(&self, session_id: SessionId) -> Result<OutStreams> {
         if self.active_sessions.contains(&session_id) {
             return Err(eyre!(
                 "Session {:?} has already been created by player {:?}",
