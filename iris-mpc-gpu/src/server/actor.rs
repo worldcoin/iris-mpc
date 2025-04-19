@@ -532,25 +532,42 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-
-            match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
-                Ok(mirrored_results) => {
-                    match self.process_batch_query(
-                        batch,
-                        Orientation::Normal,
-                        Some(mirrored_results),
-                    ) {
-                        Ok(combined_results) => {
-                            // Send the combined results to the return channel
-                            let _ = return_channel.send(combined_results);
-                        }
-                        Err(e) => {
-                            tracing::error!("Error processing batch query (normal flow): {:?}", e);
+            if batch.full_face_mirror_attacks_detection_enabled {
+                tracing::info!("Full face mirror attack detection enabled");
+                match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
+                    Ok(mirrored_results) => {
+                        match self.process_batch_query(
+                            batch,
+                            Orientation::Normal,
+                            Some(mirrored_results),
+                        ) {
+                            Ok(combined_results) => {
+                                // Send the combined results to the return channel
+                                let _ = return_channel.send(combined_results);
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error processing batch query (normal flow): {:?}",
+                                    e
+                                );
+                            }
                         }
                     }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query (mirror flow): {:?}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Error processing batch query (mirror flow): {:?}", e);
+            } else {
+                tracing::info!("Full face mirror attack detection disabled");
+                let result = self.process_batch_query(batch, Orientation::Normal, None);
+                match result {
+                    Ok(results) => {
+                        // Send the results to the return channel
+                        let _ = return_channel.send(results);
+                    }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query: {:?}", e);
+                    }
                 }
             }
         }
@@ -592,6 +609,9 @@ impl ServerActor {
         previous_results: Option<ServerJobResult>,
     ) -> eyre::Result<ServerJobResult> {
         let now = Instant::now();
+        // we only want to perform deletions and reset updates for the first query
+        // this ensures we do not perform the same request twice and enables faster processing
+        let is_first_query = previous_results.is_none();
 
         let batch = PreprocessedBatchQuery::from(batch);
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
@@ -666,7 +686,9 @@ impl ServerActor {
             "Reset update batch sizes mismatch"
         );
 
-        if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
+        if (!batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0)
+            && orientation == Orientation::Normal
+        {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
@@ -717,7 +739,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.deletion_requests_indices.is_empty() {
+        if !batch.deletion_requests_indices.is_empty() && is_first_query {
             tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
             let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
@@ -760,7 +782,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.reset_update_request_ids.is_empty() {
+        if !batch.reset_update_request_ids.is_empty() && is_first_query {
             tracing::info!("Performing reset updates");
 
             // Overwrite the in-memory db
@@ -1164,6 +1186,15 @@ impl ServerActor {
 
         // Check for mirror attack detection when we have previous results and are in normal orientation
         let request_count = batch.request_ids.len();
+        let mut full_face_mirror_match_ids: Vec<Vec<u32>> = vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_left: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_right: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_counters_left: Vec<usize> =
+            vec![0usize; request_count];
+        let mut full_face_mirror_partial_match_counters_right: Vec<usize> =
+            vec![0usize; request_count];
         let full_face_mirror_attack_detected: Vec<bool> =
             if orientation == Orientation::Normal && previous_results.is_some() {
                 let mirror_results = previous_results.clone().unwrap();
@@ -1172,8 +1203,16 @@ impl ServerActor {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
                         merged_results[i] == NON_MATCH_ID
                             && mirror_results.matches_with_skip_persistence[i]
+                            && batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
                     })
                     .collect();
+                full_face_mirror_match_ids = mirror_results.match_ids;
+                full_face_mirror_partial_match_ids_left = mirror_results.partial_match_ids_left;
+                full_face_mirror_partial_match_ids_right = mirror_results.partial_match_ids_right;
+                full_face_mirror_partial_match_counters_left =
+                    mirror_results.partial_match_counters_left;
+                full_face_mirror_partial_match_counters_right =
+                    mirror_results.partial_match_counters_right;
 
                 // Edge case: when both normal and mirrored matches occur
                 // This happens when both merged_results and mirror_results.merged_results
@@ -1434,10 +1473,15 @@ impl ServerActor {
             matches,
             matches_with_skip_persistence,
             match_ids: match_ids_filtered,
+            full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,

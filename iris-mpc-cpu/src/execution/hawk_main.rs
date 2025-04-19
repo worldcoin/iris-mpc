@@ -16,9 +16,11 @@ use crate::{
     },
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
-    protocol::{ops::setup_replicated_prf, shared_iris::GaloisRingSharedIris},
+    protocol::{
+        ops::{setup_replicated_prf, setup_shared_rng},
+        shared_iris::GaloisRingSharedIris,
+    },
 };
-use aes_prng::AesRng;
 use clap::Parser;
 use eyre::{Report, Result};
 use futures::try_join;
@@ -31,7 +33,9 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use rand::{thread_rng, Rng, SeedableRng};
+use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
@@ -40,6 +44,10 @@ use std::{
     time::Duration,
     time::Instant,
     vec,
+};
+use std::{
+    hash::{Hash, Hasher},
+    slice::Iter,
 };
 use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
@@ -57,6 +65,10 @@ mod rot;
 mod scheduler;
 mod search;
 pub mod state_check;
+use crate::protocol::ops::{
+    compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,
+};
+use crate::shares::share::DistanceShare;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -73,6 +85,9 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
+
+    #[clap(long)]
+    pub hnsw_prng_seed: Option<u64>,
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
@@ -100,13 +115,14 @@ pub struct HawkActor {
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
+    distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
 
     // ---- My network setup ----
     networking: GrpcHandle,
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -115,10 +131,24 @@ const LEFT: usize = 0;
 const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+impl std::fmt::Display for StoreId {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            StoreId::Left => {
+                write!(f, "Left")
+            }
+            StoreId::Right => {
+                write!(f, "Right")
+            }
+        }
+    }
+}
+
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
 type VecRequests<T> = Vec<T>;
+type VecBuckets = Vec<u32>;
 /// VecEdges are lists of things for each neighbor of a vector (graph edges).
 type VecEdges<T> = Vec<T>;
 /// MapEdges are maps from neighbor IDs to something.
@@ -131,7 +161,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: AesRng,
+    shared_rng: Box<dyn RngCore + Send + Sync>,
 }
 
 type HawkSessionRef = Arc<RwLock<HawkSession>>;
@@ -264,6 +294,7 @@ impl HawkActor {
             iris_store,
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
+            distances_cache: [vec![], vec![]],
             role_assignments: Arc::new(role_assignments),
             consensus: Consensus::default(),
             networking,
@@ -302,6 +333,18 @@ impl HawkActor {
         let my_session_seed = thread_rng().gen();
         let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
+        // PRNG seed is either statically injected via configuration in TEST environments or
+        // mutually derived with other MPC parties in PROD environments.
+        let shared_rng: Box<dyn RngCore + Send + Sync> =
+            if let Some(base_seed) = self.args.hnsw_prng_seed {
+                let rng = session_seeded_rng(base_seed, store_id, session_id);
+                Box::new(rng)
+            } else {
+                let my_rng_seed = thread_rng().gen();
+                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+                Box::new(rng)
+            };
+
         let session = Session {
             network_session,
             prf,
@@ -311,9 +354,6 @@ impl HawkActor {
             session,
             storage: self.iris_store(store_id),
         };
-
-        // TODO: Use a better seed?
-        let shared_rng = AesRng::seed_from_u64(session_id.0);
 
         Ok(HawkSession {
             aby3_store,
@@ -362,6 +402,86 @@ impl HawkActor {
         Ok(connect_plan)
     }
 
+    async fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
+        (1..=n_buckets)
+            .map(|x: usize| {
+                translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
+            })
+            .collect::<Vec<_>>()
+    }
+
+    pub async fn cache_distances(
+        &mut self,
+        side: usize,
+        search_results: Iter<'_, VecRots<InsertPlan>>,
+    ) -> Result<()> {
+        let mut neighbors: Vec<&SortedNeighborhoodV<Aby3Store>> = vec![];
+        for result in search_results {
+            let n = result
+                .iter()
+                .flat_map(|plan| plan.links.iter())
+                .collect_vec();
+            neighbors.extend(n);
+        }
+
+        for neighbor in neighbors.iter() {
+            let distances = neighbor.distances_cloned();
+            self.distances_cache[side].extend(distances);
+        }
+        Ok(())
+    }
+
+    pub async fn compute_buckets(
+        &self,
+        session: &mut HawkSession,
+        side: usize,
+    ) -> Result<VecBuckets> {
+        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets).await;
+        let bucket_result_shares = compare_threshold_buckets(
+            &mut session.aby3_store.session,
+            translated_thresholds.as_slice(),
+            self.distances_cache[side].as_slice(),
+        )
+        .await?;
+
+        let buckets = open_ring(&mut session.aby3_store.session, &bucket_result_shares).await?;
+        Ok(buckets)
+    }
+
+    pub async fn fill_anonymized_statistics_buckets(
+        &mut self,
+        session: &mut HawkSession,
+    ) -> Result<()> {
+        if self.distances_cache[LEFT].len() > self.args.match_distances_buffer_size {
+            tracing::info!(
+                "Gathered enough distances for left eye: {}, filling anonymized stats buckets",
+                self.distances_cache[LEFT].len()
+            );
+            let buckets = self.compute_buckets(session, LEFT).await?;
+            self.anonymized_bucket_statistics[LEFT].fill_buckets(
+                &buckets,
+                MATCH_THRESHOLD_RATIO,
+                self.anonymized_bucket_statistics[LEFT].next_start_time_utc_timestamp,
+            );
+            self.distances_cache[LEFT].clear();
+        }
+
+        if self.distances_cache[RIGHT].len() > self.args.match_distances_buffer_size {
+            tracing::info!(
+                "Gathered enough distances for right eye: {}, filling anonymized stats buckets",
+                self.distances_cache[RIGHT].len()
+            );
+            let buckets = self.compute_buckets(session, RIGHT).await?;
+            self.anonymized_bucket_statistics[RIGHT].fill_buckets(
+                &buckets,
+                MATCH_THRESHOLD_RATIO,
+                self.anonymized_bucket_statistics[RIGHT].next_start_time_utc_timestamp,
+            );
+            self.distances_cache[RIGHT].clear();
+        }
+        Ok(())
+    }
+
     /// Borrow the in-memory iris and graph stores to modify them.
     pub async fn as_iris_loader(&mut self) -> (IrisLoader, GraphLoader) {
         (
@@ -379,6 +499,13 @@ impl HawkActor {
             ]),
         )
     }
+}
+
+pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: SessionId) -> ChaCha8Rng {
+    let mut hasher = SipHasher13::new();
+    (base_seed, store_id, session_id).hash(&mut hasher);
+    let seed = hasher.finish();
+    ChaCha8Rng::seed_from_u64(seed)
 }
 
 pub struct IrisLoader<'a> {
@@ -644,10 +771,15 @@ impl HawkResult {
             matches: self.is_matches().to_vec(),
             matches_with_skip_persistence: self.is_matches().to_vec(), // TODO
             match_ids,
+            full_face_mirror_match_ids: vec![vec![]; n_requests], // TODO.
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left: vec![vec![]; n_requests], // TODO.
+            full_face_mirror_partial_match_ids_right: vec![vec![]; n_requests], // TODO.
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left: vec![0; n_requests], // TODO.
+            full_face_mirror_partial_match_counters_right: vec![0; n_requests], // TODO.
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![], // TODO.
@@ -733,6 +865,32 @@ impl HawkHandle {
                 let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
                     search::search(&sessions, search_queries, hawk_actor.search_params.clone())
                         .await?;
+
+                let left_search_results = search_results[LEFT].iter().clone();
+                let right_search_results = search_results[RIGHT].iter().clone();
+
+                let hawk_session_left = sessions[LEFT][0].clone();
+                let hawk_session_right = sessions[RIGHT][0].clone();
+
+                hawk_actor
+                    .cache_distances(LEFT, left_search_results)
+                    .await?;
+                hawk_actor
+                    .cache_distances(RIGHT, right_search_results)
+                    .await?;
+
+                // This scope releases the below locks ASAP.
+                {
+                    let mut left_session = hawk_session_left.write().await;
+                    let mut right_session = hawk_session_right.write().await;
+
+                    hawk_actor
+                        .fill_anonymized_statistics_buckets(&mut left_session)
+                        .await?;
+                    hawk_actor
+                        .fill_anonymized_statistics_buckets(&mut right_session)
+                        .await?;
+                }
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
@@ -881,6 +1039,7 @@ mod tests {
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
+    use aes_prng::AesRng;
     use futures::future::JoinAll;
     use iris_mpc_common::{
         galois_engine::degree4::preprocess_iris_message_shares,
@@ -888,6 +1047,7 @@ mod tests {
         iris_db::db::IrisDB,
         job::{BatchMetadata, IrisQueryBatchEntries},
     };
+    use rand::SeedableRng;
     use std::ops::Not;
     use tokio::time::sleep;
 
@@ -1147,6 +1307,7 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            hnsw_prng_seed: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,

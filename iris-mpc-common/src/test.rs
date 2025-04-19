@@ -428,6 +428,9 @@ impl TestCaseGenerator {
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
+        batch0.full_face_mirror_attacks_detection_enabled = true;
+        batch1.full_face_mirror_attacks_detection_enabled = true;
+        batch2.full_face_mirror_attacks_detection_enabled = true;
         let batch_size = self.rng.gen_range(1..max_batch_size);
 
         self.batch_duplicates.clear();
@@ -639,6 +642,7 @@ impl TestCaseGenerator {
             TestCase::NonMatchSkipPersistence,
             TestCase::ResetCheckMatch,
             TestCase::ResetCheckNonMatch,
+            TestCase::FullFaceMirrorAttack,
         ];
 
         if !self.inserted_responses.is_empty() {
@@ -1030,7 +1034,6 @@ impl TestCaseGenerator {
 
                     // send a mirrored template as our test case
                     // this will ensure that the original template will be mirrored
-                    // let mirrored_template = original_template.clone().mirrored();
                     E2ETemplate {
                         // This is swapped on purpose due to the mirror attack flow
                         left: original_template[RIGHT].mirrored(),
@@ -1125,13 +1128,14 @@ impl TestCaseGenerator {
     ) {
         tracing::info!(
             "Checking result for request_id: {}, idx: {}, was_match: {}, matched_batch_req_ids: \
-             {:?}, was_reauth_success: {}, was_skip_persistence_match: {}",
+             {:?}, was_reauth_success: {}, was_skip_persistence_match: {}, full_face_mirror_attack: {}",
             req_id,
             idx,
             was_match,
             matched_batch_req_ids,
             was_reauth_success,
-            was_skip_persistence_match
+            was_skip_persistence_match,
+            full_face_mirror_attack_detected
         );
         let &ExpectedResult {
             db_index: expected_idx,
@@ -1156,6 +1160,7 @@ impl TestCaseGenerator {
             assert!(was_match);
             assert!(was_skip_persistence_match);
             assert!(!was_reauth_success);
+            assert!(!full_face_mirror_attack_detected);
 
             // assert that we report correct matched indices upon reset_check requests
             if expected_idx.is_some() {
@@ -1173,6 +1178,7 @@ impl TestCaseGenerator {
 
         // if the request is a reauth, we only check the reauth success
         if let Some(is_reauth_successful) = is_reauth_successful {
+            assert!(!full_face_mirror_attack_detected);
             assert_eq!(
                 is_reauth_successful, was_reauth_success,
                 "expected reauth success status to be as expected"
@@ -1181,6 +1187,7 @@ impl TestCaseGenerator {
         }
 
         if let Some(expected_idx) = expected_idx {
+            assert!(!full_face_mirror_attack_detected);
             assert!(
                 was_match,
                 "expected this request to be a match, but it was not"

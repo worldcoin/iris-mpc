@@ -46,8 +46,8 @@ async fn create_graph_from_plain_dbs(
     let left_graph = left_store.create_graph(&mut rng, DB_SIZE).await?;
     let right_graph = right_store.create_graph(&mut rng, DB_SIZE).await?;
 
-    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v.into());
-    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v.into());
+    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
+    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();
@@ -107,6 +107,7 @@ async fn e2e_test() -> Result<()> {
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
+        hnsw_prng_seed: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
         n_buckets: 10,

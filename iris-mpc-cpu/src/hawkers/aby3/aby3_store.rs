@@ -453,7 +453,7 @@ mod tests {
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &mut cleartext_data.1, &i.into(), 1)
+                .search(&mut cleartext_data.0, &mut cleartext_data.1, &vector_id, 1)
                 .await?;
             assert!(
                 hawk_searcher
