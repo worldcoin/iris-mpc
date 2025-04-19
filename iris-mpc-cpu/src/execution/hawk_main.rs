@@ -424,19 +424,14 @@ impl HawkActor {
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
-        let mut neighbors: Vec<&SortedNeighborhoodV<Aby3Store>> = vec![];
-        for result in search_results {
-            let n = result
-                .iter()
-                .flat_map(|plan| plan.links.iter())
-                .collect_vec();
-            neighbors.extend(n);
-        }
+        let distances = search_results
+            .iter() // All requests.
+            .flat_map(|rots| rots.iter()) // All rotations.
+            .flat_map(|plan| plan.links.first()) // Bottom layer.
+            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
+            .map(|(_, distance)| distance.clone());
 
-        for neighbor in neighbors.iter() {
-            let distances = neighbor.distances_cloned();
-            self.distances_cache[side].extend(distances);
-        }
+        self.distances_cache[side].extend(distances);
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
