@@ -15,6 +15,13 @@ pub enum NetworkValue {
     VecRing16(Vec<RingElement<u16>>),
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
+    StateChecksum(StateChecksum),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StateChecksum {
+    pub irises: u64,
+    pub graph: u64,
 }
 
 impl NetworkValue {
@@ -34,6 +41,7 @@ impl NetworkValue {
             NetworkValue::VecRing16(_) => 0x06,
             NetworkValue::VecRing32(_) => 0x07,
             NetworkValue::VecRing64(_) => 0x08,
+            NetworkValue::StateChecksum(_) => 0x09,
         }
     }
 
@@ -47,6 +55,7 @@ impl NetworkValue {
             NetworkValue::VecRing16(v) => 5 + 2 * v.len(),
             NetworkValue::VecRing32(v) => 5 + 4 * v.len(),
             NetworkValue::VecRing64(v) => 5 + 8 * v.len(),
+            NetworkValue::StateChecksum(_) => 1 + 8 + 8,
         }
     }
 
@@ -79,6 +88,10 @@ impl NetworkValue {
                 for x in v {
                     res.extend_from_slice(&x.convert().to_le_bytes());
                 }
+            }
+            NetworkValue::StateChecksum(checksums) => {
+                res.extend_from_slice(&u64::to_le_bytes(checksums.irises));
+                res.extend_from_slice(&u64::to_le_bytes(checksums.graph));
             }
         }
     }
@@ -192,6 +205,16 @@ impl NetworkValue {
                     )?)));
                 }
                 Ok(NetworkValue::VecRing64(res))
+            }
+            0x09 => {
+                let (a, b, c) = (1, 9, 17);
+                if serialized.len() != c {
+                    return Err(eyre!("Invalid length for StateChecksum"));
+                }
+                Ok(NetworkValue::StateChecksum(StateChecksum {
+                    irises: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[a..b])?),
+                    graph: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[b..c])?),
+                }))
             }
             _ => Err(eyre!("Invalid network value type")),
         }
