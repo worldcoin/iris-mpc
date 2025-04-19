@@ -862,8 +862,7 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, &job.request).await;
+                let job_result = Self::handle_job(&mut hawk_actor, &sessions, &job.request).await;
 
                 let health =
                     Self::maybe_recover(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
