@@ -839,9 +839,20 @@ impl JobSubmissionHandle for HawkHandle {
         &mut self,
         batch: BatchQuery,
     ) -> impl Future<Output = Result<ServerJobResult>> {
+        let request = HawkRequest::from(&batch);
+        let (tx, rx) = oneshot::channel();
+        let job = HawkJob {
+            request,
+            return_channel: tx,
+        };
+
+        // Wait for the job to be sent for backpressure.
+        let sent = self.job_queue.send(job).await;
+
         async move {
-            let request = HawkRequest::from(&batch);
-            let result = self.submit(request).await?;
+            // In a second Future, wait for the result.
+            sent?;
+            let result = rx.await??;
             Ok(result.job_result(batch))
         }
     }
@@ -972,16 +983,6 @@ impl HawkHandle {
             HawkSession::state_check(&sessions[RIGHT][0]),
         )?;
         Ok(())
-    }
-
-    pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
-        let (tx, rx) = oneshot::channel();
-        let job = HawkJob {
-            request,
-            return_channel: tx,
-        };
-        self.job_queue.send(job).await?;
-        rx.await?
     }
 }
 
