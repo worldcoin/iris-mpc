@@ -744,11 +744,13 @@ impl HnswSearcher {
             .filter(|e| visited.insert(e.clone()))
             .collect();
 
+        let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
+
         let distances = store
-            .eval_distance_batch(&[query.clone()], &unvisited_neighbors)
+            .eval_distance_batch(&[query.clone()], &valid_neighbors)
             .await?;
 
-        Ok(unvisited_neighbors
+        Ok(valid_neighbors
             .into_iter()
             .zip(distances.into_iter())
             .collect())
@@ -911,6 +913,7 @@ impl HnswSearcher {
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
                 let nb_links = graph.get_links(nb, lc).await;
+                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
