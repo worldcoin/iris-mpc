@@ -43,7 +43,6 @@ use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
-    slice::Iter,
     sync::Arc,
     time::Duration,
     time::Instant,
@@ -418,7 +417,23 @@ impl HawkActor {
         Ok(connect_plan)
     }
 
-    async fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
+    async fn update_anon_stats(
+        &mut self,
+        session: &HawkSessionRef,
+        search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+    ) -> Result<()> {
+        let mut session = session.write().await;
+
+        for side in [LEFT, RIGHT] {
+            self.cache_distances(side, &search_results[side]);
+
+            self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
         (1..=n_buckets)
             .map(|x: usize| {
                 translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
@@ -426,74 +441,47 @@ impl HawkActor {
             .collect::<Vec<_>>()
     }
 
-    pub async fn cache_distances(
-        &mut self,
-        side: usize,
-        search_results: Iter<'_, VecRots<InsertPlan>>,
-    ) -> Result<()> {
-        let mut neighbors: Vec<&SortedNeighborhoodV<Aby3Store>> = vec![];
-        for result in search_results {
-            let n = result
-                .iter()
-                .flat_map(|plan| plan.links.iter())
-                .collect_vec();
-            neighbors.extend(n);
-        }
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+        let distances = search_results
+            .iter() // All requests.
+            .flat_map(|rots| rots.iter()) // All rotations.
+            .flat_map(|plan| plan.links.first()) // Bottom layer.
+            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
+            .map(|(_, distance)| distance.clone());
 
-        for neighbor in neighbors.iter() {
-            let distances = neighbor.distances_cloned();
-            self.distances_cache[side].extend(distances);
-        }
-        Ok(())
+        self.distances_cache[side].extend(distances);
     }
 
-    pub async fn compute_buckets(
-        &self,
-        session: &mut HawkSession,
-        side: usize,
-    ) -> Result<VecBuckets> {
-        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets).await;
+    async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
+        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
         let bucket_result_shares = compare_threshold_buckets(
-            &mut session.aby3_store.session,
+            session,
             translated_thresholds.as_slice(),
             self.distances_cache[side].as_slice(),
         )
         .await?;
 
-        let buckets = open_ring(&mut session.aby3_store.session, &bucket_result_shares).await?;
+        let buckets = open_ring(session, &bucket_result_shares).await?;
         Ok(buckets)
     }
 
-    pub async fn fill_anonymized_statistics_buckets(
+    async fn fill_anonymized_statistics_buckets(
         &mut self,
-        session: &mut HawkSession,
+        session: &mut Session,
+        side: usize,
     ) -> Result<()> {
-        if self.distances_cache[LEFT].len() > self.args.match_distances_buffer_size {
+        if self.distances_cache[side].len() > self.args.match_distances_buffer_size {
             tracing::info!(
-                "Gathered enough distances for left eye: {}, filling anonymized stats buckets",
-                self.distances_cache[LEFT].len()
+                "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
+                self.distances_cache[side].len()
             );
-            let buckets = self.compute_buckets(session, LEFT).await?;
-            self.anonymized_bucket_statistics[LEFT].fill_buckets(
+            let buckets = self.compute_buckets(session, side).await?;
+            self.anonymized_bucket_statistics[side].fill_buckets(
                 &buckets,
                 MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics[LEFT].next_start_time_utc_timestamp,
+                self.anonymized_bucket_statistics[side].next_start_time_utc_timestamp,
             );
-            self.distances_cache[LEFT].clear();
-        }
-
-        if self.distances_cache[RIGHT].len() > self.args.match_distances_buffer_size {
-            tracing::info!(
-                "Gathered enough distances for right eye: {}, filling anonymized stats buckets",
-                self.distances_cache[RIGHT].len()
-            );
-            let buckets = self.compute_buckets(session, RIGHT).await?;
-            self.anonymized_bucket_statistics[RIGHT].fill_buckets(
-                &buckets,
-                MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics[RIGHT].next_start_time_utc_timestamp,
-            );
-            self.distances_cache[RIGHT].clear();
+            self.distances_cache[side].clear();
         }
         Ok(())
     }
@@ -884,31 +872,9 @@ impl HawkHandle {
                     search::search(&sessions, search_queries, hawk_actor.search_params.clone())
                         .await?;
 
-                let left_search_results = search_results[LEFT].iter().clone();
-                let right_search_results = search_results[RIGHT].iter().clone();
-
-                let hawk_session_left = sessions[LEFT][0].clone();
-                let hawk_session_right = sessions[RIGHT][0].clone();
-
                 hawk_actor
-                    .cache_distances(LEFT, left_search_results)
+                    .update_anon_stats(&sessions[0][0], &search_results)
                     .await?;
-                hawk_actor
-                    .cache_distances(RIGHT, right_search_results)
-                    .await?;
-
-                // This scope releases the below locks ASAP.
-                {
-                    let mut left_session = hawk_session_left.write().await;
-                    let mut right_session = hawk_session_right.write().await;
-
-                    hawk_actor
-                        .fill_anonymized_statistics_buckets(&mut left_session)
-                        .await?;
-                    hawk_actor
-                        .fill_anonymized_statistics_buckets(&mut right_session)
-                        .await?;
-                }
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
