@@ -227,6 +227,9 @@ pub struct Config {
 
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
+
+    #[serde(default = "default_batch_polling_timeout_secs")]
+    pub batch_polling_timeout_secs: u64,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -359,6 +362,10 @@ fn default_hawk_server_resets_enabled() -> bool {
 
 fn default_hawk_server_deletions_enabled() -> bool {
     false
+}
+
+fn default_batch_polling_timeout_secs() -> u64 {
+    10
 }
 
 impl Config {
@@ -503,6 +510,7 @@ pub struct CommonConfig {
     enable_reset: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
+    batch_polling_timeout_secs: u64,
 }
 
 impl From<Config> for CommonConfig {
@@ -573,6 +581,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            batch_polling_timeout_secs,
         } = value;
 
         Self {
@@ -619,6 +628,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            batch_polling_timeout_secs,
         }
     }
 }
