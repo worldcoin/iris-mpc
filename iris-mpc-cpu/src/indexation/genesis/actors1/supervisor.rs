@@ -8,7 +8,10 @@ use kameo_actors::{message_bus as mbus, DeliveryStrategy};
 use {
     super::super::{
         errors::IndexationError,
-        messages::{OnBeginIndexationOfBatch, OnBeginIndexationOfBatchItem, OnEndIndexation},
+        messages::{
+            OnBeginIndexation, OnBeginIndexationOfBatch, OnBeginIndexationOfBatchItem,
+            OnEndIndexation,
+        },
         utils::logger,
     },
     super::{BatchGenerator, GraphIndexer, SharesFetcher},
@@ -22,7 +25,7 @@ use {
 #[derive(Clone)]
 pub struct Supervisor {
     config: Config,
-    mbus_ref: Option<ActorRef<mbus::MessageBus>>,
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
 // Ctor.
@@ -32,7 +35,7 @@ impl Supervisor {
 
         Self {
             config,
-            mbus_ref: None,
+            mbus_ref: kameo::spawn(mbus::MessageBus::new(DeliveryStrategy::Guaranteed)),
         }
     }
 }
@@ -60,12 +63,7 @@ impl Message<OnBeginIndexationOfBatch> for Supervisor {
                 batch_item_idx: idx + 1,
                 iris_serial_id: *serial_id,
             };
-            self.mbus_ref
-                .clone()
-                .unwrap()
-                .tell(mbus::Publish(msg))
-                .await
-                .unwrap();
+            self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
         }
     }
 }
@@ -108,22 +106,14 @@ impl Actor for Supervisor {
     async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
-        // Spawn message bus.
-        let mbus_ref = kameo::spawn(mbus::MessageBus::new(DeliveryStrategy::Guaranteed));
-        self.mbus_ref = Some(mbus_ref.clone());
-
         // Register message handlers with message bus.
         self.mbus_ref
-            .clone()
-            .unwrap()
             .tell(mbus::Register(
                 actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
             ))
             .await
             .unwrap();
         self.mbus_ref
-            .clone()
-            .unwrap()
             .tell(mbus::Register(
                 actor_ref.clone().recipient::<OnEndIndexation>(),
             ))
@@ -131,18 +121,24 @@ impl Actor for Supervisor {
             .unwrap();
 
         // Spawn components.
-        kameo::spawn(BatchGenerator::new(self.config.clone(), mbus_ref.clone()));
-        kameo::spawn(SharesFetcher::new(self.config.clone(), mbus_ref.clone()));
-        kameo::spawn(GraphIndexer::new(self.config.clone(), mbus_ref.clone()));
+        kameo::spawn(BatchGenerator::new(
+            self.config.clone(),
+            self.mbus_ref.clone(),
+        ));
+        kameo::spawn(SharesFetcher::new(
+            self.config.clone(),
+            self.mbus_ref.clone(),
+        ));
+        kameo::spawn(GraphIndexer::new(
+            self.config.clone(),
+            self.mbus_ref.clone(),
+        ));
 
-        // // Signal start.
-        // self.a1_ref
-        //     .as_ref()
-        //     .unwrap()
-        //     .tell(OnBeginIndexation)
-        //     .await
-        //     .map_err(|_| IndexationError::BeginIndexationError)
-        //     .unwrap();
+        // Signal start.
+        self.mbus_ref
+            .tell(mbus::Publish(OnBeginIndexation))
+            .await
+            .unwrap();
 
         Ok(())
     }
