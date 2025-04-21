@@ -154,8 +154,28 @@ impl Actor for GraphIndexer {
     /// Lifecycle event handler: on_start.
     ///
     /// State initialisation hook.
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
+
+        // Register message handlers.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginGraphIndexation>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnFetchIrisShares>(),
+            ))
+            .await
+            .unwrap();
 
         // let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
         // let d = IrisLoader {

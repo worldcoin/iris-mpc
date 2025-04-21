@@ -106,20 +106,6 @@ impl Actor for Supervisor {
     async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
-        // Register message handlers with message bus.
-        self.mbus_ref
-            .tell(mbus::Register(
-                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
-            ))
-            .await
-            .unwrap();
-        self.mbus_ref
-            .tell(mbus::Register(
-                actor_ref.clone().recipient::<OnEndIndexation>(),
-            ))
-            .await
-            .unwrap();
-
         // Spawn components.
         kameo::spawn(BatchGenerator::new(
             self.config.clone(),
@@ -133,6 +119,20 @@ impl Actor for Supervisor {
             self.config.clone(),
             self.mbus_ref.clone(),
         ));
+
+        // Register message handlers.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnEndIndexation>(),
+            ))
+            .await
+            .unwrap();
 
         // Signal start.
         self.mbus_ref
