@@ -14,7 +14,7 @@ use eyre::Result;
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
-use tokio::sync::{RwLock, RwLockWriteGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::instrument;
 
 pub use iris_mpc_common::vector_id::VectorId;
@@ -109,6 +109,10 @@ impl SharedIrises {
         Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
     }
 
+    fn contains(&self, vector: &VectorId) -> bool {
+        self.points.contains_key(vector)
+    }
+
     pub fn to_arc(self) -> SharedIrisesRef {
         SharedIrisesRef {
             body: Arc::new(RwLock::new(self)),
@@ -135,6 +139,10 @@ impl std::fmt::Debug for SharedIrisesRef {
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
         self.body.write().await
+    }
+
+    async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
+        self.body.read().await
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
@@ -228,6 +236,15 @@ impl VectorStore for Aby3Store {
             .into_iter()
             .map(|v| prepare_query((*v).clone()))
             .collect()
+    }
+
+    async fn only_valid_vectors(
+        &mut self,
+        mut vectors: Vec<Self::VectorRef>,
+    ) -> Vec<Self::VectorRef> {
+        let storage = self.storage.read().await;
+        vectors.retain(|v| storage.contains(v));
+        vectors
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]

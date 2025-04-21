@@ -190,6 +190,9 @@ pub struct Config {
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
 
+    #[serde(default)]
+    pub hawk_prng_seed: Option<u64>,
+
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 
@@ -497,6 +500,7 @@ pub struct CommonConfig {
     enable_reauth: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
+    hawk_prng_seed: Option<u64>,
     max_deletions_per_batch: usize,
     mode_of_compute: ModeOfCompute,
     mode_of_deployment: ModeOfDeployment,
@@ -566,6 +570,7 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
+            hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
             mode_of_deployment,
@@ -611,6 +616,7 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             hawk_request_parallelism,
             hawk_connection_parallelism,
+            hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
             mode_of_deployment,

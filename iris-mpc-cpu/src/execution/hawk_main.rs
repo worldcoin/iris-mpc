@@ -21,7 +21,6 @@ use crate::{
         shared_iris::GaloisRingSharedIris,
     },
 };
-use aes_prng::AesRng;
 use clap::Parser;
 use eyre::{Report, Result};
 use futures::try_join;
@@ -34,10 +33,14 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use rand::{thread_rng, Rng};
-use std::slice::Iter;
+use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand_chacha::ChaCha8Rng;
+use scheduler::parallelize;
+use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
+    future::Future,
+    hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
     sync::Arc,
@@ -82,6 +85,9 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
+    #[clap(long)]
+    pub hnsw_prng_seed: Option<u64>,
+
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
 
@@ -115,7 +121,7 @@ pub struct HawkActor {
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Hash)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -154,7 +160,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: AesRng,
+    shared_rng: Box<dyn RngCore + Send + Sync>,
 }
 
 type HawkSessionRef = Arc<RwLock<HawkSession>>;
@@ -303,47 +309,72 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub async fn new_session(&mut self, store_id: StoreId) -> Result<HawkSession> {
-        let session_id = self.consensus.next_session_id();
-        self.create_session(store_id, session_id).await
+    pub fn new_sessions(
+        &mut self,
+        count: usize,
+        store_id: StoreId,
+    ) -> impl Future<Output = Result<Vec<HawkSessionRef>>> {
+        let tasks = (0..count)
+            .map(|_| {
+                let session_id = self.consensus.next_session_id();
+                self.create_session(store_id, session_id)
+            })
+            .collect_vec();
+        parallelize(tasks.into_iter())
     }
 
-    async fn create_session(
+    fn create_session(
         &self,
         store_id: StoreId,
         session_id: SessionId,
-    ) -> Result<HawkSession> {
-        // TODO: cleanup of dropped sessions.
-        let grpc_session = self.networking.create_session(session_id).await?;
+    ) -> impl Future<Output = Result<HawkSessionRef>> {
+        let networking = self.networking.clone();
+        let role_assignments = self.role_assignments.clone();
+        let storage = self.iris_store(store_id);
+        let graph_store = self.graph_store(store_id);
+        let party_id = self.party_id;
+        let hnsw_prng_seed = self.args.hnsw_prng_seed;
 
-        let mut network_session = NetworkSession {
-            session_id,
-            role_assignments: self.role_assignments.clone(),
-            networking: Box::new(grpc_session),
-            own_role: Role::new(self.party_id),
-        };
+        async move {
+            // TODO: cleanup of dropped sessions.
+            let grpc_session = networking.create_session(session_id).await?;
 
-        let my_session_seed = thread_rng().gen();
-        let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let mut network_session = NetworkSession {
+                session_id,
+                role_assignments,
+                networking: Box::new(grpc_session),
+                own_role: Role::new(party_id),
+            };
 
-        let my_rng_seed = thread_rng().gen();
-        let shared_rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+            let my_session_seed = thread_rng().gen();
+            let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
-        let session = Session {
-            network_session,
-            prf,
-        };
+            // PRNG seed is either statically injected via configuration in TEST environments or
+            // mutually derived with other MPC parties in PROD environments.
+            let shared_rng: Box<dyn RngCore + Send + Sync> = if let Some(base_seed) = hnsw_prng_seed
+            {
+                let rng = session_seeded_rng(base_seed, store_id, session_id);
+                Box::new(rng)
+            } else {
+                let my_rng_seed = thread_rng().gen();
+                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
+                Box::new(rng)
+            };
 
-        let aby3_store = Aby3Store {
-            session,
-            storage: self.iris_store(store_id),
-        };
+            let hawk_session = HawkSession {
+                aby3_store: Aby3Store {
+                    session: Session {
+                        network_session,
+                        prf,
+                    },
+                    storage,
+                },
+                graph_store,
+                shared_rng,
+            };
 
-        Ok(HawkSession {
-            aby3_store,
-            graph_store: self.graph_store(store_id),
-            shared_rng,
-        })
+            Ok(Arc::new(RwLock::new(hawk_session)))
+        }
     }
 
     pub async fn insert(
@@ -386,7 +417,23 @@ impl HawkActor {
         Ok(connect_plan)
     }
 
-    async fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
+    async fn update_anon_stats(
+        &mut self,
+        session: &HawkSessionRef,
+        search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+    ) -> Result<()> {
+        let mut session = session.write().await;
+
+        for side in [LEFT, RIGHT] {
+            self.cache_distances(side, &search_results[side]);
+
+            self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
+                .await?;
+        }
+        Ok(())
+    }
+
+    fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
         (1..=n_buckets)
             .map(|x: usize| {
                 translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
@@ -394,74 +441,47 @@ impl HawkActor {
             .collect::<Vec<_>>()
     }
 
-    pub async fn cache_distances(
-        &mut self,
-        side: usize,
-        search_results: Iter<'_, VecRots<InsertPlan>>,
-    ) -> Result<()> {
-        let mut neighbors: Vec<&SortedNeighborhoodV<Aby3Store>> = vec![];
-        for result in search_results {
-            let n = result
-                .iter()
-                .flat_map(|plan| plan.links.iter())
-                .collect_vec();
-            neighbors.extend(n);
-        }
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+        let distances = search_results
+            .iter() // All requests.
+            .flat_map(|rots| rots.iter()) // All rotations.
+            .flat_map(|plan| plan.links.first()) // Bottom layer.
+            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
+            .map(|(_, distance)| distance.clone());
 
-        for neighbor in neighbors.iter() {
-            let distances = neighbor.distances_cloned();
-            self.distances_cache[side].extend(distances);
-        }
-        Ok(())
+        self.distances_cache[side].extend(distances);
     }
 
-    pub async fn compute_buckets(
-        &self,
-        session: &mut HawkSession,
-        side: usize,
-    ) -> Result<VecBuckets> {
-        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets).await;
+    async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
+        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
         let bucket_result_shares = compare_threshold_buckets(
-            &mut session.aby3_store.session,
+            session,
             translated_thresholds.as_slice(),
             self.distances_cache[side].as_slice(),
         )
         .await?;
 
-        let buckets = open_ring(&mut session.aby3_store.session, &bucket_result_shares).await?;
+        let buckets = open_ring(session, &bucket_result_shares).await?;
         Ok(buckets)
     }
 
-    pub async fn fill_anonymized_statistics_buckets(
+    async fn fill_anonymized_statistics_buckets(
         &mut self,
-        session: &mut HawkSession,
+        session: &mut Session,
+        side: usize,
     ) -> Result<()> {
-        if self.distances_cache[LEFT].len() > self.args.match_distances_buffer_size {
+        if self.distances_cache[side].len() > self.args.match_distances_buffer_size {
             tracing::info!(
-                "Gathered enough distances for left eye: {}, filling anonymized stats buckets",
-                self.distances_cache[LEFT].len()
+                "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
+                self.distances_cache[side].len()
             );
-            let buckets = self.compute_buckets(session, LEFT).await?;
-            self.anonymized_bucket_statistics[LEFT].fill_buckets(
+            let buckets = self.compute_buckets(session, side).await?;
+            self.anonymized_bucket_statistics[side].fill_buckets(
                 &buckets,
                 MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics[LEFT].next_start_time_utc_timestamp,
+                self.anonymized_bucket_statistics[side].next_start_time_utc_timestamp,
             );
-            self.distances_cache[LEFT].clear();
-        }
-
-        if self.distances_cache[RIGHT].len() > self.args.match_distances_buffer_size {
-            tracing::info!(
-                "Gathered enough distances for right eye: {}, filling anonymized stats buckets",
-                self.distances_cache[RIGHT].len()
-            );
-            let buckets = self.compute_buckets(session, RIGHT).await?;
-            self.anonymized_bucket_statistics[RIGHT].fill_buckets(
-                &buckets,
-                MATCH_THRESHOLD_RATIO,
-                self.anonymized_bucket_statistics[RIGHT].next_start_time_utc_timestamp,
-            );
-            self.distances_cache[RIGHT].clear();
+            self.distances_cache[side].clear();
         }
         Ok(())
     }
@@ -483,6 +503,13 @@ impl HawkActor {
             ]),
         )
     }
+}
+
+pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: SessionId) -> ChaCha8Rng {
+    let mut hasher = SipHasher13::new();
+    (base_seed, store_id, session_id).hash(&mut hasher);
+    let seed = hasher.finish();
+    ChaCha8Rng::seed_from_u64(seed)
 }
 
 pub struct IrisLoader<'a> {
@@ -814,10 +841,12 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
-        let sessions = [
-            Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Left).await?,
-            Self::new_sessions(&mut hawk_actor, request_parallelism, StoreId::Right).await?,
-        ];
+        let sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
+            hawk_actor.new_sessions(request_parallelism, StoreId::Left),
+            hawk_actor.new_sessions(request_parallelism, StoreId::Right),
+        )?
+        .into();
+        tracing::debug!("Created {} MPC sessions.", request_parallelism);
 
         // Validate the common state before starting.
         try_join!(
@@ -843,31 +872,9 @@ impl HawkHandle {
                     search::search(&sessions, search_queries, hawk_actor.search_params.clone())
                         .await?;
 
-                let left_search_results = search_results[LEFT].iter().clone();
-                let right_search_results = search_results[RIGHT].iter().clone();
-
-                let hawk_session_left = sessions[LEFT][0].clone();
-                let hawk_session_right = sessions[RIGHT][0].clone();
-
                 hawk_actor
-                    .cache_distances(LEFT, left_search_results)
+                    .update_anon_stats(&sessions[0][0], &search_results)
                     .await?;
-                hawk_actor
-                    .cache_distances(RIGHT, right_search_results)
-                    .await?;
-
-                // This scope releases the below locks ASAP.
-                {
-                    let mut left_session = hawk_session_left.write().await;
-                    let mut right_session = hawk_session_right.write().await;
-
-                    hawk_actor
-                        .fill_anonymized_statistics_buckets(&mut left_session)
-                        .await?;
-                    hawk_actor
-                        .fill_anonymized_statistics_buckets(&mut right_session)
-                        .await?;
-                }
 
                 let match_result = {
                     let step1 = matching::BatchStep1::new(&search_results);
@@ -937,21 +944,6 @@ impl HawkHandle {
         Ok(Self { job_queue: tx })
     }
 
-    pub async fn new_sessions(
-        hawk_actor: &mut HawkActor,
-        request_parallelism: usize,
-        store_id: StoreId,
-    ) -> Result<Vec<HawkSessionRef>> {
-        tracing::debug!("Creating {} MPC sessions…", request_parallelism);
-        let mut sessions = vec![];
-        for _ in 0..request_parallelism {
-            let session = hawk_actor.new_session(store_id).await?;
-            sessions.push(Arc::new(RwLock::new(session)));
-        }
-        tracing::debug!("…created {} MPC sessions.", request_parallelism);
-        Ok(sessions)
-    }
-
     pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
         let (tx, rx) = oneshot::channel();
         let job = HawkJob {
@@ -1016,6 +1008,7 @@ mod tests {
     use crate::{
         execution::local::get_free_local_addresses, protocol::shared_iris::GaloisRingSharedIris,
     };
+    use aes_prng::AesRng;
     use futures::future::JoinAll;
     use iris_mpc_common::{
         galois_engine::degree4::preprocess_iris_message_shares,
@@ -1283,6 +1276,7 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            hnsw_prng_seed: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,

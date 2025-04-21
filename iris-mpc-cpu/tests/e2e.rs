@@ -107,6 +107,7 @@ async fn e2e_test() -> Result<()> {
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
+        hnsw_prng_seed: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
         n_buckets: 10,
