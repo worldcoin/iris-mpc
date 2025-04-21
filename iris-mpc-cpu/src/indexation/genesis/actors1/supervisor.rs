@@ -4,49 +4,41 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::{message_bus::MessageBus, DeliveryStrategy};
+use kameo_actors::{message_bus as mbus, DeliveryStrategy};
 use {
     super::super::{
         errors::IndexationError,
-        messages::{
-            OnBeginGraphIndexation, OnBeginIndexation, OnBeginIndexationOfBatch,
-            OnBeginIndexationOfBatchItem, OnEndIndexation, OnEndIndexationOfBatch,
-            OnFetchIrisShares,
-        },
+        messages::{OnBeginIndexationOfBatch, OnBeginIndexationOfBatchItem, OnEndIndexation},
         utils::logger,
     },
     super::{BatchGenerator, GraphIndexer, SharesFetcher},
 };
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
-// Actor: Genesis indexation supervisor.
+// Genesis indexation supervisor.
 #[derive(Clone)]
 pub struct Supervisor {
-    a1_ref: Option<ActorRef<BatchGenerator>>,
-    a2_ref: Option<ActorRef<SharesFetcher>>,
-    a3_ref: Option<ActorRef<GraphIndexer>>,
     config: Config,
+    mbus_ref: Option<ActorRef<mbus::MessageBus>>,
 }
 
+// Ctor.
 impl Supervisor {
-    // Ctor.
     pub fn new(config: Config) -> Self {
         assert!(config.aws.is_some() && config.database.is_some());
 
         Self {
-            a1_ref: None,
-            a2_ref: None,
-            a3_ref: None,
             config,
+            mbus_ref: None,
         }
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexationOfBatch> for Supervisor {
@@ -61,46 +53,20 @@ impl Message<OnBeginIndexationOfBatch> for Supervisor {
     ) -> Self::Reply {
         logger::log_message::<Self, OnBeginIndexationOfBatch>(&msg);
 
-        // Signal to other interested actors.
-        // I.E. GraphIndexer.
-        self.a3_ref
-            .as_ref()
-            .unwrap()
-            .tell(msg.clone())
-            .await
-            .unwrap();
-
-        // For each item in batch, signal that it is ready to be processing.
+        // For each item in batch signal that it is ready to be processing.
         for (idx, serial_id) in msg.iris_serial_ids.iter().enumerate() {
             let msg = OnBeginIndexationOfBatchItem {
                 batch_idx: msg.batch_idx,
                 batch_item_idx: idx + 1,
                 iris_serial_id: *serial_id,
             };
-            self.a2_ref.as_ref().unwrap().tell(msg).await.unwrap();
+            self.mbus_ref
+                .clone()
+                .unwrap()
+                .tell(mbus::Publish(msg))
+                .await
+                .unwrap();
         }
-    }
-}
-
-impl Message<OnBeginGraphIndexation> for Supervisor {
-    // Reply type.
-    type Reply = ();
-
-    // Handler.
-    async fn handle(
-        &mut self,
-        msg: OnBeginGraphIndexation,
-        _: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_message::<Self, OnBeginGraphIndexation>(&msg);
-
-        // Signal to other interested actors.
-        self.a3_ref
-            .as_ref()
-            .unwrap()
-            .tell(msg.clone())
-            .await
-            .unwrap();
     }
 }
 
@@ -120,54 +86,15 @@ impl Message<OnEndIndexation> for Supervisor {
     }
 }
 
-impl Message<OnEndIndexationOfBatch> for Supervisor {
-    // Reply type.
-    type Reply = ();
-
-    // Handler.
-    async fn handle(
-        &mut self,
-        msg: OnEndIndexationOfBatch,
-        _: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_message::<Self, OnEndIndexationOfBatch>(&msg);
-
-        // Signal to other interested actors.
-        self.a1_ref
-            .as_ref()
-            .unwrap()
-            .tell(msg.clone())
-            .await
-            .unwrap();
-    }
-}
-
-impl Message<OnFetchIrisShares> for Supervisor {
-    // Reply type.
-    type Reply = ();
-
-    // Handler.
-    async fn handle(
-        &mut self,
-        msg: OnFetchIrisShares,
-        _: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        logger::log_message::<Self, OnFetchIrisShares>(&msg);
-
-        // Signal to other interested actors.
-        self.a3_ref.as_ref().unwrap().tell(msg).await.unwrap()
-    }
-}
-
 // ------------------------------------------------------------------------
-// Actor lifecycle handlers.
+// Component lifecycle handlers.
 // ------------------------------------------------------------------------
 
 impl Actor for Supervisor {
-    // By default mailbox is limited to 1000 messages.
+    // Internal error type.
     type Error = IndexationError;
 
-    /// Actor name - overrides auto-derived name.
+    /// Name - overrides auto-derived name.
     fn name() -> &'static str {
         "Supervisor"
     }
@@ -178,30 +105,44 @@ impl Actor for Supervisor {
     ///
     /// * `actor_ref` - Self referential kameo actor pointer.
     ///
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
-        let mbus = MessageBus::new(DeliveryStrategy::Guaranteed);
-        let mbus_ref = kameo::spawn(mbus);
+        // Spawn message bus.
+        let mbus_ref = kameo::spawn(mbus::MessageBus::new(DeliveryStrategy::Guaranteed));
+        self.mbus_ref = Some(mbus_ref.clone());
 
-        // Instantiate actors.
-        let a1 = BatchGenerator::new(self.config.clone(), mbus_ref.clone());
-        let a2 = SharesFetcher::new(self.config.clone(), mbus_ref.clone());
-        let a3 = GraphIndexer::new(self.config.clone(), mbus_ref.clone());
-
-        // Spawn associated actors.
-        self.a1_ref = Some(kameo::spawn(a1));
-        self.a2_ref = Some(kameo::spawn(a2));
-        self.a3_ref = Some(kameo::spawn(a3));
-
-        // Signal start.
-        self.a1_ref
-            .as_ref()
+        // Register message handlers with message bus.
+        self.mbus_ref
+            .clone()
             .unwrap()
-            .tell(OnBeginIndexation)
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
+            ))
             .await
-            .map_err(|_| IndexationError::BeginIndexationError)
             .unwrap();
+        self.mbus_ref
+            .clone()
+            .unwrap()
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnEndIndexation>(),
+            ))
+            .await
+            .unwrap();
+
+        // Spawn components.
+        kameo::spawn(BatchGenerator::new(self.config.clone(), mbus_ref.clone()));
+        kameo::spawn(SharesFetcher::new(self.config.clone(), mbus_ref.clone()));
+        kameo::spawn(GraphIndexer::new(self.config.clone(), mbus_ref.clone()));
+
+        // // Signal start.
+        // self.a1_ref
+        //     .as_ref()
+        //     .unwrap()
+        //     .tell(OnBeginIndexation)
+        //     .await
+        //     .map_err(|_| IndexationError::BeginIndexationError)
+        //     .unwrap();
 
         Ok(())
     }

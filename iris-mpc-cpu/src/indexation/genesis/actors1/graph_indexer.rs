@@ -13,10 +13,10 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::message_bus::MessageBus;
+use kameo_actors::message_bus as mbus;
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
 // Actor: Issues query/insert operations over in-memory HNSW graph.
@@ -34,12 +34,12 @@ pub struct GraphIndexer {
     iris_store: Option<[SharedIrisesRef; 2]>,
 
     // Reference to message bus mediating intra-actor communications.
-    mbus_ref: ActorRef<MessageBus>,
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
-// Constructors.
+// Constructor.
 impl GraphIndexer {
-    pub fn new(config: Config, mbus_ref: ActorRef<MessageBus>) -> Self {
+    pub fn new(config: Config, mbus_ref: ActorRef<mbus::MessageBus>) -> Self {
         Self {
             batch: Vec::new(),
             batch_idx: 0,
@@ -50,7 +50,10 @@ impl GraphIndexer {
     }
 }
 
-// Methods.
+// ------------------------------------------------------------------------
+// Component methods.
+// ------------------------------------------------------------------------
+
 impl GraphIndexer {
     async fn do_index_batch(&self) {
         logger::log_todo::<Self>(
@@ -63,16 +66,16 @@ impl GraphIndexer {
         );
 
         // TODO: remove temporary signal emission.
-        let _ = OnEndIndexationOfBatch {
+        let msg = OnEndIndexationOfBatch {
             batch_idx: self.batch_idx,
             batch_size: self.batch.len(),
         };
-        // self.mbus_ref.tell(msg).await.unwrap();
+        self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
@@ -124,22 +127,26 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
 
         // When batch is complete then signal readiness for indexing.
         if self.batch.len() == self.batch.capacity() {
-            let _ = OnBeginGraphIndexation {
+            let msg = OnBeginGraphIndexation {
                 batch_idx: msg.batch_idx,
                 batch_size: self.batch.len(),
             };
-            // self.mbus_ref.tell(msg).await.unwrap();
+            self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
         }
 
         Ok(())
     }
 }
 
+// ------------------------------------------------------------------------
+// Component lifecycle handlers.
+// ------------------------------------------------------------------------
+
 impl Actor for GraphIndexer {
-    // By default mailbox is limited to 1000 messages.
+    // Internal error type.
     type Error = IndexationError;
 
-    /// Actor name - overrides auto-derived name.
+    /// Name - overrides auto-derived name.
     fn name() -> &'static str {
         "GraphIndexer"
     }

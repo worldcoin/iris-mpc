@@ -46,6 +46,7 @@ pub struct OnBeginGraphIndexation {
 }
 
 // Signals that indexation is complete.
+#[derive(Clone, Debug)]
 pub struct OnEndIndexation {
     // Batch count.
     pub(crate) batch_count: usize,

@@ -11,14 +11,13 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use kameo_actors::message_bus::MessageBus;
+use kameo_actors::message_bus as mbus;
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
 // Fetches Iris shares from remote store.
-#[derive(Actor, Clone)]
 #[allow(dead_code)]
 pub struct SharesFetcher {
     // System configuration information.
@@ -28,22 +27,22 @@ pub struct SharesFetcher {
     iris_store: Option<IrisStore>,
 
     // Reference to message bus mediating intra-actor communications.
-    mbus_ref: ActorRef<MessageBus>,
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
-// Constructors.
+// Ctor.
 impl SharesFetcher {
-    pub fn new(config: Config, supervisor_ref: ActorRef<MessageBus>) -> Self {
+    pub fn new(config: Config, mbus_ref: ActorRef<mbus::MessageBus>) -> Self {
         Self {
             config,
             iris_store: None,
-            mbus_ref: supervisor_ref,
+            mbus_ref,
         }
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
@@ -83,7 +82,40 @@ impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
             iris_serial_id: stored.id(),
             iris_shares: shares,
         };
-        // self.mbus_ref.tell(msg).await.unwrap();
+        self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
+
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------------------
+// Component lifecycle handlers.
+// ------------------------------------------------------------------------
+
+impl Actor for SharesFetcher {
+    // Internal error type.
+    type Error = IndexationError;
+
+    /// Name - overrides auto-derived name.
+    fn name() -> &'static str {
+        "SharesFetcher"
+    }
+
+    /// Lifecycle event handler: on_start.
+    ///
+    /// State initialisation hook.
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        logger::log_lifecycle::<Self>("on_start", None);
+
+        // Register message handlers with message bus.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref
+                    .clone()
+                    .recipient::<OnBeginIndexationOfBatchItem>(),
+            ))
+            .await
+            .unwrap();
 
         Ok(())
     }
