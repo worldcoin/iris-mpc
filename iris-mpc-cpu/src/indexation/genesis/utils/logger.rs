@@ -25,7 +25,7 @@ where
     }
 }
 
-/// Logs an actor life-cycle message.
+/// Logs an actor life-cycle event.
 ///
 /// # Arguments
 ///

@@ -1,13 +1,11 @@
-use super::{
-    super::Supervisor,
-    super::{
-        errors::IndexationError,
-        messages::{
-            OnBeginIndexation, OnBeginIndexationOfBatch, OnEndIndexation, OnEndIndexationOfBatch,
-        },
-        types::IrisSerialId,
-        utils::{self, fetcher, logger},
+use super::super::{
+    errors::IndexationError,
+    messages::{
+        OnBeginIndexation, OnBeginIndexationOfBatch, OnBeginIndexationOfBatchItem, OnEndIndexation,
+        OnEndIndexationOfBatch,
     },
+    types::IrisSerialId,
+    utils::{self, fetcher, logger},
 };
 use iris_mpc_common::config::Config;
 use kameo::{
@@ -15,14 +13,15 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
-use std::iter::Peekable;
-use std::ops::Range;
+use kameo_actors::message_bus as mbus;
+use std::{iter::Peekable, ops::Range};
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
-// Actor: Generates batches of Iris identifiers for processing.
+// Generates batches of Iris identifiers for processing.
+#[allow(dead_code)]
 pub struct BatchGenerator {
     // Count of generated batches.
     batch_count: usize,
@@ -36,24 +35,61 @@ pub struct BatchGenerator {
     // Set of Iris serial identifiers to exclude from indexing.
     indexation_exclusions: Vec<IrisSerialId>,
 
-    // Reference to supervisor.
-    supervisor_ref: ActorRef<Supervisor>,
+    // Reference to message bus mediating intra-actor communications.
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
-// Constructors.
+// Constructor.
 impl BatchGenerator {
-    pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
+    pub fn new(config: Config, mbus_ref: ActorRef<mbus::MessageBus>) -> Self {
         Self {
             batch_count: 0,
             config,
             indexation_exclusions: vec![],
             indexation_range_iter: (0..0).peekable(),
-            supervisor_ref,
+            mbus_ref,
         }
     }
 }
 
-// Methods.
+// Initializer.
+impl BatchGenerator {
+    async fn init(&mut self) -> Result<(), IndexationError> {
+        // Set indexation exclusions.
+        self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();
+
+        // Set indexation range.
+        let store = utils::pgres::get_store_instance(&self.config).await;
+        let height_of_protocol = fetcher::fetch_height_of_protocol(&store).await?;
+        let height_of_indexed = fetcher::fetch_height_of_indexed(&store).await?;
+        self.indexation_range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
+
+        // Emit log entries.
+        logger::log_info::<Self>(
+            format!(
+                "Range of serial-id's to index = {}..{}",
+                height_of_indexed, height_of_protocol
+            )
+            .as_str(),
+            None,
+        );
+        logger::log_info::<Self>(
+            format!(
+                "Deletions for exclusion = {}",
+                self.indexation_exclusions.len()
+            )
+            .as_str(),
+            None,
+        );
+
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------------------
+// Component methods.
+// ------------------------------------------------------------------------
+
 impl BatchGenerator {
     // Processes an indexation step.
     async fn do_indexation_step(&mut self) {
@@ -77,26 +113,36 @@ impl BatchGenerator {
         }
 
         if batch.is_empty() {
-            // End of indexation.
+            // Signal end of indexation.
             let msg = OnEndIndexation {
                 batch_count: self.batch_count,
             };
-            self.supervisor_ref.tell(msg).await.unwrap();
+            self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
         } else {
-            // New batch.
+            // Signal batch.
             self.batch_count += 1;
             let msg = OnBeginIndexationOfBatch {
                 batch_idx: self.batch_count,
                 batch_size: batch.len(),
-                iris_serial_ids: batch,
+                iris_serial_ids: batch.clone(),
             };
-            self.supervisor_ref.tell(msg).await.unwrap();
+            self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
+
+            // Signal batch items.
+            for (idx, serial_id) in batch.iter().enumerate() {
+                let msg = OnBeginIndexationOfBatchItem {
+                    batch_idx: self.batch_count,
+                    batch_item_idx: idx + 1,
+                    iris_serial_id: *serial_id,
+                };
+                self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
+            }
         }
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexation> for BatchGenerator {
@@ -134,52 +180,38 @@ impl Message<OnEndIndexationOfBatch> for BatchGenerator {
 }
 
 // ------------------------------------------------------------------------
-// Actor lifecycle handlers.
+// Component lifecycle handlers.
 // ------------------------------------------------------------------------
 
 impl Actor for BatchGenerator {
-    // By default mailbox is limited to 1000 messages.
+    // Internal error type.
     type Error = IndexationError;
 
-    /// Actor name - overrides auto-derived name.
+    /// Name - overrides auto-derived name.
     fn name() -> &'static str {
         "BatchGenerator"
     }
 
-    /// Lifecycle event handler: on_start.
-    ///
-    /// State initialisation hook.
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
+    // Lifecycle event handler: on_start.
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
 
-        // Set store client.
-        let store = utils::pgres::get_store_instance(&self.config).await;
+        // Register message handlers.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginIndexation>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnEndIndexationOfBatch>(),
+            ))
+            .await
+            .unwrap();
 
-        // Set indexation exclusions.
-        self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();
-
-        // Set indexation range.
-        let height_of_protocol = fetcher::fetch_height_of_protocol(&store).await?;
-        let height_of_indexed = fetcher::fetch_height_of_indexed(&store).await?;
-        self.indexation_range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
-
-        // Emit log entries.
-        logger::log_info::<Self>(
-            format!(
-                "Range of serial-id's to index = {}..{}",
-                height_of_indexed, height_of_protocol
-            )
-            .as_str(),
-            None,
-        );
-        logger::log_info::<Self>(
-            format!(
-                "Deletions for exclusion = {}",
-                self.indexation_exclusions.len()
-            )
-            .as_str(),
-            None,
-        );
+        // Intitialise state.
+        self.init().await?;
 
         Ok(())
     }

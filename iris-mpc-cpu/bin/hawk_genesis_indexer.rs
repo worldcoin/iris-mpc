@@ -1,5 +1,5 @@
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::indexation::genesis::Supervisor1;
+use iris_mpc_cpu::indexation::genesis::Supervisor;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Spinup: config initialised.");
 
     // Spawn job.
-    kameo::spawn(Supervisor1::new(config))
+    kameo::spawn(Supervisor::new(config))
         .wait_for_shutdown()
         .await;
 

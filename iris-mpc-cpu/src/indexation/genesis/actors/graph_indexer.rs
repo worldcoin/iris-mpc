@@ -1,14 +1,10 @@
-use super::{
-    super::Supervisor,
-    super::{
-        errors::IndexationError,
-        messages::{
-            OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch,
-            OnFetchIrisShares,
-        },
-        types::IrisGaloisShares,
-        utils::logger,
+use super::super::{
+    errors::IndexationError,
+    messages::{
+        OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch, OnFetchIrisShares,
     },
+    types::IrisGaloisShares,
+    utils::logger,
 };
 use crate::hawkers::aby3::aby3_store::SharedIrisesRef;
 use iris_mpc_common::config::Config;
@@ -17,9 +13,10 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
+use kameo_actors::message_bus as mbus;
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
 // Actor: Issues query/insert operations over in-memory HNSW graph.
@@ -36,24 +33,27 @@ pub struct GraphIndexer {
 
     iris_store: Option<[SharedIrisesRef; 2]>,
 
-    // Reference to supervisor.
-    supervisor_ref: ActorRef<Supervisor>,
+    // Reference to message bus mediating intra-actor communications.
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
-// Constructors.
+// Constructor.
 impl GraphIndexer {
-    pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
+    pub fn new(config: Config, mbus_ref: ActorRef<mbus::MessageBus>) -> Self {
         Self {
             batch: Vec::new(),
             batch_idx: 0,
             iris_store: None,
             config,
-            supervisor_ref,
+            mbus_ref,
         }
     }
 }
 
-// Methods.
+// ------------------------------------------------------------------------
+// Component methods.
+// ------------------------------------------------------------------------
+
 impl GraphIndexer {
     async fn do_index_batch(&self) {
         logger::log_todo::<Self>(
@@ -70,12 +70,12 @@ impl GraphIndexer {
             batch_idx: self.batch_idx,
             batch_size: self.batch.len(),
         };
-        self.supervisor_ref.tell(msg).await.unwrap();
+        self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
@@ -131,18 +131,22 @@ impl Message<OnFetchIrisShares> for GraphIndexer {
                 batch_idx: msg.batch_idx,
                 batch_size: self.batch.len(),
             };
-            self.supervisor_ref.tell(msg).await.unwrap();
+            self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
         }
 
         Ok(())
     }
 }
 
+// ------------------------------------------------------------------------
+// Component lifecycle handlers.
+// ------------------------------------------------------------------------
+
 impl Actor for GraphIndexer {
-    // By default mailbox is limited to 1000 messages.
+    // Internal error type.
     type Error = IndexationError;
 
-    /// Actor name - overrides auto-derived name.
+    /// Name - overrides auto-derived name.
     fn name() -> &'static str {
         "GraphIndexer"
     }
@@ -150,8 +154,28 @@ impl Actor for GraphIndexer {
     /// Lifecycle event handler: on_start.
     ///
     /// State initialisation hook.
-    async fn on_start(&mut self, _: ActorRef<Self>) -> Result<(), Self::Error> {
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
         logger::log_lifecycle::<Self>("on_start", None);
+
+        // Register message handlers.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnBeginGraphIndexation>(),
+            ))
+            .await
+            .unwrap();
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref.clone().recipient::<OnFetchIrisShares>(),
+            ))
+            .await
+            .unwrap();
 
         // let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
         // let d = IrisLoader {

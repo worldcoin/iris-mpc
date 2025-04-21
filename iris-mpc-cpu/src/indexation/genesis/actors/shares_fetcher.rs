@@ -1,11 +1,8 @@
-use super::{
-    super::Supervisor,
-    super::{
-        errors::IndexationError,
-        messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
-        types::IrisGaloisShares,
-        utils::{self, fetcher, logger},
-    },
+use super::super::{
+    errors::IndexationError,
+    messages::{OnBeginIndexationOfBatchItem, OnFetchIrisShares},
+    types::IrisGaloisShares,
+    utils::{self, fetcher, logger},
 };
 use iris_mpc_common::config::Config;
 use iris_mpc_store::Store as IrisStore;
@@ -14,13 +11,14 @@ use kameo::{
     message::{Context, Message},
     Actor,
 };
+use kameo_actors::message_bus as mbus;
 
 // ------------------------------------------------------------------------
-// Actor name + state + ctor + methods.
+// Component state.
 // ------------------------------------------------------------------------
 
 // Fetches Iris shares from remote store.
-#[derive(Actor, Clone)]
+#[allow(dead_code)]
 pub struct SharesFetcher {
     // System configuration information.
     config: Config,
@@ -28,23 +26,23 @@ pub struct SharesFetcher {
     // Store provider instance.
     iris_store: Option<IrisStore>,
 
-    // Reference to supervisor.
-    supervisor_ref: ActorRef<Supervisor>,
+    // Reference to message bus mediating intra-actor communications.
+    mbus_ref: ActorRef<mbus::MessageBus>,
 }
 
-// Constructors.
+// Ctor.
 impl SharesFetcher {
-    pub fn new(config: Config, supervisor_ref: ActorRef<Supervisor>) -> Self {
+    pub fn new(config: Config, mbus_ref: ActorRef<mbus::MessageBus>) -> Self {
         Self {
             config,
             iris_store: None,
-            supervisor_ref,
+            mbus_ref,
         }
     }
 }
 
 // ------------------------------------------------------------------------
-// Actor message handlers.
+// Component message handlers.
 // ------------------------------------------------------------------------
 
 impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
@@ -78,13 +76,46 @@ impl Message<OnBeginIndexationOfBatchItem> for SharesFetcher {
         );
 
         // Signal to supervisor.
-        let msg = OnFetchIrisShares {
+        let _ = OnFetchIrisShares {
             batch_idx: msg.batch_idx,
             batch_item_idx: msg.batch_item_idx,
             iris_serial_id: stored.id(),
             iris_shares: shares,
         };
-        self.supervisor_ref.tell(msg).await.unwrap();
+        self.mbus_ref.tell(mbus::Publish(msg)).await.unwrap();
+
+        Ok(())
+    }
+}
+
+// ------------------------------------------------------------------------
+// Component lifecycle handlers.
+// ------------------------------------------------------------------------
+
+impl Actor for SharesFetcher {
+    // Internal error type.
+    type Error = IndexationError;
+
+    /// Name - overrides auto-derived name.
+    fn name() -> &'static str {
+        "SharesFetcher"
+    }
+
+    /// Lifecycle event handler: on_start.
+    ///
+    /// State initialisation hook.
+    async fn on_start(&mut self, actor_ref: ActorRef<Self>) -> Result<(), Self::Error> {
+        logger::log_lifecycle::<Self>("on_start", None);
+
+        // Register message handlers with message bus.
+        self.mbus_ref
+            .tell(mbus::Register(
+                actor_ref
+                    .clone()
+                    .recipient::<OnBeginIndexationOfBatchItem>(),
+            ))
+            .await
+            .unwrap();
 
         Ok(())
     }
