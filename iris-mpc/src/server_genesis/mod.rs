@@ -227,6 +227,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let hawk_args = HawkArgs {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
+        hnsw_prng_seed: config.hawk_prng_seed,
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         disable_persistence: config.disable_persistence,
