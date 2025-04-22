@@ -1,6 +1,7 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
 use crate::iris_db::get_dummy_shares_for_deletion;
 use crate::job::GaloisSharesBothSides;
+use crate::MASK_CODE_LENGTH;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -543,10 +544,11 @@ impl TestCaseGenerator {
                 {
                     continue;
                 }
-                let code = IrisCode::random_rng(&mut self.rng);
+                let code_left = IrisCode::random_rng(&mut self.rng);
+                let code_right = IrisCode::random_rng(&mut self.rng);
                 let template = E2ETemplate {
-                    left: code.clone(),
-                    right: code,
+                    left: code_left,
+                    right: code_right,
                 };
                 let shared_template = template.to_shared_template(true, &mut self.rng);
                 let shares0 = GaloisSharesBothSides {
@@ -586,9 +588,46 @@ impl TestCaseGenerator {
                 batch1.reset_update_indices.push(idx as u32);
                 batch2.reset_update_indices.push(idx as u32);
 
-                batch0.reset_update_shares.push(shares0);
-                batch1.reset_update_shares.push(shares1);
-                batch2.reset_update_shares.push(shares2);
+                batch0.reset_update_shares.push(shares0.clone());
+                batch1.reset_update_shares.push(shares1.clone());
+                batch2.reset_update_shares.push(shares2.clone());
+
+                // delete shares also from the internal db
+                {
+                    self.db_state.shared_dbs[0].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares0.code_left,
+                            mask: shares0.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares0.code_right,
+                            mask: shares0.mask_right,
+                        },
+                    );
+                    self.db_state.shared_dbs[1].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares1.code_left,
+                            mask: shares1.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares1.code_right,
+                            mask: shares1.mask_right,
+                        },
+                    );
+                    self.db_state.shared_dbs[2].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares2.code_left,
+                            mask: shares2.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares2.code_right,
+                            mask: shares2.mask_right,
+                        },
+                    );
+                }
             }
         }
 
@@ -1570,6 +1609,18 @@ impl PartyDb {
         assert!(res.is_none(), "no duplicate insertions");
         let res = self.db_right.insert(db_index, right);
         assert!(res.is_none(), "no duplicate insertions");
+    }
+
+    fn reset_share(
+        &mut self,
+        db_index: usize,
+        left: FullGaloisRingIrisCodeShare,
+        right: FullGaloisRingIrisCodeShare,
+    ) {
+        let res = self.db_left.insert(db_index, left);
+        assert!(res.is_some(), "resets are only for existing shares");
+        let res = self.db_right.insert(db_index, right);
+        assert!(res.is_some(), "resets are only for existing shares");
     }
 }
 
