@@ -123,9 +123,9 @@ pub trait OnDemandLoader {
     /// Loads records from the source.
     /// The returned iterator yields tuples of the form:
     /// `(index, side_code, side_mask)`.
-    fn stream_records(
+    fn load_records(
         &self,
         side: Eye,
         indices: &[usize],
-    ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>)>>;
+    ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>>;
 }

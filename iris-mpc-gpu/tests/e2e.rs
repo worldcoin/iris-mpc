@@ -12,6 +12,7 @@ mod e2e_test {
         helpers::device_manager::DeviceManager,
         server::{InMemoryStoreType, ServerActor},
     };
+    use itertools::Itertools;
     use rand::random;
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
@@ -250,20 +251,22 @@ mod e2e_test {
     }
 
     impl OnDemandLoader for OnDemandLoaderImpl {
-        fn stream_records(
+        fn load_records(
             &self,
-            side: iris_mpc_common::job::Eye,
+            side: Eye,
             indices: &[usize],
-        ) -> Box<dyn Iterator<Item = (usize, Vec<u16>, Vec<u16>)>> {
+        ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>> {
             let test_db = Arc::clone(&self.db);
-            let indices = indices.to_vec();
-            Box::new(indices.into_iter().map(move |idx| {
-                let share = match side {
-                    Eye::Left => test_db.db_left[idx].clone(),
-                    Eye::Right => test_db.db_right[idx].clone(),
-                };
-                (idx, share.code.coefs.to_vec(), share.mask.coefs.to_vec())
-            }))
+            Ok(indices
+                .iter()
+                .map(|&idx| {
+                    let share = match side {
+                        Eye::Left => test_db.db_left[idx].clone(),
+                        Eye::Right => test_db.db_right[idx].clone(),
+                    };
+                    (idx, share.code.coefs.to_vec(), share.mask.coefs.to_vec())
+                })
+                .collect_vec())
         }
     }
 }

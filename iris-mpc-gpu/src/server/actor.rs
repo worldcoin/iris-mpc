@@ -1942,8 +1942,8 @@ impl ServerActor {
 
             // fetch them from the DB
             let iris_codes = on_demand_loader
-                .stream_records(eye_db, &db_indices)
-                .collect::<Vec<_>>();
+                .load_records(eye_db, &db_indices)
+                .expect("Can load records from on-demand loader");
 
             tracing::info!(
                 "{} loaded indices: {:?},",
