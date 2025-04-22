@@ -532,6 +532,7 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
+            let now = Instant::now();
             if batch.full_face_mirror_attacks_detection_enabled {
                 tracing::info!("Full face mirror attack detection enabled");
                 match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
@@ -570,6 +571,12 @@ impl ServerActor {
                     }
                 }
             }
+            tracing::info!(
+                "Full batch duration took:  {:?}",
+                now.elapsed().as_secs_f64()
+            );
+
+            metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
