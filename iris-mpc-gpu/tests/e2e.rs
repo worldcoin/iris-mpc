@@ -14,7 +14,10 @@ mod e2e_test {
     };
     use itertools::Itertools;
     use rand::random;
-    use std::{env, sync::Arc};
+    use std::{
+        env,
+        sync::{Arc, Mutex},
+    };
     use tokio::sync::oneshot;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -125,7 +128,7 @@ mod e2e_test {
                 InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(&party_db0, &mut actor);
+                    load_test_db(&party_db0.lock().unwrap(), &mut actor);
                     actor.preprocess_db();
                     tx0.send(Ok(handle)).unwrap();
                     actor
@@ -162,7 +165,7 @@ mod e2e_test {
                 InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(&party_db1, &mut actor);
+                    load_test_db(&party_db1.lock().unwrap(), &mut actor);
                     actor.preprocess_db();
                     tx1.send(Ok(handle)).unwrap();
                     actor
@@ -199,7 +202,7 @@ mod e2e_test {
                 InMemoryStoreType::Half(Box::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
-                    load_test_db(&party_db2, &mut actor);
+                    load_test_db(&party_db2.lock().unwrap(), &mut actor);
                     actor.preprocess_db();
                     tx2.send(Ok(handle)).unwrap();
                     actor
@@ -247,7 +250,7 @@ mod e2e_test {
     /// On-DemandLoader implementation for the GPU E2E test
     #[derive(Clone)]
     struct OnDemandLoaderImpl {
-        db: Arc<PartyDb>,
+        db: Arc<Mutex<PartyDb>>,
     }
 
     impl OnDemandLoader for OnDemandLoaderImpl {
@@ -256,13 +259,13 @@ mod e2e_test {
             side: Eye,
             indices: &[usize],
         ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>> {
-            let test_db = Arc::clone(&self.db);
+            let db = self.db.lock().unwrap();
             Ok(indices
                 .iter()
                 .map(|&idx| {
                     let share = match side {
-                        Eye::Left => test_db.db_left[idx].clone(),
-                        Eye::Right => test_db.db_right[idx].clone(),
+                        Eye::Left => db.db_left[idx].clone(),
+                        Eye::Right => db.db_right[idx].clone(),
                     };
                     (idx, share.code.coefs.to_vec(), share.mask.coefs.to_vec())
                 })

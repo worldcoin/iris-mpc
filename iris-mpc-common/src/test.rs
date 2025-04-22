@@ -22,7 +22,7 @@ use rand::{
     seq::{IteratorRandom, SliceRandom},
     Rng, SeedableRng,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -1503,13 +1503,13 @@ pub struct TestDb {
     /// A plain iris database for LEFT & RIGHT eyes
     plain_dbs: [IrisDB; 2],
     /// A shared iris database for each parties
-    shared_dbs: [Arc<PartyDb>; 3],
+    shared_dbs: [Arc<Mutex<PartyDb>>; 3],
     /// initial db len
     initial_db_len: usize,
 }
 
 impl TestDb {
-    pub fn party_db(&self, party_id: usize) -> Arc<PartyDb> {
+    pub fn party_db(&self, party_id: usize) -> Arc<Mutex<PartyDb>> {
         Arc::clone(&self.shared_dbs[party_id])
     }
     pub fn plain_dbs(&self, side: usize) -> &IrisDB {
@@ -1572,7 +1572,7 @@ pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
 
     TestDb {
         plain_dbs: [db_left, db_right],
-        shared_dbs: party_dbs.map(Arc::new),
+        shared_dbs: party_dbs.map(Mutex::new).map(Arc::new),
         initial_db_len: db_size,
     }
 }
