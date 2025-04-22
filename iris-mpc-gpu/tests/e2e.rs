@@ -41,8 +41,17 @@ mod e2e_test {
             .init();
     }
 
-    #[tokio::test]
-    async fn e2e_test() -> Result<()> {
+    #[test]
+    fn e2e_test() -> Result<()> {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(3)
+            .thread_stack_size(8 * 1024 * 1024)
+            .enable_all()
+            .build()?;
+        runtime.block_on(e2e_test_main())
+    }
+
+    async fn e2e_test_main() -> Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
