@@ -264,8 +264,8 @@ mod e2e_test {
                 .iter()
                 .map(|&idx| {
                     let share = match side {
-                        Eye::Left => db.db_left[idx].clone(),
-                        Eye::Right => db.db_right[idx].clone(),
+                        Eye::Left => db.db_left[&idx].clone(),
+                        Eye::Right => db.db_right[&idx].clone(),
                     };
                     (idx, share.code.coefs.to_vec(), share.mask.coefs.to_vec())
                 })

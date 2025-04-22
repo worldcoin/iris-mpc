@@ -1321,44 +1321,62 @@ impl TestCaseGenerator {
                         // db0
                         {
                             let mut db0 = self.db_state.shared_dbs[0].lock().unwrap();
-                            let db0_len = db0.db_left.len();
-                            assert_eq!(db0_len as u32, idx, "insertion index is as expected");
-                            db0.db_left.push(FullGaloisRingIrisCodeShare {
-                                code: batch0.left_iris_requests.code[batch_idx].clone(),
-                                mask: batch0.left_iris_requests.mask[batch_idx].clone(),
-                            });
-                            db0.db_right.push(FullGaloisRingIrisCodeShare {
-                                code: batch0.right_iris_requests.code[batch_idx].clone(),
-                                mask: batch0.right_iris_requests.mask[batch_idx].clone(),
-                            });
+                            let res = db0.db_left.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch0.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch0.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
+                            let res = db0.db_right.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch0.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch0.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
                         }
                         // db1
                         {
                             let mut db1 = self.db_state.shared_dbs[1].lock().unwrap();
-                            let db1_len = db1.db_left.len();
-                            assert_eq!(db1_len as u32, idx, "insertion index is as expected");
-                            db1.db_left.push(FullGaloisRingIrisCodeShare {
-                                code: batch1.left_iris_requests.code[batch_idx].clone(),
-                                mask: batch1.left_iris_requests.mask[batch_idx].clone(),
-                            });
-                            db1.db_right.push(FullGaloisRingIrisCodeShare {
-                                code: batch1.right_iris_requests.code[batch_idx].clone(),
-                                mask: batch1.right_iris_requests.mask[batch_idx].clone(),
-                            });
+                            let res = db1.db_left.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch1.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch1.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
+                            let res = db1.db_right.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch1.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch1.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
                         }
                         // db2
                         {
                             let mut db2 = self.db_state.shared_dbs[2].lock().unwrap();
-                            let db2_len = db2.db_left.len();
-                            assert_eq!(db2_len as u32, idx, "insertion index is as expected");
-                            db2.db_left.push(FullGaloisRingIrisCodeShare {
-                                code: batch2.left_iris_requests.code[batch_idx].clone(),
-                                mask: batch2.left_iris_requests.mask[batch_idx].clone(),
-                            });
-                            db2.db_right.push(FullGaloisRingIrisCodeShare {
-                                code: batch2.right_iris_requests.code[batch_idx].clone(),
-                                mask: batch2.right_iris_requests.mask[batch_idx].clone(),
-                            });
+                            let res = db2.db_left.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch2.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch2.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
+                            let res = db2.db_right.insert(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch2.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch2.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                            assert!(res.is_none(), "no duplicate insertions");
                         }
                     }
                 }
@@ -1537,8 +1555,8 @@ fn check_bucket_statistics(
 
 pub struct PartyDb {
     pub party_id: usize,
-    pub db_left: Vec<FullGaloisRingIrisCodeShare>,
-    pub db_right: Vec<FullGaloisRingIrisCodeShare>,
+    pub db_left: HashMap<usize, FullGaloisRingIrisCodeShare>,
+    pub db_right: HashMap<usize, FullGaloisRingIrisCodeShare>,
 }
 
 pub struct TestDb {
@@ -1584,32 +1602,32 @@ pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
     let mut party_dbs = [
         PartyDb {
             party_id: 0,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
         PartyDb {
             party_id: 1,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
         PartyDb {
             party_id: 2,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
     ];
 
-    for (left_iris, right_iris) in db_left.db.iter().zip(db_right.db.iter()) {
+    for (idx, (left_iris, right_iris)) in db_left.db.iter().zip(db_right.db.iter()).enumerate() {
         let [left0, left1, left2] =
             FullGaloisRingIrisCodeShare::encode_iris_code(left_iris, &mut share_rng);
         let [right0, right1, right2] =
             FullGaloisRingIrisCodeShare::encode_iris_code(right_iris, &mut share_rng);
-        party_dbs[0].db_left.push(left0);
-        party_dbs[0].db_right.push(right0);
-        party_dbs[1].db_left.push(left1);
-        party_dbs[1].db_right.push(right1);
-        party_dbs[2].db_left.push(left2);
-        party_dbs[2].db_right.push(right2);
+        party_dbs[0].db_left.insert(idx, left0);
+        party_dbs[0].db_right.insert(idx, right0);
+        party_dbs[1].db_left.insert(idx, left1);
+        party_dbs[1].db_right.insert(idx, right1);
+        party_dbs[2].db_left.insert(idx, left2);
+        party_dbs[2].db_right.insert(idx, right2);
     }
 
     TestDb {
@@ -1620,12 +1638,9 @@ pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
 }
 
 pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
-    for (idx, (left, right)) in party_db
-        .db_left
-        .iter()
-        .zip(party_db.db_right.iter())
-        .enumerate()
-    {
+    for idx in 0..party_db.db_left.len() {
+        let left = &party_db.db_left[&idx];
+        let right = &party_db.db_right[&idx];
         loader.load_single_record_from_db(
             idx,
             VectorId::from_0_index(idx as u32),
