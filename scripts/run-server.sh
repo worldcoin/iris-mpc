@@ -22,6 +22,8 @@ export SMPC__HAWK_SERVER_HEALTHCHECK_PORT="300${NODE_ID}"
 export SMPC__MODE_OF_COMPUTE="CPU"
 
 export AWS_ENDPOINT_URL="http://127.0.0.1:4566"
+export SMPC__MAX_DB_SIZE=6000
+export SMPC__HNSW_PRNG_SEED=10
 
 if [ "$INIT_SERVERS" = true ]; then
   ./scripts/tools/init-servers.sh

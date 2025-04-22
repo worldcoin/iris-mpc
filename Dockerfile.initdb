@@ -29,6 +29,9 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
+RUN pwd
+RUN ls -l
+
 ENV RUST_BACKTRACE=1
 RUN cargo build --release --bin init-test-dbs
 
@@ -39,6 +42,7 @@ RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
+COPY --from=build-app /src/iris-mpc/store_10.ndjson /data/store_10.ndjson
 COPY --from=build-app /src/iris-mpc/target/release/init-test-dbs /bin/init-test-dbs
 
 USER 65534

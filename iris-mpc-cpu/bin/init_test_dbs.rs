@@ -133,7 +133,7 @@ struct Args {
 
     /// PRNG seed for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
-    #[clap(default_value = "0")]
+    #[clap(long, default_value = "0")]
     hnsw_prng_seed: u64,
 
     /// PRNG seed for ABY3 MPC protocols, used for locally generating secret
