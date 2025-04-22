@@ -188,7 +188,7 @@ impl From<&Args> for Rngs {
     }
 }
 
-const N_PARTIES: usize = 3;
+const N_PARTIES: usize = 1;
 
 #[allow(non_snake_case)]
 #[tokio::main]
