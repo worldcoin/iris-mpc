@@ -1635,6 +1635,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
+    let inmemory_store_type = if config.load_only_full_scan_side_in_memory {
+        InMemoryStoreType::Half(Box::new(store.clone()))
+    } else {
+        InMemoryStoreType::Full
+    };
     background_tasks.spawn_blocking(move || {
         let config = config_clone;
         // --------------------------------------------------------------------------
@@ -1654,7 +1659,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
-            InMemoryStoreType::Full,
+            inmemory_store_type,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

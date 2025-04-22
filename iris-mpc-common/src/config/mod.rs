@@ -227,6 +227,9 @@ pub struct Config {
 
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
+
+    #[serde(default)]
+    pub load_only_full_scan_side_in_memory: bool,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -573,6 +576,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            load_only_full_scan_side_in_memory: _, // could be different for each server
         } = value;
 
         Self {

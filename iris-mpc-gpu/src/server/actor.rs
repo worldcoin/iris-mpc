@@ -112,7 +112,7 @@ pub enum Orientation {
 /// In case we only load the active side, we pass an [OnDemandLoader] to load the inactive side on demand.
 pub enum InMemoryStoreType {
     Full,
-    Half(Box<dyn OnDemandLoader>),
+    Half(Box<dyn OnDemandLoader + Send + 'static>),
 }
 
 pub struct ServerActor {
