@@ -1,7 +1,6 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
 use crate::iris_db::get_dummy_shares_for_deletion;
 use crate::job::GaloisSharesBothSides;
-use crate::MASK_CODE_LENGTH;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
