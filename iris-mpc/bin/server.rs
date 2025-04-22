@@ -632,6 +632,9 @@ async fn receive_batch(
                                 .reset_update_indices
                                 .push(reset_update_request.serial_id - 1);
                             batch_query.sns_message_ids.push(sns_message_id.clone());
+                            batch_query
+                                .reset_update_request_ids
+                                .push(reset_update_request.reset_id);
                             batch_query.reset_update_shares.push(GaloisSharesBothSides {
                                 code_left: left_shares.0,
                                 mask_left: left_shares.1,
