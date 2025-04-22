@@ -5,6 +5,10 @@ use std::fmt;
 // Definitions.
 // ------------------------------------------------------------------------
 
+// Signals start of process.
+#[derive(Clone, Debug)]
+pub struct OnBegin;
+
 // Signals start of indexation.
 #[derive(Clone, Debug)]
 pub struct OnBeginIndexation;
@@ -85,6 +89,12 @@ pub struct OnFetchIrisShares {
 // ------------------------------------------------------------------------
 // Trait implementations.
 // ------------------------------------------------------------------------
+
+impl fmt::Display for OnBegin {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "")
+    }
+}
 
 impl fmt::Display for OnBeginIndexation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

@@ -1,7 +1,8 @@
 use super::super::{
     errors::IndexationError,
     messages::{
-        OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch, OnFetchIrisShares,
+        OnBegin, OnBeginGraphIndexation, OnBeginIndexationOfBatch, OnEndIndexationOfBatch,
+        OnFetchIrisShares,
     },
     types::IrisGaloisShares,
     utils::logger,
@@ -77,6 +78,20 @@ impl GraphIndexer {
 // ------------------------------------------------------------------------
 // Component message handlers.
 // ------------------------------------------------------------------------
+
+impl Message<OnBegin> for GraphIndexer {
+    // Reply type.
+    type Reply = ();
+
+    // Handler.
+    async fn handle(&mut self, msg: OnBegin, _: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        logger::log_message::<Self, OnBegin>(&msg);
+
+        println!("107");
+
+        // TODO :: build graph from store.
+    }
+}
 
 impl Message<OnBeginIndexationOfBatch> for GraphIndexer {
     // Reply type.
@@ -159,23 +174,27 @@ impl Actor for GraphIndexer {
 
         // Register message handlers.
         self.mbus_ref
-            .tell(mbus::Register(
-                actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
-            ))
+            .tell(mbus::Register(actor_ref.clone().recipient::<OnBegin>()))
             .await
             .unwrap();
-        self.mbus_ref
-            .tell(mbus::Register(
-                actor_ref.clone().recipient::<OnBeginGraphIndexation>(),
-            ))
-            .await
-            .unwrap();
-        self.mbus_ref
-            .tell(mbus::Register(
-                actor_ref.clone().recipient::<OnFetchIrisShares>(),
-            ))
-            .await
-            .unwrap();
+        // self.mbus_ref
+        //     .tell(mbus::Register(
+        //         actor_ref.clone().recipient::<OnBeginIndexationOfBatch>(),
+        //     ))
+        //     .await
+        //     .unwrap();
+        // self.mbus_ref
+        //     .tell(mbus::Register(
+        //         actor_ref.clone().recipient::<OnBeginGraphIndexation>(),
+        //     ))
+        //     .await
+        //     .unwrap();
+        // self.mbus_ref
+        //     .tell(mbus::Register(
+        //         actor_ref.clone().recipient::<OnFetchIrisShares>(),
+        //     ))
+        //     .await
+        //     .unwrap();
 
         // let iris_store = [(); 2].map(|_| SharedIrisesRef::default());
         // let d = IrisLoader {

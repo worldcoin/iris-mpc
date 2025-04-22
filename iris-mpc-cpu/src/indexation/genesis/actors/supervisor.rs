@@ -8,7 +8,7 @@ use kameo_actors::{message_bus as mbus, DeliveryStrategy};
 use {
     super::super::{
         errors::IndexationError,
-        messages::{OnBeginIndexation, OnEndIndexation},
+        messages::{OnBegin, OnBeginIndexation, OnEndIndexation},
         utils::logger,
     },
     super::{BatchGenerator, GraphIndexer, SharesFetcher},
@@ -84,11 +84,11 @@ impl Actor for Supervisor {
             self.config.clone(),
             self.mbus_ref.clone(),
         ));
-        kameo::spawn(SharesFetcher::new(
+        kameo::spawn(GraphIndexer::new(
             self.config.clone(),
             self.mbus_ref.clone(),
         ));
-        kameo::spawn(GraphIndexer::new(
+        kameo::spawn(SharesFetcher::new(
             self.config.clone(),
             self.mbus_ref.clone(),
         ));
@@ -102,10 +102,7 @@ impl Actor for Supervisor {
             .unwrap();
 
         // Signal start.
-        self.mbus_ref
-            .tell(mbus::Publish(OnBeginIndexation))
-            .await
-            .unwrap();
+        self.mbus_ref.tell(mbus::Publish(OnBegin)).await.unwrap();
 
         Ok(())
     }
