@@ -876,7 +876,7 @@ impl HawkHandle {
                 let job_result = Self::handle_job(&mut hawk_actor, &sessions, &job.request).await;
 
                 let health =
-                    Self::maybe_recover(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
+                    Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
 
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
@@ -967,7 +967,7 @@ impl HawkHandle {
         Ok(results)
     }
 
-    async fn maybe_recover(
+    async fn health_check(
         hawk_actor: &mut HawkActor,
         sessions: &mut BothEyes<Vec<HawkSessionRef>>,
         job_failed: bool,
