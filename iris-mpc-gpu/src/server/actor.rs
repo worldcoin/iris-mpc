@@ -84,14 +84,14 @@ impl JobSubmissionHandle for ServerActorHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult> {
+    ) -> impl Future<Output = eyre::Result<ServerJobResult>> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
             return_channel: tx,
         };
         self.job_queue.send(job).await.unwrap();
-        rx.map(|x| x.unwrap())
+        rx.map(|x| Ok(x?))
     }
 }
 

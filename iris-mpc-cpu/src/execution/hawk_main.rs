@@ -22,7 +22,7 @@ use crate::{
     },
 };
 use clap::Parser;
-use eyre::{Report, Result};
+use eyre::Result;
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::statistics::BucketStatistics;
@@ -44,8 +44,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
     sync::Arc,
-    time::Duration,
-    time::Instant,
+    time::{Duration, Instant},
     vec,
 };
 use tokio::{
@@ -309,7 +308,16 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub fn new_sessions(
+    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        let (l, r) = try_join!(
+            self.new_sessions_side(self.args.request_parallelism, StoreId::Left),
+            self.new_sessions_side(self.args.request_parallelism, StoreId::Right),
+        )?;
+        tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
+        Ok([l, r])
+    }
+
+    fn new_sessions_side(
         &mut self,
         count: usize,
         store_id: StoreId,
@@ -336,7 +344,6 @@ impl HawkActor {
         let hnsw_prng_seed = self.args.hnsw_prng_seed;
 
         async move {
-            // TODO: cleanup of dropped sessions.
             let grpc_session = networking.create_session(session_id).await?;
 
             let mut network_session = NetworkSession {
@@ -831,22 +838,29 @@ impl JobSubmissionHandle for HawkHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl std::future::Future<Output = ServerJobResult> {
+    ) -> impl Future<Output = Result<ServerJobResult>> {
         let request = HawkRequest::from(&batch);
-        let result = self.submit(request).await.unwrap();
+        let (tx, rx) = oneshot::channel();
+        let job = HawkJob {
+            request,
+            return_channel: tx,
+        };
 
-        async move { result.job_result(batch) }
+        // Wait for the job to be sent for backpressure.
+        let sent = self.job_queue.send(job).await;
+
+        async move {
+            // In a second Future, wait for the result.
+            sent?;
+            let result = rx.await??;
+            Ok(result.job_result(batch))
+        }
     }
 }
 
 impl HawkHandle {
-    pub async fn new(mut hawk_actor: HawkActor, request_parallelism: usize) -> Result<Self> {
-        let sessions: BothEyes<Vec<HawkSessionRef>> = try_join!(
-            hawk_actor.new_sessions(request_parallelism, StoreId::Left),
-            hawk_actor.new_sessions(request_parallelism, StoreId::Right),
-        )?
-        .into();
-        tracing::debug!("Created {} MPC sessions.", request_parallelism);
+    pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        let mut sessions = hawk_actor.new_sessions().await?;
 
         // Validate the common state before starting.
         try_join!(
@@ -859,99 +873,116 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                tracing::info!("Processing an Hawk job…");
-                let now = Instant::now();
+                let job_result = Self::handle_job(&mut hawk_actor, &sessions, &job.request).await;
 
-                let search_queries = &job.request.queries;
+                let health =
+                    Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
 
-                let intra_results = intra_batch_is_match(&sessions, search_queries).await?;
+                let stop = health.is_err();
+                let _ = job.return_channel.send(health.and(job_result));
 
-                // Search for nearest neighbors.
-                // For both eyes, all requests, and rotations.
-                let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
-                    search::search(&sessions, search_queries, hawk_actor.search_params.clone())
-                        .await?;
-
-                hawk_actor
-                    .update_anon_stats(&sessions[0][0], &search_results)
-                    .await?;
-
-                let match_result = {
-                    let step1 = matching::BatchStep1::new(&search_results);
-                    // Go fetch the missing vector IDs and calculate their is_match.
-                    let missing_is_match = calculate_missing_is_match(
-                        search_queries,
-                        step1.missing_vector_ids(),
-                        &sessions,
-                    )
-                    .await?;
-                    step1.step2(&missing_is_match)
-                };
-
-                let mut results = HawkResult::new(
-                    match_result,
-                    intra_results,
-                    hawk_actor.anonymized_bucket_statistics.clone(),
-                );
-
-                let (insert_indices, search_results) = job
-                    .request
-                    .filter_for_insertion(search_results, results.is_matches());
-
-                // Insert into the database.
-                if !hawk_actor.args.disable_persistence {
-                    // For both eyes.
-                    for (side, sessions, search_results) in
-                        izip!(&STORE_IDS, &sessions, search_results)
-                    {
-                        // Focus on the main results (forget rotations).
-                        let insert_plans = search_results
-                            .into_iter()
-                            .map(VecRots::into_center)
-                            .collect();
-
-                        // Insert in memory, and return the plans to update the persistent database.
-                        let plans = hawk_actor.insert(sessions, insert_plans).await?;
-
-                        // Convert to Vec<Option> matching the request order.
-                        for (i, plan) in izip!(&insert_indices, plans) {
-                            results.set_connect_plan(*i, *side, plan);
-                        }
-                    }
-                } else {
-                    tracing::info!("Persistence is disabled, not writing to DB");
+                if stop {
+                    tracing::error!("Stopping HawkActor in inconsistent state.");
+                    break;
                 }
-
-                // Validate the common state after processing the requests.
-                try_join!(
-                    HawkSession::state_check(&sessions[LEFT][0]),
-                    HawkSession::state_check(&sessions[RIGHT][0]),
-                )
-                .expect("Party states diverged after processing requests");
-
-                metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
-                metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
-                let left_query_count = search_queries[LEFT].len();
-                let right_query_count = search_queries[RIGHT].len();
-                metrics::gauge!("search_queries_left").set(left_query_count as f64);
-                metrics::gauge!("search_queries_right").set(right_query_count as f64);
-
-                let _ = job.return_channel.send(Ok(results));
             }
-            Ok::<_, Report>(())
+
+            rx.close();
+            while let Some(job) = rx.recv().await {
+                let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
+            }
         });
 
         Ok(Self { job_queue: tx })
     }
 
-    pub async fn submit(&self, request: HawkRequest) -> Result<HawkResult> {
-        let (tx, rx) = oneshot::channel();
-        let job = HawkJob {
-            request,
-            return_channel: tx,
+    async fn handle_job(
+        hawk_actor: &mut HawkActor,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        request: &HawkRequest,
+    ) -> Result<HawkResult> {
+        tracing::info!("Processing an Hawk job…");
+        let now = Instant::now();
+
+        let search_queries = &request.queries;
+
+        let intra_results = intra_batch_is_match(sessions, search_queries).await?;
+
+        // Search for nearest neighbors.
+        // For both eyes, all requests, and rotations.
+        let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
+            search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
+
+        hawk_actor
+            .update_anon_stats(&sessions[0][0], &search_results)
+            .await?;
+
+        let match_result = {
+            let step1 = matching::BatchStep1::new(&search_results);
+            // Go fetch the missing vector IDs and calculate their is_match.
+            let missing_is_match =
+                calculate_missing_is_match(search_queries, step1.missing_vector_ids(), sessions)
+                    .await?;
+            step1.step2(&missing_is_match)
         };
-        self.job_queue.send(job).await?;
-        rx.await?
+
+        let mut results = HawkResult::new(
+            match_result,
+            intra_results,
+            hawk_actor.anonymized_bucket_statistics.clone(),
+        );
+
+        let (insert_indices, search_results) =
+            request.filter_for_insertion(search_results, results.is_matches());
+
+        // Insert into the database.
+        if !hawk_actor.args.disable_persistence {
+            // For both eyes.
+            for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+                // Focus on the main results (forget rotations).
+                let insert_plans = search_results
+                    .into_iter()
+                    .map(VecRots::into_center)
+                    .collect();
+
+                // Insert in memory, and return the plans to update the persistent database.
+                let plans = hawk_actor.insert(sessions, insert_plans).await?;
+
+                // Convert to Vec<Option> matching the request order.
+                for (i, plan) in izip!(&insert_indices, plans) {
+                    results.set_connect_plan(*i, *side, plan);
+                }
+            }
+        } else {
+            tracing::info!("Persistence is disabled, not writing to DB");
+        }
+
+        metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
+        metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+        let left_query_count = search_queries[LEFT].len();
+        let right_query_count = search_queries[RIGHT].len();
+        metrics::gauge!("search_queries_left").set(left_query_count as f64);
+        metrics::gauge!("search_queries_right").set(right_query_count as f64);
+
+        Ok(results)
+    }
+
+    async fn health_check(
+        hawk_actor: &mut HawkActor,
+        sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+        job_failed: bool,
+    ) -> Result<()> {
+        if job_failed {
+            // There is some error so the sessions may be somehow invalid. Make new ones.
+            *sessions = hawk_actor.new_sessions().await?;
+        }
+
+        // Validate the common state after processing the requests.
+        try_join!(
+            HawkSession::state_check(&sessions[LEFT][0]),
+            HawkSession::state_check(&sessions[RIGHT][0]),
+        )?;
+        Ok(())
     }
 }
 
@@ -999,7 +1030,7 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
     let hawk_actor = HawkActor::from_cli(&args).await?;
-    HawkHandle::new(hawk_actor, args.request_parallelism).await
+    HawkHandle::new(hawk_actor).await
 }
 
 #[cfg(test)]
@@ -1102,8 +1133,7 @@ mod tests {
                     ],
                     ..BatchQuery::default()
                 };
-                let res = handle.submit_batch_query(batch).await.await;
-                Ok(res)
+                handle.submit_batch_query(batch).await.await
             })
             .collect::<JoinSet<_>>()
             .join_all()
