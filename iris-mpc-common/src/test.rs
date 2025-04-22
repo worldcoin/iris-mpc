@@ -1,4 +1,5 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
+use crate::iris_db::get_dummy_shares_for_deletion;
 use crate::job::GaloisSharesBothSides;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -513,6 +514,22 @@ impl TestCaseGenerator {
                 batch0.deletion_requests_indices.push(idx as u32);
                 batch1.deletion_requests_indices.push(idx as u32);
                 batch2.deletion_requests_indices.push(idx as u32);
+
+                // delete shares also from the internal db
+                {
+                    self.db_state.shared_dbs[0]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                    self.db_state.shared_dbs[1]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                    self.db_state.shared_dbs[2]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                }
             }
         }
 
@@ -1325,23 +1342,20 @@ impl TestCaseGenerator {
                         let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
                         // db0
                         {
-                            let mut db = self.db_state.shared_dbs[party_id].lock().unwrap();
-                            let res = db.db_left.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch.left_iris_requests.code[batch_idx].clone(),
-                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
-                            let res = db.db_right.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch.right_iris_requests.code[batch_idx].clone(),
-                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
+                            self.db_state.shared_dbs[party_id]
+                                .lock()
+                                .unwrap()
+                                .insert_new(
+                                    idx as usize,
+                                    FullGaloisRingIrisCodeShare {
+                                        code: batch.left_iris_requests.code[batch_idx].clone(),
+                                        mask: batch.left_iris_requests.mask[batch_idx].clone(),
+                                    },
+                                    FullGaloisRingIrisCodeShare {
+                                        code: batch.right_iris_requests.code[batch_idx].clone(),
+                                        mask: batch.right_iris_requests.mask[batch_idx].clone(),
+                                    },
+                                );
                         }
                     }
                 }
@@ -1522,6 +1536,41 @@ pub struct PartyDb {
     pub party_id: usize,
     pub db_left: HashMap<usize, FullGaloisRingIrisCodeShare>,
     pub db_right: HashMap<usize, FullGaloisRingIrisCodeShare>,
+}
+
+impl PartyDb {
+    fn delete_share(&mut self, db_index: usize) {
+        let (dummy_code, dummy_mask) = get_dummy_shares_for_deletion(self.party_id);
+        self.db_left
+            .insert(
+                db_index,
+                FullGaloisRingIrisCodeShare {
+                    code: dummy_code.clone(),
+                    mask: dummy_mask.clone(),
+                },
+            )
+            .expect("deleted existing code");
+        self.db_right
+            .insert(
+                db_index,
+                FullGaloisRingIrisCodeShare {
+                    code: dummy_code,
+                    mask: dummy_mask,
+                },
+            )
+            .expect("deleted existing code");
+    }
+    fn insert_new(
+        &mut self,
+        db_index: usize,
+        left: FullGaloisRingIrisCodeShare,
+        right: FullGaloisRingIrisCodeShare,
+    ) {
+        let res = self.db_left.insert(db_index, left);
+        assert!(res.is_none(), "no duplicate insertions");
+        let res = self.db_right.insert(db_index, right);
+        assert!(res.is_none(), "no duplicate insertions");
+    }
 }
 
 pub struct TestDb {
