@@ -3,6 +3,7 @@ use crate::{
     helpers::{statistics::BucketStatistics, sync::Modification},
 };
 use core::fmt;
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -198,5 +199,5 @@ pub trait JobSubmissionHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult<Self::A>>;
+    ) -> impl Future<Output = Result<ServerJobResult<Self::A>>>;
 }
