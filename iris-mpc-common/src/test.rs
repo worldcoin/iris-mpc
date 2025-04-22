@@ -1378,23 +1378,46 @@ impl TestCaseGenerator {
                             _ => unreachable!(),
                         };
                         let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
-                        // db0
-                        {
-                            self.db_state.shared_dbs[party_id]
-                                .lock()
-                                .unwrap()
-                                .insert_new(
-                                    idx as usize,
-                                    FullGaloisRingIrisCodeShare {
-                                        code: batch.left_iris_requests.code[batch_idx].clone(),
-                                        mask: batch.left_iris_requests.mask[batch_idx].clone(),
-                                    },
-                                    FullGaloisRingIrisCodeShare {
-                                        code: batch.right_iris_requests.code[batch_idx].clone(),
-                                        mask: batch.right_iris_requests.mask[batch_idx].clone(),
-                                    },
-                                );
-                        }
+                        // insert the new shares into the db
+                        self.db_state.shared_dbs[party_id]
+                            .lock()
+                            .unwrap()
+                            .insert_new(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                    }
+                    // persist the reauth results to the current db state
+                    if was_match && was_reauth_success {
+                        let batch = match party_id {
+                            0 => &batch0,
+                            1 => &batch1,
+                            2 => &batch2,
+                            _ => unreachable!(),
+                        };
+                        let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
+                        // update the db with the new shares
+                        self.db_state.shared_dbs[party_id]
+                            .lock()
+                            .unwrap()
+                            .reset_share(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
                     }
                 }
 
