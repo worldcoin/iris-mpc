@@ -45,7 +45,7 @@ mod e2e_test {
     fn e2e_test() -> Result<()> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(3)
-            .thread_stack_size(8 * 1024 * 1024)
+            .thread_stack_size(32 * 1024 * 1024)
             .enable_all()
             .build()?;
         runtime.block_on(e2e_test_main())
