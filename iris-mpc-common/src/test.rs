@@ -326,7 +326,7 @@ pub struct TestCaseGenerator {
     /// enabled TestCases
     enabled_test_cases: Vec<TestCase>,
     /// initial state of the Iris Database
-    initial_db_state: TestDb,
+    db_state: TestDb,
     /// full_mask_range
     full_mask_range: Range<usize>,
     /// expected results for all of the queries we send
@@ -380,7 +380,7 @@ impl TestCaseGenerator {
         let db_len = db.len();
         Self {
             enabled_test_cases: TestCase::default_test_set(),
-            initial_db_state: db,
+            db_state: db,
             full_mask_range: 0..db_len / 10,
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
@@ -498,9 +498,7 @@ impl TestCaseGenerator {
         // for non-empty batches also add some deletions
         if max_deletions_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
-                let idx = self
-                    .rng
-                    .gen_range(0..self.initial_db_state.initial_db_len());
+                let idx = self.rng.gen_range(0..self.db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
@@ -521,9 +519,7 @@ impl TestCaseGenerator {
         // for non-empty batches also add some reset updates
         if max_reset_updates_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_reset_updates_per_batch) {
-                let idx = self
-                    .rng
-                    .gen_range(0..self.initial_db_state.initial_db_len());
+                let idx = self.rng.gen_range(0..self.db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
@@ -589,7 +585,7 @@ impl TestCaseGenerator {
         let mut db_index = None;
         let range = match db_range {
             DatabaseRange::FullMaskOnly => self.full_mask_range.clone(),
-            DatabaseRange::Full => 0..self.initial_db_state.initial_db_len(),
+            DatabaseRange::Full => 0..self.db_state.initial_db_len(),
         };
         for _ in 0..100 {
             let potential_db_index = self.rng.gen_range(range.clone());
@@ -615,8 +611,8 @@ impl TestCaseGenerator {
         (
             db_index,
             [
-                self.initial_db_state.plain_dbs[LEFT].db[db_index].clone(),
-                self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone(),
+                self.db_state.plain_dbs[LEFT].db[db_index].clone(),
+                self.db_state.plain_dbs[RIGHT].db[db_index].clone(),
             ],
         )
     }
@@ -815,10 +811,8 @@ impl TestCaseGenerator {
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
                     E2ETemplate {
-                        left: self.initial_db_state.plain_dbs[LEFT].db[deleted_idx as usize]
-                            .clone(),
-                        right: self.initial_db_state.plain_dbs[RIGHT].db[deleted_idx as usize]
-                            .clone(),
+                        left: self.db_state.plain_dbs[LEFT].db[deleted_idx as usize].clone(),
+                        right: self.db_state.plain_dbs[RIGHT].db[deleted_idx as usize].clone(),
                     }
                 }
                 TestCase::WithOrRuleSet => {
@@ -1080,8 +1074,8 @@ impl TestCaseGenerator {
         will_match: bool,
         flip_right: Option<bool>,
     ) -> E2ETemplate {
-        let mut code_left = self.initial_db_state.plain_dbs[LEFT].db[db_index].clone();
-        let mut code_right = self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone();
+        let mut code_left = self.db_state.plain_dbs[LEFT].db[db_index].clone();
+        let mut code_right = self.db_state.plain_dbs[RIGHT].db[db_index].clone();
 
         assert_eq!(code_left.mask, IrisCodeArray::ONES);
         assert_eq!(code_right.mask, IrisCodeArray::ONES);
@@ -1242,9 +1236,9 @@ impl TestCaseGenerator {
 
             // send batches to servers
             let (res0_fut, res1_fut, res2_fut) = tokio::join!(
-                handle0.submit_batch_query(batch0),
-                handle1.submit_batch_query(batch1),
-                handle2.submit_batch_query(batch2)
+                handle0.submit_batch_query(batch0.clone()),
+                handle1.submit_batch_query(batch1.clone()),
+                handle2.submit_batch_query(batch2.clone())
             );
 
             let res0 = res0_fut.await?;
@@ -1319,6 +1313,54 @@ impl TestCaseGenerator {
                         was_reauth_success,
                         full_face_mirror_attack_detected,
                     );
+
+                    // persist the results to the current db state
+                    if !was_match && !was_skip_persistence_match {
+                        let batch_idx =
+                            batch0.request_ids.iter().position(|x| x == req_id).unwrap();
+                        // db0
+                        {
+                            let mut db0 = self.db_state.shared_dbs[0].lock().unwrap();
+                            let db0_len = db0.db_left.len();
+                            assert_eq!(db0_len as u32, idx, "insertion index is as expected");
+                            db0.db_left.push(FullGaloisRingIrisCodeShare {
+                                code: batch0.left_iris_requests.code[batch_idx].clone(),
+                                mask: batch0.left_iris_requests.mask[batch_idx].clone(),
+                            });
+                            db0.db_right.push(FullGaloisRingIrisCodeShare {
+                                code: batch0.right_iris_requests.code[batch_idx].clone(),
+                                mask: batch0.right_iris_requests.mask[batch_idx].clone(),
+                            });
+                        }
+                        // db1
+                        {
+                            let mut db1 = self.db_state.shared_dbs[1].lock().unwrap();
+                            let db1_len = db1.db_left.len();
+                            assert_eq!(db1_len as u32, idx, "insertion index is as expected");
+                            db1.db_left.push(FullGaloisRingIrisCodeShare {
+                                code: batch1.left_iris_requests.code[batch_idx].clone(),
+                                mask: batch1.left_iris_requests.mask[batch_idx].clone(),
+                            });
+                            db1.db_right.push(FullGaloisRingIrisCodeShare {
+                                code: batch1.right_iris_requests.code[batch_idx].clone(),
+                                mask: batch1.right_iris_requests.mask[batch_idx].clone(),
+                            });
+                        }
+                        // db2
+                        {
+                            let mut db2 = self.db_state.shared_dbs[2].lock().unwrap();
+                            let db2_len = db2.db_left.len();
+                            assert_eq!(db2_len as u32, idx, "insertion index is as expected");
+                            db2.db_left.push(FullGaloisRingIrisCodeShare {
+                                code: batch2.left_iris_requests.code[batch_idx].clone(),
+                                mask: batch2.left_iris_requests.mask[batch_idx].clone(),
+                            });
+                            db2.db_right.push(FullGaloisRingIrisCodeShare {
+                                code: batch2.right_iris_requests.code[batch_idx].clone(),
+                                mask: batch2.right_iris_requests.mask[batch_idx].clone(),
+                            });
+                        }
+                    }
                 }
 
                 for (req_id, idx) in izip!(reset_update_request_ids, reset_update_indices) {
