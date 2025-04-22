@@ -42,7 +42,7 @@ pub struct E2ETemplate {
     right: IrisCode,
 }
 impl E2ETemplate {
-    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
+    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> Box<E2ESharedTemplate> {
         let (
             left_shared_code,
             left_shared_mask,
@@ -55,7 +55,7 @@ impl E2ETemplate {
             right_mirrored_shared_code,
             right_mirrored_shared_mask,
         ) = get_shared_template(is_valid, &self.right, rng);
-        E2ESharedTemplate {
+        Box::new(E2ESharedTemplate {
             left_shared_code,
             left_shared_mask,
             right_shared_code,
@@ -64,7 +64,7 @@ impl E2ETemplate {
             left_mirrored_shared_mask,
             right_mirrored_shared_code,
             right_mirrored_shared_mask,
-        }
+        })
     }
 }
 
@@ -1421,7 +1421,7 @@ fn prepare_batch(
     is_valid: bool,
     request_id: String,
     batch_idx: usize,
-    mut e2e_shared_template: E2ESharedTemplate,
+    mut e2e_shared_template: Box<E2ESharedTemplate>,
     or_rule_indices: Vec<u32>,
     maybe_reauth_target_index: Option<&u32>,
     skip_persistence: bool,
