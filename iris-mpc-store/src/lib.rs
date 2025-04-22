@@ -9,7 +9,10 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sync::{Modification, ModificationStatus},
+    helpers::{
+        inmemory_store::OnDemandLoader,
+        sync::{Modification, ModificationStatus},
+    },
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
     vector_id::VectorId,
@@ -594,6 +597,46 @@ WHERE id = $1;
             self.count_irises().await?
         );
         Ok(())
+    }
+}
+
+impl OnDemandLoader for Store {
+    /// This implementation of `OnDemandLoader` loads records from the database.
+    /// even though the function signature is sync, we expect it to be called in the context of a tokio runtime.
+    ///
+    /// # Panics
+    ///
+    /// This will panic if called outside of a tokio runtime context.
+    fn load_records(
+        &self,
+        side: iris_mpc_common::job::Eye,
+        indices: &[usize],
+    ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>> {
+        // Convert indices to i64 array
+        let ids: Vec<i64> = indices.iter().map(|&idx| idx as i64).collect();
+
+        let query = match side {
+            iris_mpc_common::job::Eye::Left => {
+                "SELECT id, left_code, leftMask FROM irises WHERE id = ANY($1::bigint[])"
+            }
+            iris_mpc_common::job::Eye::Right => {
+                "SELECT id, rightCode, rightMask FROM irises WHERE id = ANY($1::bigint[])"
+            }
+        };
+
+        // quickly jump to the tokio context for the async query
+        let results: Vec<(i64, Vec<u8>, Vec<u8>)> = tokio::runtime::Handle::current()
+            .block_on(async { sqlx::query_as(query).bind(&ids).fetch_all(&self.pool).await })?;
+
+        Ok(results
+            .into_iter()
+            .map(|(id, code, mask)| {
+                let id = id as usize;
+                let code = cast_u8_to_u16(&code).to_vec();
+                let mask = cast_u8_to_u16(&mask).to_vec();
+                (id, code, mask)
+            })
+            .collect())
     }
 }
 
