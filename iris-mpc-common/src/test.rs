@@ -1251,7 +1251,7 @@ impl TestCaseGenerator {
             }
 
             let results = [&res0, &res1, &res2];
-            for res in results.iter() {
+            for (party_id, res) in results.iter().enumerate() {
                 let ServerJobResult {
                     request_ids: thread_request_ids,
                     matches,
@@ -1316,64 +1316,29 @@ impl TestCaseGenerator {
 
                     // persist the results to the current db state
                     if !was_match && !was_skip_persistence_match {
-                        let batch_idx =
-                            batch0.request_ids.iter().position(|x| x == req_id).unwrap();
+                        let batch = match party_id {
+                            0 => &batch0,
+                            1 => &batch1,
+                            2 => &batch2,
+                            _ => unreachable!(),
+                        };
+                        let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
                         // db0
                         {
-                            let mut db0 = self.db_state.shared_dbs[0].lock().unwrap();
-                            let res = db0.db_left.insert(
+                            let mut db = self.db_state.shared_dbs[party_id].lock().unwrap();
+                            let res = db.db_left.insert(
                                 idx as usize,
                                 FullGaloisRingIrisCodeShare {
-                                    code: batch0.left_iris_requests.code[batch_idx].clone(),
-                                    mask: batch0.left_iris_requests.mask[batch_idx].clone(),
+                                    code: batch.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
                                 },
                             );
                             assert!(res.is_none(), "no duplicate insertions");
-                            let res = db0.db_right.insert(
+                            let res = db.db_right.insert(
                                 idx as usize,
                                 FullGaloisRingIrisCodeShare {
-                                    code: batch0.right_iris_requests.code[batch_idx].clone(),
-                                    mask: batch0.right_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
-                        }
-                        // db1
-                        {
-                            let mut db1 = self.db_state.shared_dbs[1].lock().unwrap();
-                            let res = db1.db_left.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch1.left_iris_requests.code[batch_idx].clone(),
-                                    mask: batch1.left_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
-                            let res = db1.db_right.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch1.right_iris_requests.code[batch_idx].clone(),
-                                    mask: batch1.right_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
-                        }
-                        // db2
-                        {
-                            let mut db2 = self.db_state.shared_dbs[2].lock().unwrap();
-                            let res = db2.db_left.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch2.left_iris_requests.code[batch_idx].clone(),
-                                    mask: batch2.left_iris_requests.mask[batch_idx].clone(),
-                                },
-                            );
-                            assert!(res.is_none(), "no duplicate insertions");
-                            let res = db2.db_right.insert(
-                                idx as usize,
-                                FullGaloisRingIrisCodeShare {
-                                    code: batch2.right_iris_requests.code[batch_idx].clone(),
-                                    mask: batch2.right_iris_requests.mask[batch_idx].clone(),
+                                    code: batch.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
                                 },
                             );
                             assert!(res.is_none(), "no duplicate insertions");
