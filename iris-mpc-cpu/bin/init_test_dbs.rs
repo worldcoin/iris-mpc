@@ -140,25 +140,44 @@ struct Args {
     /// shares of iris codes.
     #[clap(default_value = "1")]
     aby3_prng_seed: u64,
+
+    /// Allows for writing only to a db for a specified party. 0-based
+    #[clap(long)]
+    party_idx: Option<usize>
+
 }
 
 impl Args {
     /// Postgres dB schema names.
     fn db_schemas(&self) -> Vec<String> {
-        vec![
+        let v = vec![
             self.db_schema_party1.clone(),
             self.db_schema_party2.clone(),
             self.db_schema_party3.clone(),
-        ]
+        ];
+
+        if let Some(party_idx) = self.party_idx {
+            info!("Running for writes only for party id {party_idx}");
+            vec![v[party_idx].clone()]
+        }else {
+            v
+        }
     }
 
     /// Postgres dB server addresses.
     fn db_urls(&self) -> Vec<String> {
-        vec![
+        let v = vec![
             self.db_url_party1.clone(),
             self.db_url_party2.clone(),
             self.db_url_party3.clone(),
-        ]
+        ];
+
+        if let Some(party_idx) = self.party_idx {
+            vec![v[party_idx].clone()]
+        }else {
+            v
+        }
+
     }
 }
 
@@ -378,6 +397,8 @@ async fn main() -> Result<()> {
             let right_shares =
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
 
+            let left_shares :[GaloisRingSharedIris;1] = [left_shares[args.party_idx.unwrap()].clone()];
+            let right_shares :[GaloisRingSharedIris;1] = [right_shares[args.party_idx.unwrap()].clone()];
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
                 batch[party].push((shares_l, shares_r));
             }
