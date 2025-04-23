@@ -145,7 +145,7 @@ impl std::fmt::Display for StoreId {
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
-type VecRequests<T> = Vec<T>;
+pub(super) type VecRequests<T> = Vec<T>;
 type VecBuckets = Vec<u32>;
 /// VecEdges are lists of things for each neighbor of a vector (graph edges).
 type VecEdges<T> = Vec<T>;
