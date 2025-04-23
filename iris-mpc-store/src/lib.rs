@@ -1294,15 +1294,24 @@ pub mod tests {
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
         let store = Store::new(&postgres_client).await?;
+        let mut storage = vec![];
         let mut codes_and_masks = vec![];
 
         for i in 0..count {
+            storage.push((
+                vec![123_u16 + i; 12800],
+                vec![456_u16 + i; 12800],
+                vec![789_u16 + i; 12800],
+                vec![101_u16 + i; 12800],
+            ));
+        }
+        for (i, stored) in storage.iter().enumerate() {
             let iris = StoredIrisRef {
                 id: (i + 1) as i64,
-                left_code: &[123_u16 + i; 12800],
-                left_mask: &[456_u16 + i; 12800],
-                right_code: &[789_u16 + i; 12800],
-                right_mask: &[101_u16 + i; 12800],
+                left_code: &stored.0,
+                left_mask: &stored.1,
+                right_code: &stored.2,
+                right_mask: &stored.3,
             };
             codes_and_masks.push(iris);
         }
@@ -1346,7 +1355,7 @@ pub mod tests {
                 "loaded code is correct"
             );
         }
-        let indices = [5, 3, 1];
+        let indices = [5, 3, 1, 11, 15, 17];
         let loaded = store.load_records(Eye::Right, &indices)?;
         for (id, code, mask) in loaded.iter() {
             assert!(
