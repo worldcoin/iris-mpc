@@ -8,9 +8,9 @@ RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86
     && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 git curl build-essential debhelper
 
 ARG GDRCOPY_VERSION=v2.4.1
-ARG EFA_INSTALLER_VERSION=1.34.0
+ARG EFA_INSTALLER_VERSION=1.39.0
 ARG NCCL_INSTALL_VERSION=v2.22.3-1
-ARG AWS_OFI_NCCL_VERSION=aws
+ARG AWS_OFI_NCCL_VERSION=v1.13.2-aws
 
 ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/lib:$LD_LIBRARY_PATH
 ENV PATH=/opt/amazon/openmpi/bin/:/opt/amazon/efa/bin:$PATH
