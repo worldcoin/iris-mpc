@@ -1,4 +1,3 @@
-pub mod genesis;
 pub mod hawk_main;
 pub mod local;
 pub mod player;

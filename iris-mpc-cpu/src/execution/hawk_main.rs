@@ -125,8 +125,8 @@ pub enum StoreId {
     Left = 0,
     Right = 1,
 }
-const LEFT: usize = 0;
-const RIGHT: usize = 1;
+pub const LEFT: usize = 0;
+pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
 impl std::fmt::Display for StoreId {
@@ -145,7 +145,7 @@ impl std::fmt::Display for StoreId {
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
-pub(super) type VecRequests<T> = Vec<T>;
+pub(crate) type VecRequests<T> = Vec<T>;
 type VecBuckets = Vec<u32>;
 /// VecEdges are lists of things for each neighbor of a vector (graph edges).
 type VecEdges<T> = Vec<T>;
