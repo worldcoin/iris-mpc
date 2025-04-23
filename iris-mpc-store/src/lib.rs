@@ -628,7 +628,8 @@ impl OnDemandLoader for Store {
         let results: Vec<(i64, Vec<u8>, Vec<u8>)> = tokio::runtime::Handle::current()
             .block_on(async { sqlx::query_as(query).bind(&ids).fetch_all(&self.pool).await })?;
 
-        Ok(results
+        // bring results into correct form
+        let results: Vec<_> = results
             .into_iter()
             .map(|(id, code, mask)| {
                 let id = id as usize;
@@ -636,7 +637,18 @@ impl OnDemandLoader for Store {
                 let mask = cast_u8_to_u16(&mask).to_vec();
                 (id, code, mask)
             })
-            .collect())
+            .collect();
+
+        // some sanity checks
+        if results.len() != indices.len() {
+            eyre::bail!(
+                "Expected {} results, but got {} during on-demand load.",
+                indices.len(),
+                results.len()
+            );
+        }
+
+        Ok(results)
     }
 }
 
@@ -659,6 +671,7 @@ pub mod tests {
             smpc_response::UniquenessResult,
             sync::ModificationStatus,
         },
+        job::Eye,
         postgres::AccessMode,
     };
 
@@ -1271,6 +1284,85 @@ pub mod tests {
                 .all(|(i, row)| row.id == (i + 1) as i64),
             "IDs must be contiguous and in order"
         );
+    }
+
+    #[tokio::test]
+    async fn test_loading_on_demand() -> Result<()> {
+        let count = 20;
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+        let mut codes_and_masks = vec![];
+
+        for i in 0..count {
+            let iris = StoredIrisRef {
+                id: (i + 1) as i64,
+                left_code: &[123_u16 + i; 12800],
+                left_mask: &[456_u16 + i; 12800],
+                right_code: &[789_u16 + i; 12800],
+                right_mask: &[101_u16 + i; 12800],
+            };
+            codes_and_masks.push(iris);
+        }
+
+        let result_event = serde_json::to_string(&UniquenessResult::new(
+            0,
+            Some(1_000_000_000),
+            false,
+            "A".repeat(64),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        ))?;
+        let result_events = vec![result_event; count as usize];
+
+        let mut tx = store.tx().await?;
+        store.insert_results(&mut tx, &result_events).await?;
+        store.insert_irises(&mut tx, &codes_and_masks).await?;
+        tx.commit().await?;
+
+        // Load records on demand
+        let indices = [1, 2, 3, 4, 5];
+
+        let loaded = store.load_records(Eye::Right, &indices)?;
+        for (id, code, mask) in loaded.iter() {
+            assert!(
+                code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
+                "loaded code is correct"
+            );
+            assert!(
+                mask.iter().all(|&x| x == 101_u16 + *id as u16 - 1),
+                "loaded code is correct"
+            );
+        }
+        let indices = [5, 3, 1];
+        let loaded = store.load_records(Eye::Right, &indices)?;
+        for (id, code, mask) in loaded.iter() {
+            assert!(
+                code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
+                "loaded code is correct"
+            );
+            assert!(
+                mask.iter().all(|&x| x == 101_u16 + *id as u16 - 1),
+                "loaded code is correct"
+            );
+        }
+        let indices = [100, 200, 300];
+        let loaded = store.load_records(Eye::Right, &indices);
+        assert!(loaded.is_err(), "loading out of range indices should fail");
+
+        Ok(())
     }
 }
 
