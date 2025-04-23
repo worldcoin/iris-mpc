@@ -47,10 +47,17 @@ pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 pub static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 pub async fn server_main(config: Config) -> eyre::Result<()> {
+
+
+    // BLOCK: initialize shutdown handler
+
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
+
+
+    // BLOCK: validate modes of compute and deployment, load extra config values
 
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
@@ -78,11 +85,20 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
+
+    // BLOCK: prepare stores
+
     let (store, graph_store) = prepare_stores(&config).await?;
+
+
+    // BLOCK: initialize AWS services
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
     let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
+
+
+    // SUB-BLOCK: initialize shares encryption key pairs
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client,
@@ -98,13 +114,20 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     };
 
-    let party_id = config.party_id;
+
+    // SUB-BLOCK: initialize SNS message types
+
+    let party_id = config.party_id; // TODO move to state struct
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+
+
+    // ITEM: replay previous results for synchronization
+
     tracing::info!("Replaying results");
     send_results_to_sns(
         store.last_results(max_sync_lookback).await?,
@@ -120,6 +143,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Size of the database before init: {}", store_len);
 
+
+    // BLOCK: seed storage with random shares
+
     // Seed the persistent storage with random shares if configured and db is still
     // empty.
     if store_len == 0 && config.init_db_size > 0 {
@@ -131,7 +157,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         store
             .init_db_with_random_shares(
                 RNG_SEED_INIT_DB,
-                party_id,
+                config.party_id,
                 config.init_db_size,
                 config.clear_db_before_init,
             )
@@ -142,6 +168,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
 
     tracing::info!("Size of the database after init: {}", store_len);
+
+
+    // BLOCK: Check consistency of database size and sequence ids
 
     // Check if the sequence id is consistent with the number of irises
     let max_serial_id = store.get_max_serial_id().await?;
@@ -163,6 +192,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
         eyre::bail!("Database size exceeds maximum allowed size: {}", store_len);
     }
+
+
+    // BLOCK: Prepare task monitor and health checks
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
@@ -262,6 +294,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         health_check_port.clone()
     );
 
+
+    // BLOCK: wait for other servers
+
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
     let all_readiness_addresses = get_check_addresses(
@@ -308,6 +343,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     };
     tracing::info!("All nodes are starting up.");
+
+    
+    // BLOCK: initialize heartbeat task
 
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
@@ -420,25 +458,11 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("Heartbeat starting...");
     heartbeat_rx.await?;
     tracing::info!("Heartbeat on all nodes started.");
-    let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     background_tasks.check_tasks();
 
-    // Start the actor in separate task.
-    // A bit convoluted, but we need to create the actor on the thread already,
-    // since it blocks a lot and is `!Send`, we get back the handle via the oneshot
-    // channel
-    let parallelism = config
-        .database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))?
-        .load_parallelism;
 
-    let s3_load_parallelism = config.load_chunks_parallelism;
-    let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
-    let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
-    let s3_load_max_retries = config.load_chunks_max_retries;
-    let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+    // BLOCK: Sync latest node state
 
     // --------------------------------------------------------------------------
     // ANCHOR: Syncing latest node state
@@ -486,6 +510,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
 
+
+    // BLOCK: sync SQS queues
+
     // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
         let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
@@ -516,7 +543,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         metrics::counter!("db.sync.rollback").increment(1);
     }
 
-    if download_shutdown_handler.is_shutting_down() {
+    if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
         return Ok(());
     }
@@ -525,6 +552,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
 
+
+    // BLOCK: Initialize Hawk Actor
+
+    // Initialize the HawkActor
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
@@ -551,10 +582,25 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     let mut hawk_actor = HawkActor::from_cli(&hawk_args).await?;
 
+
+    // BLOCK: load database
+
     {
         // ANCHOR: Load the database
         tracing::info!("⚓️ ANCHOR: Load the database");
         let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
+
+        let parallelism = config
+            .database
+            .as_ref()
+            .ok_or(eyre!("Missing database config"))?
+            .load_parallelism;
+
+        let s3_load_parallelism = config.load_chunks_parallelism;
+        let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+        let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
+        let s3_load_max_retries = config.load_chunks_max_retries;
+        let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
 
         if config.fake_db_size > 0 {
             // TODO: not needed?
@@ -564,7 +610,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
                 "Initialize iris db: Loading from DB (parallelism: {})",
                 parallelism
             );
-            let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
+            let download_shutdown_handler = Arc::clone(&shutdown_handler);
             let db_chunks_s3_store = S3Store::new(
                 aws_clients.db_chunks_s3_client.clone(),
                 s3_chunks_bucket_name.clone(),
@@ -592,11 +638,10 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
 
-    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
-
-    let mut skip_request_ids = sync_result.deleted_request_ids();
-
     background_tasks.check_tasks();
+
+
+    // BLOCK: Initialize results processing thread
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
@@ -628,6 +673,9 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         Ok(())
     });
     background_tasks.check_tasks();
+
+
+    // BLOCK: enable readiness checks
 
     // --------------------------------------------------------------------------
     // ANCHOR: Enable readiness and check all nodes
@@ -685,10 +733,17 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     tracing::info!("All nodes are ready.");
     background_tasks.check_tasks();
 
+
+    // BLOCK: main loop
+
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Start the main loop");
+
+    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
+
+    let mut skip_request_ids = sync_result.deleted_request_ids();
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
     let uniqueness_error_result_attribute =
@@ -696,18 +751,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let res: eyre::Result<()> = async {
         tracing::info!("Entering main loop");
-        // **Tensor format of queries**
-        //
-        // The functions `receive_batch` and `prepare_query_shares` will prepare the
-        // _query_ variables as `Vec<Vec<u8>>` formatted as follows:
-        //
-        // - The inner Vec is a flattening of these dimensions (inner to outer):
-        //   - One u8 limb of one iris bit.
-        //   - One code: 12800 coefficients.
-        //   - One query: all rotated variants of a code.
-        //   - One batch: many queries.
-        // - The outer Vec is the dimension of the Galois Ring (2):
-        //   - A decomposition of each iris bit into two u8 limbs.
 
         // Skip requests based on the startup sync, only in the first iteration.
         let skip_request_ids = mem::take(&mut skip_request_ids);
@@ -821,6 +864,8 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     }
     Ok(())
 }
+
+
 
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let schema_name = format!(

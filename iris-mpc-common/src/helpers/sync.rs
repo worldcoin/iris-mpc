@@ -102,6 +102,10 @@ impl SyncResult {
         }
     }
 
+    /// Returns `None` if all states have equal database length.  If not all
+    /// database lengths are the same, instead returns `Some
+    /// (smallest_len)`, indicating that other databases probably should be
+    /// rolled back to this smallest size.
     pub fn must_rollback_storage(&self) -> Option<usize> {
         let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
         let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
