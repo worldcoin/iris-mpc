@@ -1,4 +1,4 @@
-mod utils;
+pub mod utils;
 
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
