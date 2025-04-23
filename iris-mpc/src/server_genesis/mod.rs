@@ -284,7 +284,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
     }
 
-    let mut hawk_handle = HawkHandle::new(hawk_actor, 10).await?;
+    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
     let mut skip_request_ids = Vec::new();
 
