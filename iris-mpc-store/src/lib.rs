@@ -600,14 +600,10 @@ WHERE id = $1;
     }
 }
 
+#[async_trait::async_trait]
 impl OnDemandLoader for Store {
     /// This implementation of `OnDemandLoader` loads records from the database.
-    /// even though the function signature is sync, we expect it to be called in the context of a tokio runtime.
-    ///
-    /// # Panics
-    ///
-    /// This will panic if called outside of a tokio runtime context.
-    fn load_records(
+    async fn load_records(
         &self,
         side: iris_mpc_common::job::Eye,
         indices: &[usize],
@@ -624,9 +620,10 @@ impl OnDemandLoader for Store {
             }
         };
 
-        // quickly jump to the tokio context for the async query
-        let results: Vec<(i64, Vec<u8>, Vec<u8>)> = tokio::runtime::Handle::current()
-            .block_on(async { sqlx::query_as(query).bind(&ids).fetch_all(&self.pool).await })?;
+        let results: Vec<(i64, Vec<u8>, Vec<u8>)> = sqlx::query_as(query)
+            .bind(&ids)
+            .fetch_all(&self.pool)
+            .await?;
 
         // bring results into correct form
         let results: Vec<_> = results
@@ -1344,7 +1341,7 @@ pub mod tests {
         // Load records on demand
         let indices = [1, 2, 3, 4, 5];
 
-        let loaded = store.load_records(Eye::Right, &indices)?;
+        let loaded = store.load_records(Eye::Right, &indices).await?;
         for (id, code, mask) in loaded.iter() {
             assert!(
                 code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
@@ -1356,7 +1353,7 @@ pub mod tests {
             );
         }
         let indices = [5, 3, 1, 11, 15, 17];
-        let loaded = store.load_records(Eye::Right, &indices)?;
+        let loaded = store.load_records(Eye::Right, &indices).await?;
         for (id, code, mask) in loaded.iter() {
             assert!(
                 code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
@@ -1368,7 +1365,7 @@ pub mod tests {
             );
         }
         let indices = [100, 200, 300];
-        let loaded = store.load_records(Eye::Right, &indices);
+        let loaded = store.load_records(Eye::Right, &indices).await;
         assert!(loaded.is_err(), "loading out of range indices should fail");
 
         Ok(())

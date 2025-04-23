@@ -119,12 +119,13 @@ pub trait InMemoryStore {
 }
 
 /// A helper trait encapsulating the functionality to load iris codes on demand from some source (DB, File-backed, etc.).
+#[async_trait::async_trait]
 pub trait OnDemandLoader {
     /// Loads records from the source.
     /// The returned Vec has the form:
     /// `(index, side_code, side_mask)`.
     #[allow(clippy::type_complexity)]
-    fn load_records(
+    async fn load_records(
         &self,
         side: Eye,
         indices: &[usize],

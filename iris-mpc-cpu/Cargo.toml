@@ -12,7 +12,7 @@ aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dra
 ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
-async-trait = "~0.1"
+async-trait.workspace = true
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
@@ -50,7 +50,9 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
-backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
+backon = { version = "1.4.0", default-features = false, features = [
+    "tokio-sleep",
+] }
 rand_chacha = { version = "0.3", features = ["serde1"] }
 
 [dev-dependencies]

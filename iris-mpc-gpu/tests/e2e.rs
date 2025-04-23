@@ -253,8 +253,9 @@ mod e2e_test {
         db: Arc<Mutex<PartyDb>>,
     }
 
+    #[async_trait::async_trait]
     impl OnDemandLoader for OnDemandLoaderImpl {
-        fn load_records(
+        async fn load_records(
             &self,
             side: Eye,
             indices: &[usize],

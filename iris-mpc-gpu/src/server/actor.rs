@@ -1942,9 +1942,13 @@ impl ServerActor {
 
             // fetch them from the DB
             let now = Instant::now();
-            let iris_codes = on_demand_loader
-                .load_records(eye_db, &db_indices)
-                .expect("Can load records from on-demand loader");
+            // since we are in a tokio::spawn_blocking context, we can use the tokio runtime handle
+            let iris_codes = tokio::runtime::Handle::current().block_on(async {
+                on_demand_loader
+                    .load_records(eye_db, &db_indices)
+                    .await
+                    .expect("Can load records from on-demand loader")
+            });
 
             tracing::info!(
                 "{} loaded indices in {}s: {:?},",

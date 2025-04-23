@@ -2307,6 +2307,7 @@ dependencies = [
 name = "iris-mpc-common"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-kms",
@@ -2400,6 +2401,7 @@ dependencies = [
 name = "iris-mpc-gpu"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bincode",
