@@ -1941,13 +1941,15 @@ impl ServerActor {
             tracing::info!("{} DB indices: {:?},", self.party_id, db_indices);
 
             // fetch them from the DB
+            let now = Instant::now();
             let iris_codes = on_demand_loader
                 .load_records(eye_db, &db_indices)
                 .expect("Can load records from on-demand loader");
 
             tracing::info!(
-                "{} loaded indices: {:?},",
+                "{} loaded indices in {}s: {:?},",
                 self.party_id,
+                now.elapsed().as_secs_f64(),
                 iris_codes.iter().map(|x| x.0).collect::<Vec<_>>()
             );
 
