@@ -613,10 +613,10 @@ impl OnDemandLoader for Store {
 
         let query = match side {
             iris_mpc_common::job::Eye::Left => {
-                "SELECT id, left_code, leftMask FROM irises WHERE id = ANY($1::bigint[])"
+                "SELECT id, left_code, left_mask FROM irises WHERE id = ANY($1::bigint[])"
             }
             iris_mpc_common::job::Eye::Right => {
-                "SELECT id, rightCode, rightMask FROM irises WHERE id = ANY($1::bigint[])"
+                "SELECT id, right_code, right_mask FROM irises WHERE id = ANY($1::bigint[])"
             }
         };
 
