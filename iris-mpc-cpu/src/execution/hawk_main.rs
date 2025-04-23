@@ -162,7 +162,8 @@ pub struct HawkSession {
     shared_rng: Box<dyn RngCore + Send + Sync>,
 }
 
-type HawkSessionRef = Arc<RwLock<HawkSession>>;
+// Thread safe reference to a HakwSession instance.
+pub type HawkSessionRef = Arc<RwLock<HawkSession>>;
 
 pub type SearchResult = (
     <Aby3Store as VectorStore>::VectorRef,
