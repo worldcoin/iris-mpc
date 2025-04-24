@@ -468,7 +468,7 @@ async fn start_coordination_server(
 
     let _health_check_abort = task_monitor.spawn({
         let uuid = uuid::Uuid::new_v4().to_string();
-        let is_ready_flag = is_ready_flag.clone();
+        let is_ready_flag = Arc::clone(&is_ready_flag);
         let ready_probe_response = ReadyProbeResponse {
             image_name: config.image_name.clone(),
             shutting_down: false,
