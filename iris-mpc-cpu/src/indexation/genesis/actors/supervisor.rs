@@ -8,7 +8,7 @@ use kameo_actors::{message_bus as mbus, DeliveryStrategy};
 use {
     super::super::{
         errors::IndexationError,
-        messages::{OnBegin, OnBeginIndexation, OnEndIndexation},
+        messages::{OnBegin, OnEndIndexation},
         utils::logger,
     },
     super::{BatchGenerator, GraphIndexer, SharesFetcher},
