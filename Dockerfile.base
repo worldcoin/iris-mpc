@@ -1,10 +1,10 @@
 FROM --platform=linux/amd64 ubuntu:22.04 as build-image
 
-RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates protobuf-compiler
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config wget libssl-dev ca-certificates protobuf-compiler
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 git curl build-essential debhelper libhwloc-dev
+    && apt-get install -y --no-install-recommends cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 git curl build-essential debhelper libhwloc-dev
 
 ARG GDRCOPY_VERSION=v2.4.1
 ARG EFA_INSTALLER_VERSION=1.39.0
@@ -47,4 +47,10 @@ RUN cd /tmp \
     && make && make install
 
 # Final cleanup
-RUN rm -rf /var/lib/apt/lists/*
+RUN rm -rf /var/lib/apt/lists/* \
+&& rm -rf /var/cache/apt/archives \
+&& rm -rf /usr/share/doc/ \
+&& rm -rf /usr/share/man/ \
+&& rm -rf /usr/share/locale/ \
+&& rm -rf /tmp/aws-* \
+&& rm -rf /tmp/gdrcopy
