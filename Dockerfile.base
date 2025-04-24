@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends pkg-config wget
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y--no-install-recommends cuda-toolkit-12-2 libnccl2=2.23.4-1+cuda12.2 libnccl-dev=2.23.4-1+cuda12.2 git curl build-essential debhelper libhwloc-dev
+    && apt-get install -y --no-install-recommends cuda-toolkit-12-2 libnccl2=2.23.4-1+cuda12.2 libnccl-dev=2.23.4-1+cuda12.2 git curl build-essential debhelper libhwloc-dev
 
 ARG GDRCOPY_VERSION=v2.4.1
 ARG EFA_INSTALLER_VERSION=1.39.0
