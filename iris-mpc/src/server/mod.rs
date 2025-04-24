@@ -150,7 +150,7 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler
 }
 
-/// Validate server Config input and initialize associated static state
+/// Validates server config and initializes associated static state.
 fn process_config(config: &Config) {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
@@ -177,16 +177,18 @@ fn process_config(config: &Config) {
     tracing::info!("Set batch size to {}", config.max_batch_size);
 }
 
+/// Returns computed maximum sync lookback size.
 fn max_sync_lookback(config: &Config) -> usize {
     config.max_batch_size * 2
 }
 
+/// Returns computed maximum rollback size.
 fn max_rollback(config: &Config) -> usize {
     config.max_batch_size * 2
 }
 
-/// Initialize Postgres connections for access to iris share and HNSW graph
-/// databases.
+/// Returnes initialized PostgreSQL clients for interacting
+/// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let schema_name = format!(
         "{}_{}_{}",
@@ -289,14 +291,13 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
     }
 }
 
-/// Initialize AWS service access for SQS, SNS, S3, and Secrets Manager.
+/// Returns AWS service clients for SQS, SNS, S3, and Secrets Manager.
 async fn init_aws_services(config: &Config) -> Result<AwsClients> {
     tracing::info!("Initialising AWS services");
     AwsClients::new(config).await
 }
 
-/// Retrieve this node's keypair for decrypting their iris code secret shares
-/// from SQS query inputs.
+/// Returns a party's keypair used to decrypt iris code secret shares from SQS input queue.
 async fn get_shares_encryption_key_pair(
     config: &Config,
     aws_clients: &AwsClients,
@@ -322,8 +323,9 @@ struct SnsAttributesMaps {
     identity_deletion_result_attributes: HashMap<String, MessageAttributeValue>,
 }
 
-/// Initialize SNS attribute maps, and replay recent SNS results to ensure
-/// delivery occurred in case of previous server failure.
+/// Returns a set of attribute maps used to interact with AWS SNS.
+///
+/// Also replays recent SNS results to ensure delivery occurred in case of previous server failure.
 async fn init_sns(
     config: &Config,
     aws_clients: &AwsClients,
@@ -355,8 +357,9 @@ async fn init_sns(
     })
 }
 
-/// Seed the iris database with random shares if the store has length 0 and
-/// `config.init_db_size` has value greater than 0.
+/// Seeds iris dB with random shares.
+///
+/// Note: seeds only if store length is 0 and `config.init_db_size` > 0.
 async fn maybe_seed_random_shares(config: &Config, store: &Store) -> Result<()> {
     let store_len = store.count_irises().await?;
     if store_len == 0 && config.init_db_size > 0 {
@@ -378,7 +381,7 @@ async fn maybe_seed_random_shares(config: &Config, store: &Store) -> Result<()> 
     Ok(())
 }
 
-/// Conduct consistency checks on the iris shares store.
+/// Conducts consistency checks on iris shares store.
 async fn check_store_consistency(config: &Config, store: &Store) -> Result<()> {
     let store_len = store.count_irises().await?;
     tracing::info!("Size of the database after init: {}", store_len);
@@ -407,6 +410,7 @@ async fn check_store_consistency(config: &Config, store: &Store) -> Result<()> {
     Ok(())
 }
 
+// Returns a new task monitor.
 fn init_task_monitor() -> TaskMonitor {
     tracing::info!("Preparing task monitor");
     TaskMonitor::new()
@@ -447,18 +451,14 @@ struct ReadyProbeResponse {
 /// Initializes and starts HTTP server for coordinating healthcheck, readiness,
 /// and synchronization between MPC nodes.
 ///
-/// Returns a reference to the readiness flag, an `AtomicBool`, which can later
-/// be set to indicate to other MPC nodes that this server is ready for
-/// operation.
+/// Note: returns a reference to a readiness flag, an `AtomicBool`, which can later
+/// be set to indicate to other MPC nodes that this server is ready for operation.
 async fn start_coordination_server(
     config: &Config,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     my_state: &SyncState,
 ) -> Arc<AtomicBool> {
-    // --------------------------------------------------------------------------
-    // ANCHOR: Starting Healthcheck, Readiness and Sync server
-    // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
     let is_ready_flag = Arc::new(AtomicBool::new(false));
@@ -538,10 +538,10 @@ async fn start_coordination_server(
     is_ready_flag
 }
 
-/// Wait until all other MPC nodes respond to queries against their "ready"
-/// endpoints, indicating that their coordination servers are running.  The
-/// response to this query is expected initially to be `503 Service
-/// Unavailable`.
+/// Awaits until other MPC nodes respond to "ready" queries
+/// indicating that their coordination servers are running.
+///
+/// Note: The response to this query is expected initially to be `503 Service Unavailable`.
 async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
@@ -595,7 +595,7 @@ async fn wait_for_others_unready(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Start a heartbeat task which periodically polls the "health" endpoints of
+/// Starts a heartbeat task which periodically polls the "health" endpoints of
 /// all other MPC nodes to ensure that the other nodes are still running and
 /// responding to network requests.
 async fn init_heartbeat_task(
@@ -722,13 +722,10 @@ async fn init_heartbeat_task(
     Ok(())
 }
 
-/// Retrieve the synchronization state of the other MPC nodes from their
-/// "startup-sync" endpoints.  This data is used to ensure that all nodes are
-/// in a consistent state prior to starting MPC operation.
+/// Retrieves synchronization state of other MPC nodes.  This data is
+/// used to ensure that all nodes are in a consistent state prior
+/// to starting MPC operations.
 async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
-    // --------------------------------------------------------------------------
-    // ANCHOR: Syncing latest node state
-    // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
     let all_startup_sync_addresses = get_check_addresses(
@@ -770,15 +767,14 @@ async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Result<
     Ok(SyncResult::new(my_state.clone(), states))
 }
 
-/// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete SQS
-/// messages in the requests queue with sequence number older than the most
+/// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete stale
+/// SQS messages in requests queue with sequence number older than the most
 /// recent sequence number seen by any MPC party.
 async fn maybe_sync_sqs_queues(
     config: &Config,
     sync_result: &SyncResult,
     aws_clients: &AwsClients,
 ) -> Result<()> {
-    // sync the queues
     if config.enable_sync_queues_on_sns_sequence_number {
         let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
         delete_messages_until_sequence_num(
@@ -793,8 +789,8 @@ async fn maybe_sync_sqs_queues(
     Ok(())
 }
 
-/// Synchronize iris databases if needed by rolling back to the smallest length
-/// among the MPC parties.  Rollback fails if the number of rolled back entries
+/// Synchronize iris databases if needed by rolling back to smallest height
+/// among the MPC parties.  Rollback fails if number of rolled back entries
 /// is greater than a fixed maximum rollback amount determined by the
 /// configuration parameters.
 async fn sync_dbs_rollback(config: &Config, sync_result: &SyncResult, store: &Store) -> Result<()> {
@@ -828,7 +824,6 @@ async fn sync_dbs_rollback(config: &Config, sync_result: &SyncResult, store: &St
 /// Initialize main Hawk actor process for handling query batches using HNSW
 /// approximate k-nearest neighbors graph search.
 async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
-    // Initialize the HawkActor
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
@@ -856,7 +851,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
     HawkActor::from_cli(&hawk_args).await
 }
 
-/// Load iris code shares and HNSW graph from Postgres and/or S3.
+/// Loads iris code shares & HNSW graph from Postgres and/or S3.
 async fn load_database(
     config: &Config,
     store: &Store,
@@ -921,8 +916,7 @@ async fn load_database(
     Ok(())
 }
 
-/// Start thread which is responsible for communicating back the results from
-/// batch query processing.
+/// Spawns thread responsible for communicating back results from batch query processing.
 async fn start_results_thread(
     config: &Config,
     store: &Store,
@@ -970,13 +964,12 @@ async fn start_results_thread(
 fn set_node_ready(is_ready_flag: Arc<AtomicBool>) {
     tracing::info!("⚓️ ANCHOR: Enable readiness and check all nodes");
 
-    // Set the readiness flag to true, which will make the readiness server return a
-    // 200 status code.
+    // Set readiness flag to true, i.e. ensure readiness server returns a 200 status code.
     is_ready_flag.store(true, Ordering::SeqCst);
 }
 
-/// Query other nodes at their "ready" endpoints until all other nodes return
-/// a success response, indicating readiness to execute the main server loop.
+/// Awaits until other MPC nodes respond to "ready" queries
+/// indicating readiness to execute the main server loop.
 async fn wait_for_others_ready(config: &Config) -> Result<()> {
     // Check other nodes and wait until all nodes are ready.
     let all_readiness_addresses = get_check_addresses(
@@ -1028,7 +1021,7 @@ async fn wait_for_others_ready(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Run the main processing loop in this thread.  Batches of requests are read
+/// Runs main processing loop in this thread.  Batches of requests are read
 /// from the SQS input queue, and are passed to a `HawkHandle` processer task,
 /// which distributes tasks among different threads and gRPC network sessions
 /// to execute appropriate computations via MPC.  Once a batch is processed,
