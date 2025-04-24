@@ -1979,6 +1979,7 @@ impl ServerActor {
                 iris_masks_split[device_index].push(mask);
             }
             // push the iris codes to the devices
+            let now = Instant::now();
             record_stream_time!(
                 &self.device_manager,
                 &self.streams[0],
@@ -1986,6 +1987,7 @@ impl ServerActor {
                 "prefetch_db_chunk_on_demand",
                 self.enable_debug_timing,
                 {
+                    // TODO these could be done in parallel on different streams?
                     self.codes_engine.load_host_db_subset_into_chunk_buffers(
                         &iris_codes_split,
                         &self.code_chunk_buffers[0],
@@ -1997,6 +1999,11 @@ impl ServerActor {
                         &self.streams[0],
                     );
                 }
+            );
+            tracing::info!(
+                "Pushed DB subset to GPU in {}s: {:?},",
+                self.party_id,
+                now.elapsed().as_secs_f64(),
             );
         } else {
             // which database are we querying against
@@ -2016,6 +2023,7 @@ impl ServerActor {
                 )
             };
 
+            let now = Instant::now();
             record_stream_time!(
                 &self.device_manager,
                 &self.streams[0],
@@ -2036,6 +2044,11 @@ impl ServerActor {
                         &self.streams[0],
                     );
                 }
+            );
+            tracing::info!(
+                "Pushed DB subset to GPU in {}s: {:?},",
+                self.party_id,
+                now.elapsed().as_secs_f64(),
             );
         }
 
