@@ -56,15 +56,15 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     process_config(&config);
 
-    let (store, graph_store) = prepare_stores(&config).await?;
+    let (iris_store, graph_store) = prepare_stores(&config).await?;
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair = get_shares_encryption_key_pair(&config, &aws_clients).await?;
-    let sns_attributes_maps = init_sns(&config, &aws_clients, &store).await?;
+    let sns_attributes_maps = init_sns(&config, &aws_clients, &iris_store).await?;
 
-    maybe_seed_random_shares(&config, &store).await?;
-    check_store_consistency(&config, &store).await?;
-    let my_state = build_sync_state(&config, &aws_clients, &store).await?;
+    maybe_seed_random_shares(&config, &iris_store).await?;
+    check_store_consistency(&config, &iris_store).await?;
+    let my_state = build_sync_state(&config, &aws_clients, &iris_store).await?;
 
     let mut background_tasks = init_task_monitor();
 
@@ -83,7 +83,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     sync_result.check_common_config()?;
 
     maybe_sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
-    sync_dbs_rollback(&config, &sync_result, &store).await?;
+    sync_dbs_rollback(&config, &sync_result, &iris_store).await?;
 
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
@@ -94,7 +94,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     load_database(
         &config,
-        &store,
+        &iris_store,
         &graph_store,
         &aws_clients,
         &shutdown_handler,
@@ -106,7 +106,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let tx_results = start_results_thread(
         &config,
-        &store,
+        &iris_store,
         graph_store,
         &aws_clients,
         &mut background_tasks,
@@ -124,7 +124,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     run_main_server_loop(
         &config,
-        &store,
+        &iris_store,
         &aws_clients,
         shares_encryption_key_pair,
         &sync_result,
@@ -213,7 +213,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 hawk_db_config,
                 config.mode_of_deployment
             );
-            let store = Store::new(&hawk_postgres_client).await?;
+            let iris_store = Store::new(&hawk_postgres_client).await?;
 
             // Graph -> CPU
             tracing::info!(
@@ -223,7 +223,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             );
             let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
-            Ok((store, graph_store))
+            Ok((iris_store, graph_store))
         }
 
         // use base db for iris store and hawk db for graph store
@@ -242,7 +242,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 config.mode_of_deployment
             );
 
-            let store = Store::new(&postgres_client).await?;
+            let iris_store = Store::new(&postgres_client).await?;
 
             let hawk_db_config = config
                 .cpu_database
@@ -259,7 +259,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             );
             let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
-            Ok((store, graph_store))
+            Ok((iris_store, graph_store))
         }
 
         // use the base db for both stores
@@ -277,7 +277,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 db_config,
                 config.mode_of_deployment
             );
-            let store = Store::new(&postgres_client).await?;
+            let iris_store = Store::new(&postgres_client).await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
@@ -286,7 +286,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             );
             let graph_store = GraphStore::new(&postgres_client).await?;
 
-            Ok((store, graph_store))
+            Ok((iris_store, graph_store))
         }
     }
 }
@@ -360,15 +360,15 @@ async fn init_sns(
 /// Seeds iris dB with random shares.
 ///
 /// Note: seeds only if store length is 0 and `config.init_db_size` > 0.
-async fn maybe_seed_random_shares(config: &Config, store: &Store) -> Result<()> {
-    let store_len = store.count_irises().await?;
+async fn maybe_seed_random_shares(config: &Config, iris_store: &Store) -> Result<()> {
+    let store_len = iris_store.count_irises().await?;
     if store_len == 0 && config.init_db_size > 0 {
         tracing::info!(
             "Initialize persistent iris DB with {} randomly generated shares",
             config.init_db_size
         );
         tracing::info!("Resetting the db: {}", config.clear_db_before_init);
-        store
+        iris_store
             .init_db_with_random_shares(
                 RNG_SEED_INIT_DB,
                 config.party_id,
@@ -382,12 +382,12 @@ async fn maybe_seed_random_shares(config: &Config, store: &Store) -> Result<()> 
 }
 
 /// Conducts consistency checks on iris shares store.
-async fn check_store_consistency(config: &Config, store: &Store) -> Result<()> {
-    let store_len = store.count_irises().await?;
+async fn check_store_consistency(config: &Config, iris_store: &Store) -> Result<()> {
+    let store_len = iris_store.count_irises().await?;
     tracing::info!("Size of the database after init: {}", store_len);
 
     // Check if the sequence id is consistent with the number of irises
-    let max_serial_id = store.get_max_serial_id().await?;
+    let max_serial_id = iris_store.get_max_serial_id().await?;
     if max_serial_id != store_len {
         tracing::error!(
             "Detected inconsistency between max serial id {} and db size {}.",
@@ -793,8 +793,12 @@ async fn maybe_sync_sqs_queues(
 /// among the MPC parties.  Rollback fails if number of rolled back entries
 /// is greater than a fixed maximum rollback amount determined by the
 /// configuration parameters.
-async fn sync_dbs_rollback(config: &Config, sync_result: &SyncResult, store: &Store) -> Result<()> {
-    let my_db_len = store.count_irises().await?;
+async fn sync_dbs_rollback(
+    config: &Config,
+    sync_result: &SyncResult,
+    iris_store: &Store,
+) -> Result<()> {
+    let my_db_len = iris_store.count_irises().await?;
 
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -810,12 +814,12 @@ async fn sync_dbs_rollback(config: &Config, sync_result: &SyncResult, store: &St
             my_db_len,
             min_db_len
         );
-        store.rollback(min_db_len).await?;
+        iris_store.rollback(min_db_len).await?;
         metrics::counter!("db.sync.rollback").increment(1);
     }
 
     // refetch store_len in case we rolled back
-    let store_len = store.count_irises().await?;
+    let store_len = iris_store.count_irises().await?;
     tracing::info!("Size of the database after sync: {}", store_len);
 
     Ok(())
@@ -854,7 +858,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
 /// Loads iris code shares & HNSW graph from Postgres and/or S3.
 async fn load_database(
     config: &Config,
-    store: &Store,
+    iris_store: &Store,
     graph_store: &GraphPg<Aby3Store>,
     aws_clients: &AwsClients,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -890,11 +894,11 @@ async fn load_database(
             s3_chunks_bucket_name.clone(),
         );
 
-        let store_len = store.count_irises().await?;
+        let store_len = iris_store.count_irises().await?;
 
         load_db(
             &mut iris_loader,
-            store,
+            iris_store,
             store_len,
             parallelism,
             config,
@@ -919,7 +923,7 @@ async fn load_database(
 /// Spawns thread responsible for communicating back results from batch query processing.
 async fn start_results_thread(
     config: &Config,
-    store: &Store,
+    iris_store: &Store,
     graph_store: GraphPg<Aby3Store>,
     aws_clients: &AwsClients,
     task_monitor: &mut TaskMonitor,
@@ -929,7 +933,7 @@ async fn start_results_thread(
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
-    let store_bg = store.clone();
+    let store_bg = iris_store.clone();
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
     let _result_sender_abort = task_monitor.spawn(async move {
@@ -1030,7 +1034,7 @@ async fn wait_for_others_ready(config: &Config) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 async fn run_main_server_loop(
     config: &Config,
-    store: &Store,
+    iris_store: &Store,
     aws_clients: &AwsClients,
     shares_encryption_key_pair: SharesEncryptionKeyPairs,
     sync_result: &SyncResult,
@@ -1069,7 +1073,7 @@ async fn run_main_server_loop(
             &aws_clients.sns_client,
             &aws_clients.s3_client,
             config,
-            store,
+            iris_store,
             &skip_request_ids,
             shares_encryption_key_pair.clone(),
             shutdown_handler,
@@ -1096,7 +1100,7 @@ async fn run_main_server_loop(
 
             process_identity_deletions(
                 &batch,
-                store,
+                iris_store,
                 &dummy_shares_for_deletions.0,
                 &dummy_shares_for_deletions.1,
             )
@@ -1124,7 +1128,7 @@ async fn run_main_server_loop(
                 &aws_clients.sns_client,
                 &aws_clients.s3_client,
                 config,
-                store,
+                iris_store,
                 &skip_request_ids,
                 shares_encryption_key_pair.clone(),
                 shutdown_handler,
