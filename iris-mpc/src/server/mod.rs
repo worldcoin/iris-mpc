@@ -890,9 +890,9 @@ async fn load_database(
 
     let s3_loader_params = S3LoaderParams {
         db_chunks_s3_store: S3Store::new(
-                aws_clients.db_chunks_s3_client.clone(),
-                config.db_chunks_bucket_name.clone(),
-            ),
+            aws_clients.db_chunks_s3_client.clone(),
+            config.db_chunks_bucket_name.clone(),
+        ),
         db_chunks_s3_client: aws_clients.db_chunks_s3_client.clone(),
         s3_chunks_folder_name: config.db_chunks_folder_name.clone(),
         s3_chunks_bucket_name: config.db_chunks_bucket_name.clone(),
@@ -1172,7 +1172,6 @@ async fn run_main_server_loop(
     Ok(())
 }
 
-
 /// Main logic for initialization and execution of server nodes for genesis
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
@@ -1253,10 +1252,7 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
 /// Build this node's synchronization state, which is compared against the
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
-async fn build_genesis_sync_state(
-    config: &Config,
-    store: &Store,
-) -> Result<SyncState> {
+async fn build_genesis_sync_state(config: &Config, store: &Store) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
