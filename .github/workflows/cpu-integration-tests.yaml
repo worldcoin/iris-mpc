@@ -12,8 +12,7 @@ env:
 
 jobs:
   integration-tests:
-    runs-on:
-      labels: ubuntu-22.04-64core
+    runs-on: 8xlarge-amd64
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
