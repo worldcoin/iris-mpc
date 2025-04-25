@@ -34,8 +34,17 @@ use tracing::{info, warn};
 
 use eyre::Result;
 
+/// Number of MPC parties.
+const N_PARTIES: usize = 3;
+
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
+
+/// Number of iris code pairs to generate secret shares for at a time.
+const SECRET_SHARING_BATCH_SIZE: usize = 5000;
+
+/// Number of secret-shared iris code pairs to persist to Postgres per transaction.
+const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
 /// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
 /// Postgres databases. This binary iteratively builds up a graph in stages
@@ -187,8 +196,6 @@ impl From<&Args> for Rngs {
         )
     }
 }
-
-const N_PARTIES: usize = 3;
 
 #[allow(non_snake_case)]
 #[tokio::main]
@@ -361,14 +368,13 @@ async fn main() -> Result<()> {
 
     info!("Converting plaintext iris codes locally into secret shares");
 
-    const BATCH_SIZE: usize = 10_000;
     let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..N_PARTIES)
-        .map(|_| Vec::with_capacity(BATCH_SIZE))
+        .map(|_| Vec::with_capacity(SECRET_SHARING_BATCH_SIZE))
         .collect();
 
     for (batch_idx, vectors_batch) in izip!(&vector_l.points, &vector_r.points)
         .skip(n_existing_irises)
-        .chunks(BATCH_SIZE)
+        .chunks(SECRET_SHARING_BATCH_SIZE)
         .into_iter()
         .enumerate()
     {
@@ -384,7 +390,7 @@ async fn main() -> Result<()> {
         }
 
         let cur_batch_len = batch[0].len();
-        let last_idx = batch_idx * BATCH_SIZE + cur_batch_len + n_existing_irises;
+        let last_idx = batch_idx * SECRET_SHARING_BATCH_SIZE + cur_batch_len + n_existing_irises;
 
         for (db, shares) in izip!(&dbs, batch.iter_mut()) {
             #[allow(clippy::drain_collect)]
@@ -478,7 +484,7 @@ impl DbContext {
         let start_serial_id = self.store.get_max_serial_id().await.unwrap_or(0) + 1;
         let end_serial_id = start_serial_id + shares.len() - 1;
 
-        for batch in &shares.iter().enumerate().chunks(1000) {
+        for batch in &shares.iter().enumerate().chunks(SECRET_SHARING_PG_TX_SIZE) {
             let iris_refs: Vec<_> = batch
                 .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
                     id: (start_serial_id + idx) as i64,
