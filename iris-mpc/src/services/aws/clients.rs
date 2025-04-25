@@ -29,7 +29,7 @@ impl AwsClients {
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let sqs_client = Client::new(&shared_config);
         let sns_client = SNSClient::new(&shared_config);
-        
+
         // Override region for Secrets Manager and S3, to be removed after migration,
         // required because we want to keep a single source of truth for secrets
         let overridden_secrets_and_s3_region = config
@@ -43,10 +43,11 @@ impl AwsClients {
             .region(overridden_secrets_and_s3_region_provider)
             .load()
             .await;
-        
+
         let force_path_style = config.environment != "prod" && config.environment != "stage";
         let s3_client = create_s3_client(&overridden_secrets_and_s3_config, force_path_style);
-        let db_chunks_s3_client = create_db_chunks_s3_client(&overridden_secrets_and_s3_config, force_path_style);
+        let db_chunks_s3_client =
+            create_db_chunks_s3_client(&overridden_secrets_and_s3_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&overridden_secrets_and_s3_config);
 
         Ok(Self {
