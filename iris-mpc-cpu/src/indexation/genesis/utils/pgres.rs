@@ -31,7 +31,7 @@ pub(crate) async fn get_store_instance(config: &ApplicationConfig) -> IrisStore 
         AccessMode::ReadWrite,
     )
     .await
-    .map_err(|_| IndexationError::PostgresConnectionError)
+    .map_err(|_| IndexationError::PostgresConnection)
     .unwrap();
 
     IrisStore::new(&db_client).await.unwrap()

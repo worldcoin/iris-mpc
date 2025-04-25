@@ -37,7 +37,7 @@ pub(crate) async fn fetch_height_of_protocol(
     store
         .count_irises()
         .await
-        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
+        .map_err(|_| IndexationError::PostgresFetchIrisById)
         .map(|val| val as IrisSerialId)
 }
 
@@ -59,7 +59,7 @@ pub(crate) async fn fetch_iris_data(
     let data = store
         .fetch_iris_by_serial_id(serial_id)
         .await
-        .map_err(|_| IndexationError::PostgresFetchIrisByIdError)
+        .map_err(|_| IndexationError::PostgresFetchIrisById)
         .unwrap();
 
     Ok(data)
@@ -82,17 +82,17 @@ pub(crate) async fn fetch_iris_deletions(
     let aws_endpoint = config
         .aws
         .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?
+        .ok_or(IndexationError::AwsConfiguration)?
         .endpoint
         .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?;
+        .ok_or(IndexationError::AwsConfiguration)?;
     let aws_region = config
         .aws
         .as_ref()
         .unwrap()
         .region
         .as_ref()
-        .ok_or(IndexationError::AwsConfigurationError)?;
+        .ok_or(IndexationError::AwsConfiguration)?;
 
     // Set AWS S3 client.
     let aws_config = aws_config::from_env()

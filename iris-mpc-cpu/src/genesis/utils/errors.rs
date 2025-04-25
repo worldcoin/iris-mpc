@@ -5,20 +5,20 @@ use thiserror::Error;
 #[allow(dead_code)]
 pub enum IndexationError {
     #[error("Failed to load AWS configuration")]
-    AwsConfigurationError,
+    AwsConfiguration,
 
     #[error("Failed to download resource from AWS S3")]
-    AwsS3DownloadError,
+    AwsS3Download,
 
     #[error("Failed to begin indexation correctly")]
-    BeginIndexationError,
+    BeginIndexation,
 
     #[error("Failed to spawn Hawk actor")]
-    HawkActorError,
+    HawkActor,
 
     #[error("Failed to connect to PostgreSQL dB")]
-    PostgresConnectionError,
+    PostgresConnection,
 
     #[error("Failed to fetch Iris data from PostgreSQL dB")]
-    PostgresFetchIrisByIdError,
+    PostgresFetchIrisById,
 }
