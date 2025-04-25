@@ -427,6 +427,10 @@ pub struct AwsConfig {
 
     #[serde(default)]
     pub region: Option<String>,
+
+    // Required during the migration to eu-central-1, should be removed after
+    #[serde(default)]
+    pub override_secrets_manager_region: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

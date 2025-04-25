@@ -51,7 +51,10 @@ env:
 
   - name: SMPC__AWS__REGION
     value: "eu-central-1"
-
+  
+  - name: SMPC__AWS__OVERRIDE_SECRETS_MANAGER_REGION
+    value: "eu-north-1"
+  
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
       secretKeyRef:
