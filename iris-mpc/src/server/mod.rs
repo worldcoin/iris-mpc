@@ -2,7 +2,7 @@ mod utils;
 
 use crate::server::utils::get_check_addresses;
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::batch::receive_batch;
+use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
@@ -34,7 +34,6 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
-use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -594,7 +593,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
 
     let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
+    let skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
 
@@ -709,24 +708,22 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
 
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
         let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
 
-        let mut next_batch = receive_batch(
+        let mut batch_stream = receive_batch_stream(
             party_id,
-            &aws_clients.sqs_client,
-            &aws_clients.sns_client,
-            &aws_clients.s3_client,
-            &config,
-            &store,
-            &skip_request_ids,
+            aws_clients.sqs_client.clone(),
+            aws_clients.sns_client.clone(),
+            aws_clients.s3_client.clone(),
+            config.clone(),
+            store.clone(),
+            skip_request_ids,
             shares_encryption_key_pair.clone(),
-            &shutdown_handler,
-            &uniqueness_error_result_attribute,
-            &reauth_error_result_attribute,
+            shutdown_handler.clone(),
+            uniqueness_error_result_attribute.clone(),
+            reauth_error_result_attribute.clone(),
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
@@ -734,12 +731,16 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         loop {
             let now = Instant::now();
 
-            let _batch = next_batch.await?;
-            if _batch.is_none() {
-                tracing::info!("No more batches to process, exiting main loop");
-                return Ok(());
-            }
-            let batch = _batch.unwrap();
+            let batch = match batch_stream.recv().await {
+                Some(Ok(None)) | None => {
+                    tracing::info!("No more batches to process, exiting main loop");
+                    return Ok(());
+                }
+                Some(Err(e)) => {
+                    return Err(e.into());
+                }
+                Some(Ok(Some(batch))) => batch,
+            };
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -769,20 +770,6 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks();
 
             let result_future = hawk_handle.submit_batch_query(batch.clone());
-
-            next_batch = receive_batch(
-                party_id,
-                &aws_clients.sqs_client,
-                &aws_clients.sns_client,
-                &aws_clients.s3_client,
-                &config,
-                &store,
-                &skip_request_ids,
-                shares_encryption_key_pair.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attribute,
-                &reauth_error_result_attribute,
-            );
 
             // await the result
             let result = timeout(processing_timeout, result_future.await)
