@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:23785d72424f683a5734816958a4022b7b2ea1e0"
+image: "ghcr.io/worldcoin/iris-mpc:2056117ae5fc0dce0e2f8fe9e16c7aadee5591d6"
 
 resources:
   limits:
