@@ -8,7 +8,7 @@ on:
 jobs:
   execute-relyance-sci:
     name: Relyance SCI Job
-    runs-on: large-amd64
+    runs-on: [large-amd64]
 
     steps:
       - name: Checkout

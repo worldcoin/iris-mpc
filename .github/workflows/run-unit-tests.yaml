@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: 8xlarge-amd64
+    runs-on: [8xlarge-amd64]
     services:
       postgres:
         image: postgres
