@@ -1636,7 +1636,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
     let inmemory_store_type = if config.load_only_full_scan_side_in_memory {
-        InMemoryStoreType::Half(Box::new(store.clone()))
+        InMemoryStoreType::Half(Arc::new(store.clone()))
     } else {
         InMemoryStoreType::Full
     };

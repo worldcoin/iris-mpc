@@ -112,7 +112,7 @@ pub enum Orientation {
 /// In case we only load the active side, we pass an [OnDemandLoader] to load the inactive side on demand.
 pub enum InMemoryStoreType {
     Full,
-    Half(Box<dyn OnDemandLoader + Send + 'static>),
+    Half(Arc<dyn OnDemandLoader + Send + Sync + 'static>),
 }
 
 pub struct ServerActor {
@@ -134,7 +134,7 @@ pub struct ServerActor {
     pub active_side_mask_db_slices: SlicedProcessedDatabase,
     pub inactive_side_code_db_slices: Option<SlicedProcessedDatabase>,
     pub inactive_side_mask_db_slices: Option<SlicedProcessedDatabase>,
-    on_demand_loader: Option<Box<dyn OnDemandLoader>>,
+    on_demand_loader: Option<Arc<dyn OnDemandLoader + Send + Sync + 'static>>,
     streams: Vec<Vec<CudaStream>>,
     cublas_handles: Vec<Vec<CudaBlas>>,
     results: Vec<CudaSlice<u32>>,
@@ -873,6 +873,32 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
+        // If enabled, load or-rule indices on demand already
+        ///////////////////////////////////////////////////////////////////
+        let or_indices = batch
+            .or_rule_indices
+            .iter()
+            .flatten()
+            .map(|x| *x as usize)
+            .unique()
+            .collect_vec();
+
+        let (sender, or_rule_db_receiver) = oneshot::channel();
+        if let Some(on_demand_loader) = &self.on_demand_loader {
+            let loader = Arc::clone(on_demand_loader);
+            let side = self.full_scan_side.other();
+            let or_indices = or_indices.clone();
+            tokio::runtime::Handle::current().spawn(async move {
+                let or_records = loader.load_records(side, &or_indices).await;
+                // if sending fails, we see it due to the receiver being dropped
+                let _ = sender.send(or_records);
+            });
+        } else {
+            // we drop the sender if we are not using on-demand loading to catch errors on the receiver side
+            drop(sender);
+        }
+
+        ///////////////////////////////////////////////////////////////////
         // COMPARE FULL SCAN EYE QUERIES
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Comparing {} eye queries", self.full_scan_side);
@@ -945,19 +971,10 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        // also add the OR rule indices to the partial matches
-        let or_indices = batch
-            .or_rule_indices
-            .iter()
-            .flatten()
-            .copied()
-            .unique()
-            .collect_vec();
-
         for or_idx in or_indices {
-            let device_idx = or_idx % self.device_manager.device_count() as u32;
-            let db_idx = or_idx / self.device_manager.device_count() as u32;
-            if db_idx as usize >= self.current_db_sizes[device_idx as usize] {
+            let device_idx = or_idx % self.device_manager.device_count();
+            let db_idx = or_idx / self.device_manager.device_count();
+            if db_idx >= self.current_db_sizes[device_idx] {
                 tracing::warn!(
                     "OR rule index {} is out of bounds for device {}",
                     or_idx,
@@ -965,7 +982,28 @@ impl ServerActor {
                 );
                 continue;
             }
-            partial_matches_side1[device_idx as usize].push(db_idx);
+            partial_matches_side1[device_idx].push(db_idx as u32);
+        }
+
+        let (sender, partial_db_receiver) = oneshot::channel();
+        if let Some(on_demand_loader) = &self.on_demand_loader {
+            let loader = Arc::clone(on_demand_loader);
+            let side = self.full_scan_side.other();
+            let num_devices = self.device_manager.device_count();
+            let partial_indices = partial_matches_side1
+                .iter()
+                .enumerate()
+                .flat_map(|(idx, x)| x.iter().map(move |&y| y as usize * num_devices + idx))
+                .unique()
+                .collect_vec();
+            tokio::runtime::Handle::current().spawn(async move {
+                let partial_records = loader.load_records(side, &partial_indices).await;
+                // if sending fails, we see it due to the receiver being dropped
+                let _ = sender.send(partial_records);
+            });
+        } else {
+            // we drop the sender if we are not using on-demand loading to catch errors on the receiver side
+            drop(sender);
         }
 
         ///////////////////////////////////////////////////////////////////
@@ -1048,6 +1086,7 @@ impl ServerActor {
                 other_side,
                 batch_size,
                 &partial_matches_side1,
+                (partial_db_receiver, or_rule_db_receiver),
                 orientation,
             );
         }
@@ -1892,7 +1931,7 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     fn compare_query_against_db_subset_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
@@ -1901,6 +1940,10 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
+        host_subset_receivers: (
+            oneshot::Receiver<eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>>>,
+            oneshot::Receiver<eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>>>,
+        ),
         orientation: Orientation,
     ) {
         assert!(
@@ -1929,7 +1972,26 @@ impl ServerActor {
 
         if eye_db != self.full_scan_side && self.on_demand_loader.is_some() {
             // load the database on demand
-            let on_demand_loader = self.on_demand_loader.as_mut().unwrap();
+            let now = Instant::now();
+            let or_rule_host_subset = host_subset_receivers
+                .1
+                .blocking_recv()
+                .expect("failed to receive or rule host subset from DB")
+                .expect("error during loading OR rule subset from DB");
+            let other_side_subset = host_subset_receivers
+                .0
+                .blocking_recv()
+                .expect("failed to receive other side subset from DB")
+                .expect("error during loading other side subset from DB");
+
+            // we only time this wait right here, since the rest of the time is async
+            tracing::info!(
+                "Party {} loaded {} OR and {} subset indices. Blocking wait time was {}s",
+                self.party_id,
+                or_rule_host_subset.len(),
+                other_side_subset.len(),
+                now.elapsed().as_secs_f64(),
+            );
 
             // map in-memory GPU indices to DB indices
             let num_devices = db_subset_idx.len();
@@ -1940,23 +2002,6 @@ impl ServerActor {
                 .collect::<Vec<_>>();
             tracing::info!("{} DB indices: {:?},", self.party_id, db_indices);
 
-            // fetch them from the DB
-            let now = Instant::now();
-            // since we are in a tokio::spawn_blocking context, we can use the tokio runtime handle
-            let iris_codes = tokio::runtime::Handle::current().block_on(async {
-                on_demand_loader
-                    .load_records(eye_db, &db_indices)
-                    .await
-                    .expect("Can load records from on-demand loader")
-            });
-
-            tracing::info!(
-                "{} loaded indices in {}s: {:?},",
-                self.party_id,
-                now.elapsed().as_secs_f64(),
-                iris_codes.iter().map(|x| x.0).collect::<Vec<_>>()
-            );
-
             // spread them to their respective devices
             let mut iris_codes_split = db_subset_idx
                 .iter()
@@ -1966,7 +2011,7 @@ impl ServerActor {
                 .iter()
                 .map(|x| Vec::with_capacity(x.len()))
                 .collect::<Vec<_>>();
-            for (db_idx, code, mask) in iris_codes.into_iter() {
+            for (db_idx, code, mask) in other_side_subset.into_iter().chain(or_rule_host_subset) {
                 let device_index = db_idx % num_devices;
                 let device_db_index = db_idx / num_devices;
                 // sanity check: queried iris codes are returned in the same order as queried
@@ -2001,8 +2046,7 @@ impl ServerActor {
                 }
             );
             tracing::info!(
-                "Pushed DB subset to GPU in {}s: {:?},",
-                self.party_id,
+                "Pushed DB subset to GPU in {}s",
                 now.elapsed().as_secs_f64(),
             );
         } else {
@@ -2046,8 +2090,7 @@ impl ServerActor {
                 }
             );
             tracing::info!(
-                "Pushed DB subset to GPU in {}s: {:?},",
-                self.party_id,
+                "Pushed DB subset to GPU in {}s",
                 now.elapsed().as_secs_f64(),
             );
         }

@@ -125,7 +125,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Half(Box::new(test_db.clone())),
+                InMemoryStoreType::Half(Arc::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0.lock().unwrap(), &mut actor);
@@ -162,7 +162,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Half(Box::new(test_db.clone())),
+                InMemoryStoreType::Half(Arc::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1.lock().unwrap(), &mut actor);
@@ -199,7 +199,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                InMemoryStoreType::Half(Box::new(test_db.clone())),
+                InMemoryStoreType::Half(Arc::new(test_db.clone())),
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2.lock().unwrap(), &mut actor);
