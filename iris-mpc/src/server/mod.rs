@@ -6,7 +6,7 @@ use crate::services::processors::batch::receive_batch;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
-use crate::services::store::load_db;
+use crate::services::store::{load_db, S3LoaderParams};
 use aws_sdk_sns::types::MessageAttributeValue;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -868,54 +868,52 @@ async fn load_database(
     tracing::info!("⚓️ ANCHOR: Load the database");
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
+    // TODO: not needed?
+    if config.fake_db_size > 0 {
+        iris_loader.fake_db(config.fake_db_size);
+        return Ok(());
+    }
+
     let parallelism = config
         .database
         .as_ref()
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
 
-    let s3_load_parallelism = config.load_chunks_parallelism;
-    let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
-    let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
-    let s3_load_max_retries = config.load_chunks_max_retries;
-    let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+    tracing::info!(
+        "Initialize iris db: Loading from DB (parallelism: {})",
+        parallelism
+    );
+    let download_shutdown_handler = Arc::clone(shutdown_handler);
 
-    if config.fake_db_size > 0 {
-        // TODO: not needed?
-        iris_loader.fake_db(config.fake_db_size);
-    } else {
-        tracing::info!(
-            "Initialize iris db: Loading from DB (parallelism: {})",
-            parallelism
-        );
-        let download_shutdown_handler = Arc::clone(shutdown_handler);
-        let db_chunks_s3_store = S3Store::new(
+    let store_len = iris_store.count_irises().await?;
+
+    let s3_loader_params = S3LoaderParams {
+        db_chunks_s3_store: S3Store::new(
             aws_clients.db_chunks_s3_client.clone(),
-            s3_chunks_bucket_name.clone(),
-        );
+            config.db_chunks_bucket_name.clone(),
+        ),
+        db_chunks_s3_client: aws_clients.db_chunks_s3_client.clone(),
+        s3_chunks_folder_name: config.db_chunks_folder_name.clone(),
+        s3_chunks_bucket_name: config.db_chunks_bucket_name.clone(),
+        s3_load_parallelism: config.load_chunks_parallelism,
+        s3_load_max_retries: config.load_chunks_max_retries,
+        s3_load_initial_backoff_ms: config.load_chunks_initial_backoff_ms,
+    };
 
-        let store_len = iris_store.count_irises().await?;
+    load_db(
+        &mut iris_loader,
+        iris_store,
+        store_len,
+        parallelism,
+        config,
+        Some(s3_loader_params),
+        download_shutdown_handler,
+    )
+    .await
+    .expect("Failed to load DB");
 
-        load_db(
-            &mut iris_loader,
-            iris_store,
-            store_len,
-            parallelism,
-            config,
-            db_chunks_s3_store,
-            aws_clients.db_chunks_s3_client.clone(),
-            s3_chunks_folder_name,
-            s3_chunks_bucket_name,
-            s3_load_parallelism,
-            s3_load_max_retries,
-            s3_load_initial_backoff_ms,
-            download_shutdown_handler,
-        )
-        .await
-        .expect("Failed to load DB");
-
-        graph_loader.load_graph_store(graph_store).await?;
-    }
+    graph_loader.load_graph_store(graph_store).await?;
 
     Ok(())
 }
@@ -1173,3 +1171,178 @@ async fn run_main_server_loop(
     }
     Ok(())
 }
+
+/// Main logic for initialization and execution of server nodes for genesis
+/// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
+/// shared iris codes in a database snapshot.  In particular, this indexer
+/// mode does not make use of AWS services, instead processing entries from
+/// an isolated database snapshot of previously validated unique iris shares.
+pub async fn server_main_genesis(config: Config) -> Result<()> {
+    let shutdown_handler = init_shutdown_handler(&config).await;
+
+    process_config(&config);
+
+    let (iris_store, graph_store) = prepare_stores(&config).await?;
+
+    // skip: init_aws_services
+    // skip: get_shares_encryption_key_pair
+    // skip: init_sns
+
+    maybe_seed_random_shares(&config, &iris_store).await?;
+    check_store_consistency(&config, &iris_store).await?;
+    let my_state = build_genesis_sync_state(&config, &iris_store).await?;
+
+    let mut background_tasks = init_task_monitor();
+
+    let is_ready_flag =
+        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
+            .await;
+
+    background_tasks.check_tasks();
+
+    wait_for_others_unready(&config).await?;
+    init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
+
+    background_tasks.check_tasks();
+
+    let sync_result = get_others_sync_state(&config, &my_state).await?;
+    sync_result.check_common_config()?;
+
+    // skip: maybe_sync_sqs_queues
+    sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
+
+    if shutdown_handler.is_shutting_down() {
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
+
+    let mut hawk_actor = init_hawk_actor(&config).await?;
+
+    load_database_genesis(
+        &config,
+        &iris_store,
+        &graph_store,
+        &shutdown_handler,
+        &mut hawk_actor,
+    )
+    .await?;
+
+    background_tasks.check_tasks();
+
+    // skip: start_results_thread
+
+    set_node_ready(is_ready_flag);
+    wait_for_others_ready(&config).await?;
+
+    background_tasks.check_tasks();
+
+    run_genesis_main_server_loop(
+        &config,
+        &iris_store,
+        &sync_result,
+        background_tasks,
+        &shutdown_handler,
+        hawk_actor,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Build this node's synchronization state, which is compared against the
+/// states provided by the other MPC nodes to reconstruct a consistent initial
+/// state for MPC operation.
+async fn build_genesis_sync_state(config: &Config, store: &Store) -> Result<SyncState> {
+    let db_len = store.count_irises().await? as u64;
+    let common_config = CommonConfig::from(config.clone());
+
+    // TODO are any of these meaningful, or should they be given empty values?
+    let deleted_request_ids = store
+        .last_deleted_requests(max_sync_lookback(config))
+        .await?;
+    let modifications = store.last_modifications(max_sync_lookback(config)).await?;
+
+    let next_sns_sequence_num = None;
+
+    Ok(SyncState {
+        db_len,
+        deleted_request_ids,
+        modifications,
+        next_sns_sequence_num,
+        common_config,
+    })
+}
+
+async fn sync_dbs_genesis(
+    _config: &Config,
+    _sync_result: &SyncResult,
+    _iris_store: &Store,
+) -> Result<()> {
+    todo!();
+}
+
+async fn load_database_genesis(
+    config: &Config,
+    iris_store: &Store,
+    graph_store: &GraphPg<Aby3Store>,
+    shutdown_handler: &Arc<ShutdownHandler>,
+    hawk_actor: &mut HawkActor,
+) -> Result<()> {
+    // ANCHOR: Load the database
+    tracing::info!("⚓️ ANCHOR: Load the database");
+    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
+
+    let parallelism = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?
+        .load_parallelism;
+
+    tracing::info!(
+        "Initialize iris db: Loading from DB (parallelism: {})",
+        parallelism
+    );
+    let download_shutdown_handler = Arc::clone(shutdown_handler);
+
+    // -------------------------------------------------------------------
+    // TODO: use the number of currently processed entries for the amount
+    //       to read into memory
+    // -------------------------------------------------------------------
+    let store_len = iris_store.count_irises().await?;
+
+    load_db::<S3Store>(
+        &mut iris_loader,
+        iris_store,
+        store_len,
+        parallelism,
+        config,
+        None,
+        download_shutdown_handler,
+    )
+    .await
+    .expect("Failed to load DB");
+
+    graph_loader.load_graph_store(graph_store).await?;
+
+    Ok(())
+}
+
+async fn run_genesis_main_server_loop(
+    _config: &Config,
+    _iris_store: &Store,
+    _sync_result: &SyncResult,
+    mut _task_monitor: TaskMonitor,
+    _shutdown_handler: &Arc<ShutdownHandler>,
+    _hawk_actor: HawkActor,
+) -> Result<()> {
+    todo!()
+}
+
+// TODO genesis "num_processed" state flag
+
+// TODO genesis results produced in large batches, update written to temporary
+// table, then update applied to graph
+
+// DB sync possibly should support limited rollback?
+
+// DB loading should use num_processed value to choose number of entries to load
