@@ -29,26 +29,25 @@ impl AwsClients {
         let shared_config = aws_config::from_env().region(region_provider).load().await;
         let sqs_client = Client::new(&shared_config);
         let sns_client = SNSClient::new(&shared_config);
-
-        let force_path_style = config.environment != "prod" && config.environment != "stage";
-
-        let s3_client = create_s3_client(&shared_config, force_path_style);
-        let db_chunks_s3_client = create_db_chunks_s3_client(&shared_config, force_path_style);
-
-        // Override region for Secrets Manager, to be removed after migration,
+        
+        // Override region for Secrets Manager and S3, to be removed after migration,
         // required because we want to keep a single source of truth for secrets
-        let overridden_secrets_manager_region = config
+        let overridden_secrets_and_s3_region = config
             .clone()
             .aws
             .and_then(|aws| aws.override_secrets_manager_region)
             .unwrap_or_else(|| DEFAULT_REGION.to_owned());
-        let overridden_secrets_manager_region_provider =
-            Region::new(overridden_secrets_manager_region);
-        let overridden_secrets_manager_config = aws_config::from_env()
-            .region(overridden_secrets_manager_region_provider)
+        let overridden_secrets_and_s3_region_provider =
+            Region::new(overridden_secrets_and_s3_region);
+        let overridden_secrets_and_s3_config = aws_config::from_env()
+            .region(overridden_secrets_and_s3_region_provider)
             .load()
             .await;
-        let secrets_manager_client = SecretsManagerClient::new(&overridden_secrets_manager_config);
+        
+        let force_path_style = config.environment != "prod" && config.environment != "stage";
+        let s3_client = create_s3_client(&overridden_secrets_and_s3_config, force_path_style);
+        let db_chunks_s3_client = create_db_chunks_s3_client(&overridden_secrets_and_s3_config, force_path_style);
+        let secrets_manager_client = SecretsManagerClient::new(&overridden_secrets_and_s3_config);
 
         Ok(Self {
             sqs_client,
