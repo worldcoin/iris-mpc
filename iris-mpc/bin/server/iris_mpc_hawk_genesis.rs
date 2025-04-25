@@ -1,7 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use clap::Parser;
-use iris_mpc::server::server_main;
+use iris_mpc::server::server_main_genesis;
 use iris_mpc::services::init::initialize_tracing;
 use iris_mpc_common::config::{Config, Opt};
 
@@ -26,7 +26,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Invoke main.
-    match server_main(config).await {
+    match server_main_genesis(config).await {
         Ok(_) => {
             tracing::info!("Server exited normally");
         }
