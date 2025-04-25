@@ -9,7 +9,7 @@
 use axum::{extract::Path, routing::get, Router};
 use cudarc::{
     driver::{CudaDevice, CudaSlice},
-    nccl::{Comm, Id},
+    nccl::{group_end, group_start, Comm, Id},
 };
 use iris_mpc_gpu::helpers::id_wrapper::IdWrapper;
 use std::{env, str::FromStr, sync::LazyLock, time::Instant};
@@ -31,7 +31,7 @@ async fn root(Path(device_id): Path<String>) -> String {
 async fn main() -> eyre::Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
-    let party_id: usize = args[1].parse().unwrap();
+    let party_id: i32 = args[1].parse().unwrap();
 
     let mut server_join_handle = None;
 
@@ -46,10 +46,8 @@ async fn main() -> eyre::Result<()> {
 
     let mut devs = vec![];
     let mut comms = vec![];
-    let mut slices = vec![];
-    let mut slices1 = vec![];
-    let mut slices2 = vec![];
-    let mut slices3 = vec![];
+    let mut slices_send = vec![];
+    let mut slices_recv = vec![];
 
     for i in 0..n_devices {
         let id = if party_id == 0 {
@@ -59,42 +57,32 @@ async fn main() -> eyre::Result<()> {
             IdWrapper::from_str(&res.text().unwrap()).unwrap().0
         };
 
-        // This call to CudaDevice::new is only used in context of a benchmark - not
-        // used in the server binary
         let dev = CudaDevice::new(i).unwrap();
-        let slice: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-        let slice1: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-        let slice2: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
-        let slice3: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice_send: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
+        let slice_recv: CudaSlice<u8> = dev.alloc_zeros(DUMMY_DATA_LEN).unwrap();
 
         println!("starting device {i}...");
 
-        let comm = Comm::from_rank(dev.clone(), party_id, 3, id).unwrap();
+        let comm = Comm::from_rank(dev.clone(), party_id as usize, 2, id).unwrap();
 
         devs.push(dev);
         comms.push(comm);
-        slices.push(Some(slice));
-        slices1.push(slice1);
-        slices2.push(slice2);
-        slices3.push(slice3);
+        slices_send.push(slice_send);
+        slices_recv.push(slice_recv);
     }
 
     for _ in 0..10 {
         let now = Instant::now();
 
+        group_start().unwrap();
         for i in 0..n_devices {
             devs[i].bind_to_thread().unwrap();
-
+            comms[i].send(&slices_send[i], (party_id + 1) % 2).unwrap();
             comms[i]
-                .broadcast(slices[i].as_ref(), &mut slices1[i], 0)
-                .unwrap();
-            comms[i]
-                .broadcast(slices[i].as_ref(), &mut slices2[i], 1)
-                .unwrap();
-            comms[i]
-                .broadcast(slices[i].as_ref(), &mut slices3[i], 2)
+                .recv(&mut slices_recv[i], (party_id + 1) % 2)
                 .unwrap();
         }
+        group_end().unwrap();
 
         for dev in devs.iter() {
             dev.synchronize().unwrap();
@@ -102,9 +90,7 @@ async fn main() -> eyre::Result<()> {
 
         if party_id != 0 {
             let elapsed = now.elapsed();
-            // Throughput multiplied by 4 because every device sends *and* receives the
-            // buffer to/from two peers.
-            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 4f64)
+            let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 2f64)
                 / (elapsed.as_millis() as f64)
                 / 1_000_000_000f64
                 * 1_000f64;
