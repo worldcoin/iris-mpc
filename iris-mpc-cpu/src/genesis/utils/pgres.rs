@@ -16,6 +16,7 @@ use iris_mpc_store::Store as IrisStore;
 ///
 /// Height of indexed Iris's.
 ///
+#[allow(dead_code)]
 pub(crate) async fn get_store_instance(config: &ApplicationConfig) -> IrisStore {
     let db_schema_name = config.get_database_schema_name();
 

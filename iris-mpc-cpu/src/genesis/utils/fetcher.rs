@@ -106,10 +106,11 @@ pub(crate) async fn fetch_iris_deletions(
         .build();
     let _ = S3_CLient::from_conf(s3_cfg);
 
-    // Set AWS S3 response.
+    // TODO: Set AWS S3 response.
     // Response will be a simple json file with a single field:
-    //  name: deleted_serial_ids
-    //  type: Vec<IrisSerialId>
+    // {
+    //     "deleted_serial_ids": ["1234567890", "0987654321" ... etc]
+    // }
     // Response parser will:
     //  - attempt to simply deserialise the response body into Json.Value
     //  - map `deleted_serial_ids` field from Vec<String> -> Vec<IrisSerialId>.

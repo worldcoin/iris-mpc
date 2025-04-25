@@ -1,5 +1,6 @@
-use super::utils::{self, errors::IndexationError, fetcher, types::IrisSerialId};
+use super::utils::{errors::IndexationError, fetcher, types::IrisSerialId};
 use iris_mpc_common::config::Config;
+use iris_mpc_store::Store as IrisStore;
 use std::{iter::Peekable, ops::Range};
 
 // Generates batches of Iris identifiers for processing.
@@ -11,6 +12,9 @@ pub struct BatchGenerator {
     // System configuration information.
     config: Config,
 
+    // System configuration information.
+    store: IrisStore,
+
     // Iterator over range of Iris serial identifiers to be indexed.
     indexation_range_iter: Peekable<Range<IrisSerialId>>,
 
@@ -21,10 +25,11 @@ pub struct BatchGenerator {
 // Constructor.
 #[allow(dead_code)]
 impl BatchGenerator {
-    pub fn new(config: Config) -> Self {
+    pub fn new(config: Config, store: IrisStore) -> Self {
         Self {
-            batch_count: 0,
             config,
+            store,
+            batch_count: 0,
             indexation_exclusions: vec![],
             indexation_range_iter: (0..0).peekable(),
         }
@@ -39,9 +44,8 @@ impl BatchGenerator {
         self.indexation_exclusions = fetcher::fetch_iris_deletions(&self.config).await.unwrap();
 
         // Set indexation range.
-        let store = utils::pgres::get_store_instance(&self.config).await;
-        let height_of_protocol = fetcher::fetch_height_of_protocol(&store).await?;
-        let height_of_indexed = fetcher::fetch_height_of_indexed(&store).await?;
+        let height_of_protocol = fetcher::fetch_height_of_protocol(&self.store).await?;
+        let height_of_indexed = fetcher::fetch_height_of_indexed(&self.store).await?;
         self.indexation_range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
 
         // Emit log entries.
