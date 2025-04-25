@@ -971,20 +971,7 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        for or_idx in or_indices {
-            let device_idx = or_idx % self.device_manager.device_count();
-            let db_idx = or_idx / self.device_manager.device_count();
-            if db_idx >= self.current_db_sizes[device_idx] {
-                tracing::warn!(
-                    "OR rule index {} is out of bounds for device {}",
-                    or_idx,
-                    device_idx
-                );
-                continue;
-            }
-            partial_matches_side1[device_idx].push(db_idx as u32);
-        }
-
+        // load the partial matches
         let (sender, partial_db_receiver) = oneshot::channel();
         if let Some(on_demand_loader) = &self.on_demand_loader {
             let loader = Arc::clone(on_demand_loader);
@@ -1004,6 +991,21 @@ impl ServerActor {
         } else {
             // we drop the sender if we are not using on-demand loading to catch errors on the receiver side
             drop(sender);
+        }
+
+        // add the OR rule indices to the partial matches
+        for or_idx in or_indices {
+            let device_idx = or_idx % self.device_manager.device_count();
+            let db_idx = or_idx / self.device_manager.device_count();
+            if db_idx >= self.current_db_sizes[device_idx] {
+                tracing::warn!(
+                    "OR rule index {} is out of bounds for device {}",
+                    or_idx,
+                    device_idx
+                );
+                continue;
+            }
+            partial_matches_side1[device_idx].push(db_idx as u32);
         }
 
         ///////////////////////////////////////////////////////////////////
