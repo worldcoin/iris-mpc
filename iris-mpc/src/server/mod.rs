@@ -1184,6 +1184,7 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
     process_config(&config);
 
     let (iris_store, graph_store) = prepare_stores(&config).await?;
+    let aws_clients = init_aws_services(&config).await?;
 
     // skip: init_aws_services
     // skip: get_shares_encryption_key_pair
@@ -1241,6 +1242,7 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
         &config,
         &iris_store,
         &graph_store,
+        &aws_clients,
         &sync_result,
         background_tasks,
         &shutdown_handler,
@@ -1329,10 +1331,12 @@ async fn load_database_genesis(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_genesis_main_server_loop(
     config: &Config,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store>,
+    aws_clients: &AwsClients,
     _sync_result: &SyncResult,
     mut _task_monitor: TaskMonitor,
     _shutdown_handler: &Arc<ShutdownHandler>,
@@ -1341,7 +1345,7 @@ async fn run_genesis_main_server_loop(
     // Initialise Iris batch generator.
     let mut batch_generator = GenesisBatchGenerator::new(config.max_batch_size);
     batch_generator
-        .init(config, iris_store, graph_store)
+        .init(iris_store, graph_store, &aws_clients.s3_client)
         .await?;
 
     // Index until generator is exhausted.

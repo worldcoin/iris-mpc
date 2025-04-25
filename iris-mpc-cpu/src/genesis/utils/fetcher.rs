@@ -1,6 +1,5 @@
 use super::{errors::IndexationError, types::IrisSerialId};
-use aws_sdk_s3::{config::Region as S3_Region, Client as S3_CLient};
-use iris_mpc_common::config::Config;
+use aws_sdk_s3::Client as S3_Client;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
 
@@ -95,42 +94,15 @@ pub(crate) async fn fetch_iris_data(
 ///
 /// # Arguments
 ///
-/// * `config` - System configuration information.
+/// * `s3_client` - A configured AWS S3 client instance.
 ///
 /// # Returns
 ///
 /// A set of Iris serial identifiers marked as deleted.
 ///
 pub(crate) async fn fetch_iris_deletions(
-    config: &Config,
+    _s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // Destructure AWS configuration settings.
-    let aws_endpoint = config
-        .aws
-        .as_ref()
-        .ok_or(IndexationError::AwsConfiguration)?
-        .endpoint
-        .as_ref()
-        .ok_or(IndexationError::AwsConfiguration)?;
-    let aws_region = config
-        .aws
-        .as_ref()
-        .unwrap()
-        .region
-        .as_ref()
-        .ok_or(IndexationError::AwsConfiguration)?;
-
-    // Set AWS S3 client.
-    let aws_config = aws_config::from_env()
-        .region(S3_Region::new(aws_region.clone()))
-        .load()
-        .await;
-    let s3_cfg = aws_sdk_s3::config::Builder::from(&aws_config)
-        .endpoint_url(aws_endpoint.clone())
-        .force_path_style(true)
-        .build();
-    let _ = S3_CLient::from_conf(s3_cfg);
-
     // TODO: Set AWS S3 response.
     // Response will be a simple json file with a single field:
     // {
