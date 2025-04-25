@@ -39,7 +39,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nccl-test
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nccl-test-2hosts
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
