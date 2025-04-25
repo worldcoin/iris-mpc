@@ -1995,11 +1995,13 @@ impl ServerActor {
 
             // map in-memory GPU indices to DB indices
             let num_devices = db_subset_idx.len();
-            let db_indices = db_subset_idx
+            let mut db_indices = db_subset_idx
                 .iter()
                 .enumerate()
                 .flat_map(|(i, x)| x.iter().map(move |&y| y as usize * num_devices + i))
                 .collect::<Vec<_>>();
+            db_indices.sort();
+
             tracing::info!("{} DB indices: {:?},", self.party_id, db_indices);
 
             // spread them to their respective devices
