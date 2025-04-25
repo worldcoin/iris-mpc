@@ -14,7 +14,6 @@ use iris_mpc_common::{
     postgres::PostgresClient,
     vector_id::VectorId,
 };
-
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -154,6 +153,45 @@ impl Store {
             .fetch_one(&self.pool)
             .await?;
         Ok(count.0 as usize)
+    }
+
+    /// Fetches an ordered vector of rows from Iris table matched by a set of serial identifiers.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifiers` - Serial identifiers of Irises to be fetched.
+    ///
+    /// # Returns
+    ///
+    /// An ordered vector of `DbStoredIris` instances.
+    ///
+    pub async fn fetch_iris_batch(
+        &self,
+        identifiers: Vec<i64>,
+    ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
+        // TODO: define max batch size constant.
+        assert!(
+            !identifiers.is_empty() && identifiers.len() <= 64,
+            "Invalid identifier set"
+        );
+
+        tracing::info!(
+            "Iris Store: Fetching a batch of {} Irises",
+            identifiers.len()
+        );
+
+        let irises = sqlx::query_as::<_, DbStoredIris>(
+            r#"
+            SELECT * FROM irises
+            ORDER BY id ASC
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(&identifiers)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(irises)
     }
 
     /// Fetches first row from Iris table matched by id.

@@ -19,6 +19,9 @@ pub enum IndexationError {
     #[error("Failed to connect to PostgreSQL dB")]
     PostgresConnection,
 
+    #[error("Failed to fetch a batch of Iris data from PostgreSQL dB")]
+    PostgresFetchIrisBatch,
+
     #[error("Failed to fetch Iris data from PostgreSQL dB")]
     PostgresFetchIrisById,
 }

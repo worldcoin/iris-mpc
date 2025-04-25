@@ -25,16 +25,16 @@ pub(crate) async fn fetch_height_of_indexed(
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 ///
 /// # Returns
 ///
 /// Height of stored Iris's.
 ///
 pub(crate) async fn fetch_height_of_protocol(
-    store: &IrisPgresStore,
+    iris_store: &IrisPgresStore,
 ) -> Result<IrisSerialId, IndexationError> {
-    store
+    iris_store
         .count_irises()
         .await
         .map_err(|_| IndexationError::PostgresFetchIrisById)
@@ -45,7 +45,7 @@ pub(crate) async fn fetch_height_of_protocol(
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `serial_id` - Serial identifier of a processedIris.
 ///
 /// # Returns
@@ -53,10 +53,10 @@ pub(crate) async fn fetch_height_of_protocol(
 /// Iris data for indexation.
 ///
 pub(crate) async fn fetch_iris_data(
-    store: &IrisPgresStore,
+    iris_store: &IrisPgresStore,
     serial_id: IrisSerialId,
 ) -> Result<IrisData, IndexationError> {
-    let data = store
+    let data = iris_store
         .fetch_iris_by_serial_id(serial_id)
         .await
         .map_err(|_| IndexationError::PostgresFetchIrisById)
