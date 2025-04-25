@@ -1,3 +1,5 @@
+image: "ghcr.io/worldcoin/iris-mpc:85b9114111752b558618246e0b8bf0e79e98012a"
+
 resources:
   limits:
     cpu: 96
@@ -51,10 +53,10 @@ env:
 
   - name: SMPC__AWS__REGION
     value: "eu-central-1"
-  
+
   - name: SMPC__AWS__OVERRIDE_SECRETS_MANAGER_REGION
     value: "eu-north-1"
-  
+
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
       secretKeyRef:
