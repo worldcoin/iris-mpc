@@ -92,10 +92,9 @@ async fn main() -> eyre::Result<()> {
             let elapsed = now.elapsed();
             let throughput = (DUMMY_DATA_LEN as f64 * n_devices as f64 * 2f64)
                 / (elapsed.as_millis() as f64)
-                / 1_000_000_000f64
-                * 1_000f64;
+                / (1 << 20);
             println!(
-                "received in {:?} [{:.2} GB/s] [{:.2} Gbps]",
+                "received in {:?} [{:.2} GiB/s] [{:.2} Gbps]",
                 elapsed,
                 throughput,
                 throughput * 8f64
