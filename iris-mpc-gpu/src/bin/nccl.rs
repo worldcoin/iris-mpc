@@ -77,8 +77,6 @@ async fn main() -> eyre::Result<()> {
         group_start().unwrap();
         for i in 0..n_devices {
             comms[i].send(&slices_send[i], (party_id + 1) % 2).unwrap();
-        }
-        for i in 0..n_devices {
             comms[i]
                 .recv(&mut slices_recv[i], (party_id + 1) % 2)
                 .unwrap();
