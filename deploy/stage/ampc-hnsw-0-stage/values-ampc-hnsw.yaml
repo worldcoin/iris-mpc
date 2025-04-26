@@ -34,6 +34,9 @@ env:
 
   - name: SMPC__MAX_DB_SIZE
     value: "1000000"
+  
+  - name: SMPC__CPU_DISABLE_PERSISTENCE
+    value: "true"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
