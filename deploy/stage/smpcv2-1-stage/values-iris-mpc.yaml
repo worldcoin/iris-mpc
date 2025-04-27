@@ -108,13 +108,13 @@ env:
     value: "true"  
 
   - name: SMPC__ENABLE_REAUTH
-    value: "false"
+    value: "true"
 
   - name: SMPC__ENABLE_RESET
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
     value: "50"
@@ -148,9 +148,6 @@ env:
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
 
-  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
-    value: "20"
-
   - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
     value: "true"
 
@@ -158,6 +155,9 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
+
+  - name : SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
 initContainer:
