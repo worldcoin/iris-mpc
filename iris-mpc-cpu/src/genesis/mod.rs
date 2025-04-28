@@ -2,8 +2,5 @@ mod batch_generator;
 mod hawk_handle;
 mod utils;
 
-pub use batch_generator::BatchGenerator as GenesisBatchGenerator;
-pub use hawk_handle::{
-    Handle as GenesisHandle, Job as GenesisJob, JobRequest as GenesisJobRequest,
-    JobResult as GenesisJobResult,
-};
+pub use batch_generator::{BatchGenerator, BatchIterator};
+pub use hawk_handle::{Handle, Job, JobRequest, JobResult};

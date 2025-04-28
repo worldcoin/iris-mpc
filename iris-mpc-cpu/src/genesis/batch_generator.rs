@@ -2,6 +2,7 @@ use super::utils::{errors::IndexationError, fetcher, types::IrisSerialId};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
+use std::future::Future;
 use std::{iter::Peekable, ops::Range};
 
 // Generates batches of Iris identifiers for processing.
@@ -18,6 +19,18 @@ pub struct BatchGenerator {
 
     // Iterator over range of Iris serial identifiers to be indexed.
     range_iter: Peekable<Range<IrisSerialId>>,
+}
+
+// Batch generation iterator interface.
+pub trait BatchIterator {
+    // Count of generated batches.
+    fn batch_count(&self) -> usize;
+
+    // Iterator over batches of Iris data to be indexed.
+    fn next_batch(
+        &mut self,
+        iris_store: &IrisStore,
+    ) -> impl Future<Output = Result<Option<Vec<IrisData>>, IndexationError>> + Send;
 }
 
 // Constructor.
@@ -52,6 +65,7 @@ impl BatchGenerator {
         let height_of_protocol = fetcher::fetch_height_of_protocol(iris_store).await?;
         let height_of_indexed = fetcher::fetch_height_of_indexed(iris_store).await?;
         self.range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
+
         tracing::info!(
             "HNSW GENESIS: Range of serial-id's to index = {}..{}",
             height_of_indexed,
@@ -62,26 +76,15 @@ impl BatchGenerator {
     }
 }
 
-#[allow(dead_code)]
+// Methods.
 impl BatchGenerator {
-    // Returns next batch of Iris data to be indexed.
-    pub async fn next_batch(
-        &mut self,
-        iris_store: &IrisStore,
-    ) -> Result<Vec<IrisData>, IndexationError> {
-        let identifiers = self.get_identifiers();
-        let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-        tracing::info!(
-            "HNSW GENESIS: Fetched new batch for indexation: idx={} :: irises={}",
-            self.batch_count,
-            batch.len(),
-        );
-
-        Ok(batch)
-    }
-
     // Returns next batch of Iris serial identifiers to be indexed.
-    fn get_identifiers(&mut self) -> Vec<IrisSerialId> {
+    fn get_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
+        self.range_iter.peek()?;
+        // if self.range_iter.peek().is_none() {
+        //     return None;
+        // }
+
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
@@ -91,6 +94,11 @@ impl BatchGenerator {
                 tracing::info!("HNSW GENESIS: Excluding deletion :: serial-id={}", next_id);
             }
         }
+
+        if batch.is_empty() {
+            return None;
+        }
+
         self.batch_count += 1;
         tracing::info!(
             "HNSW GENESIS: Constructed new batch for indexation: idx={} :: irises={}",
@@ -98,6 +106,34 @@ impl BatchGenerator {
             batch.len(),
         );
 
-        batch
+        Some(batch)
+    }
+}
+
+// Implement our BatchIterator trait
+impl BatchIterator for BatchGenerator {
+    // Count of generated batches.
+    fn batch_count(&self) -> usize {
+        self.batch_count
+    }
+
+    // Returns next batch of Iris data to be indexed or None if exhausted.
+    async fn next_batch(
+        &mut self,
+        iris_store: &IrisStore,
+    ) -> Result<Option<Vec<IrisData>>, IndexationError> {
+        if let Some(identifiers) = self.get_identifiers() {
+            let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
+
+            tracing::info!(
+                "HNSW GENESIS: Fetched new batch for indexation: idx={} :: irises={}",
+                self.batch_count,
+                batch.len(),
+            );
+
+            Ok(Some(batch))
+        } else {
+            Ok(None)
+        }
     }
 }

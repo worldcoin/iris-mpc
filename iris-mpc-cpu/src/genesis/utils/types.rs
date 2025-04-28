@@ -1,4 +1,5 @@
 use crate::protocol::shared_iris::GaloisRingSharedIris;
+use iris_mpc_store::DbStoredIris as IrisData;
 
 // An iris pair identifier.
 pub type IrisSerialId = i64;
@@ -54,5 +55,13 @@ impl IrisGaloisShares {
             left,
             right,
         }
+    }
+}
+
+// Convertor.
+#[allow(dead_code)]
+impl From<&IrisData> for IrisGaloisShares {
+    fn from(_value: &IrisData) -> Self {
+        unimplemented!()
     }
 }

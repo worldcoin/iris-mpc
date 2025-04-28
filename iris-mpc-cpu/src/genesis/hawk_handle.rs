@@ -95,7 +95,7 @@ impl Handle {
         unimplemented!()
     }
 
-    async fn submit_batch(&mut self, _batch: Vec<u64>) -> impl Future<Output = Result<u64>> {
+    pub async fn submit_batch(&mut self, _batch: Vec<u64>) -> impl Future<Output = Result<u64>> {
         async move { unimplemented!() }
     }
 }

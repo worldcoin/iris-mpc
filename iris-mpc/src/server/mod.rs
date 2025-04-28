@@ -31,7 +31,10 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
-use iris_mpc_cpu::genesis::GenesisBatchGenerator;
+use iris_mpc_cpu::genesis::{
+    BatchGenerator as GenesisBatchGenerator, BatchIterator as GenesisBatchIterator,
+    Handle as GenesisHandle,
+};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
@@ -1176,7 +1179,6 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
     let (iris_store, graph_store) = prepare_stores(&config).await?;
     let aws_clients = init_aws_services(&config).await?;
 
-    // skip: init_aws_services
     // skip: get_shares_encryption_key_pair
     // skip: init_sns
 
@@ -1330,17 +1332,27 @@ async fn run_genesis_main_server_loop(
     _sync_result: &SyncResult,
     mut _task_monitor: TaskMonitor,
     _shutdown_handler: &Arc<ShutdownHandler>,
-    _hawk_actor: HawkActor,
+    hawk_actor: HawkActor,
 ) -> Result<()> {
-    // Initialise Iris batch generator.
+    // Initialise Hawk handle.
+    let _handle = GenesisHandle::new(hawk_actor).await?;
+
+    // Initialise batch generator.
     let mut batch_generator = GenesisBatchGenerator::new(config.max_batch_size);
     batch_generator
         .init(iris_store, graph_store, &aws_clients.s3_client)
         .await?;
 
-    // Index until generator is exhausted.
-    // TODO: implement outer loop.
-    let _ = batch_generator.next_batch(iris_store).await?;
+    // Index until batch generator is exhausted.
+    while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+        tracing::info!(
+            "HNSW GENESIS: Indexing new batch: idx={} :: irises={}",
+            batch_generator.batch_count(),
+            batch.len(),
+        );
+
+        // TODO: hand off batch to handle.
+    }
 
     todo!()
 }
