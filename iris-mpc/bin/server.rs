@@ -2055,7 +2055,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &dummy_deletion_shares.1,
                         &dummy_deletion_shares.0,
                         &dummy_deletion_shares.1,
-                    );
+                    )
+                    .await?;
                 }
 
                 // persist reset_update results into db
@@ -2074,7 +2075,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &shares.mask_left,
                         &shares.code_right,
                         &shares.mask_right,
-                    );
+                    )
+                    .await?;
                 }
             }
 
