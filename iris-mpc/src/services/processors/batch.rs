@@ -196,11 +196,7 @@ impl<'a> BatchProcessor<'a> {
     async fn poll_messages(&mut self) -> Result<(), ReceiveRequestError> {
         // let max_batch_size = self.config.max_batch_size;
         let queue_url = &self.config.requests_queue_url;
-
-        // Poll until we have enough messages
-        // temporary hack for staging to only process 1 message at a time
-        // this helps with the correctness test
-        while self.msg_counter < 1 {
+        while self.msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
             let rcv_message_output = self
                 .client
                 .receive_message()
