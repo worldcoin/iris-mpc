@@ -87,7 +87,7 @@ pub fn receive_batch_stream(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn receive_batch(
+async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
