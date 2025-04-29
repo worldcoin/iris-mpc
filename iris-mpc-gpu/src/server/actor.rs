@@ -17,6 +17,7 @@ use crate::{
     server::PreprocessedBatchQuery,
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
+use core::panic;
 use cudarc::{
     cublas::CudaBlas,
     driver::{
@@ -1008,6 +1009,12 @@ impl ServerActor {
             partial_matches_side1[device_idx].push(db_idx as u32);
         }
 
+        // sort and dedup the partial matches
+        for device_idx in 0..self.device_manager.device_count() {
+            partial_matches_side1[device_idx].sort_unstable();
+            partial_matches_side1[device_idx].dedup();
+        }
+
         ///////////////////////////////////////////////////////////////////
         // COMPARE OTHER EYE QUERIES
         ///////////////////////////////////////////////////////////////////
@@ -1069,6 +1076,11 @@ impl ServerActor {
                 partial_matches_side1.len(),
                 DB_CHUNK_SIZE
             );
+
+            if self.on_demand_loader.is_some() {
+                tracing::error!("On-demand loading is enabled, but partial matches are too large. Restarting due to infeasible request.");
+                panic!("On-demand loading is enabled, but partial matches are too large. Restarting due to infeasible request.");
+            }
 
             tracing::info!("Comparing right eye queries against DB and self");
             self.compare_query_against_db_and_self(
@@ -1995,16 +2007,7 @@ impl ServerActor {
                 now.elapsed().as_secs_f64(),
             );
 
-            // map in-memory GPU indices to DB indices
             let num_devices = db_subset_idx.len();
-            let mut db_indices = db_subset_idx
-                .iter()
-                .enumerate()
-                .flat_map(|(i, x)| x.iter().map(move |&y| y as usize * num_devices + i))
-                .collect::<Vec<_>>();
-            db_indices.sort();
-
-            tracing::info!("{} DB indices: {:?},", self.party_id, db_indices);
 
             // spread them to their respective devices
             let mut iris_codes_split = db_subset_idx
@@ -2015,7 +2018,13 @@ impl ServerActor {
                 .iter()
                 .map(|x| Vec::with_capacity(x.len()))
                 .collect::<Vec<_>>();
-            for (db_idx, code, mask) in other_side_subset.into_iter().chain(or_rule_host_subset) {
+            let combined_subset = {
+                let mut combined_subset = other_side_subset;
+                combined_subset.extend(or_rule_host_subset.into_iter());
+                combined_subset.sort_unstable_by_key(|x| x.0);
+                combined_subset
+            };
+            for (db_idx, code, mask) in combined_subset {
                 let device_index = db_idx % num_devices;
                 let device_db_index = db_idx / num_devices;
                 // sanity check: queried iris codes are returned in the same order as queried

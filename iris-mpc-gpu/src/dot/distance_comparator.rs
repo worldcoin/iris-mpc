@@ -488,9 +488,9 @@ impl DistanceComparator {
             let mut ids = results[i][..min(len, DB_CHUNK_SIZE)]
                 .iter()
                 .copied()
-                .unique()
                 .collect::<Vec<_>>();
-            ids.sort();
+            ids.sort_unstable();
+            ids.dedup();
             matches.push(ids);
         }
 
