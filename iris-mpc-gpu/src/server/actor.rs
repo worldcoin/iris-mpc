@@ -3032,7 +3032,7 @@ pub fn generate_luc_records(
 
     // If there are no OR rules, return only the lookback records
     if or_rule_indices.is_empty() {
-        return lookback_records;
+        or_rule_indices = vec![vec![]; batch_size];
     }
 
     // Otherwise, merge them into each inner vector of or_rule_indices

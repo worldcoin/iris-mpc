@@ -549,21 +549,27 @@ impl<'a> BatchProcessor<'a> {
     }
 
     fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) {
-        if self.config.luc_enabled {
-            if self.config.luc_lookback_records > 0 {
-                self.batch_query.luc_lookback_records = self.config.luc_lookback_records;
-            }
+        let config = &self.config;
 
-            if self.config.luc_serial_ids_from_smpc_request {
-                if let Some(serial_ids) = &uniqueness_request.or_rule_serial_ids {
-                    self.batch_query
-                        .or_rule_indices
-                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                } else {
-                    tracing::error!("Received a uniqueness request without serial_ids");
-                }
-            }
+        if config.luc_enabled && config.luc_lookback_records > 0 {
+            self.batch_query.luc_lookback_records = config.luc_lookback_records;
         }
+
+        let or_rule_indices = if config.luc_enabled && config.luc_serial_ids_from_smpc_request {
+            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref() {
+                // convert from 1-based serial id to 0-based index in actor
+                serial_ids.iter().map(|x| x - 1).collect()
+            } else {
+                tracing::warn!(
+                    "LUC serial ids from request enabled, but no serial_ids were passed"
+                );
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        self.batch_query.or_rule_indices.push(or_rule_indices);
     }
 
     fn add_iris_shares_task(&mut self, s3_key: String) -> Result<(), ReceiveRequestError> {
