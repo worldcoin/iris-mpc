@@ -31,6 +31,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
+use iris_mpc_cpu::genesis::utils::fetcher::{fetch_height_of_indexed, LATEST_IRIS_INDEX_FILE};
 use iris_mpc_cpu::genesis::{
     BatchGenerator as GenesisBatchGenerator, BatchIterator as GenesisBatchIterator,
     Handle as GenesisHandle,
@@ -40,12 +41,12 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::mem;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
+use tokio::fs;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::timeout;
@@ -1380,15 +1381,8 @@ async fn run_genesis_main_server_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut latest_iris_index = 1;
-        let path = Path::new("lastest_iris_index.txt");
-        if path.try_exists().is_ok() && path.is_file() {
-            let file_content: String = fs::read_to_string(path)?;
-            if let Ok(index) = file_content.parse::<usize>() {
-                tracing::info!("Successfully read existing index {} from disk", index);
-                latest_iris_index = index;
-            }
-        }
+        let mut latest_iris_index = fetch_height_of_indexed();
+        let path = Path::new(LATEST_IRIS_INDEX_FILE);
 
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {

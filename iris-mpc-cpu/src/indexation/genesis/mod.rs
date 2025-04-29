@@ -2,7 +2,7 @@ mod actors;
 mod errors;
 mod messages;
 mod types;
-mod utils;
+pub mod utils;
 
 pub use actors::Supervisor;
 pub use errors::IndexationError;
