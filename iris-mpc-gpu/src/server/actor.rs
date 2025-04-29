@@ -2022,8 +2022,14 @@ impl ServerActor {
                 let mut combined_subset = other_side_subset;
                 combined_subset.extend(or_rule_host_subset);
                 combined_subset.sort_unstable_by_key(|x| x.0);
+                combined_subset.dedup_by_key(|x| x.0);
                 combined_subset
             };
+            tracing::info!(
+                "loaded idx {:?}",
+                combined_subset.iter().map(|x| x.0).collect::<Vec<_>>()
+            );
+            tracing::info!("wanted idx {:?}", &db_subset_idx);
             for (db_idx, code, mask) in combined_subset {
                 let device_index = db_idx % num_devices;
                 let device_db_index = db_idx / num_devices;
