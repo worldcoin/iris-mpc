@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::mem;
-use std::path::{self, Path};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -1380,12 +1380,13 @@ async fn run_genesis_main_server_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut latest_iris_offset = 0;
-        let path = Path::new("lastest_iris_offset.txt");
+        let mut latest_iris_index = 1;
+        let path = Path::new("lastest_iris_index.txt");
         if path.try_exists().is_ok() && path.is_file() {
             let file_content: String = fs::read_to_string(path)?;
-            if let Ok(offset) = file_content.parse::<usize>() {
-                latest_iris_offset = offset;
+            if let Ok(index) = file_content.parse::<usize>() {
+                tracing::info!("Successfully read existing index {} from disk", index);
+                latest_iris_index = index;
             }
         }
 
@@ -1409,8 +1410,8 @@ async fn run_genesis_main_server_loop(
 
             shutdown_handler.increment_batches_pending_completion();
 
-            latest_iris_offset += batch_len;
-            let file_content = latest_iris_offset.to_string();
+            latest_iris_index += batch_len;
+            let file_content = latest_iris_index.to_string();
             fs::write(path, file_content)
                 .map_err(|e| tracing::error!("{}", e))
                 .unwrap_or(());

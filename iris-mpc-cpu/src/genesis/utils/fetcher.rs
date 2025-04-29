@@ -1,7 +1,10 @@
+use std::path::Path;
+
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
+use tokio::fs;
 
 /// Fetches height of indexed from store.
 ///
@@ -13,11 +16,16 @@ use rand::prelude::IteratorRandom;
 ///
 /// Height of indexed Iris's.
 ///
-pub(crate) async fn fetch_height_of_indexed(
-    _: &IrisPgresStore,
-) -> Result<IrisSerialId, IndexationError> {
-    // TODO: fetch from store.
-    Ok(1)
+pub(crate) async fn fetch_height_of_indexed() -> IrisSerialId {
+    let path = Path::new("lastest_iris_index.txt");
+    if path.try_exists().is_ok() && path.is_file() {
+        if let Ok(file_content) = fs::read_to_string(path).await {
+            if let Ok(index) = file_content.parse::<IrisSerialId>() {
+                return index;
+            }
+        }
+    };
+    1
 }
 
 /// Fetches height of protocol from store.
