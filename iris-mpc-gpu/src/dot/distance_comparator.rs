@@ -485,10 +485,7 @@ impl DistanceComparator {
         let mut matches = vec![];
         for i in 0..self.device_manager.device_count() {
             let len = counters[i][0] as usize;
-            let mut ids = results[i][..min(len, DB_CHUNK_SIZE)]
-                .iter()
-                .copied()
-                .collect::<Vec<_>>();
+            let mut ids = results[i][..min(len, DB_CHUNK_SIZE)].to_vec();
             ids.sort_unstable();
             ids.dedup();
             matches.push(ids);

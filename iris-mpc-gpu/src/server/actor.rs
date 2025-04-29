@@ -2020,7 +2020,7 @@ impl ServerActor {
                 .collect::<Vec<_>>();
             let combined_subset = {
                 let mut combined_subset = other_side_subset;
-                combined_subset.extend(or_rule_host_subset.into_iter());
+                combined_subset.extend(or_rule_host_subset);
                 combined_subset.sort_unstable_by_key(|x| x.0);
                 combined_subset
             };
