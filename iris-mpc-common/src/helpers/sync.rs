@@ -15,7 +15,7 @@ pub struct SyncState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResult {
-    my_state: SyncState,
+    pub my_state: SyncState,
     all_states: Vec<SyncState>,
 }
 
@@ -102,6 +102,10 @@ impl SyncResult {
         }
     }
 
+    /// Returns `None` if all states have equal database length.  If not all
+    /// database lengths are the same, instead returns `Some(smallest_len)`,
+    /// indicating that other databases probably should be rolled back to this
+    /// smallest size.
     pub fn must_rollback_storage(&self) -> Option<usize> {
         let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
         let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
@@ -112,6 +116,7 @@ impl SyncResult {
         }
     }
 
+    /// Check if the common part of the config is the same across all nodes.
     pub fn check_common_config(&self) -> eyre::Result<()> {
         let config = self.my_state.common_config.clone();
         for state in &self.all_states {
