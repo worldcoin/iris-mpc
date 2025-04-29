@@ -1381,7 +1381,7 @@ async fn run_genesis_main_server_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut latest_iris_index = fetch_height_of_indexed();
+        let mut latest_iris_index = fetch_height_of_indexed().await;
         let path = Path::new(LATEST_IRIS_INDEX_FILE);
 
         // Index until batch generator is exhausted.
@@ -1396,7 +1396,7 @@ async fn run_genesis_main_server_loop(
 
             task_monitor.check_tasks();
 
-            let batch_len = batch.len();
+            let batch_len: i64 = batch.len().try_into()?;
             let result_future = hawk_handle.submit_batch(batch);
             let _result = timeout(processing_timeout, result_future.await)
                 .await
@@ -1407,6 +1407,7 @@ async fn run_genesis_main_server_loop(
             latest_iris_index += batch_len;
             let file_content = latest_iris_index.to_string();
             fs::write(path, file_content)
+                .await
                 .map_err(|e| tracing::error!("{}", e))
                 .unwrap_or(());
         }
