@@ -38,30 +38,24 @@ impl IrisGaloisShares {
 #[allow(dead_code)]
 impl IrisGaloisShares {
     /// Creates a new instance of `IrisGaloisShares` from data fetched from a store.
-    pub(crate) fn new(
-        party_id: usize,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) -> Self {
-        let left =
-            GaloisRingSharedIris::try_from_buffers_inner(party_id, left_code, left_mask).unwrap();
-        let right =
-            GaloisRingSharedIris::try_from_buffers_inner(party_id, right_code, right_mask).unwrap();
+    pub(crate) fn new(party_id: usize, data: &IrisData) -> Self {
+        let left = GaloisRingSharedIris::try_from_buffers_inner(
+            party_id,
+            data.left_code(),
+            data.left_mask(),
+        )
+        .unwrap();
+        let right = GaloisRingSharedIris::try_from_buffers_inner(
+            party_id,
+            data.right_code(),
+            data.right_mask(),
+        )
+        .unwrap();
 
         Self {
             party_id,
             left,
             right,
         }
-    }
-}
-
-// Convertor.
-#[allow(dead_code)]
-impl From<&IrisData> for IrisGaloisShares {
-    fn from(_value: &IrisData) -> Self {
-        unimplemented!()
     }
 }

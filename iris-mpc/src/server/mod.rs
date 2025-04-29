@@ -1330,12 +1330,12 @@ async fn run_genesis_main_server_loop(
     graph_store: &GraphPg<Aby3Store>,
     aws_clients: &AwsClients,
     _sync_result: &SyncResult,
-    mut _task_monitor: TaskMonitor,
-    _shutdown_handler: &Arc<ShutdownHandler>,
+    mut task_monitor: TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
 ) -> Result<()> {
     // Initialise Hawk handle.
-    let _handle = GenesisHandle::new(hawk_actor).await?;
+    let mut hawk_handle = GenesisHandle::new(hawk_actor).await?;
 
     // Initialise batch generator.
     let mut batch_generator = GenesisBatchGenerator::new(config.max_batch_size);
@@ -1343,18 +1343,58 @@ async fn run_genesis_main_server_loop(
         .init(iris_store, graph_store, &aws_clients.s3_client)
         .await?;
 
-    // Index until batch generator is exhausted.
-    while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-        tracing::info!(
-            "HNSW GENESIS: Indexing new batch: idx={} :: irises={}",
-            batch_generator.batch_count(),
-            batch.len(),
-        );
+    let res: Result<()> = async {
+        tracing::info!("Entering main loop");
+        let now = Instant::now();
+        let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        // TODO: hand off batch to handle.
+        // Index until batch generator is exhausted.
+        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            tracing::info!(
+                "HNSW GENESIS: Indexing new batch: idx={} :: irises={} :: time {:?}",
+                batch_generator.batch_count(),
+                batch.len(),
+                now.elapsed(),
+            );
+            metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
+
+            task_monitor.check_tasks();
+
+            let result_future = hawk_handle.submit_batch(batch);
+            let _result = timeout(processing_timeout, result_future.await)
+                .await
+                .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
+
+            shutdown_handler.increment_batches_pending_completion()
+        }
+
+        Ok(())
+    }
+    .await;
+
+    match res {
+        Ok(_) => {
+            tracing::info!(
+                "Main loop exited normally. Waiting for last batch results to be processed before shutting down..."
+            );
+            shutdown_handler.wait_for_pending_batches_completion().await;
+        }
+        Err(e) => {
+            tracing::error!("HawkActor processing error: {:?}", e);
+
+            // Ensure hawk handle is dropped so as to initiate shutdown.
+            drop(hawk_handle);
+
+            // Clean up server tasks, then wait for them to finish
+            task_monitor.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+
+            // Check for background task hangs and shutdown panics
+            task_monitor.check_tasks_finished();
+        }
     }
 
-    todo!()
+    Ok(())
 }
 
 // TODO genesis "num_processed" state flag

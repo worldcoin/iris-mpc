@@ -4,6 +4,7 @@ use crate::execution::hawk_main::{
 use crate::hawkers::aby3::aby3_store::QueryRef;
 use eyre::Result;
 use futures::try_join;
+use iris_mpc_store::DbStoredIris as IrisData;
 use std::{future::Future, sync::Arc};
 use tokio::sync::{mpsc, oneshot};
 
@@ -95,7 +96,10 @@ impl Handle {
         unimplemented!()
     }
 
-    pub async fn submit_batch(&mut self, _batch: Vec<u64>) -> impl Future<Output = Result<u64>> {
+    pub async fn submit_batch(
+        &mut self,
+        _batch: Vec<IrisData>,
+    ) -> impl Future<Output = Result<u64>> {
         async move { unimplemented!() }
     }
 }
