@@ -346,26 +346,28 @@ async fn receive_batch(
                         } else {
                             batch_query.skip_persistence.push(false);
                         }
-                        if config.luc_enabled {
-                            if config.luc_lookback_records > 0 {
-                                batch_query.luc_lookback_records = config.luc_lookback_records;
-                            }
-                            if config.luc_serial_ids_from_smpc_request {
-                                if let Some(serial_ids) =
-                                    uniqueness_request.or_rule_serial_ids.clone()
-                                {
-                                    // convert from 1-based serial id to 0-based index in actor
-                                    batch_query
-                                        .or_rule_indices
-                                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                                } else {
-                                    tracing::warn!(
+
+                        if config.luc_enabled && config.luc_lookback_records > 0 {
+                            batch_query.luc_lookback_records = config.luc_lookback_records;
+                        }
+
+                        let or_rule_indices = if config.luc_enabled
+                            && config.luc_serial_ids_from_smpc_request
+                        {
+                            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref()
+                            {
+                                // convert from 1-based serial id to 0-based index in actor
+                                serial_ids.iter().map(|x| x - 1).collect()
+                            } else {
+                                tracing::warn!(
                                         "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
-                                    batch_query.or_rule_indices.push(vec![]);
-                                }
+                                vec![]
                             }
-                        }
+                        } else {
+                            vec![]
+                        };
+                        batch_query.or_rule_indices.push(or_rule_indices);
 
                         batch_query
                             .request_ids
@@ -2055,7 +2057,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &dummy_deletion_shares.1,
                         &dummy_deletion_shares.0,
                         &dummy_deletion_shares.1,
-                    );
+                    )
+                    .await?;
                 }
 
                 // persist reset_update results into db
@@ -2074,7 +2077,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &shares.mask_left,
                         &shares.code_right,
                         &shares.mask_right,
-                    );
+                    )
+                    .await?;
                 }
             }
 
