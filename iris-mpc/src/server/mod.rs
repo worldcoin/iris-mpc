@@ -40,7 +40,9 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::mem;
+use std::path::{self, Path};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -1378,6 +1380,15 @@ async fn run_genesis_main_server_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
+        let mut latest_iris_offset = 0;
+        let path = Path::new("lastest_iris_offset.txt");
+        if path.try_exists().is_ok() && path.is_file() {
+            let file_content: String = fs::read_to_string(path)?;
+            if let Ok(offset) = file_content.parse::<usize>() {
+                latest_iris_offset = offset;
+            }
+        }
+
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             tracing::info!(
@@ -1390,12 +1401,19 @@ async fn run_genesis_main_server_loop(
 
             task_monitor.check_tasks();
 
+            let batch_len = batch.len();
             let result_future = hawk_handle.submit_batch(batch);
             let _result = timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
 
-            shutdown_handler.increment_batches_pending_completion()
+            shutdown_handler.increment_batches_pending_completion();
+
+            latest_iris_offset += batch_len;
+            let file_content = latest_iris_offset.to_string();
+            fs::write(path, file_content)
+                .map_err(|e| tracing::error!("{}", e))
+                .unwrap_or(());
         }
 
         Ok(())
