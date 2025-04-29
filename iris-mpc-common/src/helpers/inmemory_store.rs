@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{job::Eye, vector_id::VectorId};
 
 /// A helper trait encapsulating the functionality to add iris codes to some
@@ -130,4 +132,74 @@ pub trait OnDemandLoader {
         side: Eye,
         indices: &[usize],
     ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>>;
+}
+
+pub struct CachingOnDemandLoader {
+    inner: Arc<dyn OnDemandLoader + Send + Sync + 'static>,
+    cache: quick_cache::sync::Cache<usize, (Vec<u16>, Vec<u16>)>,
+    fixed_side: Eye,
+}
+
+impl CachingOnDemandLoader {
+    pub fn new(
+        inner: Arc<dyn OnDemandLoader + Send + Sync + 'static>,
+        num_cached_iris_codes: usize,
+        fixed_side: Eye,
+    ) -> Self {
+        let cache = quick_cache::sync::Cache::new(num_cached_iris_codes);
+        Self {
+            inner,
+            cache,
+            fixed_side,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl OnDemandLoader for CachingOnDemandLoader {
+    async fn load_records(
+        &self,
+        side: Eye,
+        indices: &[usize],
+    ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>> {
+        if side != self.fixed_side {
+            return Err(eyre::eyre!(
+                "Invalid side requested, expected: {:?}",
+                self.fixed_side
+            ));
+        }
+
+        // grab cached iris codes
+        let cached: Vec<_> = indices.iter().map(|x| (*x, self.cache.get(x))).collect();
+        // grab missing ones
+        let missing_indices = cached
+            .iter()
+            .filter_map(|(i, c)| if c.is_none() { Some(*i) } else { None })
+            .collect::<Vec<_>>();
+
+        // for missing ones, load from the inner source
+        let loaded = if missing_indices.is_empty() {
+            vec![]
+        } else {
+            self.inner.load_records(side, &missing_indices).await?
+        };
+
+        // put collected iris codes into the cache
+        for (idx, code, mask) in loaded.iter() {
+            self.cache.insert(*idx, (code.clone(), mask.clone()));
+        }
+        let result = cached
+            .into_iter()
+            .filter_map(|x| {
+                if let Some((code, mask)) = x.1 {
+                    Some((x.0, code, mask))
+                } else {
+                    None
+                }
+            })
+            .chain(loaded.into_iter())
+            .collect::<Vec<_>>();
+
+        Ok(result)
+    }
 }
