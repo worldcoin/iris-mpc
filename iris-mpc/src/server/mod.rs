@@ -1386,6 +1386,20 @@ async fn run_genesis_main_server_loop(
 
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            let curr_iris_index = batch.last().map(|db_stored_iris| db_stored_iris.id());
+            match curr_iris_index {
+              Some(index) if index <= prev_iris_index => {
+                tracing::info!(
+                    "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
+                    batch_generator.batch_count(),
+                    batch.len(),
+                    now.elapsed(),
+                );
+                continue;
+              }
+              _ => ()
+            }
+
             tracing::info!(
                 "HNSW GENESIS: Indexing new batch: idx={} :: irises={} :: time {:?}",
                 batch_generator.batch_count(),
@@ -1396,7 +1410,6 @@ async fn run_genesis_main_server_loop(
 
             task_monitor.check_tasks();
 
-            let curr_iris_index = batch.last().map(|db_stored_iris| db_stored_iris.id());
             let result_future = hawk_handle.submit_batch(batch);
             let _result = timeout(processing_timeout, result_future.await)
                 .await
