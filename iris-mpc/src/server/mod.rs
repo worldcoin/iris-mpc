@@ -31,7 +31,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
-use iris_mpc_cpu::genesis::utils::fetcher::{fetch_height_of_indexed, LATEST_IRIS_INDEX_FILE};
+use iris_mpc_cpu::genesis::utils::fetcher::{fetch_height_of_indexed, PREV_IRIS_INDEX_FILE};
 use iris_mpc_cpu::genesis::{
     BatchGenerator as GenesisBatchGenerator, BatchIterator as GenesisBatchIterator,
     Handle as GenesisHandle,
@@ -1381,8 +1381,8 @@ async fn run_genesis_main_server_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut latest_iris_index = fetch_height_of_indexed().await;
-        let path = Path::new(LATEST_IRIS_INDEX_FILE);
+        let mut prev_iris_index = fetch_height_of_indexed().await;
+        let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
 
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
@@ -1396,8 +1396,7 @@ async fn run_genesis_main_server_loop(
 
             task_monitor.check_tasks();
 
-            let lastest_iris_index_in_batch =
-                batch.last().map(|db_stored_iris| db_stored_iris.id());
+            let prev_iris_index_in_batch = batch.last().map(|db_stored_iris| db_stored_iris.id());
             let result_future = hawk_handle.submit_batch(batch);
             let _result = timeout(processing_timeout, result_future.await)
                 .await
@@ -1405,14 +1404,14 @@ async fn run_genesis_main_server_loop(
 
             shutdown_handler.increment_batches_pending_completion();
 
-            if lastest_iris_index_in_batch.is_none() {
+            if prev_iris_index_in_batch.is_none() {
                 tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
                 continue;
             };
 
-            latest_iris_index = lastest_iris_index_in_batch.unwrap();
-            let file_content = latest_iris_index.to_string();
-            fs::write(path, file_content)
+            prev_iris_index = prev_iris_index_in_batch.unwrap();
+            let file_content = prev_iris_index.to_string();
+            fs::write(prev_iris_index_path, file_content)
                 .await
                 .map_err(|e| tracing::error!("{}", e))
                 .unwrap_or(());

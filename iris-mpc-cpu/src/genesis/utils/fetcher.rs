@@ -6,7 +6,8 @@ use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
 use tokio::fs;
 
-pub const LATEST_IRIS_INDEX_FILE: &str = "lastest_iris_index.txt";
+/// The name of the file that stores the previous iris index as a string.
+pub const PREV_IRIS_INDEX_FILE: &str = "prev_iris_index.txt";
 
 /// Fetches height of indexed from store.
 ///
@@ -19,9 +20,9 @@ pub const LATEST_IRIS_INDEX_FILE: &str = "lastest_iris_index.txt";
 /// Height of indexed Iris's.
 ///
 pub async fn fetch_height_of_indexed() -> IrisSerialId {
-    let path = Path::new(LATEST_IRIS_INDEX_FILE);
-    if path.try_exists().is_ok() && path.is_file() {
-        if let Ok(file_content) = fs::read_to_string(path).await {
+    let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
+    if prev_iris_index_path.try_exists().is_ok() && prev_iris_index_path.is_file() {
+        if let Ok(file_content) = fs::read_to_string(prev_iris_index_path).await {
             if let Ok(index) = file_content.parse::<IrisSerialId>() {
                 return index;
             }
