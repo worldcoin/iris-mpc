@@ -33,7 +33,7 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::genesis::{
     BatchGenerator as GenesisBatchGenerator, BatchIterator as GenesisBatchIterator,
-    Handle as GenesisHandle,
+    Handle as GenesisHawkHandle,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -1335,7 +1335,7 @@ async fn run_genesis_main_server_loop(
     hawk_actor: HawkActor,
 ) -> Result<()> {
     // Initialise Hawk handle.
-    let mut hawk_handle = GenesisHandle::new(hawk_actor).await?;
+    let mut hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
 
     // Initialise batch generator.
     let mut batch_generator = GenesisBatchGenerator::new(config.max_batch_size);
