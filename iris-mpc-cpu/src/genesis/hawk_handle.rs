@@ -24,6 +24,7 @@ pub struct Job {
     return_channel: oneshot::Sender<Result<JobResult>>,
 }
 
+// einar
 /// An indexation job request.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -75,6 +76,7 @@ impl Handle {
     }
 }
 
+// Einar
 /// ---------------------------------------------
 /// Methods.
 /// ---------------------------------------------
