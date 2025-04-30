@@ -1385,8 +1385,8 @@ async fn run_genesis_main_server_loop(
 
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let curr_iris_index = batch.last().map(|db_stored_iris| db_stored_iris.id());
-            match curr_iris_index {
+            let curr_iris_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
+            match curr_iris_index_opt {
               Some(index) if index <= prev_iris_index => {
                 tracing::info!(
                     "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
@@ -1416,17 +1416,18 @@ async fn run_genesis_main_server_loop(
 
             shutdown_handler.increment_batches_pending_completion();
 
-            if curr_iris_index.is_none() {
+            if curr_iris_index_opt.is_none() {
                 tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
                 continue;
             };
+            let curr_iris_index = curr_iris_index_opt.unwrap();
 
-            prev_iris_index = curr_iris_index.unwrap();
-            let file_content = prev_iris_index.to_string();
+            let file_content = curr_iris_index.to_string();
             fs::write(prev_iris_index_path, file_content)
                 .await
                 .map_err(|e| tracing::error!("{}", e))
                 .unwrap_or(());
+            prev_iris_index = curr_iris_index;
         }
 
         Ok(())
