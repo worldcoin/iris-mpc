@@ -117,7 +117,11 @@ impl Handle {
         _sessions: &BothEyes<Vec<HawkSessionRef>>,
         _request: &JobRequest,
     ) -> Result<JobResult> {
-        unimplemented!()
+        tracing::info!("Processing a Genesis Hawk job …");
+
+        // TODO implement business logic.
+
+        Ok(JobResult {})
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
@@ -137,7 +141,7 @@ impl Handle {
     pub async fn submit_batch(
         &mut self,
         batch: Vec<DbStoredIris>,
-    ) -> impl Future<Output = Result<Vec<u64>>> {
+    ) -> impl Future<Output = Result<()>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
@@ -157,7 +161,7 @@ impl Handle {
             let _result = rx.await??;
 
             // TODO: Implement job result processing.
-            Ok(Vec::new())
+            Ok(())
         }
     }
 }
