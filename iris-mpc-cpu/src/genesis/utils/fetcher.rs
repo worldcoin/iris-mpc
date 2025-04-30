@@ -2,6 +2,7 @@ use std::path::Path;
 
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
+use eyre::ensure;
 use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
 use tokio::fs;
@@ -20,15 +21,17 @@ pub const PREV_IRIS_INDEX_FILE: &str = "prev_iris_index.txt";
 /// Height of indexed Iris's.
 ///
 pub async fn fetch_height_of_indexed() -> IrisSerialId {
-    let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
-    if prev_iris_index_path.try_exists().is_ok() && prev_iris_index_path.is_file() {
-        if let Ok(file_content) = fs::read_to_string(prev_iris_index_path).await {
-            if let Ok(index) = file_content.parse::<IrisSerialId>() {
-                return index;
-            }
-        }
-    };
-    1
+    async fn try_fetch_from_disk() -> eyre::Result<IrisSerialId> {
+        let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
+        prev_iris_index_path.try_exists()?;
+        ensure!(
+            prev_iris_index_path.is_file(),
+            format!("{} is not a file.", prev_iris_index_path.display())
+        );
+        let file_content = fs::read_to_string(prev_iris_index_path).await?;
+        Ok(file_content.parse::<IrisSerialId>()?)
+    }
+    try_fetch_from_disk().await.unwrap_or(1)
 }
 
 /// Fetches height of protocol from store.
