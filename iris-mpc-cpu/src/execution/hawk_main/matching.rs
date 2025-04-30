@@ -1,7 +1,7 @@
 use super::{
     rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
-use itertools::{izip, Itertools};
+use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
 
 /// Since the two separate HSNW for left and right return separate vectors of matching ids, we
@@ -23,11 +23,14 @@ use std::collections::HashMap;
 pub struct BatchStep1(VecRequests<Step1>);
 
 impl BatchStep1 {
-    pub fn new(plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>) -> Self {
+    pub fn new(
+        plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        luc_ids: VecRequests<Vec<VectorId>>,
+    ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
-            izip!(&plans[LEFT], &plans[RIGHT])
-                .map(|(left, right)| Step1::new([left, right]))
+            izip!(&plans[LEFT], &plans[RIGHT], luc_ids)
+                .map(|(left, right, luc)| Step1::new([left, right], luc))
                 .collect_vec(),
         )
     }
@@ -57,13 +60,14 @@ impl BatchStep1 {
 struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
+    luc_ids: Vec<VectorId>,
 }
 
 impl Step1 {
-    fn new(results: BothEyes<&VecRots<InsertPlan>>) -> Step1 {
+    fn new(search_results: BothEyes<&VecRots<InsertPlan>>, luc_ids: Vec<VectorId>) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
-        for (side, rotations) in izip!([LEFT, RIGHT], results) {
+        for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
                 for vector_id in rotation.match_ids() {
@@ -73,6 +77,7 @@ impl Step1 {
         }
 
         let mut step1 = Step1::with_capacity(full_join.len());
+        step1.luc_ids = luc_ids;
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
@@ -93,17 +98,32 @@ impl Step1 {
                 Vec::with_capacity(capacity / 2),
                 Vec::with_capacity(capacity / 2),
             ],
+            luc_ids: Vec::new(),
         }
     }
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
-        self.anti_join[other_side].clone()
+        let anti_join = &self.anti_join[other_side];
+
+        chain!(anti_join, &self.luc_ids).cloned().collect_vec()
+        // TODO: dedup?
     }
 
     fn step2(self, missing_is_match: BothEyes<&MapEdges<bool>>) -> Step2 {
+        let luc_results = self
+            .luc_ids
+            .iter()
+            .map(|id| {
+                let is_match =
+                    [LEFT, RIGHT].map(|side| *missing_is_match[side].get(id).unwrap_or(&false));
+                (*id, is_match)
+            })
+            .collect_vec();
+
         let mut step2 = Step2 {
             full_join: self.inner_join,
+            luc_results,
         };
 
         for id in &self.anti_join[LEFT] {
@@ -141,13 +161,19 @@ impl BatchStep2 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
+    luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
 }
 
 impl Step2 {
-    /// *AND* policy: only match, if both eyes match (like `mergeDbResults`).
-    /// TODO: Account for rotated and mirrored versions.
+    /// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
+    ///
+    /// LUC *OR* policy: "Local" irises match if either side matches.
     fn is_match(&self) -> bool {
-        self.full_join.iter().any(|(_, [l, r])| *l && *r)
+        let search = self.full_join.iter().any(|(_, [l, r])| *l && *r);
+
+        let luc = self.luc_results.iter().any(|(_, [l, r])| *l || *r);
+
+        search || luc
     }
 
     fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>

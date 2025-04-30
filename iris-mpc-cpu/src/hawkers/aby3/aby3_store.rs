@@ -11,6 +11,7 @@ use crate::{
     shares::share::{DistanceShare, Share},
 };
 use eyre::Result;
+use iris_mpc_common::vector_id::{SerialId, VersionId};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
@@ -62,7 +63,7 @@ pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
 /// Storage of inserted irises.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
-    points: HashMap<VectorId, IrisRef>,
+    points: HashMap<SerialId, (VersionId, IrisRef)>,
     next_id: u32,
     empty_iris: IrisRef,
     set_hash: SetHash,
@@ -77,6 +78,12 @@ impl Default for SharedIrises {
 impl SharedIrises {
     pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
         let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+
+        let points = points
+            .into_iter()
+            .map(|(v, iris)| (v.serial_id(), (v.version_id(), iris)))
+            .collect::<HashMap<_, _>>();
+
         SharedIrises {
             points,
             next_id,
@@ -86,7 +93,9 @@ impl SharedIrises {
     }
 
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        let was_there = self.points.insert(vector_id, iris);
+        let was_there = self
+            .points
+            .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
         if was_there.is_none() {
@@ -106,17 +115,33 @@ impl SharedIrises {
 
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
-        Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
+        match self.points.get(&vector.serial_id()) {
+            Some((version, iris)) if vector.version_matches(*version) => Arc::clone(iris),
+            _ => Arc::clone(&self.empty_iris),
+        }
     }
 
     fn contains(&self, vector: &VectorId) -> bool {
-        self.points.contains_key(vector)
+        matches!(self.points.get(&vector.serial_id()),
+            Some((version, _)) if vector.version_matches(*version))
     }
 
     pub fn to_arc(self) -> SharedIrisesRef {
         SharedIrisesRef {
             body: Arc::new(RwLock::new(self)),
         }
+    }
+
+    pub fn last_vector_ids(&self, n: usize) -> Vec<VectorId> {
+        (1..self.next_id)
+            .rev()
+            .take(n)
+            .filter_map(|serial_id| {
+                self.points
+                    .get(&serial_id)
+                    .map(|(version, _)| VectorId::new(serial_id, *version))
+            })
+            .collect_vec()
     }
 }
 
@@ -141,7 +166,7 @@ impl SharedIrisesRef {
         self.body.write().await
     }
 
-    async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
+    pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
         self.body.read().await
     }
 

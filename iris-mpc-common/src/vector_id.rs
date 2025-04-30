@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
+pub type SerialId = u32;
+pub type VersionId = i16;
+
+const ANY_VERSION: i16 = -1;
+
 /// Unique identifier for an immutable pair of iris codes.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
@@ -66,6 +71,23 @@ impl VectorId {
     /// To index (0-indexed).
     pub fn index(&self) -> u32 {
         self.id - 1
+    }
+
+    /// Make a VectorId that represents any iris version for its serial ID.
+    pub fn any_version(mut self) -> Self {
+        self.version = ANY_VERSION;
+        self
+    }
+
+    /// Get the version number of the iris code for a same serial ID.
+    pub fn version_id(&self) -> i16 {
+        self.version
+    }
+
+    /// Whether the version of this vector ID matches the other vector ID.
+    /// If either vector ID is marked as LATEST, it matches any version.
+    pub fn version_matches(&self, other_version: VersionId) -> bool {
+        self.version == ANY_VERSION || other_version == ANY_VERSION || self.version == other_version
     }
 }
 
