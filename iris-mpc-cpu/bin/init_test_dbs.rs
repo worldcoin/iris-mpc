@@ -209,6 +209,12 @@ impl From<&Args> for Rngs {
 
 const N_PARTIES: usize = 1;
 
+/// Number of iris code pairs to generate secret shares for at a time.
+const SECRET_SHARING_BATCH_SIZE: usize = 5000;
+
+/// Number of secret-shared iris code pairs to persist to Postgres per transaction.
+const SECRET_SHARING_PG_TX_SIZE: usize = 100;
+
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -254,148 +260,31 @@ async fn main() -> Result<()> {
         info!("Initialized PRNGs from explicit seeds");
     }
 
-    info!("Initializing in-memory vectors from NDJSON file");
-    let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
-    if n_existing_irises > 0 {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .take(2 * n_existing_irises);
-
-        for (count, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
-
-            let side = count % 2;
-            let query = vectors[side].prepare_query(raw_query);
-            vectors[side].insert(&query).await;
-        }
-    }
-
-    info!("Initializing in-memory graphs from databases");
-    let graphs = if n_existing_irises > 0 {
-        // read graph store from party 0
-        let graph_l = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Left)
-            .await?;
-        let graph_r = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Right)
-            .await?;
-        [graph_l, graph_r]
-    } else {
-        // new graphs
-        [GraphMem::new(), GraphMem::new()]
-    };
-
-    info!(
-        "Reading NDJSON file of plaintext iris codes: {:?}",
-        args.path_to_iris_codes
-    );
-
-    let (tx_l, rx_l) = mpsc::channel::<IrisCode>(256);
-    let (tx_r, rx_r) = mpsc::channel::<IrisCode>(256);
-    let processors = [tx_l, tx_r];
-    let receivers = [rx_l, rx_r];
-    let mut jobs: JoinSet<Result<_>> = JoinSet::new();
-
-    info!("Initializing I/O thread upon which plaintext iris codes will be read");
-    let io_thread = tokio::task::spawn_blocking(move || {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
-
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .skip(2 * n_existing_irises);
-        let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
-
-        let mut count = 0usize;
-        for json_pt in stream {
-            let raw_query = (&json_pt.unwrap()).into();
-
-            let side = count % 2;
-            processors[side].blocking_send(raw_query).unwrap();
-
-            count += 1;
-        }
-
-        count
-    });
-
-    info!("Initializing jobs to process plaintext iris codes");
-    let hnsw_rngs = [hnsw_rng_l, hnsw_rng_r];
-    for (side, mut rx, mut vector_store, mut graph, mut hnsw_rng) in izip!(
-        STORE_IDS,
-        receivers.into_iter(),
-        vectors.into_iter(),
-        graphs.into_iter(),
-        hnsw_rngs.into_iter()
-    ) {
-        let params = params.clone();
-
-        jobs.spawn(async move {
-            let searcher = HnswSearcher { params };
-            let mut counter = 0usize;
-
-            while let Some(raw_query) = rx.recv().await {
-                let query = vector_store.prepare_query(raw_query);
-                searcher
-                    .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
-                    .await?;
-
-                counter += 1;
-                if counter % 1000 == 0 {
-                    info!("Processed {} plaintext entries for {} side", counter, side);
-                }
-            }
-
-            Ok((side, vector_store, graph, hnsw_rng))
-        });
-    }
-
-    info!("Building in-memory plaintext vector stores and HNSW graphs");
-
-    let mut results: Vec<_> = jobs
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<_, _>>()?;
-    results.sort_by_key(|x| x.0 as usize);
-
-    let n_read = io_thread.await?;
-
-    info!(
-        "Finished building HNSW graphs with {} nodes",
-        results[0].1.points.len()
-    );
-
-    let (_, vector_r, graph_r, hnsw_rng_r) = results.remove(1);
-    let (_, vector_l, graph_l, hnsw_rng_l) = results.remove(0);
-
-    for (party, db) in dbs.iter().enumerate() {
-        for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
-            info!("Persisting {} graph for party {}", side, party);
-            db.persist_graph_db(graph.clone(), side).await?;
-        }
-    }
-
-    info!("Converting plaintext iris codes locally into secret shares");
-
-    const BATCH_SIZE: usize = 10_000;
     let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..N_PARTIES)
-        .map(|_| Vec::with_capacity(BATCH_SIZE))
+        .map(|_| Vec::with_capacity(SECRET_SHARING_BATCH_SIZE))
         .collect();
 
-    for (batch_idx, vectors_batch) in izip!(&vector_l.points, &vector_r.points)
-        .skip(n_existing_irises)
-        .chunks(BATCH_SIZE)
-        .into_iter()
-        .enumerate()
-    {
+    let mut n_read: usize = 0;
+
+    let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
+    let reader = BufReader::new(file);
+
+    let stream = Deserializer::from_reader(reader)
+        .into_iter::<Base64IrisCode>()
+        .skip(2 * n_existing_irises)
+        .map(|x| IrisCode::from(&x.unwrap()))
+        .tuples();
+    let stream = limited_iterator(stream, num_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+
+    for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
+        let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
+        n_read += vectors_batch.len();
+
         for (left, right) in vectors_batch {
             let left_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.data.0.clone());
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
             let right_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
 
             let left_shares :[GaloisRingSharedIris;1] = [left_shares[args.party_idx.unwrap()].clone()];
             let right_shares :[GaloisRingSharedIris;1] = [right_shares[args.party_idx.unwrap()].clone()];
@@ -405,7 +294,7 @@ async fn main() -> Result<()> {
         }
 
         let cur_batch_len = batch[0].len();
-        let last_idx = batch_idx * BATCH_SIZE + cur_batch_len + n_existing_irises;
+        let last_idx = batch_idx * SECRET_SHARING_BATCH_SIZE + cur_batch_len + n_existing_irises;
 
         for (db, shares) in izip!(&dbs, batch.iter_mut()) {
             #[allow(clippy::drain_collect)]
@@ -418,13 +307,7 @@ async fn main() -> Result<()> {
         );
     }
 
-    info!(
-        "Finished persisting {} locally generated shares",
-        n_read / 2
-    );
-
-    info!("Serializing HNSW PRNG intermediate state");
-    write_json(&(hnsw_rng_l, hnsw_rng_r), &prng_state_filename)?;
+    info!("Finished persisting {} locally generated shares", n_read);
 
     info!("Exited successfully! 🎉");
 
