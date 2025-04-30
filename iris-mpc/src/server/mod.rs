@@ -564,7 +564,6 @@ async fn start_coordination_server(
 /// indicating that their coordination servers are running.
 ///
 /// Note: The response to this query is expected initially to be `503 Service Unavailable`.
-// Einar :
 async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
