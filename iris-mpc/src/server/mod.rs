@@ -1396,7 +1396,8 @@ async fn run_genesis_main_server_loop(
 
             task_monitor.check_tasks();
 
-            let batch_len: i64 = batch.len().try_into()?;
+            let lastest_iris_index_in_batch =
+                batch.last().map(|db_stored_iris| db_stored_iris.id());
             let result_future = hawk_handle.submit_batch(batch);
             let _result = timeout(processing_timeout, result_future.await)
                 .await
@@ -1404,7 +1405,12 @@ async fn run_genesis_main_server_loop(
 
             shutdown_handler.increment_batches_pending_completion();
 
-            latest_iris_index += batch_len;
+            if lastest_iris_index_in_batch.is_none() {
+                tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
+                continue;
+            };
+
+            latest_iris_index = lastest_iris_index_in_batch.unwrap();
             let file_content = latest_iris_index.to_string();
             fs::write(path, file_content)
                 .await
