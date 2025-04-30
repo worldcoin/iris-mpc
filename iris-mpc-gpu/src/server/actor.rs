@@ -1210,7 +1210,6 @@ impl ServerActor {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
                         merged_results[i] == NON_MATCH_ID
                             && mirror_results.matches_with_skip_persistence[i]
-                            && batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
                     })
                     .collect();
                 full_face_mirror_match_ids = mirror_results.match_ids;
