@@ -42,6 +42,28 @@ pub struct JobResult {}
 
 impl Handle {
     pub async fn new(mut actor: HawkActor) -> Result<Self> {
+        /// Performs post job processing health checks:
+        /// - resets Hawk sessions upon job failure
+        /// - ensures system state is in sync.
+        async fn do_health_check(
+            actor: &mut HawkActor,
+            sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+            job_failed: bool,
+        ) -> Result<()> {
+            // Reset sessions upon an error.
+            if job_failed {
+                *sessions = actor.new_sessions().await?;
+            }
+
+            // Validate the common state after processing the requests.
+            try_join!(
+                HawkSession::state_check(&sessions[LEFT][0]),
+                HawkSession::state_check(&sessions[RIGHT][0]),
+            )?;
+
+            Ok(())
+        }
+
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
         try_join!(
@@ -49,14 +71,13 @@ impl Handle {
             HawkSession::state_check(&sessions[RIGHT][0]),
         )?;
 
-        // Process jobs over mpsc channel until MPC network health check fails or channel closes.
+        // Process jobs until health check fails or channel closes.
         let (tx, mut rx) = mpsc::channel::<Job>(1);
         tokio::spawn(async move {
-            // Job processing loop.
+            // Processing loop.
             while let Some(job) = rx.recv().await {
                 let job_result = Self::handle_job(&mut actor, &sessions, &job.request).await;
-                let health =
-                    Self::health_check(&mut actor, &mut sessions, job_result.is_err()).await;
+                let health = do_health_check(&mut actor, &mut sessions, job_result.is_err()).await;
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
                 if stop {
@@ -96,14 +117,6 @@ impl Handle {
         _sessions: &BothEyes<Vec<HawkSessionRef>>,
         _request: &JobRequest,
     ) -> Result<JobResult> {
-        unimplemented!()
-    }
-
-    async fn health_check(
-        _actor: &mut HawkActor,
-        _sessions: &mut BothEyes<Vec<HawkSessionRef>>,
-        _job_failed: bool,
-    ) -> Result<()> {
         unimplemented!()
     }
 
