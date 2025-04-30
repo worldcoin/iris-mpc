@@ -1911,10 +1911,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .enumerate()
                 .filter_map(
                     // Find the indices of non-matching queries in the batch.
-                    // BUT ALSO filter out any detected full face mirror attacks.
                     |(query_idx, is_match)| {
                         if !is_match {
-                            // Check for full face mirror attack (only for UNIQUENESS requests)
+                                Some(query_idx)
+                        } else {
+                            // Check for full face mirror attack (only for UNIQUENESS requests) and log it.
                             if request_types[query_idx] == UNIQUENESS_MESSAGE_TYPE && full_face_mirror_attack_detected[query_idx]
                             {
                                 tracing::warn!(
@@ -1922,12 +1923,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     request_ids[query_idx]
                                 );
                                 metrics::counter!("mirror.attack.rejected").increment(1);
-                                None
-                            } else {
-                                // Otherwise it's a legitimate non-match, include it.
-                                Some(query_idx)
                             }
-                        } else {
                             // It matched, don't include.
                             None
                         }
