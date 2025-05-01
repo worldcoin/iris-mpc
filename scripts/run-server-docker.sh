@@ -3,7 +3,7 @@ set -e
 
 NODE_ID="$1"
 if [ -z "$NODE_ID" ]; then
-  echo "Usage: run-server.sh <node_id>"
+  echo "Usage: run-server-docker.sh <node_id>"
   exit 1
 fi
 

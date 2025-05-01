@@ -40,7 +40,7 @@ RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
 COPY --from=build-app /src/iris-mpc/target/release/key-manager /bin/key-manager
-COPY scripts/run-server-docker-genesis.sh .
+COPY scripts/run-server-genesis-docker.sh .
 
 USER 65534
 
