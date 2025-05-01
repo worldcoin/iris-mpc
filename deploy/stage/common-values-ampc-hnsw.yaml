@@ -44,8 +44,13 @@ resources:
 imagePullSecrets:
   - name: github-secret
 
+podAnnotations:
+  karpenter.sh/do-not-disrupt: "true"
+
 nodeSelector:
   kubernetes.io/arch: amd64
+  karpenter.sh/capacity-type: on-demand
+  node.kubernetes.io/instance-type: "r7a.8xlarge"
 
 podSecurityContext:
   runAsUser: 65534
