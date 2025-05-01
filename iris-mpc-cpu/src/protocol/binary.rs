@@ -9,7 +9,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use eyre::{eyre, Error, Result};
+use eyre::{bail, eyre, Error, Result};
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
@@ -65,9 +65,7 @@ fn a2b_pre<T: IntRing2k>(session: &Session, x: Share<T>) -> Result<(Share<T>, Sh
             x2.b = b;
         }
         _ => {
-            bail!(
-                "Cannot deal with roles that have index outside of the set [0, 1, 2]"
-            )
+            bail!("Cannot deal with roles that have index outside of the set [0, 1, 2]")
         }
     }
     Ok((x1, x2, x3))
@@ -167,11 +165,7 @@ where
     Standard: Distribution<T>,
 {
     if x1.len() != x2.len() {
-        bail!(
-            "Inputs have different length {} {}",
-            x1.len(),
-            x2.len()
-        );
+        bail!("Inputs have different length {} {}", x1.len(), x2.len());
     }
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
     let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
@@ -467,9 +461,7 @@ where
             bit_inject_ot_2round_sender::<T>(session, input).await?
         }
         _ => {
-            bail!(
-                "Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot"
-            )
+            bail!("Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot")
         }
     };
     Ok(res)
@@ -768,7 +760,7 @@ where
 /// This function follow the arithmetic-to-binary (A2B) conversion protocol from the ABY3 framework (see Section 5.3, Bit Decomposition).
 /// The only difference is that the binary circuit returns only the MSB of the sum.
 ///
-/// The generic T type is only used to batch bits and has no relation to the underlying type of the input arithmetic shares.  
+/// The generic T type is only used to batch bits and has no relation to the underlying type of the input arithmetic shares.
 async fn extract_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x: Vec<VecShare<T>>,

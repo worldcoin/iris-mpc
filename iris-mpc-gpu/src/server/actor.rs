@@ -25,7 +25,7 @@ use cudarc::{
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
-use eyre::eyre;
+use eyre::{bail, eyre};
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,

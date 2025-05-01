@@ -21,7 +21,7 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
 use rand::SeedableRng;
 use std::array;

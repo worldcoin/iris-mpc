@@ -1,5 +1,5 @@
 use aws_sdk_s3::Client as S3Client;
-use eyre::eyre;
+use eyre::bail;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
@@ -201,10 +201,7 @@ pub async fn load_db(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        bail!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        );
+        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
     tracing::info!("Preprocessing db");

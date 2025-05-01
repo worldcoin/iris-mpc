@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{eyre, Report, WrapErr};
+use eyre::{bail, eyre, Report, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
