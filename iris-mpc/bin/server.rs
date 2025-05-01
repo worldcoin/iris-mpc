@@ -1337,7 +1337,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+            bail!("Timeout waiting for all nodes to be unready.");
         }
     };
     tracing::info!("All nodes are starting up.");
@@ -1522,11 +1522,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if db_len + max_rollback < store_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 store_len,
                 db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",
@@ -2007,11 +2007,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     );
-                    return Err(eyre!(
+                    bail!(
                         "Serial IDs do not match between memory and db: {:?} != {:?}",
                         memory_serial_ids,
                         db_serial_ids
-                    ));
+                    );
                 }
             }
 
@@ -2235,7 +2235,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be ready.");
-            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+            bail!("Timeout waiting for all nodes to be ready.");
         }
     }
     tracing::info!("All nodes are ready.");
@@ -2489,7 +2489,7 @@ async fn load_db(
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
-                return Err(eyre!("Invalid iris index {}", index));
+                bail!("Invalid iris index {}", index);
             } else if index > store_len {
                 tracing::warn!(
                     "Skip loading rolled back item: index {} > store_len {}",
@@ -2560,10 +2560,10 @@ async fn load_db(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        return Err(eyre!(
+        bail!(
             "Not all serial_ids were loaded: {:?}",
             all_serial_ids
-        ));
+        );
     }
 
     tracing::info!("Preprocessing db");

@@ -32,7 +32,7 @@ impl S3StoredIris {
         let extract_slice =
             |bytes: &[u8], cursor: &mut usize, size: usize| -> eyre::Result<Vec<u8>, eyre::Error> {
                 if *cursor + size > bytes.len() {
-                    return Err(eyre!("Exceeded total bytes while extracting slice",));
+                    bail!("Exceeded total bytes while extracting slice",);
                 }
                 let slice = &bytes[*cursor..*cursor + size];
                 *cursor += size;

@@ -274,7 +274,7 @@ impl HnswSearcher {
     ) -> Result<()> {
         match ef {
             0 => {
-                return Err(eyre!("ef cannot be 0"));
+                bail!("ef cannot be 0");
             }
             1 => {
                 let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;

@@ -303,7 +303,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+            bail!("Timeout waiting for all nodes to be unready.");
         }
     };
     tracing::info!("All nodes are starting up.");
@@ -500,11 +500,11 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if db_len + max_rollback < store_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 store_len,
                 db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",
@@ -678,7 +678,7 @@ pub async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be ready.");
-            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+            bail!("Timeout waiting for all nodes to be ready.");
         }
     }
     tracing::info!("All nodes are ready.");

@@ -130,7 +130,7 @@ pub async fn load_db(
 
             if serial_id == 0 {
                 tracing::error!("Invalid iris serial_id {}", serial_id);
-                return Err(eyre!("Invalid iris serial_id {}", serial_id));
+                bail!("Invalid iris serial_id {}", serial_id);
             } else if serial_id > store_len {
                 tracing::warn!(
                     "Skip loading rolled back item: serial_id {} > store_len {}",
@@ -201,10 +201,10 @@ pub async fn load_db(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        return Err(eyre!(
+        bail!(
             "Not all serial_ids were loaded: {:?}",
             all_serial_ids
-        ));
+        );
     }
 
     tracing::info!("Preprocessing db");

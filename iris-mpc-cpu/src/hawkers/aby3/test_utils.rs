@@ -98,7 +98,7 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
         _ => {
-            return Err(eyre!("Invalid player index: {player_index}"));
+            bail!("Invalid player index: {player_index}");
         }
     };
     Ok(res)

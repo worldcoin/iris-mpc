@@ -180,11 +180,11 @@ pub async fn process_job_result(
                 memory_serial_ids,
                 db_serial_ids
             );
-            return Err(eyre!(
+            bail!(
                 "Serial IDs do not match between memory and db: {:?} != {:?}",
                 memory_serial_ids,
                 db_serial_ids
-            ));
+            );
         }
 
         for (i, success) in successful_reauths.iter().enumerate() {
