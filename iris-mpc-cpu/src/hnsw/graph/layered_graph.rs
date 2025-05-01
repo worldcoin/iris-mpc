@@ -252,7 +252,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PointId},
+        hawkers::plaintext_store::PlaintextStore,
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
@@ -279,8 +279,8 @@ mod tests {
     }
 
     impl VectorStore for TestStore {
-        type QueryRef = PointId; // Vector ID, pending insertion.
-        type VectorRef = PointId; // Vector ID, inserted.
+        type QueryRef = usize; // Vector ID, pending insertion.
+        type VectorRef = usize; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn vectors_as_queries(
@@ -296,8 +296,8 @@ mod tests {
             vector: &Self::VectorRef,
         ) -> Result<Self::DistanceRef> {
             // Hamming distance
-            let vector_0 = self.points[&(query.0 as usize)].data;
-            let vector_1 = self.points[&(vector.0 as usize)].data;
+            let vector_0 = self.points[&query].data;
+            let vector_1 = self.points[&vector].data;
             Ok(hamming_distance(vector_0, vector_1))
         }
 
@@ -318,7 +318,7 @@ mod tests {
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
             self.points
-                .get_mut(&(query.0 as usize))
+                .get_mut(&query)
                 .unwrap()
                 .is_persistent = true;
             *query
@@ -370,7 +370,7 @@ mod tests {
         let searcher = HnswSearcher::default();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =
             HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
@@ -390,7 +390,7 @@ mod tests {
                 )
                 .await?;
 
-            point_ids_map.insert(query, PointId(rng.next_u32()));
+            point_ids_map.insert(query, rng.next_u32() as usize);
         }
 
         let new_graph_store: GraphMem<TestStore> =

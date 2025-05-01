@@ -7,7 +7,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
         aby3::aby3_store::{Aby3Store, SharedIrises},
-        plaintext_store::{PlaintextStore, PointId},
+        plaintext_store::PlaintextStore,
     },
     hnsw::{graph::layered_graph::migrate, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
@@ -53,12 +53,12 @@ async fn create_graph_from_plain_dbs(
     let mut right_shared_irises = HashMap::new();
 
     for (vector_id, iris) in left_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
+        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
         let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
     for (vector_id, iris) in right_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
+        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
         let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }

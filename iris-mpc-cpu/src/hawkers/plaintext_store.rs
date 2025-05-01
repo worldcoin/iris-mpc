@@ -10,12 +10,6 @@ use iris_mpc_common::iris_db::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
-use std::{
-    fmt::Display,
-    num::ParseIntError,
-    ops::{Index, IndexMut},
-    str::FromStr,
-};
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
@@ -65,55 +59,6 @@ pub struct PlaintextPoint {
     /// Distinguish between queries that are pending, and those that were
     /// ultimately accepted into the vector store.
     pub is_persistent: bool,
-}
-
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PointId(pub u32);
-
-impl Display for PointId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl FromStr for PointId {
-    type Err = ParseIntError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(PointId(FromStr::from_str(s)?))
-    }
-}
-
-impl<T> Index<PointId> for Vec<T> {
-    type Output = T;
-
-    fn index(&self, index: PointId) -> &Self::Output {
-        self.index(index.0 as usize)
-    }
-}
-
-impl<T> IndexMut<PointId> for Vec<T> {
-    fn index_mut(&mut self, index: PointId) -> &mut Self::Output {
-        self.index_mut(index.0 as usize)
-    }
-}
-
-impl From<usize> for PointId {
-    fn from(value: usize) -> Self {
-        PointId(value as u32)
-    }
-}
-
-impl From<u32> for PointId {
-    fn from(value: u32) -> Self {
-        PointId(value)
-    }
-}
-
-impl From<PointId> for VectorId {
-    fn from(id: PointId) -> Self {
-        VectorId::from_0_index(id.0)
-    }
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
