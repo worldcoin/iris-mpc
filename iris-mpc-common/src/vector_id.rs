@@ -4,13 +4,13 @@ use std::{fmt::Display, str::FromStr};
 pub type SerialId = u32;
 pub type VersionId = i16;
 
-const ANY_VERSION: i16 = -1;
+const ANY_VERSION: VersionId = -1;
 
 /// Unique identifier for an immutable pair of iris codes.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
-    id: u32,
-    version: i16,
+    id: SerialId,
+    version: VersionId,
 }
 
 impl Display for VectorId {
@@ -31,10 +31,10 @@ impl FromStr for VectorId {
         // Parse as "id" or "id:version".
         let mut parts = s.split(':');
 
-        let id = parts.next().unwrap().parse::<u32>()?;
+        let id = parts.next().unwrap().parse::<SerialId>()?;
 
         let version = match parts.next() {
-            Some(v) => v.parse::<i16>()?,
+            Some(v) => v.parse::<VersionId>()?,
             None => 0,
         };
 
@@ -43,7 +43,7 @@ impl FromStr for VectorId {
 }
 
 impl VectorId {
-    pub fn new(serial_id: u32, version: i16) -> Self {
+    pub fn new(serial_id: SerialId, version: VersionId) -> Self {
         VectorId {
             id: serial_id,
             version,
@@ -51,12 +51,12 @@ impl VectorId {
     }
 
     /// From Serial ID (1-indexed).
-    pub fn from_serial_id(id: u32) -> Self {
+    pub fn from_serial_id(id: SerialId) -> Self {
         VectorId { id, version: 0 }
     }
 
     /// To Serial ID (1-indexed).
-    pub fn serial_id(&self) -> u32 {
+    pub fn serial_id(&self) -> SerialId {
         self.id
     }
 
@@ -80,12 +80,12 @@ impl VectorId {
     }
 
     /// Get the version number of the iris code for a same serial ID.
-    pub fn version_id(&self) -> i16 {
+    pub fn version_id(&self) -> VersionId {
         self.version
     }
 
     /// Whether the version of this vector ID matches the other vector ID.
-    /// If either vector ID is marked as LATEST, it matches any version.
+    /// If either vector ID is marked with `any_version()`, it matches any version.
     pub fn version_matches(&self, other_version: VersionId) -> bool {
         self.version == ANY_VERSION || other_version == ANY_VERSION || self.version == other_version
     }

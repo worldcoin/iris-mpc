@@ -107,7 +107,6 @@ impl Step1 {
         let anti_join = &self.anti_join[other_side];
 
         chain!(anti_join, &self.luc_ids).cloned().collect_vec()
-        // TODO: dedup?
     }
 
     fn step2(self, missing_is_match: BothEyes<&MapEdges<bool>>) -> Step2 {

@@ -664,7 +664,7 @@ impl HawkRequest {
             .map(|(or_rule_ids, request_type)| {
                 let or_rule_ids = or_rule_ids
                     .iter()
-                    .map(|idx| VectorId::from_0_index(*idx as u32).any_version());
+                    .map(|idx| VectorId::from_0_index(*idx).any_version());
 
                 let lookback =
                     request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
