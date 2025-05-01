@@ -1622,7 +1622,7 @@ impl ServerActor {
 
         if bucket_distance_counters
             .iter()
-            .any(|&x| x >= self.match_distances_buffer_size)
+            .all(|&x| x >= self.match_distances_buffer_size)
         {
             let now = Instant::now();
             tracing::info!(
