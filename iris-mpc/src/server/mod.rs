@@ -522,6 +522,21 @@ async fn start_coordination_server(
                 .route(
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                )
+                .route(
+                    // todo(einar)
+                    "/height",
+                    get({
+                        // We are only ready once this flag is set to true.
+                        let is_ready_flag = Arc::clone(&is_ready_flag);
+                        move || async move {
+                            if is_ready_flag.load(Ordering::SeqCst) {
+                                "ready".into_response()
+                            } else {
+                                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -596,6 +611,20 @@ async fn wait_for_others_unready(config: &Config) -> Result<()> {
         }
     };
     tracing::info!("All nodes are starting up.");
+
+    Ok(())
+}
+
+async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
+    tracing::info!("⚓️ ANCHOR: Checking consensus on iris height");
+    // Check other nodes and wait until all nodes are ready.
+    let all_readiness_addresses = get_check_addresses(
+        config.node_hostnames.clone(),
+        config.healthcheck_ports.clone(),
+        "height",
+    );
+
+    let party_id = config.party_id;
 
     Ok(())
 }
