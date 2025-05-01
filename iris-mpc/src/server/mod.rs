@@ -627,6 +627,46 @@ async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     );
 
     let party_id = config.party_id;
+    let height = todo!();
+
+    let consensus_check = tokio::spawn(async move {
+        let next_node = &all_readiness_addresses[(party_id + 1) % 3];
+        let prev_node = &all_readiness_addresses[(party_id + 2) % 3];
+        let mut connected_but_unready = [false, false];
+
+        loop {
+            for (i, host) in [next_node, prev_node].iter().enumerate() {
+                let res = reqwest::get(host.as_str()).await;
+
+                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
+                    connected_but_unready[i] = true;
+                    // If all nodes are connected, notify the main thread.
+                    if connected_but_unready.iter().all(|&c| c) {
+                        return;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    tracing::info!("Waiting for all nodes to be unready...");
+    match tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        consensus_check,
+    )
+    .await
+    {
+        Ok(res) => {
+            res?;
+        }
+        Err(_) => {
+            tracing::error!("Timeout waiting for all nodes to be unready.");
+            bail!("Timeout waiting for all nodes to be unready.");
+        }
+    };
+    tracing::info!("All nodes are on height {}", height);
 
     Ok(())
 }
