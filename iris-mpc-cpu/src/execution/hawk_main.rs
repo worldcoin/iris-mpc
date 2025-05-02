@@ -133,6 +133,16 @@ const LEFT: usize = 0;
 const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
+// TODO: Merge with the same in iris-mpc-gpu.
+// Orientation enum to indicate the orientation of the iris code during the batch processing.
+// Normal: Normal orientation of the iris code.
+// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Orientation {
+    Normal,
+    Mirror,
+}
+
 impl std::fmt::Display for StoreId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -599,29 +609,48 @@ struct HawkJob {
 pub struct HawkRequest {
     batch: BatchQuery,
     queries: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
+    queries_mirror: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
     fn from(batch: BatchQuery) -> Self {
-        let queries = Arc::new(
-            [
-                // For left and right eyes.
-                (
-                    &batch.left_iris_rotated_requests.code,
-                    &batch.left_iris_rotated_requests.mask,
-                    &batch.left_iris_interpolated_requests.code,
-                    &batch.left_iris_interpolated_requests.mask,
-                ),
-                (
-                    &batch.right_iris_rotated_requests.code,
-                    &batch.right_iris_rotated_requests.mask,
-                    &batch.right_iris_interpolated_requests.code,
-                    &batch.right_iris_interpolated_requests.mask,
-                ),
-            ]
-            .map(|(codes, masks, codes_proc, masks_proc)| {
+        let extract_queries = |orient: Orientation| {
+            let oriented = match orient {
+                Orientation::Normal => [
+                    // For left and right eyes.
+                    (
+                        &batch.left_iris_rotated_requests.code,
+                        &batch.left_iris_rotated_requests.mask,
+                        &batch.left_iris_interpolated_requests.code,
+                        &batch.left_iris_interpolated_requests.mask,
+                    ),
+                    (
+                        &batch.right_iris_rotated_requests.code,
+                        &batch.right_iris_rotated_requests.mask,
+                        &batch.right_iris_interpolated_requests.code,
+                        &batch.right_iris_interpolated_requests.mask,
+                    ),
+                ],
+                Orientation::Mirror => [
+                    // TODO: Verify and explain the logic of this.
+                    (
+                        &batch.left_iris_rotated_requests.code,
+                        &batch.left_iris_rotated_requests.mask,
+                        &batch.right_mirrored_iris_interpolated_requests.code,
+                        &batch.right_mirrored_iris_interpolated_requests.mask,
+                    ),
+                    (
+                        &batch.right_iris_rotated_requests.code,
+                        &batch.right_iris_rotated_requests.mask,
+                        &batch.left_mirrored_iris_interpolated_requests.code,
+                        &batch.left_mirrored_iris_interpolated_requests.mask,
+                    ),
+                ],
+            };
+
+            oriented.map(|(codes, masks, codes_proc, masks_proc)| {
                 // Associate the raw and processed versions of codes and masks.
                 izip!(codes, masks, codes_proc, masks_proc)
                     // The batch is a concatenation of rotations.
@@ -647,19 +676,33 @@ impl From<BatchQuery> for HawkRequest {
                             .into()
                     })
                     .collect_vec()
-            }),
-        );
+            })
+        };
+
+        let queries = Arc::new(extract_queries(Orientation::Normal));
+        let queries_mirror = Arc::new(extract_queries(Orientation::Mirror));
 
         let n_queries = queries[LEFT].len();
         assert_eq!(n_queries, queries[RIGHT].len());
         assert_eq!(n_queries, batch.request_ids.len());
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
-        Self { batch, queries }
+        Self {
+            batch,
+            queries,
+            queries_mirror,
+        }
     }
 }
 
 impl HawkRequest {
+    fn queries(&self, orient: Orientation) -> Arc<BothEyes<VecRequests<VecRots<QueryRef>>>> {
+        match orient {
+            Orientation::Normal => self.queries.clone(),
+            Orientation::Mirror => self.queries_mirror.clone(),
+        }
+    }
+
     fn luc_ids(&self, luc_lookback_ids: Vec<VectorId>) -> VecRequests<Vec<VectorId>> {
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
             .map(|(or_rule_ids, request_type)| {
@@ -938,7 +981,7 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let search_queries = &request.queries;
+        let search_queries = &request.queries(Orientation::Normal);
 
         let luc_lookback_ids = hawk_actor.iris_store[LEFT]
             .read()
