@@ -126,6 +126,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&config).await?;
+    check_consensus_on_iris_height(&config).await?;
 
     background_tasks.check_tasks();
 
@@ -1312,6 +1313,7 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&config).await?;
+    check_consensus_on_iris_height(&config).await?;
 
     background_tasks.check_tasks();
 
