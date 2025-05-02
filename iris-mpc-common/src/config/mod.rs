@@ -192,13 +192,13 @@ pub struct Config {
     pub hawk_server_healthcheck_port: usize,
 
     #[serde(default = "default_hnsw_param_ef_constr")]
-    pub hawk_hnsw_param_ef_constr: usize,
+    pub hnsw_param_ef_constr: usize,
 
     #[serde(default = "default_hnsw_param_M")]
-    pub hawk_hnsw_param_M: usize,
+    pub hnsw_param_M: usize,
 
     #[serde(default = "default_hnsw_param_ef_search")]
-    pub hawk_hnsw_param_ef_search: usize,
+    pub hnsw_param_ef_search: usize,
 
     #[serde(default)]
     pub hawk_prng_seed: Option<u64>,
@@ -512,9 +512,9 @@ pub struct CommonConfig {
     enable_reauth: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
-    hawk_hnsw_param_ef_constr: usize,
-    hawk_hnsw_param_M: usize,
-    hawk_hnsw_param_ef_search: usize,
+    hnsw_param_ef_constr: usize,
+    hnsw_param_M: usize,
+    hnsw_param_ef_search: usize,
     hawk_prng_seed: Option<u64>,
     max_deletions_per_batch: usize,
     mode_of_compute: ModeOfCompute,
@@ -585,9 +585,9 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
-            hawk_hnsw_param_ef_constr,
-            hawk_hnsw_param_M,
-            hawk_hnsw_param_ef_search,
+            hnsw_param_ef_constr,
+            hnsw_param_M,
+            hnsw_param_ef_search,
             hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
@@ -634,9 +634,9 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             hawk_request_parallelism,
             hawk_connection_parallelism,
-            hawk_hnsw_param_ef_constr,
-            hawk_hnsw_param_M,
-            hawk_hnsw_param_ef_search,
+            hnsw_param_ef_constr,
+            hnsw_param_M,
+            hnsw_param_ef_search,
             hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
