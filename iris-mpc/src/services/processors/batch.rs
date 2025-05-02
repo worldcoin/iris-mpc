@@ -200,7 +200,12 @@ impl<'a> BatchProcessor<'a> {
         // Poll until we have enough messages
         // temporary hack for staging to only process 1 message at a time
         // this helps with the correctness test
-        while self.msg_counter < 1 {
+        let mut batch_size = *CURRENT_BATCH_SIZE.lock().unwrap();
+
+        if self.config.override_max_batch_size {
+            batch_size = 1;
+        }
+        while self.msg_counter < batch_size {
             let rcv_message_output = self
                 .client
                 .receive_message()
