@@ -530,11 +530,12 @@ async fn start_coordination_server(
                     // todo(einar)
                     "/height",
                     get({
+                        let height = fetch_height_of_indexed().await;
                         // We are only ready once this flag is set to true.
                         let is_ready_flag = Arc::clone(&is_ready_flag);
                         move || async move {
                             if is_ready_flag.load(Ordering::SeqCst) {
-                                "ready".into_response()
+                                height.to_string().into_response()
                             } else {
                                 StatusCode::SERVICE_UNAVAILABLE.into_response()
                             }
@@ -617,6 +618,7 @@ async fn wait_for_others_unready(config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Assumption This function assumes that each of the nodes have finished indexing the irises before it is called.
 async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Checking consensus on iris height");
     // Check other nodes and wait until all nodes are ready.
@@ -627,23 +629,24 @@ async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     );
 
     let party_id = config.party_id;
-    let height = todo!();
+    let height = fetch_height_of_indexed().await;
+    let mut heights = [None, None];
 
     let consensus_check = tokio::spawn(async move {
         let next_node = &all_readiness_addresses[(party_id + 1) % 3];
         let prev_node = &all_readiness_addresses[(party_id + 2) % 3];
-        let mut connected_but_unready = [false, false];
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
 
-                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
-                    connected_but_unready[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected_but_unready.iter().all(|&c| c) {
-                        return;
-                    }
+                if let Ok(resp) = res {
+                    let height_i = resp.text().await.unwrap().parse::<i64>().unwrap();
+                    heights[i] = Some(height_i);
+                }
+                // If all nodes are connected, notify the main thread.
+                if heights.iter().all(|&c| c.is_some()) {
+                    return;
                 }
             }
 
@@ -651,7 +654,7 @@ async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
         }
     });
 
-    tracing::info!("Waiting for all nodes to be unready...");
+    tracing::info!("Waiting for all nodes to report height...");
     match tokio::time::timeout(
         Duration::from_secs(config.startup_sync_timeout_secs),
         consensus_check,
@@ -662,11 +665,21 @@ async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
             res?;
         }
         Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be unready.");
-            bail!("Timeout waiting for all nodes to be unready.");
+            tracing::error!("Timeout waiting for all nodes to respond to height.");
+            bail!("Timeout waiting for all nodes to respond to height.");
         }
     };
-    tracing::info!("All nodes are on height {}", height);
+
+    if heights.iter().all(|&height_i| height_i == Some(height)) {
+        tracing::info!("All nodes are on height {}", height);
+    } else {
+        let error_msg = format!(
+            "Nodes are on different heights: {:?} respectively. Aborting ..",
+            heights
+        );
+        tracing::info!(error_msg);
+        bail!(error_msg)
+    }
 
     Ok(())
 }
