@@ -1361,7 +1361,7 @@ async fn run_genesis_main_server_loop(
             task_monitor.check_tasks();
 
             let result_future = hawk_handle.submit_batch(batch);
-            let _result = timeout(processing_timeout, result_future.await)
+            timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
 

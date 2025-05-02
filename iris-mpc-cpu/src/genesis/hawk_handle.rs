@@ -36,10 +36,7 @@ pub struct JobRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {}
 
-/// ---------------------------------------------
 /// Constructors.
-/// ---------------------------------------------
-
 impl Handle {
     pub async fn new(mut actor: HawkActor) -> Result<Self> {
         /// Performs post job processing health checks:
@@ -97,19 +94,14 @@ impl Handle {
     }
 }
 
-/// ---------------------------------------------
 /// Convertors.
-/// ---------------------------------------------
-
 impl From<&Vec<DbStoredIris>> for JobRequest {
     fn from(_batch: &Vec<DbStoredIris>) -> Self {
         unimplemented!()
     }
 }
 
-/// ---------------------------------------------
 /// Methods.
-/// ---------------------------------------------
 #[allow(dead_code)]
 impl Handle {
     pub async fn handle_job(
