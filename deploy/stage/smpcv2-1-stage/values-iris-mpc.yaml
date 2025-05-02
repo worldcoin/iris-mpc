@@ -99,7 +99,7 @@ env:
     value: "64"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "64"
+    value: "128"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"  
@@ -158,7 +158,7 @@ env:
     value: "true"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
-    value: "50"
+    value: "2000"
 
 initContainer:
   enabled: true
