@@ -726,7 +726,7 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     batch: BatchQuery,
-    match_results: matching::BatchStep2,
+    match_results: matching::BatchStep3,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
@@ -735,7 +735,7 @@ pub struct HawkResult {
 impl HawkResult {
     fn new(
         batch: BatchQuery,
-        match_results: matching::BatchStep2,
+        match_results: matching::BatchStep3,
         anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     ) -> Self {
         // Get matches from the graph.
@@ -981,8 +981,7 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let (search_results, match_result) = {
-            let orient = Orientation::Normal;
+        let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
 
             let luc_lookback_ids = hawk_actor.iris_store[LEFT]
@@ -1012,7 +1011,14 @@ impl HawkHandle {
                 step1.step2(&missing_is_match, intra_results)
             };
 
-            (search_results, match_result)
+            Ok((search_results, match_result))
+        };
+
+        let (search_results, match_result) = {
+            let (search_normal, matches_normal) = do_search(Orientation::Normal).await?;
+            let (_, matches_mirror) = do_search(Orientation::Mirror).await?;
+
+            (search_normal, matches_normal.step3(matches_mirror))
         };
 
         hawk_actor

@@ -162,19 +162,37 @@ impl Step1 {
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
+    pub fn step3(self, mirror: Self) -> BatchStep3 {
+        assert_eq!(self.0.len(), mirror.0.len());
+        BatchStep3(
+            izip!(self.0, mirror.0)
+                .map(|(normal, mirror)| Step3 { normal, mirror })
+                .collect_vec(),
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchStep3(VecRequests<Step3>);
+
+impl BatchStep3 {
     pub fn is_matches(&self) -> VecRequests<bool> {
-        self.0.iter().map(Step2::is_match).collect_vec()
+        self.0.iter().map(Step3::is_match).collect_vec()
     }
 
     pub fn match_list(&self) -> VecRequests<Vec<Match>> {
-        self.0.iter().map(Step2::match_list).collect_vec()
+        self.0.iter().map(Step3::match_list).collect_vec()
     }
 
+    // TODO: Integrate mirror.
     pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
     where
         F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
     {
-        self.0.iter().map(|step| step.filter_map(&f)).collect_vec()
+        self.0
+            .iter()
+            .map(|step| step.normal.filter_map(&f))
+            .collect_vec()
     }
 }
 
@@ -197,10 +215,6 @@ impl Step2 {
     }
 
     /// The IDs of the vectors that matched this request.
-    fn match_list(&self) -> Vec<Match> {
-        self.match_iter().collect_vec()
-    }
-
     fn match_iter(&self) -> impl Iterator<Item = Match> + '_ {
         let search = self
             .full_join
@@ -234,4 +248,23 @@ pub enum Match {
     Search(VectorId),
     Luc(VectorId),
     IntraBatch(usize),
+}
+
+/// Combines the resluts from mirrored checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Step3 {
+    normal: Step2,
+    mirror: Step2,
+}
+
+impl Step3 {
+    /// It is a match if either normal or mirrored iris matches.
+    fn is_match(&self) -> bool {
+        self.normal.is_match() || self.mirror.is_match()
+    }
+
+    /// Concatenate the matches from normal and mirrored matches.
+    fn match_list(&self) -> Vec<Match> {
+        chain!(self.normal.match_iter(), self.mirror.match_iter()).collect_vec()
+    }
 }
