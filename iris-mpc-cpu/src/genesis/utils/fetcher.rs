@@ -103,24 +103,42 @@ pub(crate) async fn fetch_iris_data(
 pub(crate) async fn fetch_iris_deletions(
     _s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // TODO: Set AWS S3 response.
-    // Response will be a simple json file with a single field:
-    // {
-    //     "deleted_serial_ids": ["1234567890", "0987654321" ... etc]
-    // }
-    // Response parser will:
-    //  - attempt to simply deserialise the response body into Json.Value
-    //  - map `deleted_serial_ids` field from Vec<String> -> Vec<IrisSerialId>.
-    //  - return mapped Vec<IrisSerialId>
-    // Errors:
-    //  - AWS S3 bucket fetch error
-    //  - JSON parsing error
-    //  - Mapping error
-
     // TODO: remove temporary code that returns a random set of identifiers.
     let mut rng = rand::thread_rng();
     let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
     identifiers.sort();
 
     Ok(identifiers)
+
+    // TODO: reinstate this code when S3 bucket is setup.
+    // #[derive(Serialize, Deserialize, Debug, Clone)]
+    // struct S3Object {
+    //     deleted_serial_ids: Vec<IrisSerialId>,
+    // }
+
+    // // Fetch from S3.
+    // let s3_response = s3_client
+    //     .get_object()
+    //     .bucket(constants::S3_BUCKET_FOR_IRIS_DELETIONS)
+    //     .key(constants::S3_KEY_FOR_IRIS_DELETIONS)
+    //     .send()
+    //     .await
+    //     .map_err(|err| {
+    //         tracing::error!("Failed to download file: {}", err);
+    //         IndexationError::AwsS3ObjectDownload
+    //     })?;
+
+    // // Consume S3 object stream.
+    // let s3_object_body = s3_response.body.collect().await.map_err(|e| {
+    //     tracing::error!("Failed to get object body: {}", e);
+    //     IndexationError::AwsS3ObjectDeserialize
+    // })?;
+
+    // // Decode S3 object bytes.
+    // let s3_object_bytes = s3_object_body.into_bytes();
+    // let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes)
+    //     .map_err(|_| IndexationError::PostgresFetchIrisBatch)
+    //     .unwrap();
+
+    // Ok(s3_object.deleted_serial_ids)
 }
