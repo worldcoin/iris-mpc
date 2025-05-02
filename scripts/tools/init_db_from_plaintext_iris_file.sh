@@ -11,7 +11,7 @@ declare DEFAULT_HNSW_PARAM_M=256
 declare DEFAULT_HNSW_PARAM_P=256
 
 # Default number of iris pairs to read from file.
-declare DEFAULT_TARGET_DB_SIZE=5000
+declare DEFAULT_TARGET_DB_SIZE=100000
 
 # Returns default db schema for an MPC participant.
 function get_default_db_schema() {
@@ -44,7 +44,7 @@ function get_default_path_to_iris_plaintext() {
     here="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
     root=$( dirname "$( dirname "$here" )" )
 
-    echo "$root/iris-mpc-cpu/data/store.ndjson"
+    echo "$root/store5k.ndjson"
 }
 
 # Returns default path to prng state file utilised between runs.

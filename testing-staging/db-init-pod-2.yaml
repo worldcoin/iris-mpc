@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: init-db-manual
+  annotations:
+    karpenter.sh/do-not-disrupt: "true"
+spec:
+  initContainers:
+    - name: init-s3-download
+      image: amazon/aws-cli
+      command: [ "sh", "-c", "aws s3 cp s3://wf-smpcv2-stage-sns-requests/store_2m.ndjson /iris_data/store_2m.ndjson" ]
+      volumeMounts:
+        - name: iris-data-volume
+          mountPath: /iris_data
+  containers:
+    - name: init-db
+      image: ghcr.io/worldcoin/init-db:4d6776921fe288bc06e0400c34fb1d1c97f5eed1
+      args: [ "--source", "/iris_data/store_2m.ndjson", "--db-url-party1", "x","--db-schema-party1", "SMPC_stage_0", "--db-url-party2", "x","--db-schema-party2", "SMPC_stage_1","--db-url-party3", "x","--db-schema-party3", "SMPC_stage_2","--hnsw-prng-seed","10","--party-idx","2","--prng-state-file", "/tmp/.prng_state" ]
+      env:
+        - name: RUST_BACKTRACE
+          value: "1"
+      volumeMounts:
+        - name: iris-data-volume
+          mountPath: /iris_data
+      resources:
+        requests:
+          memory: "30Gi"
+          cpu: "2"
+        limits:
+          memory: "30Gi"
+          cpu: "2"
+  restartPolicy: Never
+  volumes:
+    - name: iris-data-volume
+      emptyDir: { }
+  serviceAccountName: ampc-hnsw
+  serviceAccount: ampc-hnsw
