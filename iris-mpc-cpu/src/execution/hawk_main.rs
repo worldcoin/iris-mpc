@@ -616,6 +616,8 @@ pub struct HawkRequest {
 // TODO: Unify `BatchQueryEntries` and `Vec<GaloisRingSharedIris>`.
 impl From<BatchQuery> for HawkRequest {
     fn from(batch: BatchQuery) -> Self {
+        let n_queries = batch.request_ids.len();
+
         let extract_queries = |orient: Orientation| {
             let oriented = match orient {
                 Orientation::Normal => [
@@ -650,7 +652,7 @@ impl From<BatchQuery> for HawkRequest {
                 ],
             };
 
-            oriented.map(|(codes, masks, codes_proc, masks_proc)| {
+            let queries = oriented.map(|(codes, masks, codes_proc, masks_proc)| {
                 // Associate the raw and processed versions of codes and masks.
                 izip!(codes, masks, codes_proc, masks_proc)
                     // The batch is a concatenation of rotations.
@@ -676,21 +678,19 @@ impl From<BatchQuery> for HawkRequest {
                             .into()
                     })
                     .collect_vec()
-            })
+            });
+
+            assert_eq!(n_queries, queries[LEFT].len());
+            assert_eq!(n_queries, queries[RIGHT].len());
+            Arc::new(queries)
         };
 
-        let queries = Arc::new(extract_queries(Orientation::Normal));
-        let queries_mirror = Arc::new(extract_queries(Orientation::Mirror));
-
-        let n_queries = queries[LEFT].len();
-        assert_eq!(n_queries, queries[RIGHT].len());
-        assert_eq!(n_queries, batch.request_ids.len());
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
         Self {
+            queries: extract_queries(Orientation::Normal),
+            queries_mirror: extract_queries(Orientation::Mirror),
             batch,
-            queries,
-            queries_mirror,
         }
     }
 }
@@ -981,30 +981,38 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let search_queries = &request.queries(Orientation::Normal);
+        let (search_results, match_result) = {
+            let orient = Orientation::Normal;
+            let search_queries = &request.queries(orient);
 
-        let luc_lookback_ids = hawk_actor.iris_store[LEFT]
-            .read()
-            .await
-            .last_vector_ids(request.batch.luc_lookback_records);
+            let luc_lookback_ids = hawk_actor.iris_store[LEFT]
+                .read()
+                .await
+                .last_vector_ids(request.batch.luc_lookback_records);
 
-        let intra_results = intra_batch_is_match(sessions, search_queries).await?;
+            let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
-        // Search for nearest neighbors.
-        // For both eyes, all requests, and rotations.
-        let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
-            search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
+            // Search for nearest neighbors.
+            // For both eyes, all requests, and rotations.
+            let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
+                search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
 
-        let match_result = {
-            let step1 =
-                matching::BatchStep1::new(&search_results, request.luc_ids(luc_lookback_ids));
+            let match_result = {
+                let step1 =
+                    matching::BatchStep1::new(&search_results, request.luc_ids(luc_lookback_ids));
 
-            // Go fetch the missing vector IDs and calculate their is_match.
-            let missing_is_match =
-                calculate_missing_is_match(search_queries, step1.missing_vector_ids(), sessions)
-                    .await?;
+                // Go fetch the missing vector IDs and calculate their is_match.
+                let missing_is_match = calculate_missing_is_match(
+                    search_queries,
+                    step1.missing_vector_ids(),
+                    sessions,
+                )
+                .await?;
 
-            step1.step2(&missing_is_match, intra_results)
+                step1.step2(&missing_is_match, intra_results)
+            };
+
+            (search_results, match_result)
         };
 
         hawk_actor
@@ -1043,10 +1051,9 @@ impl HawkHandle {
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
-        let left_query_count = search_queries[LEFT].len();
-        let right_query_count = search_queries[RIGHT].len();
-        metrics::gauge!("search_queries_left").set(left_query_count as f64);
-        metrics::gauge!("search_queries_right").set(right_query_count as f64);
+        let query_count = results.batch.request_ids.len();
+        metrics::gauge!("search_queries_left").set(query_count as f64);
+        metrics::gauge!("search_queries_right").set(query_count as f64);
 
         Ok(results)
     }
@@ -1190,8 +1197,8 @@ mod tests {
         .map(|(shares, mut handle)| async move {
                 // TODO: different test irises for each eye.
                 let shares_right = shares.clone();
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests] = receive_batch_shares(shares);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests] = receive_batch_shares(shares_right);
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right);
 
                 let batch = BatchQuery {
                     // Iris shares.
@@ -1203,6 +1210,9 @@ mod tests {
                     // All rotations, preprocessed.
                     left_iris_interpolated_requests,
                     right_iris_interpolated_requests,
+                    // All rotations, preprocessed, mirrored.
+                    left_mirrored_iris_interpolated_requests,
+                    right_mirrored_iris_interpolated_requests,
 
                     // Batch details to be just copied to the result.
                     request_ids: vec!["X".to_string(); batch_size],
@@ -1261,16 +1271,19 @@ mod tests {
     }
 
     /// Prepare shares in the same format as `receive_batch()`.
-    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 3] {
-        let mut out = [(); 3].map(|_| IrisQueryBatchEntries::default());
+    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 4] {
+        let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
         for share in shares {
             let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);
             out[1].mask.extend(one.mask_rotated);
-            out[2].code.extend(one.code_interpolated);
-            out[2].mask.extend(one.mask_interpolated);
+            out[2].code.extend(one.code_interpolated.clone());
+            out[2].mask.extend(one.mask_interpolated.clone());
+            // TODO: mirrored.
+            out[3].code.extend(one.code_interpolated);
+            out[3].mask.extend(one.mask_interpolated);
         }
         out
     }
