@@ -1,6 +1,7 @@
 use aes_prng::AesRng;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
+    hnsw::HnswParams,
     py_bindings::{io::write_bin, plaintext_store::to_ndjson_file},
 };
 use rand::SeedableRng;
@@ -17,9 +18,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     println!("Writing store to file");
     to_ndjson_file(&store, &format!("{crate_root}/data/store.ndjson"))?;
 
+    let hnsw_params = HnswParams::new(320, 256, 256);
     for graph_size in [1, 10, 100, 1000, 10_000, 100_000] {
         println!("Generating graph with {} vertices", graph_size);
-        let graph = store.create_graph(&mut rng, graph_size).await?;
+        let graph = store
+            .create_graph(&mut rng, graph_size, &hnsw_params)
+            .await?;
         write_bin(&graph, &format!("{crate_root}/data/graph_{graph_size}.dat"))?;
     }
     Ok(())

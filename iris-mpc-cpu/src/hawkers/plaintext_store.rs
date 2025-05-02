@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::hnsw::{
     metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
     vector_store::VectorStoreMut,
-    GraphMem, HnswSearcher, VectorStore,
+    GraphMem, HnswParams, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
 use iris_mpc_common::iris_db::{
@@ -25,6 +25,34 @@ pub struct PlaintextStore {
 impl PlaintextStore {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        graph_size: usize,
+        hnsw_params: &HnswParams,
+    ) -> Result<GraphMem<Self>> {
+        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
+
+        let mut graph = GraphMem::new();
+        let searcher = HnswSearcher {
+            params: hnsw_params.clone(),
+        };
+
+        for idx in 0..graph_size {
+            let query = self.points.get(idx).unwrap().clone();
+            let query_id = VectorId::from_0_index(idx as u32);
+            let insertion_layer = searcher.select_layer(&mut rng_searcher1)?;
+            let (neighbors, set_ep) = searcher
+                .search_to_insert(self, &graph, &query, insertion_layer)
+                .await?;
+            searcher
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, set_ep)
+                .await?;
+        }
+
+        Ok(graph)
     }
 }
 
@@ -127,31 +155,6 @@ impl PlaintextStore {
         }
 
         Ok(plaintext_vector_store)
-    }
-
-    pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
-        &mut self,
-        rng: &mut R,
-        graph_size: usize,
-    ) -> Result<GraphMem<Self>> {
-        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-
-        let mut graph = GraphMem::new();
-        let searcher = HnswSearcher::default();
-
-        for idx in 0..graph_size {
-            let query = self.points.get(idx).unwrap().clone();
-            let query_id = VectorId::from_0_index(idx as u32);
-            let insertion_layer = searcher.select_layer(&mut rng_searcher1)?;
-            let (neighbors, set_ep) = searcher
-                .search_to_insert(self, &graph, &query, insertion_layer)
-                .await?;
-            searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, set_ep)
-                .await?;
-        }
-
-        Ok(graph)
     }
 }
 
