@@ -1,5 +1,6 @@
 use super::{
-    rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests,
+    VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
@@ -47,7 +48,7 @@ impl BatchStep1 {
     pub fn step2(
         self,
         missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>,
-        intra_matches: VecRequests<Vec<usize>>,
+        intra_matches: VecRequests<Vec<IntraMatch>>,
     ) -> BatchStep2 {
         assert_eq!(self.0.len(), missing_is_match[LEFT].len());
         assert_eq!(self.0.len(), missing_is_match[RIGHT].len());
@@ -122,7 +123,7 @@ impl Step1 {
     fn step2(
         self,
         missing_is_match: BothEyes<&MapEdges<bool>>,
-        intra_matches: Vec<usize>,
+        intra_matches: Vec<IntraMatch>,
     ) -> Step2 {
         let luc_results = self
             .luc_ids
@@ -182,7 +183,7 @@ impl BatchStep2 {
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
-    intra_matches: Vec<usize>,
+    intra_matches: Vec<IntraMatch>,
 }
 
 impl Step2 {
@@ -211,10 +212,9 @@ impl Step2 {
             .iter()
             .filter_map(|(id, [l, r])| (*l || *r).then_some(Match::Luc(*id)));
 
-        let intra = self
-            .intra_matches
-            .iter()
-            .map(|req_i| Match::IntraBatch(*req_i));
+        let intra = self.intra_matches.iter().filter_map(|m| {
+            (m.is_match[LEFT] || m.is_match[RIGHT]).then_some(Match::IntraBatch(m.other_request_i))
+        });
 
         chain!(search, luc, intra)
     }
