@@ -54,12 +54,12 @@ async fn create_graph_from_plain_dbs(
 
     for (vector_id, iris) in left_store.points.iter().enumerate() {
         let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
     for (vector_id, iris) in right_store.points.iter().enumerate() {
         let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 

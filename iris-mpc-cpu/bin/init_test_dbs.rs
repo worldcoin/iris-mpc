@@ -1,4 +1,4 @@
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 
 use aes_prng::AesRng;
 use clap::Parser;
@@ -248,7 +248,7 @@ async fn main() -> Result<()> {
             let raw_query = (&json_pt.unwrap()).into();
 
             let side = count % 2;
-            let query = vectors[side].prepare_query(raw_query);
+            let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
         }
     }
@@ -318,7 +318,7 @@ async fn main() -> Result<()> {
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                let query = vector_store.prepare_query(raw_query);
+                let query = Arc::new(raw_query);
                 searcher
                     .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
                     .await?;
@@ -374,9 +374,9 @@ async fn main() -> Result<()> {
     {
         for (left, right) in vectors_batch {
             let left_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.data.0.clone());
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, (**left).clone());
             let right_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, (**right).clone());
 
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
                 batch[party].push((shares_l, shares_r));

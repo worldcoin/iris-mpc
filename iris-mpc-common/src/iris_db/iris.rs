@@ -11,7 +11,7 @@ use serde_big_array::BigArray;
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IrisCodeArray(#[serde(with = "BigArray")] pub [u64; Self::IRIS_CODE_SIZE_U64]);
 impl Default for IrisCodeArray {
     fn default() -> Self {
@@ -144,7 +144,7 @@ impl std::ops::BitXor for IrisCodeArray {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IrisCode {
     pub code: IrisCodeArray,
     pub mask: IrisCodeArray,

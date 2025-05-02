@@ -452,8 +452,9 @@ mod tests {
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
+            let query = cleartext_data.0.points.get(i).unwrap().clone();
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &mut cleartext_data.1, &vector_id, 1)
+                .search(&mut cleartext_data.0, &mut cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -517,8 +518,8 @@ mod tests {
     async fn test_gr_aby3_store_plaintext() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_dim = 4;
-        let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
-        let shared_irises: Vec<_> = cleartext_database
+        let plaintext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
+        let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
@@ -526,7 +527,7 @@ mod tests {
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_dim)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
         let mut plaintext_inserts = Vec::new();
         for p in plaintext_preps.iter() {
@@ -537,15 +538,17 @@ mod tests {
         let it1 = (0..db_dim).combinations(2);
         let it2 = (0..db_dim).combinations(2);
 
+        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
+
         let mut plain_results = HashMap::new();
         for comb1 in it1.clone() {
             for comb2 in it2.clone() {
                 // compute distances in plaintext
                 let dist1_plain = plaintext_store
-                    .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
+                    .eval_distance(&plaintext_queries[comb1[0]], &plaintext_inserts[comb1[1]])
                     .await?;
                 let dist2_plain = plaintext_store
-                    .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
+                    .eval_distance(&plaintext_queries[comb2[0]], &plaintext_inserts[comb2[1]])
                     .await?;
                 let bit = plaintext_store
                     .less_than(&dist1_plain, &dist2_plain)
@@ -616,8 +619,8 @@ mod tests {
     async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
-        let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
-        let shared_irises: Vec<_> = cleartext_database
+        let plaintext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
+        let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
@@ -625,19 +628,21 @@ mod tests {
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::default();
         let plaintext_preps: Vec<_> = (0..db_size)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
         let mut plaintext_inserts = Vec::with_capacity(db_size);
         for p in plaintext_preps.iter() {
             plaintext_inserts.push(plaintext_store.insert(p).await);
         }
 
+        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
+
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_inserts[0]], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_queries[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_inserts[1]], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_queries[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()

@@ -296,8 +296,8 @@ mod tests {
             vector: &Self::VectorRef,
         ) -> Result<Self::DistanceRef> {
             // Hamming distance
-            let vector_0 = self.points[&query].data;
-            let vector_1 = self.points[&vector].data;
+            let vector_0 = self.points[query].data;
+            let vector_1 = self.points[vector].data;
             Ok(hamming_distance(vector_0, vector_1))
         }
 
@@ -317,10 +317,7 @@ mod tests {
     impl VectorStoreMut for TestStore {
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
-            self.points
-                .get_mut(&query)
-                .unwrap()
-                .is_persistent = true;
+            self.points.get_mut(query).unwrap().is_persistent = true;
             *query
         }
     }
@@ -335,7 +332,7 @@ mod tests {
         let raw_queries = IrisDB::new_random_rng(10, &mut rng);
 
         for raw_query in raw_queries.db {
-            let query = vector_store.prepare_query(raw_query);
+            let query = Arc::new(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
@@ -374,7 +371,7 @@ mod tests {
             HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
-            let query = vector_store.prepare_query(raw_query);
+            let query = Arc::new(raw_query);
             let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
@@ -390,7 +387,7 @@ mod tests {
                 )
                 .await?;
 
-            point_ids_map.insert(query, rng.next_u32() as usize);
+            point_ids_map.insert(inserted, rng.next_u32() as usize);
         }
 
         let new_graph_store: GraphMem<TestStore> =
