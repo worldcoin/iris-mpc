@@ -44,15 +44,25 @@ impl BatchStep1 {
         })
     }
 
-    pub fn step2(self, missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>) -> BatchStep2 {
+    pub fn step2(
+        self,
+        missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>,
+        intra_matches: VecRequests<Vec<usize>>,
+    ) -> BatchStep2 {
         assert_eq!(self.0.len(), missing_is_match[LEFT].len());
         assert_eq!(self.0.len(), missing_is_match[RIGHT].len());
+        assert_eq!(self.0.len(), intra_matches.len());
         BatchStep2(
-            izip!(self.0, &missing_is_match[LEFT], &missing_is_match[RIGHT])
-                .map(|(step, missing_left, missing_right)| {
-                    step.step2([missing_left, missing_right])
-                })
-                .collect_vec(),
+            izip!(
+                self.0,
+                &missing_is_match[LEFT],
+                &missing_is_match[RIGHT],
+                intra_matches,
+            )
+            .map(|(step, missing_left, missing_right, intra_matches)| {
+                step.step2([missing_left, missing_right], intra_matches)
+            })
+            .collect_vec(),
         )
     }
 }
@@ -109,7 +119,11 @@ impl Step1 {
         chain!(anti_join, &self.luc_ids).cloned().collect_vec()
     }
 
-    fn step2(self, missing_is_match: BothEyes<&MapEdges<bool>>) -> Step2 {
+    fn step2(
+        self,
+        missing_is_match: BothEyes<&MapEdges<bool>>,
+        intra_matches: Vec<usize>,
+    ) -> Step2 {
         let luc_results = self
             .luc_ids
             .iter()
@@ -123,6 +137,7 @@ impl Step1 {
         let mut step2 = Step2 {
             full_join: self.inner_join,
             luc_results,
+            intra_matches,
         };
 
         for id in &self.anti_join[LEFT] {
@@ -141,12 +156,17 @@ impl Step1 {
     }
 }
 
+/// Results for a batch of requests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
     pub fn is_matches(&self) -> VecRequests<bool> {
         self.0.iter().map(Step2::is_match).collect_vec()
+    }
+
+    pub fn match_list(&self) -> VecRequests<Vec<Match>> {
+        self.0.iter().map(Step2::match_list).collect_vec()
     }
 
     pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
@@ -157,28 +177,61 @@ impl BatchStep2 {
     }
 }
 
+/// Results for one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
+    intra_matches: Vec<usize>,
 }
 
 impl Step2 {
     /// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
     ///
     /// LUC *OR* policy: "Local" irises match if either side matches.
+    ///
+    /// Intra-batch: match against requests before this request in the same batch.
     fn is_match(&self) -> bool {
-        let search = self.full_join.iter().any(|(_, [l, r])| *l && *r);
+        self.match_iter().next().is_some()
+    }
 
-        let luc = self.luc_results.iter().any(|(_, [l, r])| *l || *r);
+    /// The IDs of the vectors that matched this request.
+    fn match_list(&self) -> Vec<Match> {
+        self.match_iter().collect_vec()
+    }
 
-        search || luc
+    fn match_iter(&self) -> impl Iterator<Item = Match> + '_ {
+        let search = self
+            .full_join
+            .iter()
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(Match::Search(*id)));
+
+        let luc = self
+            .luc_results
+            .iter()
+            .filter_map(|(id, [l, r])| (*l || *r).then_some(Match::Luc(*id)));
+
+        let intra = self
+            .intra_matches
+            .iter()
+            .map(|req_i| Match::IntraBatch(*req_i));
+
+        chain!(search, luc, intra)
     }
 
     fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>
     where
         F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
     {
-        self.full_join.iter().filter_map(f).collect_vec()
+        chain!(&self.full_join, &self.luc_results)
+            .filter_map(f)
+            .collect_vec()
     }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum Match {
+    Search(VectorId),
+    Luc(VectorId),
+    IntraBatch(usize),
 }

@@ -36,6 +36,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{chain, izip, Itertools};
+use matching::Match;
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
@@ -683,7 +684,6 @@ impl HawkRequest {
 pub struct HawkResult {
     batch: BatchQuery,
     match_results: matching::BatchStep2,
-    intra_results: Vec<Vec<usize>>,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
@@ -693,23 +693,15 @@ impl HawkResult {
     fn new(
         batch: BatchQuery,
         match_results: matching::BatchStep2,
-        intra_results: Vec<Vec<usize>>,
         anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     ) -> Self {
         // Get matches from the graph.
-        let graph_matches = match_results.is_matches();
-        let n_requests = graph_matches.len();
-        assert_eq!(n_requests, intra_results.len());
-
-        // Add duplicate requests within the batch.
-        let is_matches = izip!(graph_matches, &intra_results)
-            .map(|(graph_match, intra_match)| graph_match || !intra_match.is_empty())
-            .collect_vec();
+        let is_matches = match_results.is_matches();
+        let n_requests = is_matches.len();
 
         HawkResult {
             batch,
             match_results,
-            intra_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
             anonymized_bucket_statistics,
@@ -756,33 +748,41 @@ impl HawkResult {
             .collect()
     }
 
+    fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
+        self.connect_plans.0[LEFT][request_i]
+            .as_ref()
+            .map(|plan| plan.inserted_vector)
+    }
+
     fn match_ids(&self) -> Vec<Vec<u32>> {
-        // Graph matches.
-        let mut match_ids = self
-            .match_results
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(id.index()));
+        let per_request = |matches: vec::IntoIter<Match>| {
+            matches
+                .filter_map(|m| match m {
+                    Match::Search(id) => Some(id),
+                    Match::Luc(id) => Some(id),
+                    Match::IntraBatch(req_i) => self.inserted_id(req_i),
+                })
+                .map(|id| id.index())
+                .unique()
+        };
 
-        // Intra-batch matches. Find the serial IDs that were just inserted.
-        for (graph_matches, intra_matches) in izip!(match_ids.iter_mut(), &self.intra_results) {
-            for i_request in intra_matches {
-                if let Some(plan) = &self.connect_plans.0[LEFT][*i_request] {
-                    graph_matches.push(plan.inserted_vector.index());
-                }
-            }
-        }
-
-        match_ids
+        self.match_results
+            .match_list()
+            .into_iter()
+            .map(|matches| per_request(matches.into_iter()).collect_vec())
+            .collect_vec()
     }
 
     fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
-        self.intra_results
-            .iter()
-            .map(|matching_indexes| {
-                matching_indexes
-                    .iter()
-                    .map(|&i| self.batch.request_ids[i].clone())
-                    .collect_vec()
-            })
+        let per_match = |m| match m {
+            Match::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
+            _ => None,
+        };
+
+        self.match_results
+            .match_list()
+            .into_iter()
+            .map(|matches| matches.into_iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 
@@ -952,10 +952,6 @@ impl HawkHandle {
         let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
             search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
 
-        hawk_actor
-            .update_anon_stats(&sessions[0][0], &search_results)
-            .await?;
-
         let match_result = {
             let step1 =
                 matching::BatchStep1::new(&search_results, request.luc_ids(luc_lookback_ids));
@@ -965,13 +961,16 @@ impl HawkHandle {
                 calculate_missing_is_match(search_queries, step1.missing_vector_ids(), sessions)
                     .await?;
 
-            step1.step2(&missing_is_match)
+            step1.step2(&missing_is_match, intra_results)
         };
+
+        hawk_actor
+            .update_anon_stats(&sessions[0][0], &search_results)
+            .await?;
 
         let mut results = HawkResult::new(
             request.batch,
             match_result,
-            intra_results,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
 
