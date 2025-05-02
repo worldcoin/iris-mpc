@@ -34,7 +34,13 @@ env:
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
-  
+
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "64"
+
+  - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
+    value: "false"
+
   - name: SMPC__CPU_DISABLE_PERSISTENCE
     value: "false"
 
