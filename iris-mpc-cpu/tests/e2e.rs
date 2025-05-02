@@ -26,6 +26,10 @@ const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
 
+const HNSW_EF_CONSTR: usize = 320;
+const HNSW_M: usize = 256;
+const HNSW_EF_SEARCH: usize = 256;
+
 fn install_tracing() {
     tracing_subscriber::registry()
         .with(
@@ -110,6 +114,9 @@ async fn e2e_test() -> Result<()> {
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
+        hnsw_param_ef_constr: HNSW_EF_CONSTR,
+        hnsw_param_M: HNSW_M,
+        hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_prng_seed: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
