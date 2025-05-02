@@ -710,8 +710,6 @@ mod tests {
     #[case(1)]
     #[case(2)]
     async fn test_galois_ring_to_rep3(#[case] seed: u64) {
-        use crate::hawkers::plaintext_store::dot_distance_fraction;
-
         let sessions = LocalRuntime::mock_sessions_with_channel().await.unwrap();
         let mut rng = AesRng::seed_from_u64(seed);
 
@@ -746,7 +744,7 @@ mod tests {
         assert_eq!(output0, output1);
         assert_eq!(output0, output2);
 
-        let (plain_d1, plain_d2) = dot_distance_fraction(&iris_db[0], &iris_db[1]);
+        let (plain_d1, plain_d2) = iris_db[0].get_dot_distance_fraction(&iris_db[1]);
         assert_eq!(output0.0[0], plain_d1 as u16);
         assert_eq!(output0.0[1], plain_d2);
 

@@ -17,36 +17,6 @@ use tracing::debug;
 use super::aby3::aby3_store::VectorId;
 use eyre::Result;
 
-/// Return the fractional Hamming distance between two iris codes, represented
-/// as u16 numerator and denominator.
-pub fn distance_fraction(x: &IrisCode, y: &IrisCode) -> (u16, u16) {
-    let combined_mask = x.mask & y.mask;
-    let combined_mask_len = combined_mask.count_ones();
-
-    let combined_code = (x.code ^ y.code) & combined_mask;
-    let code_distance = combined_code.count_ones();
-
-    (code_distance as u16, combined_mask_len as u16)
-}
-
-/// Return the fractional Hamming distance between two iris codes, represented
-/// as the i16 dot product of associated masked-bit vectors and the u16 size of
-/// the common unmasked region
-pub fn dot_distance_fraction(x: &IrisCode, y: &IrisCode) -> (i16, u16) {
-    let (code_distance, combined_mask_len) = distance_fraction(x, y);
-
-    // `code_distance` gives the number of common unmasked bits which are
-    // different between two iris codes, and `combined_mask_len` gives the
-    // total number of common unmasked bits. The dot product of masked-bit
-    // vectors adds 1 for each unmasked bit which is equal, and subtracts 1
-    // for each unmasked bit which is unequal; so this can be computed by
-    // starting with 1 for every unmasked bit, and subtracting 2 for every
-    // unequal unmasked bit, as follows.
-    let dot_product = combined_mask_len.wrapping_sub(2 * code_distance) as i16;
-
-    (dot_product, combined_mask_len)
-}
-
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: Vec<Arc<IrisCode>>,
@@ -77,7 +47,7 @@ impl VectorStore for PlaintextStore {
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let vector_code = &self.points[vector.index() as usize];
-        Ok(distance_fraction(query, vector_code))
+        Ok(query.get_distance_fraction(vector_code))
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
