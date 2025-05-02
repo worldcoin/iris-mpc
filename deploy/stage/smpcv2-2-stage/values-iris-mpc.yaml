@@ -157,6 +157,9 @@ env:
   - name : SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "50"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
