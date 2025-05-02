@@ -839,10 +839,9 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
-        // TODO set from config arguments
-        hnsw_param_ef_constr: 320,
-        hnsw_param_M: 256,
-        hnsw_param_ef_search: 256,
+        hnsw_param_ef_constr: config.hawk_hnsw_param_ef_constr,
+        hnsw_param_M: config.hawk_hnsw_param_M,
+        hnsw_param_ef_search: config.hawk_hnsw_param_ef_search,
         hnsw_prng_seed: config.hawk_prng_seed,
         disable_persistence: config.cpu_disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
