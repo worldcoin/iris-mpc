@@ -1491,22 +1491,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 
 [[package]]
-name = "downcast-rs"
-version = "2.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea8a8b81cacc08888170eef4d13b775126db426d0b348bee9d18c2c1eaf123cf"
-
-[[package]]
 name = "dunce"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
-
-[[package]]
-name = "dyn-clone"
-version = "1.0.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c7a8fb8a9fbf66c1f703fe16184d10ca0ee9d23be5b4436400408ba54a95005"
 
 [[package]]
 name = "ecdsa"
@@ -2387,8 +2375,6 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
- "kameo",
- "kameo_actors",
  "metrics 0.22.3",
  "num-traits",
  "prost",
@@ -2598,44 +2584,6 @@ dependencies = [
  "pest",
  "pest_derive",
  "serde",
-]
-
-[[package]]
-name = "kameo"
-version = "0.16.0"
-source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
-dependencies = [
- "downcast-rs",
- "dyn-clone",
- "futures",
- "kameo_macros",
- "once_cell",
- "serde",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "kameo_actors"
-version = "0.1.0"
-source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
-dependencies = [
- "futures",
- "glob",
- "kameo",
- "tokio",
-]
-
-[[package]]
-name = "kameo_macros"
-version = "0.16.0"
-source = "git+https://github.com/tqwewe/kameo.git?rev=02ae4a47e21973d0639588f27f7e0cf6137ff561#02ae4a47e21973d0639588f27f7e0cf6137ff561"
-dependencies = [
- "heck",
- "proc-macro2",
- "quote",
- "syn",
- "uuid",
 ]
 
 [[package]]
@@ -4810,7 +4758,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.52.0",
 ]
 

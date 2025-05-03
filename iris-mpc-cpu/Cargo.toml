@@ -26,8 +26,6 @@ futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
-kameo.workspace = true
-kameo_actors.workspace = true
 num-traits.workspace = true
 prost = "0.13"
 rand.workspace = true
