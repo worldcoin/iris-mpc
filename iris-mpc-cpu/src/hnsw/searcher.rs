@@ -209,16 +209,14 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
-impl Default for HnswSearcher {
-    fn default() -> Self {
+#[allow(non_snake_case)]
+impl HnswSearcher {
+    pub fn default() -> Self {
         HnswSearcher {
             params: HnswParams::new(64, 32, 32),
         }
     }
-}
 
-#[allow(non_snake_case)]
-impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
