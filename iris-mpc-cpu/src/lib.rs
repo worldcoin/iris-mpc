@@ -2,7 +2,6 @@ pub mod execution;
 pub mod genesis;
 pub mod hawkers;
 pub mod hnsw;
-pub mod indexation;
 pub(crate) mod network;
 #[rustfmt::skip]
 pub(crate) mod proto_generated;
