@@ -84,8 +84,11 @@ async fn start_hawk_node(
 ) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    // TODO: replace with: `HnswParams::new(args.hnsw_ef_search, args.hnsw_ef_constr, args.hnsw_M)`
-    let params = HnswParams::new(320, 256, 256);
+    let params = HnswParams::new(
+        args.hnsw_param_ef_constr,
+        args.hnsw_param_ef_search,
+        args.hnsw_param_M,
+    );
     let (graph, iris_store) =
         create_graph_from_plain_dbs(args.party_index, left_db, right_db, &params).await?;
     let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
