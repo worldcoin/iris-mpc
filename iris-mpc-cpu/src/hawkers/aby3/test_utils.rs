@@ -234,7 +234,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    let searcher = HnswSearcher::default();
+    let searcher = HnswSearcher::new_with_test_parameters();
     let (plaintext_vector_store, plaintext_graph_store) =
         PlaintextStore::create_random(rng, database_size, &searcher).await?;
 
@@ -317,7 +317,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
                 let mut graph_store = GraphMem::new();
-                let searcher = HnswSearcher::default();
+                let searcher = HnswSearcher::new_with_test_parameters();
                 // insert queries
                 for query in queries.iter() {
                     searcher

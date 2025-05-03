@@ -41,7 +41,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     let stream = super::limited_iterator(stream, len);
 
     // Iterate over each deserialized object
-    let mut vector = PlaintextStore::default();
+    let mut vector = PlaintextStore::new();
     for json_pt in stream {
         let json_pt = json_pt?;
         vector.points.push(Arc::new((&json_pt).into()));

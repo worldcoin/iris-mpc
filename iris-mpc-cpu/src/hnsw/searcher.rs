@@ -211,8 +211,23 @@ pub struct ConnectPlanLayer<Vector, Distance> {
 
 #[allow(non_snake_case)]
 impl HnswSearcher {
-    pub fn default() -> Self {
-        HnswSearcher {
+    /// Construct an HnswSearcher with specified parameters, constructed using
+    /// `HnswParamas::new`.
+    pub fn new(ef_constr: usize, M: usize, ef_search: usize) -> Self {
+        Self {
+            params: HnswParams::new(ef_constr, ef_search, M),
+        }
+    }
+
+    /// Construct an HnswSearcher with test parameters suitable for exercising
+    /// search functionality.
+    ///
+    /// This function is provided in lieu of a `Default` implementation because
+    /// good parameter selections for HNSW search generally depend on the
+    /// underlying data distribution, so there isn't a reasonable "generally
+    /// applicable" default value.
+    pub fn new_with_test_parameters() -> Self {
+        Self {
             params: HnswParams::new(64, 32, 32),
         }
     }
@@ -1052,10 +1067,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() -> Result<()> {
-        let vector_store = &mut PlaintextStore::default();
+        let vector_store = &mut PlaintextStore::new();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::default();
+        let db = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db

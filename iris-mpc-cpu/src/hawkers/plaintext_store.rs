@@ -112,7 +112,7 @@ impl PlaintextStore {
         let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
-        let mut plaintext_vector_store = PlaintextStore::default();
+        let mut plaintext_vector_store = PlaintextStore::new();
         let mut plaintext_graph_store = GraphMem::new();
 
         for raw_query in cleartext_database {
@@ -136,7 +136,7 @@ impl PlaintextStore {
     ) -> Result<Self> {
         let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
 
-        let mut plaintext_vector_store = PlaintextStore::default();
+        let mut plaintext_vector_store = PlaintextStore::new();
 
         for raw_query in cleartext_database {
             let query = Arc::new(raw_query);
@@ -147,7 +147,7 @@ impl PlaintextStore {
     }
 
     pub async fn create_random_store_with_db(cleartext_database: Vec<IrisCode>) -> Result<Self> {
-        let mut plaintext_vector_store = PlaintextStore::default();
+        let mut plaintext_vector_store = PlaintextStore::new();
 
         for raw_query in cleartext_database {
             let query = Arc::new(raw_query);
@@ -172,7 +172,7 @@ mod tests {
     #[traced_test]
     async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
 
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
@@ -244,7 +244,7 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let (mut ptxt_vector, mut ptxt_graph) =
             PlaintextStore::create_random(&mut rng, database_size, &searcher).await?;
         for i in 0..database_size {

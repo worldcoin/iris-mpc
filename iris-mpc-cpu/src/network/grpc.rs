@@ -828,7 +828,7 @@ mod tests {
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
             database_size,

@@ -11,7 +11,7 @@ pub struct PyHnswSearcher(pub HnswSearcher);
 
 impl Default for PyHnswSearcher {
     fn default() -> Self {
-        Self(HnswSearcher::default())
+        Self(HnswSearcher::new_with_test_parameters())
     }
 }
 

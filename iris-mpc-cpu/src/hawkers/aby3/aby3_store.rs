@@ -385,7 +385,7 @@ mod tests {
             jobs.spawn(async move {
                 let mut store = store.lock().await;
                 let mut aby3_graph = GraphMem::new();
-                let db = HnswSearcher::default();
+                let db = HnswSearcher::new_with_test_parameters();
 
                 let mut inserted = vec![];
                 // insert queries
@@ -448,7 +448,7 @@ mod tests {
                 premade_v.storage.body.read().await.points
             );
         }
-        let hawk_searcher = HnswSearcher::default();
+        let hawk_searcher = HnswSearcher::new_with_test_parameters();
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
@@ -525,7 +525,7 @@ mod tests {
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_dim)
             .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
@@ -626,7 +626,7 @@ mod tests {
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_size)
             .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
@@ -705,7 +705,7 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs =
             shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
                 .await
