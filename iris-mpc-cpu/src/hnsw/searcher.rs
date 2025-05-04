@@ -213,7 +213,7 @@ pub struct ConnectPlanLayer<Vector, Distance> {
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed using
     /// `HnswParamas::new`.
-    pub fn new(ef_constr: usize, M: usize, ef_search: usize) -> Self {
+    pub fn new(ef_constr: usize, ef_search: usize, M: usize) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
         }
