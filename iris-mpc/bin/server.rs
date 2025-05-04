@@ -64,6 +64,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio::sync::mpsc::Receiver;
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::{spawn_blocking, JoinHandle},
@@ -144,6 +145,62 @@ fn preprocess_iris_message_shares(
         code_share_mirrored.all_rotations(),
         mask_share_mirrored.all_rotations(),
     ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn receive_batch_stream(
+    party_id: usize,
+    client: Client,
+    sns_client: SNSClient,
+    s3_client: S3Client,
+    config: Config,
+    store: Store,
+    mut skip_request_ids: Vec<String>,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    shutdown_handler: Arc<ShutdownHandler>,
+    uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
+) -> Receiver<eyre::Result<Option<BatchQuery>, ReceiveRequestError>> {
+    let (tx, rx) = mpsc::channel(1);
+
+    tokio::spawn(async move {
+        loop {
+            let permit = match tx.reserve().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+
+            // Skip requests based on the startup sync, only in the first iteration.
+            let skip_request_ids = mem::take(&mut skip_request_ids);
+
+            let batch = receive_batch(
+                party_id,
+                &client,
+                &sns_client,
+                &s3_client,
+                &config,
+                &store,
+                &skip_request_ids,
+                shares_encryption_key_pairs.clone(),
+                &shutdown_handler,
+                &uniqueness_error_result_attributes,
+                &reauth_error_result_attributes,
+                &reset_error_result_attributes,
+            )
+            .await;
+
+            let stop = matches!(batch, Err(_) | Ok(None));
+            permit.send(batch);
+
+            if stop {
+                break;
+            }
+        }
+        tracing::info!("Stopping batch receiver.");
+    });
+
+    rx
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -346,26 +403,28 @@ async fn receive_batch(
                         } else {
                             batch_query.skip_persistence.push(false);
                         }
-                        if config.luc_enabled {
-                            if config.luc_lookback_records > 0 {
-                                batch_query.luc_lookback_records = config.luc_lookback_records;
-                            }
-                            if config.luc_serial_ids_from_smpc_request {
-                                if let Some(serial_ids) =
-                                    uniqueness_request.or_rule_serial_ids.clone()
-                                {
-                                    // convert from 1-based serial id to 0-based index in actor
-                                    batch_query
-                                        .or_rule_indices
-                                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                                } else {
-                                    tracing::warn!(
+
+                        if config.luc_enabled && config.luc_lookback_records > 0 {
+                            batch_query.luc_lookback_records = config.luc_lookback_records;
+                        }
+
+                        let or_rule_indices = if config.luc_enabled
+                            && config.luc_serial_ids_from_smpc_request
+                        {
+                            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref()
+                            {
+                                // convert from 1-based serial id to 0-based index in actor
+                                serial_ids.iter().map(|x| x - 1).collect()
+                            } else {
+                                tracing::warn!(
                                         "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
-                                    batch_query.or_rule_indices.push(vec![]);
-                                }
+                                vec![]
                             }
-                        }
+                        } else {
+                            vec![]
+                        };
+                        batch_query.or_rule_indices.push(or_rule_indices);
 
                         batch_query
                             .request_ids
@@ -1712,7 +1771,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (mut handle, store) = rx.await??;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
+    let skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
 
@@ -1852,10 +1911,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .enumerate()
                 .filter_map(
                     // Find the indices of non-matching queries in the batch.
-                    // BUT ALSO filter out any detected full face mirror attacks.
                     |(query_idx, is_match)| {
                         if !is_match {
-                            // Check for full face mirror attack (only for UNIQUENESS requests)
+                                Some(query_idx)
+                        } else {
+                            // Check for full face mirror attack (only for UNIQUENESS requests) and log it.
                             if request_types[query_idx] == UNIQUENESS_MESSAGE_TYPE && full_face_mirror_attack_detected[query_idx]
                             {
                                 tracing::warn!(
@@ -1863,12 +1923,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                                     request_ids[query_idx]
                                 );
                                 metrics::counter!("mirror.attack.rejected").increment(1);
-                                None
-                            } else {
-                                // Otherwise it's a legitimate non-match, include it.
-                                Some(query_idx)
                             }
-                        } else {
                             // It matched, don't include.
                             None
                         }
@@ -2267,35 +2322,36 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
 
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
-        let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut next_batch = receive_batch(
+        let mut batch_stream = receive_batch_stream(
             party_id,
-            &aws_clients.sqs_client,
-            &aws_clients.sns_client,
-            &aws_clients.s3_client,
-            &config,
-            &store,
-            &skip_request_ids,
+            aws_clients.sqs_client.clone(),
+            aws_clients.sns_client.clone(),
+            aws_clients.s3_client.clone(),
+            config.clone(),
+            store.clone(),
+            skip_request_ids,
             shares_encryption_key_pair.clone(),
-            &shutdown_handler,
-            &uniqueness_error_result_attribute,
-            &reauth_error_result_attribute,
-            &reset_check_error_result_attribute,
+            shutdown_handler.clone(),
+            uniqueness_error_result_attribute,
+            reauth_error_result_attribute,
+            reset_check_error_result_attribute,
         );
 
         loop {
             let now = Instant::now();
 
-            let _batch = next_batch.await?;
-            if _batch.is_none() {
-                tracing::info!("No more batches to process, exiting main loop");
-                return Ok(());
-            }
-            let batch = _batch.unwrap();
+            let batch = match batch_stream.recv().await {
+                Some(Ok(None)) | None => {
+                    tracing::info!("No more batches to process, exiting main loop");
+                    return Ok(());
+                }
+                Some(Err(e)) => {
+                    return Err(e.into());
+                }
+                Some(Ok(Some(batch))) => batch,
+            };
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -2317,21 +2373,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             background_tasks.check_tasks();
 
             let result_future = handle.submit_batch_query(batch);
-
-            next_batch = receive_batch(
-                party_id,
-                &aws_clients.sqs_client,
-                &aws_clients.sns_client,
-                &aws_clients.s3_client,
-                &config,
-                &store,
-                &skip_request_ids,
-                shares_encryption_key_pair.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attribute,
-                &reauth_error_result_attribute,
-                &reset_check_error_result_attribute,
-            );
 
             // await the result
             let result = timeout(processing_timeout, result_future.await)
