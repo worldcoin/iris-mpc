@@ -198,9 +198,14 @@ impl<'a> BatchProcessor<'a> {
         let queue_url = &self.config.requests_queue_url;
 
         // Poll until we have enough messages
-        // temporary hack for staging to only process 1 message at a time
-        // this helps with the correctness test
-        while self.msg_counter < 1 {
+        // Config to only process 1 message at a time, this helps with the correctness test
+        let batch_size = if self.config.override_max_batch_size {
+            1
+        } else {
+            *CURRENT_BATCH_SIZE.lock().unwrap()
+        };
+
+        while self.msg_counter < batch_size {
             let rcv_message_output = self
                 .client
                 .receive_message()
