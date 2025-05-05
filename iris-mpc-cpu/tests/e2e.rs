@@ -9,7 +9,7 @@ use iris_mpc_cpu::{
         aby3::aby3_store::{Aby3Store, SharedIrises},
         plaintext_store::PlaintextStore,
     },
-    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams},
+    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -46,10 +46,17 @@ async fn create_graph_from_plain_dbs(
     params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let mut left_store = PlaintextStore::create_random_store_with_db(left_db.db.clone()).await?;
-    let mut right_store = PlaintextStore::create_random_store_with_db(right_db.db.clone()).await?;
-    let left_graph = left_store.create_graph(&mut rng, DB_SIZE, params).await?;
-    let right_graph = right_store.create_graph(&mut rng, DB_SIZE, params).await?;
+    let mut left_store = PlaintextStore::new_from_vec(left_db.db.clone()).await;
+    let mut right_store = PlaintextStore::new_from_vec(right_db.db.clone()).await;
+    let searcher = HnswSearcher {
+        params: params.clone(),
+    };
+    let left_graph = left_store
+        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .await?;
+    let right_graph = right_store
+        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .await?;
 
     let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
     let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
