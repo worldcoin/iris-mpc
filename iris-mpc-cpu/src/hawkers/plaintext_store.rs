@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::hnsw::{
     metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
     vector_store::VectorStoreMut,
-    GraphMem, HnswParams, HnswSearcher, VectorStore,
+    GraphMem, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
 use iris_mpc_common::iris_db::{
@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
-use eyre::Result;
+use eyre::{eyre, Result};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
@@ -23,27 +23,49 @@ pub struct PlaintextStore {
 }
 
 impl PlaintextStore {
+    /// Generate a new empty `PlaintextStore`.
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub async fn create_graph<R: RngCore + Clone + CryptoRng>(
+    /// Generate a new `PlaintextStore` with the specified database of
+    /// `IrisCode` entries.
+    pub async fn new_from_vec(iris_codes: Vec<IrisCode>) -> Self {
+        Self {
+            points: iris_codes.into_iter().map(Arc::new).collect(),
+        }
+    }
+
+    /// Generate a new `PlaintextStore` of specified size with random entries.
+    pub async fn new_random<R: RngCore + Clone + CryptoRng>(
+        rng: &mut R,
+        store_size: usize,
+    ) -> Self {
+        let iris_codes = IrisDB::new_random_rng(store_size, rng).db;
+        PlaintextStore::new_from_vec(iris_codes).await
+    }
+
+    /// Generate an HNSW graph over the first `graph_size` entries of this
+    /// `PlaintextStore`, using the specified searcher and randomness.
+    pub async fn generate_graph<R: RngCore + Clone + CryptoRng>(
         &mut self,
         rng: &mut R,
         graph_size: usize,
-        hnsw_params: &HnswParams,
+        searcher: &HnswSearcher,
     ) -> Result<GraphMem<Self>> {
-        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-
         let mut graph = GraphMem::new();
-        let searcher = HnswSearcher {
-            params: hnsw_params.clone(),
-        };
+        let mut rng = AesRng::from_rng(rng.clone())?;
+
+        if graph_size > self.points.len() {
+            return Err(eyre!(
+                "Cannot generate graph larger than underlying vector store"
+            ));
+        }
 
         for idx in 0..graph_size {
-            let query = self.points.get(idx).unwrap().clone();
+            let query = self.points[idx].clone();
             let query_id = VectorId::from_0_index(idx as u32);
-            let insertion_layer = searcher.select_layer(&mut rng_searcher1)?;
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
@@ -99,62 +121,6 @@ impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.points.push(query.clone());
         VectorId::from_0_index((self.points.len() - 1) as u32)
-    }
-}
-
-impl PlaintextStore {
-    pub async fn create_random<R: RngCore + Clone + CryptoRng>(
-        rng: &mut R,
-        database_size: usize,
-        searcher: &HnswSearcher,
-    ) -> Result<(Self, GraphMem<Self>)> {
-        // makes sure the searcher produces same graph structure by having the same rng
-        let mut rng_searcher1 = AesRng::from_rng(rng.clone())?;
-        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
-
-        let mut plaintext_vector_store = PlaintextStore::new();
-        let mut plaintext_graph_store = GraphMem::new();
-
-        for raw_query in cleartext_database {
-            let query = Arc::new(raw_query);
-            searcher
-                .insert(
-                    &mut plaintext_vector_store,
-                    &mut plaintext_graph_store,
-                    &query,
-                    &mut rng_searcher1,
-                )
-                .await?;
-        }
-
-        Ok((plaintext_vector_store, plaintext_graph_store))
-    }
-
-    pub async fn create_random_store<R: RngCore + Clone + CryptoRng>(
-        rng: &mut R,
-        database_size: usize,
-    ) -> Result<Self> {
-        let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
-
-        let mut plaintext_vector_store = PlaintextStore::new();
-
-        for raw_query in cleartext_database {
-            let query = Arc::new(raw_query);
-            let _ = plaintext_vector_store.insert(&query).await;
-        }
-
-        Ok(plaintext_vector_store)
-    }
-
-    pub async fn create_random_store_with_db(cleartext_database: Vec<IrisCode>) -> Result<Self> {
-        let mut plaintext_vector_store = PlaintextStore::new();
-
-        for raw_query in cleartext_database {
-            let query = Arc::new(raw_query);
-            let _ = plaintext_vector_store.insert(&query).await;
-        }
-
-        Ok(plaintext_vector_store)
     }
 }
 
@@ -245,8 +211,10 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::new_with_test_parameters();
-        let (mut ptxt_vector, mut ptxt_graph) =
-            PlaintextStore::create_random(&mut rng, database_size, &searcher).await?;
+        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size).await;
+        let mut ptxt_graph = ptxt_vector
+            .generate_graph(&mut rng, database_size, &searcher)
+            .await?;
         for i in 0..database_size {
             let query = ptxt_vector.points.get(i).unwrap().clone();
             let cleartext_neighbors = searcher

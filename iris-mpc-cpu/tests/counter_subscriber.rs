@@ -174,8 +174,8 @@ async fn init_hnsw(
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
-    let (vector_store, graph_store) =
-        PlaintextStore::create_random(rng, db_size, &searcher).await?;
+    let mut vector_store = PlaintextStore::new_random(rng, db_size).await;
+    let graph_store = vector_store.generate_graph(rng, db_size, &searcher).await?;
     let query1 = Arc::new(IrisCode::random_rng(rng));
     let query2 = Arc::new(IrisCode::random_rng(rng));
     Ok((searcher, vector_store, graph_store, query1, query2))
