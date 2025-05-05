@@ -288,7 +288,7 @@ impl Buffers {
         let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
         let buckets_recv_buffer =
-            n_buckets.map(|n_buckets| Self::allocate_buffer(n_buckets * 32, devices));
+            n_buckets.map(|n_buckets| Self::allocate_buffer(n_buckets, devices));
 
         Buffers {
             lifted_shares,
