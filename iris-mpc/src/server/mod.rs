@@ -126,7 +126,11 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&config).await?;
-    check_consensus_on_iris_height(&config).await?;
+    if check_consensus_on_iris_height(&config).await.is_err() {
+        shutdown_handler.trigger_manual_shutdown();
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
 
     background_tasks.check_tasks();
 
