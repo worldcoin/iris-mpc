@@ -235,8 +235,11 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
     let searcher = HnswSearcher::default();
-    let (plaintext_vector_store, plaintext_graph_store) =
-        PlaintextStore::create_random(rng, database_size, &searcher).await?;
+
+    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size).await;
+    let plaintext_graph_store = plaintext_vector_store
+        .generate_graph(rng, database_size, &searcher)
+        .await?;
 
     let protocol_stores =
         setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t).await?;
