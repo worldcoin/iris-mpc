@@ -636,7 +636,9 @@ impl From<BatchQuery> for HawkRequest {
                     ),
                 ],
                 Orientation::Mirror => [
-                    // TODO: Verify and explain the logic of this.
+                    // Swap the left and right sides to match against the opposite side database:
+                    // original left <-> mirrored interpolated right, and vice versa.
+                    // The original not-swapped queries are kept for intra-batch matching.
                     (
                         &batch.left_iris_rotated_requests.code,
                         &batch.left_iris_rotated_requests.mask,
