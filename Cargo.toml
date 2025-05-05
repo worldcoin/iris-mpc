@@ -34,8 +34,6 @@ eyre = "0.6"
 futures = "0.3.30"
 hex = "0.4.3"
 itertools = "0.13"
-kameo = { git = "https://github.com/tqwewe/kameo.git", rev = "02ae4a47e21973d0639588f27f7e0cf6137ff561" }
-kameo_actors = { git = "https://github.com/tqwewe/kameo.git", rev = "02ae4a47e21973d0639588f27f7e0cf6137ff561" }
 num-traits = "0.2"
 memmap2 = "0.9.5"
 serde = { version = "1.0", features = ["derive"] }

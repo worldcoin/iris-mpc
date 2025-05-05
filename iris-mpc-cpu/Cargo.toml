@@ -26,8 +26,6 @@ futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
-kameo.workspace = true
-kameo_actors.workspace = true
 num-traits.workspace = true
 prost = "0.13"
 rand.workspace = true
@@ -55,7 +53,9 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
-backon = { version = "1.4.0", default-features = false, features = ["tokio-sleep"] }
+backon = { version = "1.4.0", default-features = false, features = [
+    "tokio-sleep",
+] }
 rand_chacha = { version = "0.3", features = ["serde1"] }
 
 [dev-dependencies]
@@ -81,10 +81,6 @@ name = "hnsw-ex"
 [[bin]]
 name = "generate_benchmark_data"
 path = "bin/generate_benchmark_data.rs"
-
-[[bin]]
-name = "hawk-genesis-indexer"
-path = "bin/hawk_genesis_indexer.rs"
 
 [[bin]]
 name = "hawk_main"

@@ -1,7 +1,7 @@
 use super::utils::{errors::IndexationError, fetcher, types::IrisSerialId};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
-use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisStore};
+use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
 use std::{iter::Peekable, ops::Range};
 
@@ -30,7 +30,7 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> impl Future<Output = Result<Option<Vec<IrisData>>, IndexationError>> + Send;
+    ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
 }
 
 // Constructor.
@@ -121,7 +121,7 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> Result<Option<Vec<IrisData>>, IndexationError> {
+    ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
 

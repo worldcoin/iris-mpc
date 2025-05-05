@@ -4,11 +4,11 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 #[allow(dead_code)]
 pub enum IndexationError {
-    #[error("Failed to load AWS configuration")]
-    AwsConfiguration,
+    #[error("Failed to download AWS S3 object")]
+    AwsS3ObjectDownload,
 
-    #[error("Failed to download resource from AWS S3")]
-    AwsS3Download,
+    #[error("Failed to deserialize AWS S3 object")]
+    AwsS3ObjectDeserialize,
 
     #[error("Failed to begin indexation correctly")]
     BeginIndexation,
