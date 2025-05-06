@@ -60,6 +60,16 @@ impl Networking for GrpcSession {
             self.session_id
         ))?;
         trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
+        metrics::counter!(
+            "smpc.rounds",
+            "session_id" => self.session_id.0.to_string(),
+        )
+        .increment(1);
+        metrics::counter!(
+            "smpc.bytes",
+            "session_id" => self.session_id.0.to_string(),
+        )
+        .increment(value.len() as u64);
         let request = SendRequest { data: value };
         outgoing_stream
             .send(request)
