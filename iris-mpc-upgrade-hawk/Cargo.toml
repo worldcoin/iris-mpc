@@ -1,5 +1,5 @@
 [package]
-name = "iris-mpc-hawk-upgrade"
+name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 publish = false
 
