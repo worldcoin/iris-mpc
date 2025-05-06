@@ -110,7 +110,7 @@ pub async fn start_coordination_server(
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 )
                 .route(
-                    "/height",
+                    "/height-of-graph-genesis-indexation",
                     get({
                         let height = fetch_height_of_indexed().await;
                         let is_ready_flag = Arc::clone(&is_ready_flag);
