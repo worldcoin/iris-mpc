@@ -1,11 +1,9 @@
-use crate::execution::hawk_main::{
-    BothEyes, HawkActor, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
-};
-use crate::hawkers::aby3::aby3_store::QueryRef;
+use super::hawk_job::{Job, JobRequest, JobResult};
+use crate::execution::hawk_main::{BothEyes, HawkActor, HawkSession, HawkSessionRef, LEFT, RIGHT};
 use eyre::Result;
 use futures::try_join;
 use iris_mpc_store::DbStoredIris;
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 use tokio::sync::{mpsc, oneshot};
 
 /// Handle to manage concurrent interactions with a Hawk actor.
@@ -14,27 +12,6 @@ use tokio::sync::{mpsc, oneshot};
 pub struct Handle {
     job_queue: mpsc::Sender<Job>,
 }
-
-/// An indexation job that materialises an in-mem graph.
-pub struct Job {
-    // A request encapsulating data for indexation.
-    request: JobRequest,
-
-    // Tokio channel through which job result will be signalled.
-    return_channel: oneshot::Sender<Result<JobResult>>,
-}
-
-/// An indexation job request.
-#[derive(Clone, Debug)]
-#[allow(dead_code)]
-pub struct JobRequest {
-    // Indexation queries over both eyes.
-    queries: Arc<BothEyes<VecRequests<QueryRef>>>,
-}
-
-/// An indexation job result.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResult {}
 
 /// Constructors.
 impl Handle {
@@ -91,13 +68,6 @@ impl Handle {
         });
 
         Ok(Self { job_queue: tx })
-    }
-}
-
-/// Convertors.
-impl From<&Vec<DbStoredIris>> for JobRequest {
-    fn from(_batch: &Vec<DbStoredIris>) -> Self {
-        unimplemented!()
     }
 }
 

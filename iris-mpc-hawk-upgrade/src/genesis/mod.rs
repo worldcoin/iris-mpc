@@ -134,6 +134,8 @@ async fn exec_main_loop(
 
     let res: Result<()> = async {
         tracing::info!("Entering main loop");
+
+        // Housekeeping: set processing timer info.
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
@@ -145,15 +147,20 @@ async fn exec_main_loop(
                 batch.len(),
                 now.elapsed(),
             );
-            metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
 
+            // Housekeeping: collate metrics.
+            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
+
+            // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
+            // Process batch with Hawk handle over hawk actor.
             let result_future = hawk_handle.submit_batch(batch);
             timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
 
+            // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion()
         }
 
@@ -170,6 +177,7 @@ async fn exec_main_loop(
         }
         Err(e) => {
             tracing::error!("HawkActor processing error: {:?}", e);
+            tracing::info!("Initiating shutdown");
 
             // Ensure hawk handle is dropped so as to initiate shutdown.
             drop(hawk_handle);
@@ -219,67 +227,65 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
 async fn get_service_clients(
     config: &Config,
 ) -> Result<(S3Client, IrisStore, GraphPg<Aby3Store>), Report> {
-    let (iris_store, graph_store) = get_service_clients_pgres(&config).await?;
-    let aws_s3_client = get_service_clients_aws(&config).await;
+    /// Returns an S3 client with retry configuration.
+    async fn get_aws_client(config: &Config) -> S3Client {
+        // Get region from config or use default
+        let region = config
+            .clone()
+            .aws
+            .and_then(|aws| aws.region)
+            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+        let region_provider = Region::new(region);
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let force_path_style = config.environment != "prod" && config.environment != "stage";
+        let retry_config = RetryConfig::standard().with_max_attempts(5);
+        let s3_config = S3ConfigBuilder::from(&shared_config)
+            .force_path_style(force_path_style)
+            .retry_config(retry_config.clone())
+            .build();
 
-    Ok((aws_s3_client, iris_store, graph_store))
-}
+        S3Client::from_conf(s3_config)
+    }
 
-/// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
-async fn get_service_clients_pgres(
-    config: &Config,
-) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
-    // Set config.
-    let db_config_iris = config
-        .database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))?;
-    let db_config_graph = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+    /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
+    async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+        // Set config.
+        let db_config_iris = config
+            .database
+            .as_ref()
+            .ok_or(eyre!("Missing database config"))?;
+        let db_config_graph = config
+            .cpu_database
+            .as_ref()
+            .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
 
-    // Set postgres clients.
-    let pg_client_iris = PostgresClient::new(
-        &db_config_iris.url,
-        &config.get_database_schema_name(),
-        AccessMode::ReadOnly,
-    )
-    .await?;
-    let pg_client_graph = PostgresClient::new(
-        &db_config_graph.url,
-        &config.get_database_schema_name(),
-        AccessMode::ReadWrite,
-    )
-    .await?;
+        // Set postgres clients.
+        let pg_client_iris = PostgresClient::new(
+            &db_config_iris.url,
+            &config.get_database_schema_name(),
+            AccessMode::ReadOnly,
+        )
+        .await?;
+        let pg_client_graph = PostgresClient::new(
+            &db_config_graph.url,
+            &config.get_database_schema_name(),
+            AccessMode::ReadWrite,
+        )
+        .await?;
 
-    // Set stores.
-    tracing::info!("Creating new iris store from: {:?}", db_config_iris,);
-    let store_iris = IrisStore::new(&pg_client_iris).await?;
-    tracing::info!("Creating new graph store from: {:?}", db_config_graph);
-    let store_graph = GraphStore::new(&pg_client_graph).await?;
+        // Set stores - may take time if migrations are performed upon schemas.
+        tracing::info!("Creating new iris store from: {:?}", db_config_iris,);
+        let store_iris = IrisStore::new(&pg_client_iris).await?;
+        tracing::info!("Creating new graph store from: {:?}", db_config_graph);
+        let store_graph = GraphStore::new(&pg_client_graph).await?;
 
-    Ok((store_iris, store_graph))
-}
+        Ok((store_iris, store_graph))
+    }
 
-/// Returns an S3 client with retry configuration.
-pub async fn get_service_clients_aws(config: &Config) -> S3Client {
-    // Get region from config or use default
-    let region = config
-        .clone()
-        .aws
-        .and_then(|aws| aws.region)
-        .unwrap_or_else(|| DEFAULT_REGION.to_owned());
-    let region_provider = Region::new(region);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let force_path_style = config.environment != "prod" && config.environment != "stage";
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-    let s3_config = S3ConfigBuilder::from(&shared_config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config.clone())
-        .build();
+    let pgres_clients = get_pgres_clients(&config).await?;
+    let aws_s3_client = get_aws_client(&config).await;
 
-    S3Client::from_conf(s3_config)
+    Ok((aws_s3_client, pgres_clients.0, pgres_clients.1))
 }
 
 /// Build this node's synchronization state, which is compared against the
@@ -351,7 +357,7 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler
 }
 
-pub async fn load_db(
+async fn load_db(
     actor: &mut impl InMemoryStore,
     store: &IrisStore,
     store_len: usize,
