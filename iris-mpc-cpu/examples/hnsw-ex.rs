@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
@@ -23,7 +25,7 @@ fn main() -> Result<()> {
 
         for idx in 0..DATABASE_SIZE {
             let raw_query = IrisCode::random_rng(&mut rng);
-            let query = vector.prepare_query(raw_query.clone());
+            let query = Arc::new(raw_query);
             searcher
                 .insert(&mut vector, &mut graph, &query, &mut rng)
                 .await?;

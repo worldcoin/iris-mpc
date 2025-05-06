@@ -12,7 +12,7 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -45,8 +45,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
     for (i, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from(PointId::from(i));
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
+        let vector_id = VectorId::from_0_index(i as u32);
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -235,8 +235,11 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
     let searcher = HnswSearcher::default();
-    let (plaintext_vector_store, plaintext_graph_store) =
-        PlaintextStore::create_random(rng, database_size, &searcher).await?;
+
+    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size).await;
+    let plaintext_graph_store = plaintext_vector_store
+        .generate_graph(rng, database_size, &searcher)
+        .await?;
 
     let protocol_stores =
         setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t).await?;

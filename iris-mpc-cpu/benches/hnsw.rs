@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use aes_prng::AesRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
@@ -61,7 +63,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
-                let query = vector.prepare_query(raw_query.clone());
+                let query = Arc::new(raw_query.clone());
                 searcher
                     .insert(&mut vector, &mut graph, &query, &mut rng)
                     .await
@@ -77,7 +79,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                     let searcher = HnswSearcher::default();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let query = db_vectors.prepare_query(on_the_fly_query);
+                    let query = Arc::new(on_the_fly_query);
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, &mut rng)
                         .await

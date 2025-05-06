@@ -1,9 +1,10 @@
-use crate::hawkers::plaintext_store::{PlaintextIris, PlaintextPoint, PlaintextStore};
+use crate::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Write},
+    sync::Arc,
 };
 
 /// Iris code representation using base64 encoding compatible with Open IRIS
@@ -43,10 +44,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     let mut vector = PlaintextStore::default();
     for json_pt in stream {
         let json_pt = json_pt?;
-        vector.points.push(PlaintextPoint {
-            data: PlaintextIris((&json_pt).into()),
-            is_persistent: true,
-        });
+        vector.points.push(Arc::new((&json_pt).into()));
     }
 
     if let Some(num) = len {
@@ -70,7 +68,7 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     for pt in &vector.points {
-        let json_pt: Base64IrisCode = (&pt.data.0).into();
+        let json_pt: Base64IrisCode = (&(**pt).clone()).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }

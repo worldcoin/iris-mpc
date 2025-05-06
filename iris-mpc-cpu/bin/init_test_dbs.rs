@@ -1,4 +1,4 @@
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 
 use aes_prng::AesRng;
 use clap::Parser;
@@ -340,7 +340,7 @@ async fn main() -> Result<()> {
             let raw_query = (&json_pt.unwrap()).into();
 
             let side = count % 2;
-            let query = vectors[side].prepare_query(raw_query);
+            let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
         }
     }
@@ -390,7 +390,7 @@ async fn main() -> Result<()> {
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                let query = vector_store.prepare_query(raw_query);
+                let query = Arc::new(raw_query);
                 searcher
                     .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
                     .await?;

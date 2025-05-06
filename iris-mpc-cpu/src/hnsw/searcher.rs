@@ -1043,6 +1043,8 @@ impl HnswSearcher {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
     use aes_prng::AesRng;
@@ -1060,7 +1062,7 @@ mod tests {
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(|raw_query| vector_store.prepare_query(raw_query))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes.
@@ -1079,7 +1081,7 @@ mod tests {
         let queries2 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(|raw_query| vector_store.prepare_query(raw_query))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes with helper function

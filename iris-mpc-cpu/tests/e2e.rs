@@ -7,9 +7,9 @@ use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
         aby3::aby3_store::{Aby3Store, SharedIrises},
-        plaintext_store::{PlaintextStore, PointId},
+        plaintext_store::PlaintextStore,
     },
-    hnsw::{graph::layered_graph::migrate, GraphMem},
+    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -39,12 +39,20 @@ async fn create_graph_from_plain_dbs(
     player_index: usize,
     left_db: &IrisDB,
     right_db: &IrisDB,
+    params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let mut left_store = PlaintextStore::create_random_store_with_db(left_db.db.clone()).await?;
-    let mut right_store = PlaintextStore::create_random_store_with_db(right_db.db.clone()).await?;
-    let left_graph = left_store.create_graph(&mut rng, DB_SIZE).await?;
-    let right_graph = right_store.create_graph(&mut rng, DB_SIZE).await?;
+    let mut left_store = PlaintextStore::new_from_vec(left_db.db.clone()).await;
+    let mut right_store = PlaintextStore::new_from_vec(right_db.db.clone()).await;
+    let searcher = HnswSearcher {
+        params: params.clone(),
+    };
+    let left_graph = left_store
+        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .await?;
+    let right_graph = right_store
+        .generate_graph(&mut rng, DB_SIZE, &searcher)
+        .await?;
 
     let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
     let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
@@ -53,13 +61,13 @@ async fn create_graph_from_plain_dbs(
     let mut right_shared_irises = HashMap::new();
 
     for (vector_id, iris) in left_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
+        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
     for (vector_id, iris) in right_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
+        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
@@ -79,8 +87,10 @@ async fn start_hawk_node(
 ) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
+    // TODO: replace with: `HnswParams::new(args.hnsw_ef_search, args.hnsw_ef_constr, args.hnsw_M)`
+    let params = HnswParams::new(320, 256, 256);
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, left_db, right_db).await?;
+        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &params).await?;
     let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
 
     let handle = HawkHandle::new(hawk_actor).await?;
