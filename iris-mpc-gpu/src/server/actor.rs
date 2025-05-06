@@ -1210,6 +1210,16 @@ impl ServerActor {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
                         merged_results[i] == NON_MATCH_ID
                             && mirror_results.matches_with_skip_persistence[i]
+                            // Ensures that mirror attack detection is only applied to uniqueness requests.
+                            // This constraint is necessary due to the implementation of the `matches` and
+                            // `matches_with_skip_persistence` vectors:
+                            // 1. The `matches` vector is initialized by the `calculate_insertion_indices()` function
+                            //    with all elements set to `true` by default.
+                            // 2. During iteration over the `uniqueness_insertion_list`, only elements corresponding
+                            //    to unique requests have their value set to `false` in the `matches` vector.
+                            // 3. Consequently, non-uniqueness requests (reauth, reset, deletion) retain their
+                            //    initial `true` value in the `matches` vector, which would incorrectly cause
+                            //    the mirror attack detection algorithm to classify them as full face mirror attacks.
                             && batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
                     })
                     .collect();
