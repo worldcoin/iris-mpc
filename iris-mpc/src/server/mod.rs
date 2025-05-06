@@ -532,11 +532,9 @@ async fn start_coordination_server(
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 )
                 .route(
-                    // todo(einar)
                     "/height",
                     get({
                         let height = fetch_height_of_indexed().await;
-                        // We are only ready once this flag is set to true.
                         let is_ready_flag = Arc::clone(&is_ready_flag);
                         move || async move {
                             if is_ready_flag.load(Ordering::SeqCst) {
