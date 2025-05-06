@@ -826,7 +826,6 @@ impl HawkMutation {
         Ok(())
     }
 }
-// einar
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
