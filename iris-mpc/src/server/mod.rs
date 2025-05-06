@@ -1100,6 +1100,7 @@ async fn run_main_server_loop(
             tracing::info!("Received batch in {:?}", now.elapsed());
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
+            metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
 
             process_identity_deletions(
                 &batch,
