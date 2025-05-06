@@ -1,9 +1,10 @@
 use aws_config::retry::RetryConfig;
-use aws_sdk_s3::config::Builder as S3ConfigBuilder;
-use aws_sdk_s3::{config::Region, Client as S3Client};
+use aws_sdk_s3::{
+    config::{Builder as S3ConfigBuilder, Region},
+    Client as S3Client,
+};
 use eyre::{bail, eyre, Report, Result};
-use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
@@ -16,7 +17,7 @@ use iris_mpc_common::{
     server_coordination as coordinator,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{GraphStore, HawkActor},
+    execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{BatchGenerator, BatchIterator, Handle as HawkHandle},
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -28,8 +29,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::timeout;
-
-use iris_mpc_cpu::execution::hawk_main::HawkArgs;
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -97,6 +96,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
+    // Main loop.
     run_main_server_loop(
         &config,
         &iris_store,
@@ -110,28 +110,6 @@ pub async fn server_main(config: Config) -> Result<()> {
     .await?;
 
     Ok(())
-}
-
-/// Build this node's synchronization state, which is compared against the
-/// states provided by the other MPC nodes to reconstruct a consistent initial
-/// state for MPC operation.
-/// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
-async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState> {
-    let db_len = store.count_irises().await? as u64;
-    let common_config = CommonConfig::from(config.clone());
-
-    let deleted_request_ids = Vec::new();
-    let modifications = Vec::new();
-
-    let next_sns_sequence_num = None;
-
-    Ok(SyncState {
-        db_len,
-        deleted_request_ids,
-        modifications,
-        next_sns_sequence_num,
-        common_config,
-    })
 }
 
 async fn sync_dbs_genesis(
@@ -251,30 +229,49 @@ async fn run_main_server_loop(
     Ok(())
 }
 
-/// Initializes shutdown handler, which waits for shutdown signals or function
-/// calls and provides a light mechanism for gracefully finishing ongoing query
-/// batches before exiting.
-async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
-    let shutdown_handler = Arc::new(ShutdownHandler::new(
-        config.shutdown_last_results_sync_timeout_secs,
-    ));
-    shutdown_handler.wait_for_shutdown_signal().await;
+/// Initialize main Hawk actor process for handling query batches using HNSW
+/// approximate k-nearest neighbors graph search.
+async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
+    let node_addresses: Vec<String> = config
+        .node_hostnames
+        .iter()
+        .zip(config.service_ports.iter())
+        .map(|(host, port)| format!("{}:{}", host, port))
+        .collect();
 
-    shutdown_handler
+    let hawk_args = HawkArgs {
+        party_index: config.party_id,
+        addresses: node_addresses.clone(),
+        request_parallelism: config.hawk_request_parallelism,
+        connection_parallelism: config.hawk_connection_parallelism,
+        hnsw_prng_seed: config.hawk_prng_seed,
+        disable_persistence: config.cpu_disable_persistence,
+        match_distances_buffer_size: config.match_distances_buffer_size,
+        n_buckets: config.n_buckets,
+    };
+
+    tracing::info!(
+        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        hawk_args.party_index,
+        node_addresses
+    );
+
+    HawkActor::from_cli(&hawk_args).await
 }
 
 async fn get_service_clients(
     config: &Config,
 ) -> Result<(S3Client, IrisStore, GraphPg<Aby3Store>), Report> {
-    let (iris_store, graph_store) = get_pgres_clients(&config).await?;
-    let aws_s3_client = get_s3_client(&config).await;
+    let (iris_store, graph_store) = get_service_clients_pgres(&config).await?;
+    let aws_s3_client = get_service_clients_aws(&config).await;
 
     Ok((aws_s3_client, iris_store, graph_store))
 }
 
-/// Returns initialized PostgreSQL clients for interacting
-/// with iris share and HNSW graph stores.
-async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+/// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
+async fn get_service_clients_pgres(
+    config: &Config,
+) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
     // Set config.
     let db_config_iris = config
         .database
@@ -308,8 +305,8 @@ async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3St
     Ok((store_iris, store_graph))
 }
 
-/// Creates an S3 client with retry configuration
-pub async fn get_s3_client(config: &Config) -> S3Client {
+/// Returns an S3 client with retry configuration.
+pub async fn get_service_clients_aws(config: &Config) -> S3Client {
     // Get region from config or use default
     let region = config
         .clone()
@@ -328,34 +325,38 @@ pub async fn get_s3_client(config: &Config) -> S3Client {
     S3Client::from_conf(s3_config)
 }
 
-/// Initialize main Hawk actor process for handling query batches using HNSW
-/// approximate k-nearest neighbors graph search.
-async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
-    let node_addresses: Vec<String> = config
-        .node_hostnames
-        .iter()
-        .zip(config.service_ports.iter())
-        .map(|(host, port)| format!("{}:{}", host, port))
-        .collect();
+/// Build this node's synchronization state, which is compared against the
+/// states provided by the other MPC nodes to reconstruct a consistent initial
+/// state for MPC operation.
+/// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
+async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState> {
+    let db_len = store.count_irises().await? as u64;
+    let common_config = CommonConfig::from(config.clone());
 
-    let hawk_args = HawkArgs {
-        party_index: config.party_id,
-        addresses: node_addresses.clone(),
-        request_parallelism: config.hawk_request_parallelism,
-        connection_parallelism: config.hawk_connection_parallelism,
-        hnsw_prng_seed: config.hawk_prng_seed,
-        disable_persistence: config.cpu_disable_persistence,
-        match_distances_buffer_size: config.match_distances_buffer_size,
-        n_buckets: config.n_buckets,
-    };
+    let deleted_request_ids = Vec::new();
+    let modifications = Vec::new();
 
-    tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
-        hawk_args.party_index,
-        node_addresses
-    );
+    let next_sns_sequence_num = None;
 
-    HawkActor::from_cli(&hawk_args).await
+    Ok(SyncState {
+        db_len,
+        deleted_request_ids,
+        modifications,
+        next_sns_sequence_num,
+        common_config,
+    })
+}
+
+/// Initializes shutdown handler, which waits for shutdown signals or function
+/// calls and provides a light mechanism for gracefully finishing ongoing query
+/// batches before exiting.
+async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
+    let shutdown_handler = Arc::new(ShutdownHandler::new(
+        config.shutdown_last_results_sync_timeout_secs,
+    ));
+    shutdown_handler.wait_for_shutdown_signal().await;
+
+    shutdown_handler
 }
 
 pub async fn load_db(
