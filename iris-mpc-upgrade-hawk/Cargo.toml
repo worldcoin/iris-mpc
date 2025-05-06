@@ -1,5 +1,5 @@
 [package]
-name = "iris-mpc"
+name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 publish = false
 
@@ -13,7 +13,6 @@ aws-sdk-sns.workspace = true
 aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-secretsmanager.workspace = true
-axum.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -48,13 +47,5 @@ criterion = "0.5"
 default = []
 
 [[bin]]
-name = "iris-mpc-gpu"
-path = "bin/server.rs"
-
-[[bin]]
-name = "iris-mpc-hawk"
-path = "bin/server/iris_mpc_hawk.rs"
-
-[[bin]]
-name = "client"
-path = "bin/client/client.rs"
+name = "iris-mpc-hawk-genesis"
+path = "bin/iris_mpc_hawk_genesis.rs"

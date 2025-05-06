@@ -243,6 +243,18 @@ pub struct Config {
     pub override_max_batch_size: bool,
 }
 
+impl Config {
+    // Returns computed name of application's postgres database schema.
+    pub fn get_database_schema_name(&self) -> String {
+        format!(
+            "{}_{}_{}",
+            self.app_name.clone(),
+            self.environment.clone(),
+            self.party_id.clone()
+        )
+    }
+}
+
 fn default_full_scan_side() -> Eye {
     Eye::Left
 }
