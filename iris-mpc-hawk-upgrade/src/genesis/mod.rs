@@ -37,7 +37,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
 /// an isolated database snapshot of previously validated unique iris shares.
-pub async fn server_main(config: Config) -> Result<()> {
+pub async fn exec_main(config: Config) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -53,7 +53,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(&config, &iris_store, &graph_store).await?;
 
-    // Start coordination server.
+    // Await coordination server to start.
     let my_state = get_sync_state(&config, &iris_store).await?;
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
@@ -87,8 +87,8 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Set instance of hawk actor.
     let mut hawk_actor = get_hawk_actor(&config).await?;
 
-    // Initialise in-mem graph from previously indexed.
-    initialise_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
+    // Initialise HNSW graph from previously indexed.
+    init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = ready.
@@ -96,8 +96,8 @@ pub async fn server_main(config: Config) -> Result<()> {
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
-    // Main loop.
-    run_main_server_loop(
+    // Execute main loop.
+    exec_main_loop(
         &config,
         &iris_store,
         &graph_store,
@@ -112,51 +112,8 @@ pub async fn server_main(config: Config) -> Result<()> {
     Ok(())
 }
 
-async fn sync_dbs_genesis(
-    _config: &Config,
-    _sync_result: &SyncResult,
-    _iris_store: &IrisStore,
-) -> Result<()> {
-    todo!();
-}
-
-async fn initialise_graph_from_stores(
-    config: &Config,
-    iris_store: &IrisStore,
-    graph_store: &GraphPg<Aby3Store>,
-    hawk_actor: &mut HawkActor,
-) -> Result<()> {
-    // ANCHOR: Load the database
-    tracing::info!("⚓️ ANCHOR: Load the database");
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
-
-    let parallelism = config
-        .database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))?
-        .load_parallelism;
-
-    tracing::info!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
-    );
-
-    // -------------------------------------------------------------------
-    // TODO: use the number of currently processed entries for the amount
-    //       to read into memory
-    // -------------------------------------------------------------------
-    let store_len = iris_store.count_irises().await?;
-    load_db(&mut iris_loader, iris_store, store_len, parallelism)
-        .await
-        .expect("Failed to load DB");
-
-    graph_loader.load_graph_store(graph_store).await?;
-
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
-async fn run_main_server_loop(
+async fn exec_main_loop(
     config: &Config,
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
@@ -347,6 +304,41 @@ async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState>
     })
 }
 
+async fn init_graph_from_stores(
+    config: &Config,
+    iris_store: &IrisStore,
+    graph_store: &GraphPg<Aby3Store>,
+    hawk_actor: &mut HawkActor,
+) -> Result<()> {
+    // ANCHOR: Load the database
+    tracing::info!("⚓️ ANCHOR: Load the database");
+    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
+
+    let parallelism = config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))?
+        .load_parallelism;
+
+    tracing::info!(
+        "Initialize iris db: Loading from DB (parallelism: {})",
+        parallelism
+    );
+
+    // -------------------------------------------------------------------
+    // TODO: use the number of currently processed entries for the amount
+    //       to read into memory
+    // -------------------------------------------------------------------
+    let store_len = iris_store.count_irises().await?;
+    load_db(&mut iris_loader, iris_store, store_len, parallelism)
+        .await
+        .expect("Failed to load DB");
+
+    graph_loader.load_graph_store(graph_store).await?;
+
+    Ok(())
+}
+
 /// Initializes shutdown handler, which waits for shutdown signals or function
 /// calls and provides a light mechanism for gracefully finishing ongoing query
 /// batches before exiting.
@@ -442,6 +434,14 @@ async fn load_db_records<'a>(
         time_waiting_for_stream,
         time_loading_into_memory,
     );
+}
+
+async fn sync_dbs_genesis(
+    _config: &Config,
+    _sync_result: &SyncResult,
+    _iris_store: &IrisStore,
+) -> Result<()> {
+    todo!();
 }
 
 /// Validates application config.

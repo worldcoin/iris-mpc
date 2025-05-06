@@ -3,7 +3,7 @@
 use clap::Parser;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
-use iris_mpc_hawk_upgrade::genesis::server_main;
+use iris_mpc_hawk_upgrade::genesis::exec_main;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
@@ -26,7 +26,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Invoke main.
-    match server_main(config).await {
+    match exec_main(config).await {
         Ok(_) => {
             tracing::info!("Server exited normally");
         }
