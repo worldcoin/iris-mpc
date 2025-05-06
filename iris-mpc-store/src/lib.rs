@@ -167,7 +167,7 @@ impl Store {
     ///
     pub async fn fetch_iris_batch(
         &self,
-        identifiers: Vec<i64>,
+        identifiers: Vec<u64>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
         // TODO: define max batch size constant.
         assert!(
@@ -179,6 +179,9 @@ impl Store {
             "Iris Store: Fetching a batch of {} Irises",
             identifiers.len()
         );
+
+        // Conversion required for sql interpolation.
+        let identifiers: Vec<i64> = identifiers.into_iter().map(|x| x as i64).collect();
 
         let irises = sqlx::query_as::<_, DbStoredIris>(
             r#"
@@ -206,14 +209,16 @@ impl Store {
     ///
     pub async fn fetch_iris_by_serial_id(
         &self,
-        serial_id: i64,
+        serial_id: u64,
     ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
         tracing::info!(
             "PostgreSQL Store: Fetching Iris by serial-id ({})",
             serial_id
         );
 
+        // Conversion required for sql interpolation.
         let id_of_iris = serial_id as i32;
+
         Ok(
             sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
                 .bind(id_of_iris)

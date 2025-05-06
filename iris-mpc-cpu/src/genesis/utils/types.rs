@@ -2,7 +2,7 @@ use crate::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_store::DbStoredIris as IrisData;
 
 // An iris pair identifier.
-pub type IrisSerialId = i64;
+pub type IrisSerialId = u64;
 
 // Galois field element shares over raw iris biometric data.
 #[derive(Clone, Debug)]
