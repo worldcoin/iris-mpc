@@ -143,6 +143,20 @@ impl SharedIrises {
             })
             .collect_vec()
     }
+
+    pub fn from_0_indices(&self, indices: &[u32]) -> Vec<VectorId> {
+        indices
+            .iter()
+            .map(|index| {
+                let v = VectorId::from_0_index(*index);
+                if let Some((version, _)) = self.points.get(&v.serial_id()) {
+                    VectorId::new(v.serial_id(), *version)
+                } else {
+                    v
+                }
+            })
+            .collect_vec()
+    }
 }
 
 /// Reference to inserted irises.

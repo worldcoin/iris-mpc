@@ -35,7 +35,7 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
 };
-use itertools::{chain, izip, Itertools};
+use itertools::{izip, Itertools};
 use matching::{Match, MatchId};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -706,21 +706,20 @@ impl HawkRequest {
         }
     }
 
-    fn luc_ids(&self, luc_lookback_ids: Vec<VectorId>) -> VecRequests<Vec<VectorId>> {
+    fn luc_ids(&self, iris_store: &SharedIrises) -> VecRequests<Vec<VectorId>> {
+        let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
+
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
-            .map(|(or_rule_ids, request_type)| {
-                let or_rule_ids = or_rule_ids
-                    .iter()
-                    .map(|idx| VectorId::from_0_index(*idx).any_version());
+            .map(|(or_rule_idx, request_type)| {
+                let mut or_rule_ids = iris_store.from_0_indices(or_rule_idx);
 
                 let lookback =
                     request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
+                if lookback {
+                    or_rule_ids.extend_from_slice(&luc_lookback_ids);
+                };
 
-                let lookback_ids = if lookback { &luc_lookback_ids[..] } else { &[] }
-                    .iter()
-                    .map(|id| id.any_version());
-
-                chain!(or_rule_ids, lookback_ids).unique().collect_vec()
+                or_rule_ids
             })
             .collect_vec()
     }
@@ -985,13 +984,10 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let do_search = async |orient| -> Result<_> {
-            let search_queries = &request.queries(orient);
+        let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
 
-            let luc_lookback_ids = hawk_actor.iris_store[LEFT]
-                .read()
-                .await
-                .last_vector_ids(request.batch.luc_lookback_records);
+        let mut do_search = async |orient| -> Result<_> {
+            let search_queries = &request.queries(orient);
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
@@ -1000,9 +996,12 @@ impl HawkHandle {
             let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
                 search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
 
+            hawk_actor
+                .update_anon_stats(&sessions[0][0], &search_results)
+                .await?;
+
             let match_result = {
-                let step1 =
-                    matching::BatchStep1::new(&search_results, request.luc_ids(luc_lookback_ids));
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(

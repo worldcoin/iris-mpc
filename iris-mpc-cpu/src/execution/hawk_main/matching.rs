@@ -26,12 +26,12 @@ pub struct BatchStep1(VecRequests<Step1>);
 impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
-        luc_ids: VecRequests<Vec<VectorId>>,
+        luc_ids: &VecRequests<Vec<VectorId>>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
             izip!(&plans[LEFT], &plans[RIGHT], luc_ids)
-                .map(|(left, right, luc)| Step1::new([left, right], luc))
+                .map(|(left, right, luc)| Step1::new([left, right], luc.clone()))
                 .collect_vec(),
         )
     }
@@ -117,7 +117,10 @@ impl Step1 {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
 
-        chain!(anti_join, &self.luc_ids).cloned().collect_vec()
+        chain!(anti_join, &self.luc_ids)
+            .cloned()
+            .unique()
+            .collect_vec()
     }
 
     fn step2(
