@@ -282,8 +282,8 @@ async fn get_service_clients(
         Ok((store_iris, store_graph))
     }
 
-    let pgres_clients = get_pgres_clients(&config).await?;
-    let aws_s3_client = get_aws_client(&config).await;
+    let pgres_clients = get_pgres_clients(config).await?;
+    let aws_s3_client = get_aws_client(config).await;
 
     Ok((aws_s3_client, pgres_clients.0, pgres_clients.1))
 }
