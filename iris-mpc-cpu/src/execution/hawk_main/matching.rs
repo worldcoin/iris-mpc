@@ -4,7 +4,6 @@ use super::{
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
-use tracing_subscriber::filter;
 
 /// Since the two separate HSNW for left and right return separate vectors of matching ids, we
 /// cannot do the trivial AND/OR matching procedure from v2, since the other side might not have
@@ -195,17 +194,6 @@ impl BatchStep3 {
             .map(|step| step.select(filter).collect_vec())
             .collect_vec()
     }
-
-    // TODO: Integrate mirror.
-    pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
-    where
-        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
-    {
-        self.0
-            .iter()
-            .map(|step| step.normal.filter_map(&f))
-            .collect_vec()
-    }
 }
 
 /// Results for one request.
@@ -266,15 +254,6 @@ impl Step2 {
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
         chain!(search, luc, intra)
-    }
-
-    fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>
-    where
-        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
-    {
-        chain!(&self.full_join, &self.luc_results)
-            .filter_map(f)
-            .collect_vec()
     }
 }
 

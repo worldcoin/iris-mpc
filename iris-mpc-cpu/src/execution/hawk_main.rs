@@ -36,7 +36,10 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use matching::{Filter, Match, MatchId};
+use matching::{
+    Filter, Match, MatchId,
+    OnlyOrBoth::{Both, Only},
+};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
@@ -47,7 +50,6 @@ use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
-    slice,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -801,35 +803,10 @@ impl HawkResult {
             .map(|plan| plan.inserted_vector)
     }
 
-    fn match_ids(&self) -> Vec<Vec<u32>> {
-        let per_request = |matches: slice::Iter<Match>| {
-            matches
-                .filter_map(|m| match m.id {
-                    MatchId::Search(id) => Some(id),
-                    MatchId::Luc(id) => Some(id),
-                    MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
-                })
-                .map(|id| id.index())
-                .unique()
-                .collect_vec()
-        };
-
-        self.matches
-            .iter()
-            .map(|matches| per_request(matches.iter()))
-            .collect_vec()
-    }
-
-    fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
-        let per_match = |m: &Match| match m.id {
-            MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
-            _ => None,
-        };
-
-        self.matches
-            .iter()
-            .map(|matches| matches.iter().filter_map(per_match).collect_vec())
-            .collect_vec()
+    fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
+        let indices = self.select_indices(filter);
+        let counts = indices.iter().map(|ids| ids.len()).collect_vec();
+        (indices, counts)
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
@@ -850,32 +827,63 @@ impl HawkResult {
             .collect_vec()
     }
 
-    fn select_count(&self, filter: Filter) -> VecRequests<usize> {
-        self.match_results
-            .select(filter)
+    fn match_ids(&self) -> Vec<Vec<u32>> {
+        self.select_indices(Filter {
+            eyes: Both,
+            orient: Both,
+        })
+    }
+
+    fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
+        let per_match = |m: &Match| match m.id {
+            MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
+            _ => None,
+        };
+
+        self.matches
             .iter()
-            .map(|matches| matches.len())
+            .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 
     fn job_result(self) -> ServerJobResult {
-        use OnlyOrBoth::{Both, Only};
-        use Orientation::{Mirror, Normal};
+        use Orientation::Mirror;
         use StoreId::{Left, Right};
 
         let n_requests = self.is_matches.len();
 
         let matches = self.is_matches().to_vec();
+
         let match_ids = self.match_ids();
 
-        let partial_match_ids_left = self
-            .match_results
-            .filter_map(|(id, [l, _r])| l.then_some(id.index()));
-        let partial_match_ids_right = self
-            .match_results
-            .filter_map(|(id, [_l, r])| r.then_some(id.index()));
-        let partial_match_counters_left = partial_match_ids_left.iter().map(Vec::len).collect();
-        let partial_match_counters_right = partial_match_ids_right.iter().map(Vec::len).collect();
+        let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
+            eyes: Only(Left),
+            orient: Both,
+        });
+
+        let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
+            eyes: Only(Right),
+            orient: Both,
+        });
+
+        let (full_face_mirror_match_ids, _) = self.select(Filter {
+            eyes: Both,
+            orient: Only(Mirror),
+        });
+
+        let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
+            self.select(Filter {
+                eyes: Only(Left),
+                orient: Only(Mirror),
+            });
+
+        let (
+            full_face_mirror_partial_match_ids_right,
+            full_face_mirror_partial_match_counters_right,
+        ) = self.select(Filter {
+            eyes: Only(Right),
+            orient: Only(Mirror),
+        });
 
         let merged_results = self.merged_results();
         let matched_batch_request_ids = self.matched_batch_request_ids();
@@ -883,40 +891,31 @@ impl HawkResult {
         let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
+        let batch = self.batch;
         ServerJobResult {
             merged_results,
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
             matches_with_skip_persistence: matches.clone(), // TODO
             matches,
 
             match_ids,
+
             partial_match_ids_left,
-            partial_match_ids_right,
-
-            full_face_mirror_match_ids: self.select_indices(Filter {
-                eyes: Both,
-                orient: Only(Mirror),
-            }),
-            full_face_mirror_partial_match_ids_left: self.select_indices(Filter {
-                eyes: Only(Left),
-                orient: Only(Mirror),
-            }),
-            full_face_mirror_partial_match_counters_left: self.select_count(Filter {
-                eyes: Only(Left),
-                orient: Only(Mirror),
-            }),
-            full_face_mirror_partial_match_ids_right: self.select_indices(Filter {
-                eyes: Only(Right),
-                orient: Only(Mirror),
-            }),
-            full_face_mirror_partial_match_counters_right: self.select_count(Filter {
-                eyes: Only(Right),
-                orient: Only(Mirror),
-            }),
-
             partial_match_counters_left,
+            partial_match_ids_right,
             partial_match_counters_right,
-            left_iris_requests: self.batch.left_iris_requests,
-            right_iris_requests: self.batch.right_iris_requests,
+
+            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
+            full_face_mirror_match_ids,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_ids_right,
+            full_face_mirror_partial_match_counters_right,
+
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
             deleted_ids: vec![], // TODO.
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
@@ -928,13 +927,9 @@ impl HawkResult {
             reset_update_request_ids: vec![],            // TODO.
             reset_update_shares: vec![],                 // TODO.
 
-            request_ids: self.batch.request_ids,
-            request_types: self.batch.request_types,
-            metadata: self.batch.metadata,
-            modifications: self.batch.modifications,
+            modifications: batch.modifications,
 
             actor_data: self.connect_plans,
-            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
         }
     }
 }
