@@ -114,10 +114,10 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "false"
+    value: "true"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "50"
+    value: "1000"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "true"
