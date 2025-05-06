@@ -326,7 +326,7 @@ mod tests {
     async fn test_from_another_naive() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         let raw_queries = IrisDB::new_random_rng(10, &mut rng);
@@ -364,7 +364,7 @@ mod tests {
     async fn test_from_another() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =

@@ -405,9 +405,9 @@ mod tests {
     async fn test_hnsw_db() -> Result<()> {
         let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
         let graph_mem = &mut GraphMem::new();
-        let vector_store = &mut PlaintextStore::default();
+        let vector_store = &mut PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::default();
+        let db = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(10, rng)
             .db

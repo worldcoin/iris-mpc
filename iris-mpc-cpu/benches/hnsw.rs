@@ -57,9 +57,9 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
         let (vector, graph) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            let mut vector = PlaintextStore::default();
+            let mut vector = PlaintextStore::new();
             let mut graph = GraphMem::new();
-            let searcher = HnswSearcher::default();
+            let searcher = HnswSearcher::new_with_test_parameters();
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
@@ -76,7 +76,7 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || (vector.clone(), graph.clone()),
                 |(mut db_vectors, mut graph)| async move {
-                    let searcher = HnswSearcher::default();
+                    let searcher = HnswSearcher::new_with_test_parameters();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                     let query = Arc::new(on_the_fly_query);
@@ -232,7 +232,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(
@@ -271,7 +271,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(

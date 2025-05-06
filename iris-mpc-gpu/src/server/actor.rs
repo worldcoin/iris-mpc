@@ -991,7 +991,7 @@ impl ServerActor {
                 DB_CHUNK_SIZE
             );
 
-            tracing::info!("Comparing right eye queries against DB and self");
+            tracing::info!("Comparing {} eye queries against DB and self", other_side);
             self.compare_query_against_db_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
@@ -1001,7 +1001,7 @@ impl ServerActor {
                 orientation,
             );
         } else {
-            tracing::info!("Comparing right eye queries against DB subset");
+            tracing::info!("Comparing {} eye queries against DB subset", other_side);
             self.compare_query_against_db_subset_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
