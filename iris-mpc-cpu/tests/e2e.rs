@@ -42,8 +42,8 @@ async fn create_graph_from_plain_dbs(
     params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let mut left_store = PlaintextStore::new_from_vec(left_db.db.clone()).await;
-    let mut right_store = PlaintextStore::new_from_vec(right_db.db.clone()).await;
+    let mut left_store = PlaintextStore::new_from_vec(left_db.db.clone());
+    let mut right_store = PlaintextStore::new_from_vec(right_db.db.clone());
     let searcher = HnswSearcher {
         params: params.clone(),
     };

@@ -236,7 +236,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
 )> {
     let searcher = HnswSearcher::default();
 
-    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size).await;
+    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size);
     let plaintext_graph_store = plaintext_vector_store
         .generate_graph(rng, database_size, &searcher)
         .await?;

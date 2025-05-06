@@ -285,11 +285,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let vector_store = vector_store.clone();
-                            let mut graph_store = graph_store;
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search(&mut *vector_store, &mut graph_store, &query, 1)
+                                    .search(&mut *vector_store, &graph_store, &query, 1)
                                     .await
                                     .unwrap();
                                 searcher

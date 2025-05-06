@@ -766,7 +766,7 @@ impl HnswSearcher {
     pub async fn search<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V>,
+        graph: &GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
