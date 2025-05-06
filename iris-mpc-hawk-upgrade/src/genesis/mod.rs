@@ -4,21 +4,29 @@ use aws_sdk_s3::{config::Region, Client as S3Client};
 use eyre::{bail, eyre, Report, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
-use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
-use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::server_coordination as coordinator;
-use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkActor};
-use iris_mpc_cpu::genesis::{BatchGenerator, BatchIterator, Handle as HawkHandle};
-use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
-use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
+use iris_mpc_common::{
+    config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
+    helpers::{
+        inmemory_store::InMemoryStore,
+        shutdown_handler::ShutdownHandler,
+        sync::{SyncResult, SyncState},
+        task_monitor::TaskMonitor,
+    },
+    postgres::{AccessMode, PostgresClient},
+    server_coordination as coordinator,
+};
+use iris_mpc_cpu::{
+    execution::hawk_main::{GraphStore, HawkActor},
+    genesis::{BatchGenerator, BatchIterator, Handle as HawkHandle},
+    hawkers::aby3::aby3_store::Aby3Store,
+    hnsw::graph::graph_store::GraphPg,
+};
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
-use std::collections::HashSet;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::time::timeout;
 
 use iris_mpc_cpu::execution::hawk_main::HawkArgs;
