@@ -1,5 +1,5 @@
 use crate::protocol::shared_iris::GaloisRingSharedIris;
-use iris_mpc_store::DbStoredIris as IrisData;
+use iris_mpc_store::DbStoredIris;
 
 // An iris pair identifier.
 pub type IrisSerialId = u64;
@@ -38,7 +38,7 @@ impl IrisGaloisShares {
 #[allow(dead_code)]
 impl IrisGaloisShares {
     /// Creates a new instance of `IrisGaloisShares` from data fetched from a store.
-    pub(crate) fn new(party_id: usize, data: &IrisData) -> Self {
+    pub(crate) fn new(party_id: usize, data: &DbStoredIris) -> Self {
         let left = GaloisRingSharedIris::try_from_buffers_inner(
             party_id,
             data.left_code(),

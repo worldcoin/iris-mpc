@@ -1,6 +1,6 @@
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
-use iris_mpc_store::{DbStoredIris as IrisData, Store as IrisPgresStore};
+use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
 
 /// Fetches height of indexed from store.
@@ -55,7 +55,7 @@ pub(crate) async fn fetch_height_of_protocol(
 pub(crate) async fn fetch_iris_batch(
     iris_store: &IrisPgresStore,
     identifiers: Vec<IrisSerialId>,
-) -> Result<Vec<IrisData>, IndexationError> {
+) -> Result<Vec<DbStoredIris>, IndexationError> {
     let data = iris_store
         .fetch_iris_batch(identifiers)
         .await
@@ -80,7 +80,7 @@ pub(crate) async fn fetch_iris_batch(
 pub(crate) async fn fetch_iris_data(
     iris_store: &IrisPgresStore,
     serial_id: IrisSerialId,
-) -> Result<IrisData, IndexationError> {
+) -> Result<DbStoredIris, IndexationError> {
     let data = iris_store
         .fetch_iris_by_serial_id(serial_id)
         .await

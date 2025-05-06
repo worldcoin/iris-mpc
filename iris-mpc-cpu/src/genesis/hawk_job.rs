@@ -1,5 +1,5 @@
 use crate::execution::hawk_main::{BothEyes, VecRequests};
-use crate::hawkers::aby3::aby3_store::QueryRef;
+use crate::hawkers::aby3::aby3_store;
 use eyre::Result;
 use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
@@ -20,7 +20,7 @@ pub struct Job {
 #[allow(dead_code)]
 pub struct JobRequest {
     // Indexation queries over both eyes.
-    queries: Arc<BothEyes<VecRequests<QueryRef>>>,
+    queries: Arc<BothEyes<VecRequests<aby3_store::QueryRef>>>,
 }
 
 /// An indexation job result.
@@ -29,7 +29,12 @@ pub struct JobResult {}
 
 /// Convertors.
 impl From<&Vec<DbStoredIris>> for JobRequest {
-    fn from(_batch: &Vec<DbStoredIris>) -> Self {
+    fn from(_value: &Vec<DbStoredIris>) -> Self {
+        // From a vec of 64 stored iris codes (left and right)
+        // 1. Map each iris to a GaloisRingSharedIris
+        // 2. Map each GaloisRingSharedIris to a QueryRef using aby3_store::prepare_query
+        // 3. Insert Left.QueryRef + Right.QueryRef into relevant vecs.
+        // 4. Return result.
         unimplemented!()
     }
 }
