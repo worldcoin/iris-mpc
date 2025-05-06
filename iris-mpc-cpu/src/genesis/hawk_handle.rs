@@ -10,12 +10,13 @@ use tokio::sync::{mpsc, oneshot};
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct Handle {
+    party_id: usize,
     job_queue: mpsc::Sender<Job>,
 }
 
 /// Constructors.
 impl Handle {
-    pub async fn new(mut actor: HawkActor) -> Result<Self> {
+    pub async fn new(party_id: usize, mut actor: HawkActor) -> Result<Self> {
         /// Performs post job processing health checks:
         /// - resets Hawk sessions upon job failure
         /// - ensures system state is in sync.
@@ -67,7 +68,10 @@ impl Handle {
             }
         });
 
-        Ok(Self { job_queue: tx })
+        Ok(Self {
+            party_id,
+            job_queue: tx,
+        })
     }
 }
 
@@ -102,14 +106,14 @@ impl Handle {
     /// This method may return an error if the job queue channel is closed or if the job fails.
     pub async fn submit_batch(
         &mut self,
-        batch: Vec<DbStoredIris>,
+        batch: &[DbStoredIris],
     ) -> impl Future<Output = Result<()>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::from(&batch),
+            request: JobRequest::new(self.party_id, batch),
             return_channel: tx,
         };
 

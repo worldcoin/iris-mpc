@@ -8,9 +8,6 @@ pub type IrisSerialId = u64;
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub struct IrisGaloisShares {
-    // MPC party ordinal identifier.
-    party_id: usize,
-
     // Left share of the iris Galois field element.
     left: GaloisRingSharedIris,
 
@@ -21,10 +18,6 @@ pub struct IrisGaloisShares {
 // Accessors.
 #[allow(dead_code)]
 impl IrisGaloisShares {
-    pub fn party_id(&self) -> usize {
-        self.party_id
-    }
-
     pub fn left(&self) -> &GaloisRingSharedIris {
         &self.left
     }
@@ -52,10 +45,6 @@ impl IrisGaloisShares {
         )
         .unwrap();
 
-        Self {
-            party_id,
-            left,
-            right,
-        }
+        Self { left, right }
     }
 }

@@ -1,9 +1,18 @@
-use crate::execution::hawk_main::{BothEyes, VecRequests};
-use crate::hawkers::aby3::aby3_store;
+use crate::{
+    execution::hawk_main::{BothEyes, VecRequests},
+    hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
+    protocol::shared_iris::GaloisRingSharedIris,
+};
 use eyre::Result;
 use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+// Helper type: Aby3 store batch query.
+pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
+
+// Helper type: Aby3 store batch query reference.
+pub type Aby3BatchQueryRef = Arc<Aby3BatchQuery>;
 
 /// An indexation job that materialises an in-mem graph.
 #[allow(dead_code)]
@@ -20,21 +29,43 @@ pub struct Job {
 #[allow(dead_code)]
 pub struct JobRequest {
     // Indexation queries over both eyes.
-    queries: Arc<BothEyes<VecRequests<aby3_store::QueryRef>>>,
+    queries: Aby3BatchQueryRef,
 }
 
 /// An indexation job result.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {}
 
-/// Convertors.
-impl From<&Vec<DbStoredIris>> for JobRequest {
-    fn from(_value: &Vec<DbStoredIris>) -> Self {
-        // From a vec of 64 stored iris codes (left and right)
-        // 1. Map each iris to a GaloisRingSharedIris
-        // 2. Map each GaloisRingSharedIris to a QueryRef using aby3_store::prepare_query
-        // 3. Insert Left.QueryRef + Right.QueryRef into relevant vecs.
-        // 4. Return result.
-        unimplemented!()
+/// Constructor.
+impl JobRequest {
+    pub fn new(party_id: usize, data: &[DbStoredIris]) -> Self {
+        Self {
+            queries: Arc::new([
+                data.iter()
+                    .map(|iris| {
+                        prepare_aby3_query(
+                            GaloisRingSharedIris::try_from_buffers_inner(
+                                party_id,
+                                iris.left_code(),
+                                iris.left_mask(),
+                            )
+                            .unwrap(),
+                        )
+                    })
+                    .collect(),
+                data.iter()
+                    .map(|iris| {
+                        prepare_aby3_query(
+                            GaloisRingSharedIris::try_from_buffers_inner(
+                                party_id,
+                                iris.right_code(),
+                                iris.right_mask(),
+                            )
+                            .unwrap(),
+                        )
+                    })
+                    .collect(),
+            ]),
+        }
     }
 }

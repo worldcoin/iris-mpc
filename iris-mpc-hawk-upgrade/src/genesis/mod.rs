@@ -124,7 +124,7 @@ async fn exec_main_loop(
     hawk_actor: HawkActor,
 ) -> Result<()> {
     // Initialise Hawk handle.
-    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
+    let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
 
     // Initialise batch generator.
     let mut batch_generator = BatchGenerator::new(config.max_batch_size);
@@ -155,7 +155,7 @@ async fn exec_main_loop(
             task_monitor.check_tasks();
 
             // Process batch with Hawk handle over hawk actor.
-            let result_future = hawk_handle.submit_batch(batch);
+            let result_future = hawk_handle.submit_batch(&batch);
             timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
