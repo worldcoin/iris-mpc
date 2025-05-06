@@ -348,7 +348,6 @@ mod tests {
     use super::*;
     use crate::{
         execution::local::{generate_local_identities, LocalRuntime},
-        hawkers::plaintext_store::PlaintextIris,
         network::value::NetworkInt,
         protocol::{ops::NetworkValue::RingElement32, shared_iris::GaloisRingSharedIris},
         shares::{int_ring::IntRing2k, ring_impl::RingElement},
@@ -745,9 +744,7 @@ mod tests {
         assert_eq!(output0, output1);
         assert_eq!(output0, output2);
 
-        let plaintext_first = PlaintextIris(iris_db[0].clone());
-        let plaintext_second = PlaintextIris(iris_db[1].clone());
-        let (plain_d1, plain_d2) = plaintext_first.dot_distance_fraction(&plaintext_second);
+        let (plain_d1, plain_d2) = iris_db[0].get_dot_distance_fraction(&iris_db[1]);
         assert_eq!(output0.0[0], plain_d1 as u16);
         assert_eq!(output0.0[1], plain_d2);
 
