@@ -34,14 +34,12 @@ RUN cargo build --release --bin iris-mpc-hawk-genesis
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y ca-certificates awscli curl
+RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
-
-COPY scripts/run-server-docker.sh .
+COPY --from=build-app /src/iris-mpc-upgrade-hawk/target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
 
 USER 65534
 
-ENTRYPOINT ["./run-server-docker.sh genesis"] 
+ENTRYPOINT ["/bin/iris-mpc-hawk-genesis"]

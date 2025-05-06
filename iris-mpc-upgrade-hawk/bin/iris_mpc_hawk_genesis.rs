@@ -3,7 +3,7 @@
 use clap::Parser;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
-use iris_mpc_hawk_upgrade::genesis::exec_main;
+use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {

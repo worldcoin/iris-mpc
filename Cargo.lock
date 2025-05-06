@@ -2439,44 +2439,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iris-mpc-hawk-upgrade"
-version = "0.1.0"
-dependencies = [
- "aws-config",
- "aws-sdk-s3",
- "aws-sdk-secretsmanager",
- "aws-sdk-sns",
- "aws-sdk-sqs",
- "base64 0.22.1",
- "bytemuck",
- "chrono",
- "clap",
- "criterion",
- "dotenvy",
- "eyre",
- "futures",
- "iris-mpc-common",
- "iris-mpc-cpu",
- "iris-mpc-gpu",
- "iris-mpc-store",
- "itertools 0.13.0",
- "metrics 0.22.3",
- "metrics-exporter-statsd 0.7.0",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "sodiumoxide",
- "sqlx",
- "static_assertions",
- "telemetry-batteries",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "iris-mpc-py"
 version = "0.1.0"
 dependencies = [
@@ -2538,6 +2500,44 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iris-mpc-upgrade-hawk"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "criterion",
+ "dotenvy",
+ "eyre",
+ "futures",
+ "iris-mpc-common",
+ "iris-mpc-cpu",
+ "iris-mpc-gpu",
+ "iris-mpc-store",
+ "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sodiumoxide",
+ "sqlx",
+ "static_assertions",
+ "telemetry-batteries",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
