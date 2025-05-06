@@ -8,6 +8,7 @@ use iris_mpc_upgrade_hawk::genesis::exec_main;
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
+    // Maximum height of indexation.
     #[clap(long("max-height"))]
     max_indexation_height: Option<u64>,
 }
