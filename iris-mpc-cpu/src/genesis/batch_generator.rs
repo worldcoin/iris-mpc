@@ -6,7 +6,6 @@ use std::future::Future;
 use std::{iter::Peekable, ops::Range};
 
 // Generates batches of Iris identifiers for processing.
-#[allow(dead_code)]
 pub struct BatchGenerator {
     // Count of generated batches.
     batch_count: usize,
@@ -34,7 +33,6 @@ pub trait BatchIterator {
 }
 
 // Constructor.
-#[allow(dead_code)]
 impl BatchGenerator {
     pub fn new(batch_size: usize) -> Self {
         Self {

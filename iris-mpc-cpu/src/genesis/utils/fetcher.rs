@@ -52,7 +52,6 @@ pub(crate) async fn fetch_height_of_protocol(
 ///
 /// Iris data for indexation.
 ///
-#[allow(dead_code)]
 pub(crate) async fn fetch_iris_batch(
     iris_store: &IrisPgresStore,
     identifiers: Vec<IrisSerialId>,
@@ -61,31 +60,6 @@ pub(crate) async fn fetch_iris_batch(
         .fetch_iris_batch(identifiers)
         .await
         .map_err(|_| IndexationError::PostgresFetchIrisBatch)
-        .unwrap();
-
-    Ok(data)
-}
-
-/// Fetch iris data for indexation.
-///
-/// # Arguments
-///
-/// * `store` - Iris PostgreSQL store provider.
-/// * `serial_id` - Serial identifier of a processedIris.
-///
-/// # Returns
-///
-/// Iris data for indexation.
-///
-#[allow(dead_code)]
-pub(crate) async fn fetch_iris_data(
-    iris_store: &IrisPgresStore,
-    serial_id: IrisSerialId,
-) -> Result<DbStoredIris, IndexationError> {
-    let data = iris_store
-        .fetch_iris_by_serial_id(serial_id)
-        .await
-        .map_err(|_| IndexationError::PostgresFetchIrisById)
         .unwrap();
 
     Ok(data)

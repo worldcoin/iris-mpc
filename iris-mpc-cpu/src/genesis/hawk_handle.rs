@@ -3,14 +3,16 @@ use crate::execution::hawk_main::{BothEyes, HawkActor, HawkSession, HawkSessionR
 use eyre::Result;
 use futures::try_join;
 use iris_mpc_store::DbStoredIris;
-use std::future::Future;
+use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct Handle {
+    // Identifier of party participating in MPC protocol.
     party_id: usize,
+
+    // Queue of indexation jobs for processing.
     job_queue: mpsc::Sender<Job>,
 }
 
@@ -76,18 +78,35 @@ impl Handle {
 }
 
 /// Methods.
-#[allow(dead_code)]
 impl Handle {
+    /// Processes a single genesis indexation job by sending it to the Hawk actor.
+    ///
+    /// # Arguments
+    ///
+    /// * `actor` - A mutable instance of a Hawk actor.
+    /// * `sessions` - Hawk sessions to other MPC nodes.
+    /// * `request` - Indexation job to be processed.
+    ///
+    /// # Returns
+    ///
+    /// Indexation processing results.
+    ///
     pub async fn handle_job(
         _actor: &mut HawkActor,
         _sessions: &BothEyes<Vec<HawkSessionRef>>,
-        _request: &JobRequest,
+        request: &JobRequest,
     ) -> Result<JobResult> {
-        tracing::info!("Processing a Genesis Hawk job …");
+        tracing::info!(
+            "Genesis Hawk job processing ::{} elements within batch",
+            request.identifiers.len()
+        );
+        let _ = Instant::now();
 
         // TODO implement business logic.
 
-        Ok(JobResult {})
+        Ok(JobResult {
+            results: Vec::new(),
+        })
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns

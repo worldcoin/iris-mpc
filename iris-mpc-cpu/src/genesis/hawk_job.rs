@@ -1,3 +1,4 @@
+use super::utils::types::IrisIdentifier;
 use crate::{
     execution::hawk_main::{BothEyes, VecRequests},
     hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
@@ -15,7 +16,6 @@ pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
 pub type Aby3BatchQueryRef = Arc<Aby3BatchQuery>;
 
 /// An indexation job that materialises an in-mem graph.
-#[allow(dead_code)]
 pub struct Job {
     // A request encapsulating data for indexation.
     pub(super) request: JobRequest,
@@ -26,20 +26,19 @@ pub struct Job {
 
 /// An indexation job request.
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub struct JobRequest {
-    // Indexation queries over both eyes.
-    queries: Aby3BatchQueryRef,
-}
+    // Incoming batch of iris identifiers for subsequent correlation.
+    pub identifiers: Vec<IrisIdentifier>,
 
-/// An indexation job result.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResult {}
+    // HNSW indexation queries over both eyes.
+    pub queries: Aby3BatchQueryRef,
+}
 
 /// Constructor.
 impl JobRequest {
     pub fn new(party_id: usize, data: &[DbStoredIris]) -> Self {
         Self {
+            identifiers: data.iter().map(IrisIdentifier::from).collect(),
             queries: Arc::new([
                 data.iter()
                     .map(|iris| {
@@ -66,6 +65,33 @@ impl JobRequest {
                     })
                     .collect(),
             ]),
+        }
+    }
+}
+
+/// An indexation result over a set of irises.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobResult {
+    // Results of indexation.
+    pub results: Vec<JobResultOfBatchElement>,
+}
+
+/// An indexation result over a single iris.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobResultOfBatchElement {
+    // Identifier of iris.
+    iris_identifier: IrisIdentifier,
+
+    // Error flag - TEMP.
+    did_error: bool,
+}
+
+/// Constructor.
+impl JobResultOfBatchElement {
+    pub fn new(iris_identifier: IrisIdentifier, did_error: bool) -> Self {
+        Self {
+            iris_identifier,
+            did_error,
         }
     }
 }
