@@ -9,7 +9,7 @@ use clap::Parser;
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::init::initialize_chacha_seeds;
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
@@ -17,6 +17,8 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::server_coordination::ReadyProbeResponse;
+use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -1281,13 +1283,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     };
 
     tracing::info!("Sync state: {:?}", my_state);
-
-    #[derive(Debug, Serialize, Deserialize, Clone)]
-    struct ReadyProbeResponse {
-        image_name: String,
-        uuid: String,
-        shutting_down: bool,
-    }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
 

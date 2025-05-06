@@ -12,7 +12,7 @@ use crate::{
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
@@ -74,6 +74,7 @@ use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
 #[derive(Clone, Parser)]
+#[allow(non_snake_case)]
 pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
@@ -86,6 +87,15 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
+
+    #[clap(long, default_value_t = 320)]
+    pub hnsw_param_ef_constr: usize,
+
+    #[clap(long, default_value_t = 256)]
+    pub hnsw_param_M: usize,
+
+    #[clap(long, default_value_t = 256)]
+    pub hnsw_param_ef_search: usize,
 
     #[clap(long)]
     pub hnsw_prng_seed: Option<u64>,
@@ -106,7 +116,7 @@ pub struct HawkActor {
     args: HawkArgs,
 
     // ---- Shared setup ----
-    search_params: Arc<HnswSearcher>,
+    searcher: Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus: Consensus,
 
@@ -128,8 +138,8 @@ pub enum StoreId {
     Left = 0,
     Right = 1,
 }
-const LEFT: usize = 0;
-const RIGHT: usize = 1;
+pub const LEFT: usize = 0;
+pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 
 impl std::fmt::Display for StoreId {
@@ -148,7 +158,7 @@ impl std::fmt::Display for StoreId {
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
-type VecRequests<T> = Vec<T>;
+pub(crate) type VecRequests<T> = Vec<T>;
 type VecBuckets = Vec<u32>;
 /// VecEdges are lists of things for each neighbor of a vector (graph edges).
 type VecEdges<T> = Vec<T>;
@@ -165,7 +175,8 @@ pub struct HawkSession {
     shared_rng: Box<dyn RngCore + Send + Sync>,
 }
 
-type HawkSessionRef = Arc<RwLock<HawkSession>>;
+// Thread safe reference to a HakwSession instance.
+pub type HawkSessionRef = Arc<RwLock<HawkSession>>;
 
 pub type SearchResult = (
     <Aby3Store as VectorStore>::VectorRef,
@@ -216,7 +227,14 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3Store>>,
         iris_store: BothEyes<SharedIrises>,
     ) -> Result<Self> {
-        let search_params = Arc::new(HnswSearcher::default());
+        let search_params = HnswParams::new(
+            args.hnsw_param_ef_constr,
+            args.hnsw_param_ef_search,
+            args.hnsw_param_M,
+        );
+        let searcher = Arc::new(HnswSearcher {
+            params: search_params,
+        });
 
         let identities = generate_local_identities();
 
@@ -290,7 +308,7 @@ impl HawkActor {
 
         Ok(HawkActor {
             args: args.clone(),
-            search_params,
+            searcher,
             db_size: 0,
             iris_store,
             graph_store,
@@ -412,7 +430,7 @@ impl HawkActor {
         let mut graph_store = session.graph_store.write().await;
 
         let connect_plan = self
-            .search_params
+            .searcher
             .insert_prepare(
                 &mut session.aby3_store,
                 graph_store.deref(),
@@ -944,7 +962,7 @@ impl HawkHandle {
         // Search for nearest neighbors.
         // For both eyes, all requests, and rotations.
         let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
-            search::search(sessions, search_queries, hawk_actor.search_params.clone()).await?;
+            search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
         hawk_actor
             .update_anon_stats(&sessions[0][0], &search_results)
@@ -1343,6 +1361,9 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            hnsw_param_ef_constr: 320,
+            hnsw_param_M: 256,
+            hnsw_param_ef_search: 256,
             hnsw_prng_seed: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,

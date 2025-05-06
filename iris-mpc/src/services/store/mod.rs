@@ -63,20 +63,24 @@ async fn load_db_records<'a>(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn load_db(
+/// Parameters used to specify behavior of S3 database importer
+pub struct S3LoaderParams<T: ObjectStore> {
+    pub db_chunks_s3_store: T,
+    pub db_chunks_s3_client: S3Client,
+    pub s3_chunks_folder_name: String,
+    pub s3_chunks_bucket_name: String,
+    pub s3_load_parallelism: usize,
+    pub s3_load_max_retries: usize,
+    pub s3_load_initial_backoff_ms: u64,
+}
+
+pub async fn load_db<T: ObjectStore>(
     actor: &mut impl InMemoryStore,
     store: &Store,
     store_len: usize,
     store_load_parallelism: usize,
     config: &Config,
-    db_chunks_s3_store: impl ObjectStore,
-    db_chunks_s3_client: S3Client,
-    s3_chunks_folder_name: String,
-    s3_chunks_bucket_name: String,
-    s3_load_parallelism: usize,
-    s3_load_max_retries: usize,
-    s3_load_initial_backoff_ms: u64,
+    s3_loader_params: Option<S3LoaderParams<T>>,
     download_shutdown_handler: Arc<ShutdownHandler>,
 ) -> eyre::Result<()> {
     let total_load_time = Instant::now();
@@ -86,8 +90,18 @@ pub async fn load_db(
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
     actor.reserve(store_len);
 
-    if config.enable_s3_importer {
+    if config.enable_s3_importer && s3_loader_params.is_some() {
         tracing::info!("S3 importer enabled. Fetching from s3 + db");
+
+        let S3LoaderParams {
+            db_chunks_s3_store,
+            db_chunks_s3_client,
+            s3_chunks_folder_name,
+            s3_chunks_bucket_name,
+            s3_load_parallelism,
+            s3_load_max_retries,
+            s3_load_initial_backoff_ms,
+        } = s3_loader_params.unwrap();
 
         // First fetch last snapshot from S3
         let last_snapshot_details =

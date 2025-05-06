@@ -1829,9 +1829,9 @@ checksum = "4271d37baee1b8c7e4b708028c57d816cf9d2434acb33a549475f78c181f6253"
 
 [[package]]
 name = "glob"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2fabcfbdc87f4758337ca535fb41a6d701b65693ce38287d856d1674551ec9b"
+checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
 
 [[package]]
 name = "group"
@@ -2314,6 +2314,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum",
  "base64 0.22.1",
  "bincode",
  "bytemuck",
@@ -2329,6 +2330,8 @@ dependencies = [
  "hmac",
  "http 1.1.0",
  "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
  "percent-encoding",
  "rand",
  "rayon",
@@ -2340,6 +2343,7 @@ dependencies = [
  "sha2",
  "sodiumoxide",
  "sqlx",
+ "telemetry-batteries",
  "thiserror",
  "time",
  "tokio",
@@ -2360,6 +2364,8 @@ dependencies = [
  "async-channel",
  "async-stream",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "backon",
  "bincode",
  "bytemuck",
@@ -2385,6 +2391,7 @@ dependencies = [
  "siphasher",
  "sqlx",
  "static_assertions",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -2493,6 +2500,44 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iris-mpc-upgrade-hawk"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "criterion",
+ "dotenvy",
+ "eyre",
+ "futures",
+ "iris-mpc-common",
+ "iris-mpc-cpu",
+ "iris-mpc-gpu",
+ "iris-mpc-store",
+ "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sodiumoxide",
+ "sqlx",
+ "static_assertions",
+ "telemetry-batteries",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2611,7 +2656,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

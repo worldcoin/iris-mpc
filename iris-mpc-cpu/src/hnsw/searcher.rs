@@ -209,16 +209,29 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
-impl Default for HnswSearcher {
-    fn default() -> Self {
-        HnswSearcher {
+#[allow(non_snake_case)]
+impl HnswSearcher {
+    /// Construct an HnswSearcher with specified parameters, constructed using
+    /// `HnswParamas::new`.
+    pub fn new(ef_constr: usize, ef_search: usize, M: usize) -> Self {
+        Self {
+            params: HnswParams::new(ef_constr, ef_search, M),
+        }
+    }
+
+    /// Construct an HnswSearcher with test parameters suitable for exercising
+    /// search functionality.
+    ///
+    /// This function is provided in lieu of a `Default` implementation because
+    /// good parameter selections for HNSW search generally depend on the
+    /// underlying data distribution, so there isn't a reasonable "generally
+    /// applicable" default value.
+    pub fn new_with_test_parameters() -> Self {
+        Self {
             params: HnswParams::new(64, 32, 32),
         }
     }
-}
 
-#[allow(non_snake_case)]
-impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
@@ -1054,10 +1067,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() -> Result<()> {
-        let vector_store = &mut PlaintextStore::default();
+        let vector_store = &mut PlaintextStore::new();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::default();
+        let db = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db

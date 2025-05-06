@@ -240,7 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_neighborhood() -> Result<()> {
-        let mut store = PlaintextStore::default();
+        let mut store = PlaintextStore::new();
         let query = Arc::new(IrisCode::default());
         let vector = store.insert(&query).await;
         let distance = store.eval_distance(&query, &vector).await?;
