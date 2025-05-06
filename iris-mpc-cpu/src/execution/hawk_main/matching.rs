@@ -183,10 +183,6 @@ impl BatchStep3 {
         self.0.iter().map(Step3::is_match).collect_vec()
     }
 
-    pub fn match_list(&self) -> VecRequests<Vec<Match>> {
-        self.0.iter().map(Step3::match_list).collect_vec()
-    }
-
     /// The IDs of the vectors that matched at least partially.
     pub fn select(&self, filter: Filter) -> VecRequests<Vec<MatchId>> {
         self.0
@@ -205,35 +201,7 @@ struct Step2 {
 }
 
 impl Step2 {
-    /// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
-    ///
-    /// LUC *OR* policy: "Local" irises match if either side matches.
-    ///
-    /// Intra-batch: match against requests before this request in the same batch.
-    fn is_match(&self) -> bool {
-        self.match_iter().next().is_some()
-    }
-
     /// The IDs of the vectors that matched this request.
-    fn match_iter(&self) -> impl Iterator<Item = MatchId> + '_ {
-        let search = self
-            .full_join
-            .iter()
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(MatchId::Search(*id)));
-
-        let luc = self
-            .luc_results
-            .iter()
-            .filter_map(|(id, [l, r])| (*l || *r).then_some(MatchId::Luc(*id)));
-
-        let intra = self.intra_matches.iter().filter_map(|m| {
-            (m.is_match[LEFT] || m.is_match[RIGHT])
-                .then_some(MatchId::IntraBatch(m.other_request_i))
-        });
-
-        chain!(search, luc, intra)
-    }
-
     fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
         let search = self
             .full_join
@@ -250,7 +218,7 @@ impl Step2 {
         let intra = self
             .intra_matches
             .iter()
-            .filter(move |m| filter.luc_rule(m.is_match[LEFT], m.is_match[RIGHT]))
+            .filter(move |m| filter.intra_rule(m.is_match[LEFT], m.is_match[RIGHT]))
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
         chain!(search, luc, intra)
@@ -264,12 +232,6 @@ pub enum MatchId {
     IntraBatch(usize),
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Match {
-    pub id: MatchId,
-    pub orient: Orientation,
-}
-
 /// Combines the results from mirrored checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Step3 {
@@ -280,20 +242,12 @@ struct Step3 {
 impl Step3 {
     /// It is a match if either normal or mirrored iris matches.
     fn is_match(&self) -> bool {
-        self.normal.is_match() || self.mirror.is_match()
-    }
-
-    /// Concatenate the matches from normal and mirrored matches.
-    fn match_list(&self) -> Vec<Match> {
-        chain!(
-            self.normal
-                .match_iter()
-                .map(|id| Match { id, orient: Normal }),
-            self.mirror
-                .match_iter()
-                .map(|id| Match { id, orient: Mirror })
-        )
-        .collect_vec()
+        self.select(Filter {
+            eyes: Both,
+            orient: Both,
+        })
+        .next()
+        .is_some()
     }
 
     /// The IDs of the vectors that matched at least partially.
@@ -306,6 +260,15 @@ impl Step3 {
     }
 }
 
+/// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
+///
+/// LUC *OR* policy: "Local" irises match if either side matches.
+///
+/// Intra-batch *OR* policy: match against requests before this request in the same batch.
+///
+/// Partial matches: set `eyes: Only(Left)` or `eyes: Only(Right)`.
+///
+/// Mirror matches: set `orient: Only(Mirror)`.
 #[derive(Copy, Clone)]
 pub struct Filter {
     pub eyes: OnlyOrBoth<StoreId>,
@@ -337,5 +300,9 @@ impl Filter {
             Only(Right) => right,
             Both => left || right,
         }
+    }
+
+    fn intra_rule(&self, left: bool, right: bool) -> bool {
+        self.luc_rule(left, right)
     }
 }

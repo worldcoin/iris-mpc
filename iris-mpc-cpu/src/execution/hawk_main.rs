@@ -37,7 +37,7 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use matching::{
-    Filter, Match, MatchId,
+    Filter, MatchId,
     OnlyOrBoth::{Both, Only},
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
@@ -730,7 +730,6 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     batch: BatchQuery,
-    matches: VecRequests<Vec<Match>>,
     match_results: matching::BatchStep3,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
@@ -749,7 +748,6 @@ impl HawkResult {
 
         HawkResult {
             batch,
-            matches: match_results.match_list(),
             match_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
@@ -835,12 +833,16 @@ impl HawkResult {
     }
 
     fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
-        let per_match = |m: &Match| match m.id {
-            MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
+        let per_match = |id: &MatchId| match id {
+            MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[*req_i].clone()),
             _ => None,
         };
 
-        self.matches
+        self.match_results
+            .select(Filter {
+                eyes: Both,
+                orient: Both,
+            })
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
