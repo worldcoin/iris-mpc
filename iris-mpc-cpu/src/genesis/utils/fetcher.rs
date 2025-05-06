@@ -1,7 +1,8 @@
-use super::{errors::IndexationError, types::IrisSerialId};
+use super::{constants, errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use rand::prelude::IteratorRandom;
+use serde::{Deserialize, Serialize};
 
 /// Fetches height of indexed from store.
 ///
@@ -100,45 +101,51 @@ pub(crate) async fn fetch_iris_data(
 ///
 /// A set of Iris serial identifiers marked as deleted.
 ///
+#[allow(dead_code)]
 pub(crate) async fn fetch_iris_deletions(
-    _s3_client: &S3_Client,
+    s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // TODO: remove temporary code that returns a random set of identifiers.
+    // Struct for deserialization.
+    #[derive(Serialize, Deserialize, Debug, Clone)]
+    struct S3Object {
+        deleted_serial_ids: Vec<IrisSerialId>,
+    }
+
+    // Fetch from S3.
+    let s3_response = s3_client
+        .get_object()
+        .bucket(constants::S3_BUCKET_FOR_IRIS_DELETIONS)
+        .key(constants::S3_KEY_FOR_IRIS_DELETIONS)
+        .send()
+        .await
+        .map_err(|err| {
+            tracing::error!("Failed to download file: {}", err);
+            IndexationError::AwsS3ObjectDownload
+        })?;
+
+    // Consume S3 object stream.
+    let s3_object_body = s3_response.body.collect().await.map_err(|e| {
+        tracing::error!("Failed to get object body: {}", e);
+        IndexationError::AwsS3ObjectDeserialize
+    })?;
+
+    // Decode S3 object bytes.
+    let s3_object_bytes = s3_object_body.into_bytes();
+    let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes)
+        .map_err(|_| IndexationError::PostgresFetchIrisBatch)
+        .unwrap();
+
+    Ok(s3_object.deleted_serial_ids)
+}
+
+/// Fetches serial identifiers marked as deleted.
+/// TODO: remove usage as this is a temporary solution.
+pub(crate) async fn fetch_iris_deletions_temp(
+    _: &S3_Client,
+) -> Result<Vec<IrisSerialId>, IndexationError> {
     let mut rng = rand::thread_rng();
     let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
     identifiers.sort();
 
     Ok(identifiers)
-
-    // TODO: reinstate this code when S3 bucket is setup.
-    // #[derive(Serialize, Deserialize, Debug, Clone)]
-    // struct S3Object {
-    //     deleted_serial_ids: Vec<IrisSerialId>,
-    // }
-
-    // // Fetch from S3.
-    // let s3_response = s3_client
-    //     .get_object()
-    //     .bucket(constants::S3_BUCKET_FOR_IRIS_DELETIONS)
-    //     .key(constants::S3_KEY_FOR_IRIS_DELETIONS)
-    //     .send()
-    //     .await
-    //     .map_err(|err| {
-    //         tracing::error!("Failed to download file: {}", err);
-    //         IndexationError::AwsS3ObjectDownload
-    //     })?;
-
-    // // Consume S3 object stream.
-    // let s3_object_body = s3_response.body.collect().await.map_err(|e| {
-    //     tracing::error!("Failed to get object body: {}", e);
-    //     IndexationError::AwsS3ObjectDeserialize
-    // })?;
-
-    // // Decode S3 object bytes.
-    // let s3_object_bytes = s3_object_body.into_bytes();
-    // let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes)
-    //     .map_err(|_| IndexationError::PostgresFetchIrisBatch)
-    //     .unwrap();
-
-    // Ok(s3_object.deleted_serial_ids)
 }
