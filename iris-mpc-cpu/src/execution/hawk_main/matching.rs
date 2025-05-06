@@ -1,9 +1,10 @@
 use super::{
-    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, VecEdges,
-    VecRequests, VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, StoreId,
+    VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
+use tracing_subscriber::filter;
 
 /// Since the two separate HSNW for left and right return separate vectors of matching ids, we
 /// cannot do the trivial AND/OR matching procedure from v2, since the other side might not have
@@ -187,6 +188,14 @@ impl BatchStep3 {
         self.0.iter().map(Step3::match_list).collect_vec()
     }
 
+    /// The IDs of the vectors that matched at least partially.
+    pub fn select(&self, filter: Filter) -> VecRequests<Vec<MatchId>> {
+        self.0
+            .iter()
+            .map(|step| step.select(filter).collect_vec())
+            .collect_vec()
+    }
+
     // TODO: Integrate mirror.
     pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
     where
@@ -237,6 +246,28 @@ impl Step2 {
         chain!(search, luc, intra)
     }
 
+    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        let search = self
+            .full_join
+            .iter()
+            .filter(move |(_, [l, r])| filter.search_rule(*l, *r))
+            .map(|(id, _)| MatchId::Search(*id));
+
+        let luc = self
+            .luc_results
+            .iter()
+            .filter(move |(_, [l, r])| filter.luc_rule(*l, *r))
+            .map(|(id, _)| MatchId::Luc(*id));
+
+        let intra = self
+            .intra_matches
+            .iter()
+            .filter(move |m| filter.luc_rule(m.is_match[LEFT], m.is_match[RIGHT]))
+            .map(|m| MatchId::IntraBatch(m.other_request_i));
+
+        chain!(search, luc, intra)
+    }
+
     fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>
     where
         F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
@@ -276,15 +307,56 @@ impl Step3 {
     /// Concatenate the matches from normal and mirrored matches.
     fn match_list(&self) -> Vec<Match> {
         chain!(
-            self.normal.match_iter().map(|id| Match {
-                id,
-                orient: Orientation::Normal,
-            }),
-            self.mirror.match_iter().map(|id| Match {
-                id,
-                orient: Orientation::Mirror,
-            })
+            self.normal
+                .match_iter()
+                .map(|id| Match { id, orient: Normal }),
+            self.mirror
+                .match_iter()
+                .map(|id| Match { id, orient: Mirror })
         )
         .collect_vec()
+    }
+
+    /// The IDs of the vectors that matched at least partially.
+    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        chain!(
+            matches!(filter.orient, Only(Normal) | Both).then_some(self.normal.select(filter)),
+            matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select(filter)),
+        )
+        .flatten()
+    }
+}
+
+#[derive(Copy, Clone)]
+pub struct Filter {
+    pub eyes: OnlyOrBoth<StoreId>,
+    pub orient: OnlyOrBoth<Orientation>,
+}
+
+#[derive(Copy, Clone)]
+pub enum OnlyOrBoth<T> {
+    Only(T),
+    Both,
+}
+
+use OnlyOrBoth::{Both, Only};
+use Orientation::{Mirror, Normal};
+use StoreId::{Left, Right};
+
+impl Filter {
+    fn search_rule(&self, left: bool, right: bool) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both => left && right,
+        }
+    }
+
+    fn luc_rule(&self, left: bool, right: bool) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both => left || right,
+        }
     }
 }

@@ -36,7 +36,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{izip, Itertools};
-use matching::{Match, MatchId};
+use matching::{Filter, Match, MatchId};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
@@ -832,7 +832,37 @@ impl HawkResult {
             .collect_vec()
     }
 
+    fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
+        self.match_results
+            .select(filter)
+            .iter()
+            .map(|matches| {
+                matches
+                    .iter()
+                    .filter_map(|&m| match m {
+                        MatchId::Search(id) => Some(id),
+                        MatchId::Luc(id) => Some(id),
+                        MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
+                    })
+                    .map(|id| id.index())
+                    .collect_vec()
+            })
+            .collect_vec()
+    }
+
+    fn select_count(&self, filter: Filter) -> VecRequests<usize> {
+        self.match_results
+            .select(filter)
+            .iter()
+            .map(|matches| matches.len())
+            .collect_vec()
+    }
+
     fn job_result(self) -> ServerJobResult {
+        use OnlyOrBoth::{Both, Only};
+        use Orientation::{Mirror, Normal};
+        use StoreId::{Left, Right};
+
         let n_requests = self.is_matches.len();
 
         let matches = self.is_matches().to_vec();
@@ -853,26 +883,40 @@ impl HawkResult {
         let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
-        let batch = self.batch;
         ServerJobResult {
             merged_results,
-            request_ids: batch.request_ids,
-            request_types: batch.request_types,
-            metadata: batch.metadata,
             matches_with_skip_persistence: matches.clone(), // TODO
             matches,
+
             match_ids,
-            full_face_mirror_match_ids: vec![vec![]; n_requests], // TODO.
             partial_match_ids_left,
             partial_match_ids_right,
-            full_face_mirror_partial_match_ids_left: vec![vec![]; n_requests], // TODO.
-            full_face_mirror_partial_match_ids_right: vec![vec![]; n_requests], // TODO.
+
+            full_face_mirror_match_ids: self.select_indices(Filter {
+                eyes: Both,
+                orient: Only(Mirror),
+            }),
+            full_face_mirror_partial_match_ids_left: self.select_indices(Filter {
+                eyes: Only(Left),
+                orient: Only(Mirror),
+            }),
+            full_face_mirror_partial_match_counters_left: self.select_count(Filter {
+                eyes: Only(Left),
+                orient: Only(Mirror),
+            }),
+            full_face_mirror_partial_match_ids_right: self.select_indices(Filter {
+                eyes: Only(Right),
+                orient: Only(Mirror),
+            }),
+            full_face_mirror_partial_match_counters_right: self.select_count(Filter {
+                eyes: Only(Right),
+                orient: Only(Mirror),
+            }),
+
             partial_match_counters_left,
             partial_match_counters_right,
-            full_face_mirror_partial_match_counters_left: vec![0; n_requests], // TODO.
-            full_face_mirror_partial_match_counters_right: vec![0; n_requests], // TODO.
-            left_iris_requests: batch.left_iris_requests,
-            right_iris_requests: batch.right_iris_requests,
+            left_iris_requests: self.batch.left_iris_requests,
+            right_iris_requests: self.batch.right_iris_requests,
             deleted_ids: vec![], // TODO.
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
@@ -883,7 +927,12 @@ impl HawkResult {
             reset_update_indices: vec![],                // TODO.
             reset_update_request_ids: vec![],            // TODO.
             reset_update_shares: vec![],                 // TODO.
-            modifications: batch.modifications,
+
+            request_ids: self.batch.request_ids,
+            request_types: self.batch.request_types,
+            metadata: self.batch.metadata,
+            modifications: self.batch.modifications,
+
             actor_data: self.connect_plans,
             full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
         }
