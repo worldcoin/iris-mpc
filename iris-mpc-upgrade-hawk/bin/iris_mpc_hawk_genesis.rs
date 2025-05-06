@@ -5,13 +5,22 @@ use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
+#[derive(Parser)]
+#[allow(non_snake_case)]
+struct Args {
+    #[clap(long("max-height"))]
+    max_indexation_height: Option<u64>,
+}
+
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
-    // Load .env file(s).
-    dotenvy::dotenv().ok();
+    // Set args.
+    let args = Args::parse();
+    let max_indexation_height = args.max_indexation_height.unwrap_or(0);
 
     // Set config.
     println!("Initialising config");
+    dotenvy::dotenv().ok();
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
@@ -26,7 +35,7 @@ async fn main() -> eyre::Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config).await {
+    match exec_main(config, max_indexation_height).await {
         Ok(_) => {
             tracing::info!("Server exited normally");
         }

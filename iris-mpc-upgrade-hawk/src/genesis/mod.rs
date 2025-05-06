@@ -37,7 +37,13 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
 /// an isolated database snapshot of previously validated unique iris shares.
-pub async fn exec_main(config: Config) -> Result<()> {
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `max_indexation_height` - Maximum height to which to index iris codes.
+///
+pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -99,6 +105,7 @@ pub async fn exec_main(config: Config) -> Result<()> {
     // Execute main loop.
     exec_main_loop(
         &config,
+        max_indexation_height,
         &iris_store,
         &graph_store,
         &aws_s3_client,
@@ -115,6 +122,7 @@ pub async fn exec_main(config: Config) -> Result<()> {
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
+    max_indexation_height: u64,
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
@@ -127,7 +135,7 @@ async fn exec_main_loop(
     let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
 
     // Initialise batch generator.
-    let mut batch_generator = BatchGenerator::new(config.max_batch_size);
+    let mut batch_generator = BatchGenerator::new(config.max_batch_size, max_indexation_height);
     batch_generator
         .init(iris_store, graph_store, s3_client)
         .await?;

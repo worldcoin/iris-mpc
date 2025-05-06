@@ -16,6 +16,9 @@ pub struct BatchGenerator {
     // Set of Iris serial identifiers to exclude from indexing.
     exclusions: Vec<IrisSerialId>,
 
+    // Maximum height to which to index.
+    max_indexation_height: IrisSerialId,
+
     // Iterator over range of Iris serial identifiers to be indexed.
     range_iter: Peekable<Range<IrisSerialId>>,
 }
@@ -34,9 +37,10 @@ pub trait BatchIterator {
 
 // Constructor.
 impl BatchGenerator {
-    pub fn new(batch_size: usize) -> Self {
+    pub fn new(batch_size: usize, max_indexation_height: IrisSerialId) -> Self {
         Self {
             batch_size,
+            max_indexation_height,
             batch_count: 0,
             exclusions: vec![],
             range_iter: (0..0).peekable(),
@@ -86,6 +90,9 @@ impl BatchGenerator {
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
+            if next_id > self.max_indexation_height {
+                break;
+            }
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
