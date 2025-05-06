@@ -1,9 +1,9 @@
 #![allow(clippy::needless_range_loop)]
 
 use clap::Parser;
-use iris_mpc::server::server_main_genesis;
-use iris_mpc::services::init::initialize_tracing;
 use iris_mpc_common::config::{Config, Opt};
+use iris_mpc_common::tracing::initialize_tracing;
+use iris_mpc_hawk_upgrade::genesis::server_main_genesis;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
