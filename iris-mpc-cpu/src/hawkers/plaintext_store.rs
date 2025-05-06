@@ -138,7 +138,7 @@ mod tests {
     #[traced_test]
     async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
 
         let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
 
@@ -210,7 +210,7 @@ mod tests {
     async fn test_plaintext_hnsw_matcher() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size).await;
         let mut ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
