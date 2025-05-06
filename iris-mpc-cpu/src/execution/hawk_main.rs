@@ -972,8 +972,7 @@ impl HawkHandle {
 
         let (insert_indices, search_results) = results.filter_for_insertion(search_results);
 
-        // Insert into the database.
-        // if !hawk_actor.args.disable_persistence {
+        // Insert into the in memory stores.
         // For both eyes.
         for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
             // Focus on the main results (forget rotations).
@@ -990,9 +989,6 @@ impl HawkHandle {
                 results.set_connect_plan(*i, *side, plan);
             }
         }
-        // } else {
-        //     tracing::info!("Persistence is disabled, not writing to DB");
-        // }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
