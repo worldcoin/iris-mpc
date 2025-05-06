@@ -659,21 +659,20 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    fn luc_ids(&self, luc_lookback_ids: Vec<VectorId>) -> VecRequests<Vec<VectorId>> {
+    fn luc_ids(&self, iris_store: &SharedIrises) -> VecRequests<Vec<VectorId>> {
+        let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
+
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
-            .map(|(or_rule_ids, request_type)| {
-                let or_rule_ids = or_rule_ids
-                    .iter()
-                    .map(|idx| VectorId::from_0_index(*idx).any_version());
+            .map(|(or_rule_idx, request_type)| {
+                let mut or_rule_ids = iris_store.from_0_indices(or_rule_idx);
 
                 let lookback =
                     request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
+                if lookback {
+                    or_rule_ids.extend_from_slice(&luc_lookback_ids);
+                };
 
-                let lookback_ids = if lookback { &luc_lookback_ids[..] } else { &[] }
-                    .iter()
-                    .map(|id| id.any_version());
-
-                chain!(or_rule_ids, lookback_ids).unique().collect_vec()
+                or_rule_ids
             })
             .collect_vec()
     }
@@ -940,11 +939,6 @@ impl HawkHandle {
 
         let search_queries = &request.queries;
 
-        let luc_lookback_ids = hawk_actor.iris_store[LEFT]
-            .read()
-            .await
-            .last_vector_ids(request.batch.luc_lookback_records);
-
         let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
         // Search for nearest neighbors.
@@ -957,8 +951,9 @@ impl HawkHandle {
             .await?;
 
         let match_result = {
-            let step1 =
-                matching::BatchStep1::new(&search_results, request.luc_ids(luc_lookback_ids));
+            let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
+
+            let step1 = matching::BatchStep1::new(&search_results, luc_ids);
 
             // Go fetch the missing vector IDs and calculate their is_match.
             let missing_is_match =
