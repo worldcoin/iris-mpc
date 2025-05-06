@@ -36,7 +36,7 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use itertools::{chain, izip, Itertools};
-use matching::Match;
+use matching::{Match, MatchId};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
@@ -47,6 +47,7 @@ use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::{Deref, Not},
+    slice,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -137,7 +138,7 @@ pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 // Orientation enum to indicate the orientation of the iris code during the batch processing.
 // Normal: Normal orientation of the iris code.
 // Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
     Normal,
     Mirror,
@@ -728,6 +729,7 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     batch: BatchQuery,
+    matches: VecRequests<Vec<Match>>,
     match_results: matching::BatchStep3,
     connect_plans: HawkMutation,
     is_matches: VecRequests<bool>,
@@ -746,6 +748,7 @@ impl HawkResult {
 
         HawkResult {
             batch,
+            matches: match_results.match_list(),
             match_results,
             connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
             is_matches,
@@ -800,34 +803,33 @@ impl HawkResult {
     }
 
     fn match_ids(&self) -> Vec<Vec<u32>> {
-        let per_request = |matches: vec::IntoIter<Match>| {
+        let per_request = |matches: slice::Iter<Match>| {
             matches
-                .filter_map(|m| match m {
-                    Match::Search(id) => Some(id),
-                    Match::Luc(id) => Some(id),
-                    Match::IntraBatch(req_i) => self.inserted_id(req_i),
+                .filter_map(|m| match m.id {
+                    MatchId::Search(id) => Some(id),
+                    MatchId::Luc(id) => Some(id),
+                    MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
                 })
                 .map(|id| id.index())
                 .unique()
+                .collect_vec()
         };
 
-        self.match_results
-            .match_list()
-            .into_iter()
-            .map(|matches| per_request(matches.into_iter()).collect_vec())
+        self.matches
+            .iter()
+            .map(|matches| per_request(matches.iter()))
             .collect_vec()
     }
 
     fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
-        let per_match = |m| match m {
-            Match::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
+        let per_match = |m: &Match| match m.id {
+            MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[req_i].clone()),
             _ => None,
         };
 
-        self.match_results
-            .match_list()
-            .into_iter()
-            .map(|matches| matches.into_iter().filter_map(per_match).collect_vec())
+        self.matches
+            .iter()
+            .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 

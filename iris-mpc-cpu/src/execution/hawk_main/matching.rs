@@ -1,6 +1,6 @@
 use super::{
-    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests,
-    VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, VecEdges,
+    VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
@@ -215,19 +215,20 @@ impl Step2 {
     }
 
     /// The IDs of the vectors that matched this request.
-    fn match_iter(&self) -> impl Iterator<Item = Match> + '_ {
+    fn match_iter(&self) -> impl Iterator<Item = MatchId> + '_ {
         let search = self
             .full_join
             .iter()
-            .filter_map(|(id, [l, r])| (*l && *r).then_some(Match::Search(*id)));
+            .filter_map(|(id, [l, r])| (*l && *r).then_some(MatchId::Search(*id)));
 
         let luc = self
             .luc_results
             .iter()
-            .filter_map(|(id, [l, r])| (*l || *r).then_some(Match::Luc(*id)));
+            .filter_map(|(id, [l, r])| (*l || *r).then_some(MatchId::Luc(*id)));
 
         let intra = self.intra_matches.iter().filter_map(|m| {
-            (m.is_match[LEFT] || m.is_match[RIGHT]).then_some(Match::IntraBatch(m.other_request_i))
+            (m.is_match[LEFT] || m.is_match[RIGHT])
+                .then_some(MatchId::IntraBatch(m.other_request_i))
         });
 
         chain!(search, luc, intra)
@@ -243,14 +244,20 @@ impl Step2 {
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub enum Match {
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MatchId {
     Search(VectorId),
     Luc(VectorId),
     IntraBatch(usize),
 }
 
-/// Combines the resluts from mirrored checks.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub id: MatchId,
+    pub orient: Orientation,
+}
+
+/// Combines the results from mirrored checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Step3 {
     normal: Step2,
@@ -265,6 +272,16 @@ impl Step3 {
 
     /// Concatenate the matches from normal and mirrored matches.
     fn match_list(&self) -> Vec<Match> {
-        chain!(self.normal.match_iter(), self.mirror.match_iter()).collect_vec()
+        chain!(
+            self.normal.match_iter().map(|id| Match {
+                id,
+                orient: Orientation::Normal,
+            }),
+            self.mirror.match_iter().map(|id| Match {
+                id,
+                orient: Orientation::Mirror,
+            })
+        )
+        .collect_vec()
     }
 }
