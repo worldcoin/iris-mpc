@@ -35,7 +35,7 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
 };
-use itertools::{chain, izip, Itertools};
+use itertools::{izip, Itertools};
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
