@@ -4,25 +4,18 @@ use aws_sdk_s3::{config::Region, Client as S3Client};
 use eyre::{bail, eyre, Report, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
-use iris_mpc_common::config::{CommonConfig, Config};
+use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::server_coordination as coordinator;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkActor};
-use iris_mpc_cpu::genesis::{
-    BatchGenerator as GenesisBatchGenerator, BatchIterator as GenesisBatchIterator,
-    Handle as GenesisHawkHandle,
-};
+use iris_mpc_cpu::genesis::{BatchGenerator, BatchIterator, Handle as HawkHandle};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::{DbStoredIris, Store};
-
-use iris_mpc_common::server_coordination::{
-    get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
-};
+use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -37,56 +30,66 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
 /// an isolated database snapshot of previously validated unique iris shares.
-pub async fn server_main_genesis(config: Config) -> Result<()> {
+pub async fn server_main(config: Config) -> Result<()> {
+    // Bail if config is invalid.
+    validate_config(&config);
+
+    // Set process shutdown handler.
     let shutdown_handler = init_shutdown_handler(&config).await;
 
-    let (iris_store, graph_store) = prepare_stores(&config).await?;
+    // Set coordinator task monitor.
+    let mut background_tasks = coordinator::init_task_monitor();
 
-    let aws_s3_client = create_s3_client(&config).await;
+    // Set service clients.
+    let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    // skip: get_shares_encryption_key_pair
-    // skip: init_sns
-    check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_genesis_sync_state(&config, &iris_store).await?;
+    // Bail if stores are inconsistent.
+    validate_consistency_of_stores(&config, &iris_store, &graph_store).await?;
 
-    let mut background_tasks = init_task_monitor();
-
-    let is_ready_flag =
-        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
-            .await;
-
+    // Start coordination server.
+    let my_state = get_sync_state(&config, &iris_store).await?;
+    let is_ready_flag = coordinator::start_coordination_server(
+        &config,
+        &mut background_tasks,
+        &shutdown_handler,
+        &my_state,
+    )
+    .await;
     background_tasks.check_tasks();
 
-    wait_for_others_unready(&config).await?;
-    init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
+    // Await coordinator to signal network state = unready.
+    coordinator::wait_for_others_unready(&config).await?;
 
+    // Await coordinator to signal network state = healthy.
+    coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
 
-    let sync_result = get_others_sync_state(&config, &my_state).await?;
+    // Await coordinator to signal network state = synchronized.
+    let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    // skip: maybe_sync_sqs_queues
+    // TODO: What should happen here - see Bryan.
     sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
 
+    // Escape if coordinator has signalled a shutdown.
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config).await?;
+    // Set instance of hawk actor.
+    let mut hawk_actor = get_hawk_actor(&config).await?;
 
-    load_database_genesis(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
-
+    // Initialise in-mem graph from previously indexed.
+    initialise_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
-    // skip: start_results_thread
-
-    set_node_ready(is_ready_flag);
-    wait_for_others_ready(&config).await?;
-
+    // Await coordinator to signal network state = ready.
+    coordinator::set_node_ready(is_ready_flag);
+    coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
-    run_genesis_main_server_loop(
+    run_main_server_loop(
         &config,
         &iris_store,
         &graph_store,
@@ -105,7 +108,7 @@ pub async fn server_main_genesis(config: Config) -> Result<()> {
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
 /// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
-async fn build_genesis_sync_state(config: &Config, store: &Store) -> Result<SyncState> {
+async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
@@ -126,14 +129,14 @@ async fn build_genesis_sync_state(config: &Config, store: &Store) -> Result<Sync
 async fn sync_dbs_genesis(
     _config: &Config,
     _sync_result: &SyncResult,
-    _iris_store: &Store,
+    _iris_store: &IrisStore,
 ) -> Result<()> {
     todo!();
 }
 
-async fn load_database_genesis(
+async fn initialise_graph_from_stores(
     config: &Config,
-    iris_store: &Store,
+    iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
@@ -157,7 +160,6 @@ async fn load_database_genesis(
     //       to read into memory
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
-
     load_db(&mut iris_loader, iris_store, store_len, parallelism)
         .await
         .expect("Failed to load DB");
@@ -168,9 +170,9 @@ async fn load_database_genesis(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn run_genesis_main_server_loop(
+async fn run_main_server_loop(
     config: &Config,
-    iris_store: &Store,
+    iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
     _sync_result: &SyncResult,
@@ -179,10 +181,10 @@ async fn run_genesis_main_server_loop(
     hawk_actor: HawkActor,
 ) -> Result<()> {
     // Initialise Hawk handle.
-    let mut hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
+    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
     // Initialise batch generator.
-    let mut batch_generator = GenesisBatchGenerator::new(config.max_batch_size);
+    let mut batch_generator = BatchGenerator::new(config.max_batch_size);
     batch_generator
         .init(iris_store, graph_store, s3_client)
         .await?;
@@ -253,54 +255,63 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler
 }
 
+async fn get_service_clients(
+    config: &Config,
+) -> Result<(S3Client, IrisStore, GraphPg<Aby3Store>), Report> {
+    let (iris_store, graph_store) = get_pgres_clients(&config).await?;
+    let aws_s3_client = get_s3_client(&config).await;
+
+    Ok((aws_s3_client, iris_store, graph_store))
+}
+
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
-async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let schema_name = format!(
-        "{}_{}_{}",
-        config.app_name, config.environment, config.party_id
-    );
-    let db_config = config
+async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+    // Set config.
+    let db_config_iris = config
         .database
         .as_ref()
         .ok_or(eyre!("Missing database config"))?;
-
-    let postgres_client =
-        PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadOnly).await?;
-
-    tracing::info!("Creating new iris store from: {:?}", db_config,);
-
-    let iris_store = Store::new(&postgres_client).await?;
-
-    let hawk_db_config = config
+    let db_config_graph = config
         .cpu_database
         .as_ref()
         .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-    let hawk_postgres_client =
-        PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite).await?;
 
-    tracing::info!("Creating new graph store from: {:?}", hawk_db_config);
-    let graph_store = GraphStore::new(&hawk_postgres_client).await?;
+    // Set postgres clients.
+    let pg_client_iris = PostgresClient::new(
+        &db_config_iris.url,
+        &config.get_database_schema_name(),
+        AccessMode::ReadOnly,
+    )
+    .await?;
+    let pg_client_graph = PostgresClient::new(
+        &db_config_graph.url,
+        &config.get_database_schema_name(),
+        AccessMode::ReadWrite,
+    )
+    .await?;
 
-    Ok((iris_store, graph_store))
+    // Set stores.
+    tracing::info!("Creating new iris store from: {:?}", db_config_iris,);
+    let store_iris = IrisStore::new(&pg_client_iris).await?;
+    tracing::info!("Creating new graph store from: {:?}", db_config_graph);
+    let store_graph = GraphStore::new(&pg_client_graph).await?;
+
+    Ok((store_iris, store_graph))
 }
 
 /// Creates an S3 client with retry configuration
-pub async fn create_s3_client(config: &Config) -> S3Client {
+pub async fn get_s3_client(config: &Config) -> S3Client {
     // Get region from config or use default
     let region = config
         .clone()
         .aws
         .and_then(|aws| aws.region)
         .unwrap_or_else(|| DEFAULT_REGION.to_owned());
-
     let region_provider = Region::new(region);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
-
     let force_path_style = config.environment != "prod" && config.environment != "stage";
-
     let retry_config = RetryConfig::standard().with_max_attempts(5);
-
     let s3_config = S3ConfigBuilder::from(&shared_config)
         .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
@@ -309,24 +320,9 @@ pub async fn create_s3_client(config: &Config) -> S3Client {
     S3Client::from_conf(s3_config)
 }
 
-/// Conducts consistency checks on iris shares store.
-async fn check_store_consistency(config: &Config, iris_store: &Store) -> Result<()> {
-    // TODO - check the database size matches where genesis should run too
-    // We would only want to run genesis from a certain serial id to the other serial id
-    let store_len = iris_store.count_irises().await?;
-    tracing::info!("Size of the database after init: {}", store_len);
-
-    if store_len > config.max_db_size {
-        tracing::error!("Database size exceeds maximum allowed size: {}", store_len);
-        bail!("Database size exceeds maximum allowed size: {}", store_len);
-    }
-
-    Ok(())
-}
-
 /// Initialize main Hawk actor process for handling query batches using HNSW
 /// approximate k-nearest neighbors graph search.
-async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
+async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
@@ -356,7 +352,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
 
 pub async fn load_db(
     actor: &mut impl InMemoryStore,
-    store: &Store,
+    store: &IrisStore,
     store_len: usize,
     store_load_parallelism: usize,
 ) -> eyre::Result<()> {
@@ -437,6 +433,56 @@ async fn load_db_records<'a>(
         time_waiting_for_stream,
         time_loading_into_memory,
     );
+}
+
+/// Validates application config.
+fn validate_config(config: &Config) {
+    // Validate modes of compute/deployment.
+    if config.mode_of_compute != ModeOfCompute::Cpu {
+        panic!(
+            "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
+            config.mode_of_compute
+        );
+    }
+
+    // Validate modes of compute/deployment.
+    if config.mode_of_deployment != ModeOfDeployment::Standard {
+        panic!(
+            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
+            config.mode_of_deployment
+        );
+    }
+
+    tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
+    tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+}
+
+/// Validates consistency of PostGres stores.
+async fn validate_consistency_of_stores(
+    config: &Config,
+    iris_store: &IrisStore,
+    _graph_store: &GraphPg<Aby3Store>,
+) -> Result<()> {
+    // Bail if current Iris store length exceeed maximum constraint - should never occur.
+    let store_len = iris_store.count_irises().await?;
+    if store_len > config.max_db_size {
+        tracing::error!(
+            "Database size {} exceeds maximum allowed {}",
+            store_len,
+            config.max_db_size
+        );
+        bail!(
+            "Database size {} exceeds maximum allowed {}",
+            store_len,
+            config.max_db_size
+        );
+    }
+    tracing::info!("Size of the database after init: {}", store_len);
+
+    // TODO - check the database size matches where genesis should run too
+    // We would only want to run genesis from a certain serial id to the other serial id
+
+    Ok(())
 }
 
 // TODO genesis "num_processed" state flag
