@@ -973,26 +973,22 @@ impl HawkHandle {
 
         let (insert_indices, search_results) = results.filter_for_insertion(search_results);
 
-        // Insert into the database.
-        if !hawk_actor.args.disable_persistence {
-            // For both eyes.
-            for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
-                // Focus on the main results (forget rotations).
-                let insert_plans = search_results
-                    .into_iter()
-                    .map(VecRots::into_center)
-                    .collect();
+        // Insert into the in memory stores.
+        // For both eyes.
+        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+            // Focus on the main results (forget rotations).
+            let insert_plans = search_results
+                .into_iter()
+                .map(VecRots::into_center)
+                .collect();
 
-                // Insert in memory, and return the plans to update the persistent database.
-                let plans = hawk_actor.insert(sessions, insert_plans).await?;
+            // Insert in memory, and return the plans to update the persistent database.
+            let plans = hawk_actor.insert(sessions, insert_plans).await?;
 
-                // Convert to Vec<Option> matching the request order.
-                for (i, plan) in izip!(&insert_indices, plans) {
-                    results.set_connect_plan(*i, *side, plan);
-                }
+            // Convert to Vec<Option> matching the request order.
+            for (i, plan) in izip!(&insert_indices, plans) {
+                results.set_connect_plan(*i, *side, plan);
             }
-        } else {
-            tracing::info!("Persistence is disabled, not writing to DB");
         }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
