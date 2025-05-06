@@ -440,7 +440,7 @@ pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     let all_readiness_addresses = get_check_addresses(
         config.node_hostnames.clone(),
         config.healthcheck_ports.clone(),
-        "height",
+        "height-of-graph-genesis-indexation",
     );
 
     let party_id = config.party_id;
