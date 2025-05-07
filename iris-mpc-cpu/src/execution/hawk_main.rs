@@ -887,6 +887,10 @@ impl HawkResult {
             orient: Only(Mirror),
         });
 
+        let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
+            .map(|(normal, mirror)| normal.is_empty() && !mirror.is_empty())
+            .collect_vec();
+
         let merged_results = self.merged_results();
         let matched_batch_request_ids = self.matched_batch_request_ids();
 
@@ -909,12 +913,12 @@ impl HawkResult {
             partial_match_ids_right,
             partial_match_counters_right,
 
-            full_face_mirror_attack_detected: vec![false; n_requests], // TODO.
             full_face_mirror_match_ids,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_counters_left,
             full_face_mirror_partial_match_ids_right,
             full_face_mirror_partial_match_counters_right,
+            full_face_mirror_attack_detected,
 
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
