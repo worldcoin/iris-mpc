@@ -672,14 +672,12 @@ mod tests {
             plaintext_inserts.push(plaintext_store.insert(p).await);
         }
 
-        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
-
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()

@@ -46,7 +46,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     for (i, iris) in plain_store.points.iter().enumerate() {
         let vector_id = VectorId::from_0_index(i as u32);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }

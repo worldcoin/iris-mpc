@@ -18,9 +18,12 @@ use tracing::debug;
 use super::aby3::aby3_store::VectorId;
 use eyre::{eyre, Result};
 
+/// Vector store which works over plaintext iris codes and distance computations.
+///
+/// This variant is only suitable for single-threaded operation.
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
-    pub points: Vec<Arc<IrisCode>>,
+    pub points: Vec<IrisCode>,
 }
 
 impl PlaintextStore {
@@ -29,18 +32,10 @@ impl PlaintextStore {
         Self::default()
     }
 
-    /// Generate a new `PlaintextStore` with the specified database of
-    /// `IrisCode` entries.
-    pub fn new_from_vec(iris_codes: Vec<IrisCode>) -> Self {
-        Self {
-            points: iris_codes.into_iter().map(Arc::new).collect(),
-        }
-    }
-
     /// Generate a new `PlaintextStore` of specified size with random entries.
     pub fn new_random<R: RngCore + Clone + CryptoRng>(rng: &mut R, store_size: usize) -> Self {
-        let iris_codes = IrisDB::new_random_rng(store_size, rng).db;
-        PlaintextStore::new_from_vec(iris_codes)
+        let points = IrisDB::new_random_rng(store_size, rng).db;
+        Self { points }
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this
@@ -61,7 +56,7 @@ impl PlaintextStore {
         }
 
         for idx in 0..graph_size {
-            let query = self.points[idx].clone();
+            let query = Arc::new(self.points[idx].clone());
             let query_id = VectorId::from_0_index(idx as u32);
             let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
@@ -88,7 +83,7 @@ fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
 }
 
 impl VectorStore for PlaintextStore {
-    type QueryRef = Arc<IrisCode>;
+    type QueryRef = IrisCode;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
@@ -130,28 +125,28 @@ impl VectorStoreMut for PlaintextStore {
     }
 }
 
-type PlaintextIrisRef = Arc<IrisCode>;
-type SharedPlaintextIrises = Vec<PlaintextIrisRef>;
-
+/// PlaintextStore with synchronization primitives for multithreaded use.
 #[derive(Default, Debug, Clone)]
 pub struct SharedPlaintextStore {
-    pub points: Arc<RwLock<SharedPlaintextIrises>>,
+    pub points: Arc<RwLock<Vec<IrisCode>>>,
 }
 
 impl SharedPlaintextStore {
     pub fn new() -> Self {
         Default::default()
     }
+}
 
-    pub fn from_store(store: PlaintextStore) -> Self {
+impl From<PlaintextStore> for SharedPlaintextStore {
+    fn from(value: PlaintextStore) -> Self {
         Self {
-            points: Arc::new(RwLock::new(store.points)),
+            points: Arc::new(RwLock::new(value.points)),
         }
     }
 }
 
 impl VectorStore for SharedPlaintextStore {
-    type QueryRef = Arc<IrisCode>;
+    type QueryRef = IrisCode;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
@@ -289,7 +284,7 @@ mod tests {
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
         for i in 0..database_size {
-            let query = ptxt_vector.points.get(i).unwrap().clone();
+            let query = Arc::new(ptxt_vector.points.get(i).unwrap().clone());
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
@@ -314,7 +309,7 @@ mod tests {
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
 
-        let mut shared_vector = SharedPlaintextStore::from_store(ptxt_vector);
+        let mut shared_vector = SharedPlaintextStore::from(ptxt_vector);
         let shared_graph = Arc::new(migrate(ptxt_graph, |id| id));
 
         for ids in (0..database_size)
@@ -326,11 +321,10 @@ mod tests {
             let queries = shared_vector.vectors_as_queries(ids.clone()).await;
 
             let mut jobs = JoinSet::new();
-            for query in queries.iter() {
+            for query in queries {
                 let mut sh_vec = shared_vector.clone();
                 let searcher = searcher.clone();
                 let graph = Arc::clone(&shared_graph);
-                let query = Arc::clone(query);
                 jobs.spawn(async move { searcher.search(&mut sh_vec, &graph, &query, 1).await });
             }
 
