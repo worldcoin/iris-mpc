@@ -82,7 +82,7 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
     sync_result.check_common_config()?;
 
     // TODO: What should happen here - see Bryan.
-    sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
+    // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
 
     // Escape if coordinator has signalled a shutdown.
     if shutdown_handler.is_shutting_down() {
@@ -101,6 +101,8 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
+
+    tracing::info!("HNSW GENESIS: Executing main loop");
 
     // Execute main loop.
     exec_main_loop(
@@ -137,7 +139,12 @@ async fn exec_main_loop(
     // Initialise batch generator.
     let mut batch_generator = BatchGenerator::new(config.max_batch_size, max_indexation_height);
     batch_generator
-        .init(iris_store, graph_store, s3_client)
+        .init(
+            iris_store,
+            graph_store,
+            s3_client,
+            config.environment.clone(),
+        )
         .await?;
 
     let res: Result<()> = async {
@@ -378,7 +385,6 @@ async fn load_db(
 
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
     actor.reserve(store_len);
-    tracing::info!("S3 importer disabled. Fetching only from db");
     let stream_db = store
         .stream_irises_par(None, store_load_parallelism)
         .await
@@ -453,13 +459,14 @@ async fn load_db_records<'a>(
     );
 }
 
-async fn sync_dbs_genesis(
-    _config: &Config,
-    _sync_result: &SyncResult,
-    _iris_store: &IrisStore,
-) -> Result<()> {
-    todo!();
-}
+// TODO : implement db sync genesis
+// async fn sync_dbs_genesis(
+//     _config: &Config,
+//     _sync_result: &SyncResult,
+//     _iris_store: &IrisStore,
+// ) -> Result<()> {
+//     todo!();
+// }
 
 /// Validates application config.
 fn validate_config(config: &Config) {

@@ -3,7 +3,7 @@ include:
 
 services:
   hawk_participant_0:
-    image: genesis:latest
+    image: hawk-server-genesis:latest
     env_file:
       - .test.env
       - .test.hawk0.env
@@ -22,7 +22,7 @@ services:
     entrypoint: ./run-server-docker.sh 0 genesis
 
   hawk_participant_1:
-    image: genesis:latest
+    image: hawk-server-genesis:latest
     env_file:
       - .test.env
       - .test.hawk1.env
@@ -41,7 +41,7 @@ services:
     entrypoint: ./run-server-docker.sh 1 genesis
 
   hawk_participant_2:
-    image: genesis:latest
+    image: hawk-server-genesis:latest
     env_file:
       - .test.env
       - .test.hawk2.env

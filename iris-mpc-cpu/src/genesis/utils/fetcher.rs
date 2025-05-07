@@ -1,7 +1,6 @@
-use super::{constants, errors::IndexationError, types::IrisSerialId};
+use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
-use rand::prelude::IteratorRandom;
 use serde::{Deserialize, Serialize};
 
 /// Fetches height of indexed from store.
@@ -78,6 +77,7 @@ pub(crate) async fn fetch_iris_batch(
 #[allow(dead_code)]
 pub(crate) async fn fetch_iris_deletions(
     s3_client: &S3_Client,
+    env: String,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
     #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -85,15 +85,25 @@ pub(crate) async fn fetch_iris_deletions(
         deleted_serial_ids: Vec<IrisSerialId>,
     }
 
+    // Compose bucket and key based on environment
+    let bucket = format!("wf-smpcv2-{}-sync-protocol", env);
+    let key = format!("{}_deleted_serial_ids.json", env);
+
+    tracing::info!(
+        "Fetching deleted serial ids from S3 bucket: {}, key: {}",
+        bucket,
+        key
+    );
+
     // Fetch from S3.
     let s3_response = s3_client
         .get_object()
-        .bucket(constants::S3_BUCKET_FOR_IRIS_DELETIONS)
-        .key(constants::S3_KEY_FOR_IRIS_DELETIONS)
+        .bucket(&bucket)
+        .key(&key)
         .send()
         .await
         .map_err(|err| {
-            tracing::error!("Failed to download file: {}", err);
+            tracing::error!("Failed to download file from S3: {}", err);
             IndexationError::AwsS3ObjectDownload
         })?;
 
@@ -105,21 +115,10 @@ pub(crate) async fn fetch_iris_deletions(
 
     // Decode S3 object bytes.
     let s3_object_bytes = s3_object_body.into_bytes();
-    let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes)
-        .map_err(|_| IndexationError::PostgresFetchIrisBatch)
-        .unwrap();
+    let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes).map_err(|err| {
+        tracing::error!("Failed to deserialize S3 object: {}", err);
+        IndexationError::AwsS3ObjectDeserialize
+    })?;
 
     Ok(s3_object.deleted_serial_ids)
-}
-
-/// Fetches serial identifiers marked as deleted.
-/// TODO: remove usage as this is a temporary solution.
-pub(crate) async fn fetch_iris_deletions_temp(
-    _: &S3_Client,
-) -> Result<Vec<IrisSerialId>, IndexationError> {
-    let mut rng = rand::thread_rng();
-    let mut identifiers: Vec<IrisSerialId> = (1..1000).choose_multiple(&mut rng, 50);
-    identifiers.sort();
-
-    Ok(identifiers)
 }

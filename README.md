@@ -191,7 +191,7 @@ docker-compose -f docker-compose.test.yaml up
 docker build -f Dockerfile.genesis.dev.hawk -t genesis2:latest .
 
 ```bash
-docker build -f Dockerfile.genesis.dev.hawk -t genesis:latest .
+docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
 docker-compose -f docker-compose.test.genesis.yaml up
 ```
 
