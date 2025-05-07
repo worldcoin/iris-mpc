@@ -1,6 +1,6 @@
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
-use eyre::{bail, WrapErr};
+use eyre::{bail, Result, WrapErr};
 use iris_mpc_common::config::{Config, ModeOfDeployment};
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
@@ -31,7 +31,7 @@ pub async fn process_job_result(
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
     anonymized_statistics_attributes: &HashMap<String, MessageAttributeValue>,
     shutdown_handler: &ShutdownHandler,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let ServerJobResult {
         merged_results,
         request_ids,
@@ -118,7 +118,7 @@ pub async fn process_job_result(
 
             serde_json::to_string(&result_event).wrap_err("failed to serialize result")
         })
-        .collect::<eyre::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     // Insert non-matching uniqueness queries into the persistent store.
     let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -160,7 +160,7 @@ pub async fn process_job_result(
             );
             serde_json::to_string(&result_event).wrap_err("failed to serialize reauth result")
         })
-        .collect::<eyre::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     let mut iris_tx = store.tx().await?;
 
@@ -249,7 +249,7 @@ pub async fn process_job_result(
             serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize identity deletion result")
         })
-        .collect::<eyre::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
 
     tracing::info!(
         "Sending {} identity deletion results",
@@ -281,7 +281,7 @@ pub async fn process_job_result(
                 serde_json::to_string(anonymized_bucket_statistics)
                     .wrap_err("failed to serialize anonymized statistics result")
             })
-            .collect::<eyre::Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         send_results_to_sns(
             anonymized_statistics_results,
@@ -305,7 +305,7 @@ async fn persist(
     graph_store: &GraphStore,
     hawk_mutation: HawkMutation,
     config: &Config,
-) -> eyre::Result<()> {
+) -> Result<()> {
     // If we're in ShadowReadOnly mode, never commit to iris-db, but possibly commit graph.
     if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
         if !config.cpu_disable_persistence {

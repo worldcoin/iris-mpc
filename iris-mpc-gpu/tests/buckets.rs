@@ -195,7 +195,7 @@ mod buckets_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_buckets() -> eyre::Result<()> {
+    async fn test_buckets() -> Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");

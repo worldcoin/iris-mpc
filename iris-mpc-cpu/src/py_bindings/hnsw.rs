@@ -6,7 +6,7 @@ use crate::{
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
-use std::{fs::File, io::BufReader};
+use std::{fs::File, io::BufReader, sync::Arc};
 
 pub fn search(
     query: IrisCode,
@@ -20,7 +20,7 @@ pub fn search(
         .unwrap();
 
     rt.block_on(async move {
-        let query = vector.prepare_query(query);
+        let query = Arc::new(query);
         let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
@@ -42,7 +42,7 @@ pub fn insert(
     rt.block_on(async move {
         let mut rng = ThreadRng::default();
 
-        let query = vector.prepare_query(iris);
+        let query = Arc::new(iris);
         searcher
             .insert(vector, graph, &query, &mut rng)
             .await
@@ -76,8 +76,7 @@ pub fn fill_uniform_random(
         let mut rng = ThreadRng::default();
 
         for idx in 0..num {
-            let raw_query = IrisCode::random_rng(&mut rng);
-            let query = vector.prepare_query(raw_query.clone());
+            let query = Arc::new(IrisCode::random_rng(&mut rng));
             searcher
                 .insert(vector, graph, &query, &mut rng)
                 .await
@@ -114,7 +113,7 @@ pub fn fill_from_ndjson_file(
         // Iterate over each deserialized object
         for json_pt in stream {
             let raw_query = (&json_pt.unwrap()).into();
-            let query = vector.prepare_query(raw_query);
+            let query = Arc::new(raw_query);
             searcher
                 .insert(vector, graph, &query, &mut rng)
                 .await

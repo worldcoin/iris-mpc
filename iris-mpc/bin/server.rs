@@ -6,10 +6,10 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
-use eyre::{bail, eyre, Context, Report};
+use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::init::initialize_chacha_seeds;
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
@@ -17,6 +17,8 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::server_coordination::ReadyProbeResponse;
+use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -92,7 +94,7 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
+) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
     let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
@@ -110,7 +112,7 @@ fn preprocess_iris_message_shares(
     mask_share: GaloisRingTrimmedMaskCodeShare,
     code_share_mirrored: GaloisRingIrisCodeShare,
     mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<GaloisShares> {
+) -> Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
 
@@ -161,7 +163,7 @@ pub fn receive_batch_stream(
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
-) -> Receiver<eyre::Result<Option<BatchQuery>, ReceiveRequestError>> {
+) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
     tokio::spawn(async move {
@@ -217,7 +219,7 @@ async fn receive_batch(
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
@@ -1006,7 +1008,7 @@ async fn send_last_modifications_to_sns(
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
-) -> eyre::Result<()> {
+) -> Result<()> {
     // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
@@ -1099,7 +1101,7 @@ async fn send_last_modifications_to_sns(
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     println!("Init config");
@@ -1127,7 +1129,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-async fn server_main(config: Config) -> eyre::Result<()> {
+async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -1281,13 +1283,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     };
 
     tracing::info!("Sync state: {:?}", my_state);
-
-    #[derive(Debug, Serialize, Deserialize, Clone)]
-    struct ReadyProbeResponse {
-        image_name: String,
-        uuid: String,
-        shutting_down: bool,
-    }
 
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
 
@@ -1903,7 +1898,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -2223,7 +2218,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         serde_json::to_string(anonymized_bucket_statistics)
                             .wrap_err("failed to serialize anonymized statistics result")
                     })
-                    .collect::<eyre::Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 send_results_to_sns(
                     anonymized_statistics_results,
@@ -2307,7 +2302,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
-    let res: eyre::Result<()> = async {
+    let res: Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
         //
@@ -2418,7 +2413,7 @@ async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
@@ -2476,7 +2471,7 @@ async fn load_db(
     s3_load_max_retries: usize,
     s3_load_initial_backoff_ms: u64,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 

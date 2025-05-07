@@ -60,6 +60,16 @@ impl Networking for GrpcSession {
             self.session_id
         ))?;
         trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
+        metrics::counter!(
+            "smpc.rounds",
+            "session_id" => self.session_id.0.to_string(),
+        )
+        .increment(1);
+        metrics::counter!(
+            "smpc.bytes",
+            "session_id" => self.session_id.0.to_string(),
+        )
+        .increment(value.len() as u64);
         let request = SendRequest { data: value };
         outgoing_stream
             .send(request)
@@ -825,7 +835,7 @@ mod tests {
     async fn test_hnsw_local() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
             database_size,

@@ -25,7 +25,7 @@ use cudarc::{
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
-use eyre::{bail, eyre};
+use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -84,7 +84,7 @@ impl JobSubmissionHandle for ServerActorHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = eyre::Result<ServerJobResult>> {
+    ) -> impl Future<Output = Result<ServerJobResult>> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
@@ -181,7 +181,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -215,7 +215,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -253,7 +253,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
             party_id,
@@ -290,22 +290,21 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, &hex::decode(KDF_SALT)?);
         let n_queries = max_batch_size * ROTATIONS;
 
         // helper closure to generate the next chacha seeds
-        let mut next_chacha_seeds =
-            |seeds: ([u32; 8], [u32; 8])| -> eyre::Result<([u32; 8], [u32; 8])> {
-                let nonce = kdf_nonce;
-                kdf_nonce += 1;
-                Ok((
-                    derive_seed(seeds.0, &kdf_salt, nonce)?,
-                    derive_seed(seeds.1, &kdf_salt, nonce)?,
-                ))
-            };
+        let mut next_chacha_seeds = |seeds: ([u32; 8], [u32; 8])| -> Result<([u32; 8], [u32; 8])> {
+            let nonce = kdf_nonce;
+            kdf_nonce += 1;
+            Ok((
+                derive_seed(seeds.0, &kdf_salt, nonce)?,
+                derive_seed(seeds.1, &kdf_salt, nonce)?,
+            ))
+        };
 
         tracing::info!("GPU actor: Starting engines...");
 
@@ -614,7 +613,7 @@ impl ServerActor {
         batch: BatchQuery,
         orientation: Orientation,
         previous_results: Option<ServerJobResult>,
-    ) -> eyre::Result<ServerJobResult> {
+    ) -> Result<ServerJobResult> {
         let now = Instant::now();
         // we only want to perform deletions and reset updates for the first query
         // this ensures we do not perform the same request twice and enables faster processing
@@ -991,7 +990,7 @@ impl ServerActor {
                 DB_CHUNK_SIZE
             );
 
-            tracing::info!("Comparing right eye queries against DB and self");
+            tracing::info!("Comparing {} eye queries against DB and self", other_side);
             self.compare_query_against_db_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
@@ -1001,7 +1000,7 @@ impl ServerActor {
                 orientation,
             );
         } else {
-            tracing::info!("Comparing right eye queries against DB subset");
+            tracing::info!("Comparing {} eye queries against DB subset", other_side);
             self.compare_query_against_db_subset_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
@@ -1210,6 +1209,16 @@ impl ServerActor {
                         // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
                         merged_results[i] == NON_MATCH_ID
                             && mirror_results.matches_with_skip_persistence[i]
+                            // Ensures that mirror attack detection is only applied to uniqueness requests.
+                            // This constraint is necessary due to the implementation of the `matches` and
+                            // `matches_with_skip_persistence` vectors:
+                            // 1. The `matches` vector is initialized by the `calculate_insertion_indices()` function
+                            //    with all elements set to `true` by default.
+                            // 2. During iteration over the `uniqueness_insertion_list`, only elements corresponding
+                            //    to unique requests have their value set to `false` in the `matches` vector.
+                            // 3. Consequently, non-uniqueness requests (reauth, reset, deletion) retain their
+                            //    initial `true` value in the `matches` vector, which would incorrectly cause
+                            //    the mirror attack detection algorithm to classify them as full face mirror attacks.
                             && batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
                     })
                     .collect();
@@ -2363,11 +2372,7 @@ impl ServerActor {
         }
     }
 
-    fn sync_match_results(
-        &mut self,
-        max_batch_size: usize,
-        match_results: &[u32],
-    ) -> eyre::Result<()> {
+    fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
         assert!(match_results.len() <= max_batch_size);
         let mut buffer = self
             .device_manager
@@ -2413,7 +2418,7 @@ impl ServerActor {
         valid_entries: &[bool],
         max_batch_size: usize,
         batch_hash: &[u8],
-    ) -> eyre::Result<Vec<bool>> {
+    ) -> Result<Vec<bool>> {
         assert!(valid_entries.len() <= max_batch_size);
         let hash_len = batch_hash.len();
         let mut buffer = self
@@ -2472,7 +2477,7 @@ impl ServerActor {
         &self,
         code_share: &GaloisRingIrisCodeShare,
         mask_share: &GaloisRingTrimmedMaskCodeShare,
-    ) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
+    ) -> Result<(DeviceCompactQuery, DeviceCompactSums)> {
         let compact_query = {
             let code = preprocess_query(
                 &code_share
@@ -2550,7 +2555,7 @@ fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
 }
 
 /// Internal helper function to derive a new seed from the given seed and nonce.
-fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u32; 8]> {
+fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> Result<[u32; 8]> {
     let pseudo_rand_key = kdf_salt.extract(bytemuck::cast_slice(&seed));
     let nonce = nonce.to_be_bytes();
     let context = vec![nonce.as_slice()];

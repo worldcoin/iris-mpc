@@ -11,6 +11,7 @@ use crate::{
     shares::share::{DistanceShare, Share},
 };
 use eyre::Result;
+use iris_mpc_common::vector_id::{SerialId, VersionId};
 use itertools::{izip, Itertools};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
@@ -62,7 +63,7 @@ pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
 /// Storage of inserted irises.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SharedIrises {
-    points: HashMap<VectorId, IrisRef>,
+    points: HashMap<SerialId, (VersionId, IrisRef)>,
     next_id: u32,
     empty_iris: IrisRef,
     set_hash: SetHash,
@@ -77,6 +78,12 @@ impl Default for SharedIrises {
 impl SharedIrises {
     pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
         let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+
+        let points = points
+            .into_iter()
+            .map(|(v, iris)| (v.serial_id(), (v.version_id(), iris)))
+            .collect::<HashMap<_, _>>();
+
         SharedIrises {
             points,
             next_id,
@@ -86,7 +93,9 @@ impl SharedIrises {
     }
 
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        let was_there = self.points.insert(vector_id, iris);
+        let was_there = self
+            .points
+            .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
         if was_there.is_none() {
@@ -106,17 +115,47 @@ impl SharedIrises {
 
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
-        Arc::clone(self.points.get(vector).unwrap_or(&self.empty_iris))
+        match self.points.get(&vector.serial_id()) {
+            Some((version, iris)) if vector.version_matches(*version) => Arc::clone(iris),
+            _ => Arc::clone(&self.empty_iris),
+        }
     }
 
     fn contains(&self, vector: &VectorId) -> bool {
-        self.points.contains_key(vector)
+        matches!(self.points.get(&vector.serial_id()),
+            Some((version, _)) if vector.version_matches(*version))
     }
 
     pub fn to_arc(self) -> SharedIrisesRef {
         SharedIrisesRef {
             body: Arc::new(RwLock::new(self)),
         }
+    }
+
+    pub fn last_vector_ids(&self, n: usize) -> Vec<VectorId> {
+        (1..self.next_id)
+            .rev()
+            .take(n)
+            .filter_map(|serial_id| {
+                self.points
+                    .get(&serial_id)
+                    .map(|(version, _)| VectorId::new(serial_id, *version))
+            })
+            .collect_vec()
+    }
+
+    pub fn from_0_indices(&self, indices: &[u32]) -> Vec<VectorId> {
+        indices
+            .iter()
+            .map(|index| {
+                let v = VectorId::from_0_index(*index);
+                if let Some((version, _)) = self.points.get(&v.serial_id()) {
+                    VectorId::new(v.serial_id(), *version)
+                } else {
+                    v
+                }
+            })
+            .collect_vec()
     }
 }
 
@@ -141,7 +180,7 @@ impl SharedIrisesRef {
         self.body.write().await
     }
 
-    async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
+    pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
         self.body.read().await
     }
 
@@ -385,7 +424,7 @@ mod tests {
             jobs.spawn(async move {
                 let mut store = store.lock().await;
                 let mut aby3_graph = GraphMem::new();
-                let db = HnswSearcher::default();
+                let db = HnswSearcher::new_with_test_parameters();
 
                 let mut inserted = vec![];
                 // insert queries
@@ -448,12 +487,13 @@ mod tests {
                 premade_v.storage.body.read().await.points
             );
         }
-        let hawk_searcher = HnswSearcher::default();
+        let hawk_searcher = HnswSearcher::new_with_test_parameters();
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
+            let query = cleartext_data.0.points.get(i).unwrap().clone();
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &mut cleartext_data.1, &vector_id, 1)
+                .search(&mut cleartext_data.0, &mut cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -517,16 +557,16 @@ mod tests {
     async fn test_gr_aby3_store_plaintext() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_dim = 4;
-        let cleartext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
-        let shared_irises: Vec<_> = cleartext_database
+        let plaintext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
+        let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_dim)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
         let mut plaintext_inserts = Vec::new();
         for p in plaintext_preps.iter() {
@@ -537,15 +577,17 @@ mod tests {
         let it1 = (0..db_dim).combinations(2);
         let it2 = (0..db_dim).combinations(2);
 
+        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
+
         let mut plain_results = HashMap::new();
         for comb1 in it1.clone() {
             for comb2 in it2.clone() {
                 // compute distances in plaintext
                 let dist1_plain = plaintext_store
-                    .eval_distance(&plaintext_inserts[comb1[0]], &plaintext_inserts[comb1[1]])
+                    .eval_distance(&plaintext_queries[comb1[0]], &plaintext_inserts[comb1[1]])
                     .await?;
                 let dist2_plain = plaintext_store
-                    .eval_distance(&plaintext_inserts[comb2[0]], &plaintext_inserts[comb2[1]])
+                    .eval_distance(&plaintext_queries[comb2[0]], &plaintext_inserts[comb2[1]])
                     .await?;
                 let bit = plaintext_store
                     .less_than(&dist1_plain, &dist2_plain)
@@ -616,28 +658,30 @@ mod tests {
     async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
-        let cleartext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
-        let shared_irises: Vec<_> = cleartext_database
+        let plaintext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
+        let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
-        let mut plaintext_store = PlaintextStore::default();
+        let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_size)
-            .map(|id| plaintext_store.prepare_query(cleartext_database[id].clone()))
+            .map(|id| Arc::new(plaintext_database[id].clone()))
             .collect();
         let mut plaintext_inserts = Vec::with_capacity(db_size);
         for p in plaintext_preps.iter() {
             plaintext_inserts.push(plaintext_store.insert(p).await);
         }
 
+        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
+
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_inserts[0]], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_queries[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_inserts[1]], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_queries[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -700,7 +744,7 @@ mod tests {
     async fn test_gr_scratch_hnsw() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 2;
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs =
             shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
                 .await

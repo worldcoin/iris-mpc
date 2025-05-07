@@ -1,5 +1,6 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
+use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -17,6 +18,7 @@ pub struct Opt {
     party_id: Option<usize>,
 }
 
+#[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_app_name")]
@@ -190,6 +192,15 @@ pub struct Config {
     #[serde(default = "default_hawk_server_healthcheck_port")]
     pub hawk_server_healthcheck_port: usize,
 
+    #[serde(default = "default_hnsw_param_ef_constr")]
+    pub hnsw_param_ef_constr: usize,
+
+    #[serde(default = "default_hnsw_param_M")]
+    pub hnsw_param_M: usize,
+
+    #[serde(default = "default_hnsw_param_ef_search")]
+    pub hnsw_param_ef_search: usize,
+
     #[serde(default)]
     pub hawk_prng_seed: Option<u64>,
 
@@ -227,10 +238,30 @@ pub struct Config {
 
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
+
+    // used to fix max batch size to 1 for correctness testing purposes
+    #[serde(default = "default_override_max_batch_size")]
+    pub override_max_batch_size: bool,
+}
+
+impl Config {
+    // Returns computed name of application's postgres database schema.
+    pub fn get_database_schema_name(&self) -> String {
+        format!(
+            "{}_{}_{}",
+            self.app_name.clone(),
+            self.environment.clone(),
+            self.party_id.clone()
+        )
+    }
 }
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
+}
+
+fn default_override_max_batch_size() -> bool {
+    false
 }
 
 /// Enumeration over set of compute modes.
@@ -333,6 +364,19 @@ fn default_hawk_server_healthcheck_port() -> usize {
     300
 }
 
+fn default_hnsw_param_ef_constr() -> usize {
+    320
+}
+
+#[allow(non_snake_case)]
+fn default_hnsw_param_M() -> usize {
+    256
+}
+
+fn default_hnsw_param_ef_search() -> usize {
+    256
+}
+
 fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
 }
@@ -362,7 +406,7 @@ fn default_hawk_server_deletions_enabled() -> bool {
 }
 
 impl Config {
-    pub fn load_config(prefix: &str) -> eyre::Result<Config> {
+    pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
         let settings = settings
             .add_source(
@@ -458,6 +502,7 @@ where
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
+#[allow(non_snake_case)]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,
@@ -488,6 +533,9 @@ pub struct CommonConfig {
     enable_reauth: bool,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
+    hnsw_param_ef_constr: usize,
+    hnsw_param_M: usize,
+    hnsw_param_ef_search: usize,
     hawk_prng_seed: Option<u64>,
     max_deletions_per_batch: usize,
     mode_of_compute: ModeOfCompute,
@@ -558,6 +606,9 @@ impl From<Config> for CommonConfig {
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
+            hnsw_param_ef_constr,
+            hnsw_param_M,
+            hnsw_param_ef_search,
             hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
@@ -573,6 +624,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            override_max_batch_size: _, // for testing purposes only
         } = value;
 
         Self {
@@ -604,6 +656,9 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             hawk_request_parallelism,
             hawk_connection_parallelism,
+            hnsw_param_ef_constr,
+            hnsw_param_M,
+            hnsw_param_ef_search,
             hawk_prng_seed,
             max_deletions_per_batch,
             mode_of_compute,
