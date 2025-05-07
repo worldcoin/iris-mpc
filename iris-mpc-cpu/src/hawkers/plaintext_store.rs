@@ -54,7 +54,7 @@ impl PlaintextStore {
         }
 
         for idx in 0..graph_size {
-            let query = Arc::new(self.points[idx].clone());
+            let query = self.points[idx].clone();
             let query_id = VectorId::from_0_index(idx as u32);
             let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
@@ -204,68 +204,57 @@ mod tests {
     #[traced_test]
     async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut plaintext_store = PlaintextStore::new();
+        let mut store = PlaintextStore::new();
 
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-
-        let queries = cleartext_database
-            .iter()
-            .cloned()
-            .map(Arc::new)
-            .collect_vec();
+        let db = IrisDB::new_random_rng(10, &mut rng).db;
 
         let mut ids = Vec::new();
-        for q in queries.iter() {
-            ids.push(plaintext_store.insert(q).await);
+        for q in db.iter() {
+            ids.push(store.insert(q).await);
         }
 
-        let d01 = plaintext_store.eval_distance(&queries[0], &ids[1]).await?;
-        let d02 = plaintext_store.eval_distance(&queries[0], &ids[2]).await?;
-        let d03 = plaintext_store.eval_distance(&queries[0], &ids[3]).await?;
-        let d10 = plaintext_store.eval_distance(&queries[1], &ids[0]).await?;
-        let d12 = plaintext_store.eval_distance(&queries[1], &ids[2]).await?;
-        let d13 = plaintext_store.eval_distance(&queries[1], &ids[3]).await?;
-        let d23 = plaintext_store.eval_distance(&queries[2], &ids[3]).await?;
-        let d30 = plaintext_store.eval_distance(&queries[3], &ids[0]).await?;
-
-        let db0 = &cleartext_database[0];
-        let db1 = &cleartext_database[1];
-        let db2 = &cleartext_database[2];
-        let db3 = &cleartext_database[3];
+        let d01 = store.eval_distance(&db[0], &ids[1]).await?;
+        let d02 = store.eval_distance(&db[0], &ids[2]).await?;
+        let d03 = store.eval_distance(&db[0], &ids[3]).await?;
+        let d10 = store.eval_distance(&db[1], &ids[0]).await?;
+        let d12 = store.eval_distance(&db[1], &ids[2]).await?;
+        let d13 = store.eval_distance(&db[1], &ids[3]).await?;
+        let d23 = store.eval_distance(&db[2], &ids[3]).await?;
+        let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
         assert_eq!(
-            plaintext_store.less_than(&d01, &d23).await?,
-            db0.get_distance(db1) < db2.get_distance(db3)
+            store.less_than(&d01, &d23).await?,
+            db[0].get_distance(&db[1]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d23, &d01).await?,
-            db2.get_distance(db3) < db0.get_distance(db1)
+            store.less_than(&d23, &d01).await?,
+            db[2].get_distance(&db[3]) < db[0].get_distance(&db[1])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d13).await?,
-            db0.get_distance(db2) < db1.get_distance(db3)
+            store.less_than(&d02, &d13).await?,
+            db[0].get_distance(&db[2]) < db[1].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d03, &d12).await?,
-            db0.get_distance(db3) < db1.get_distance(db2)
+            store.less_than(&d03, &d12).await?,
+            db[0].get_distance(&db[3]) < db[1].get_distance(&db[2])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d10, &d23).await?,
-            db1.get_distance(db0) < db2.get_distance(db3)
+            store.less_than(&d10, &d23).await?,
+            db[1].get_distance(&db[0]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d12, &d30).await?,
-            db1.get_distance(db2) < db3.get_distance(db0)
+            store.less_than(&d12, &d30).await?,
+            db[1].get_distance(&db[2]) < db[3].get_distance(&db[0])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d01).await?,
-            db0.get_distance(db2) < db0.get_distance(db1)
+            store.less_than(&d02, &d01).await?,
+            db[0].get_distance(&db[2]) < db[0].get_distance(&db[1])
         );
 
         Ok(())
