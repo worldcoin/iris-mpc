@@ -215,10 +215,7 @@ pub async fn load_db<T: ObjectStore>(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        bail!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        );
+        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
     tracing::info!("Preprocessing db");

@@ -471,10 +471,7 @@ impl GrpcNetworking {
         stream: UnboundedReceiver<SendRequest>,
     ) -> Result<()> {
         if sender_id == self.party_id {
-            bail!(
-                "Sender ID coincides with receiver ID: {:?}",
-                sender_id
-            );
+            bail!("Sender ID coincides with receiver ID: {:?}", sender_id);
         }
 
         tracing::debug!(
