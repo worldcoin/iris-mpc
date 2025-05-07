@@ -57,9 +57,9 @@ impl PlaintextStore {
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.points.len() {
-            return Err(eyre!(
+            bail!(
                 "Cannot generate graph larger than underlying vector store"
-            ));
+            );
         }
 
         for idx in 0..graph_size {

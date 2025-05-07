@@ -65,9 +65,9 @@ fn a2b_pre<T: IntRing2k>(session: &Session, x: Share<T>) -> Result<(Share<T>, Sh
             x2.b = b;
         }
         _ => {
-            return Err(eyre!(
+            bail!(
                 "Cannot deal with roles that have index outside of the set [0, 1, 2]"
-            ))
+            )
         }
     }
     Ok((x1, x2, x3))
@@ -105,7 +105,7 @@ where
     Standard: Distribution<T>,
 {
     if a.len() != b.len() {
-        return Err(eyre!("InvalidSize in and_many_send"));
+        bail!("InvalidSize in and_many_send");
     }
     let mut shares_a = Vec::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
@@ -167,16 +167,16 @@ where
     Standard: Distribution<T>,
 {
     if x1.len() != x2.len() {
-        return Err(eyre!(
+        bail!(
             "Inputs have different length {} {}",
             x1.len(),
             x2.len()
-        ));
+        );
     }
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
     let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
     if chunk_sizes != chunk_sizes2 {
-        return Err(eyre!("VecShare lengths are not equal"));
+        bail!("VecShare lengths are not equal");
     }
 
     let x1 = VecShare::flatten(x1);
@@ -209,16 +209,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        return Err(eyre!(
+        bail!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        ));
+        );
     };
 
     if len < 16 {
-        return Err(eyre!("Input length should be at least 16: {len}"));
+        bail!("Input length should be at least 16: {len}");
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -350,10 +350,10 @@ where
         let reply_m0_and_m1 = network.receive_next().await;
         let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1)?;
         if m0_and_m1.len() != 2 {
-            return Err(eyre!(
+            bail!(
                 "Deserialized vec in bit inject is wrong length: {}",
                 m0_and_m1.len()
-            ));
+            );
         }
         let (m0, m1) = m0_and_m1
             .into_iter()
@@ -482,9 +482,9 @@ where
             bit_inject_ot_2round_sender::<T>(session, input).await?
         }
         _ => {
-            return Err(eyre!(
+            bail!(
                 "Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot"
-            ))
+            )
         }
     };
     Ok(res)
@@ -584,16 +584,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        return Err(eyre!(
+        bail!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        ));
+        );
     };
 
     if len < 32 {
-        return Err(eyre!("Input length should be at least 32: {len}"));
+        bail!("Input length should be at least 32: {len}");
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -661,16 +661,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        return Err(eyre!(
+        bail!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        ));
+        );
     };
 
     if len < 32 {
-        return Err(eyre!("Input length should be at least 32: {len}"));
+        bail!("Input length should be at least 32: {len}");
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.

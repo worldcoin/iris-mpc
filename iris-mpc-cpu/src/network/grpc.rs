@@ -370,11 +370,11 @@ impl GrpcNetworking {
 
     pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
         if self.clients.contains_key(&party_id) {
-            return Err(eyre!(
+            bail!(
                 "Player {:?} has already connected to player {:?}",
                 self.party_id,
                 party_id
-            ));
+            );
         }
         let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
@@ -400,11 +400,11 @@ impl GrpcNetworking {
 
     pub async fn create_outgoing_streams(&self, session_id: SessionId) -> Result<OutStreams> {
         if self.active_sessions.contains(&session_id) {
-            return Err(eyre!(
+            bail!(
                 "Session {:?} has already been created by player {:?}",
                 session_id,
                 self.party_id
-            ));
+            );
         }
         let mut out_streams = HashMap::new();
         for (client_id, clients) in self.clients.iter() {
@@ -471,10 +471,10 @@ impl GrpcNetworking {
         stream: UnboundedReceiver<SendRequest>,
     ) -> Result<()> {
         if sender_id == self.party_id {
-            return Err(eyre!(
+            bail!(
                 "Sender ID coincides with receiver ID: {:?}",
                 sender_id
-            ));
+            );
         }
 
         tracing::debug!(
@@ -487,10 +487,10 @@ impl GrpcNetworking {
         let instreams = self.instreams.entry(session_id).or_default();
 
         if instreams.contains_key(&sender_id) {
-            return Err(eyre!(
+            bail!(
                 "Incoming stream for player {:?} has been already created",
                 sender_id
-            ));
+            );
         }
         instreams.insert(sender_id.clone(), stream);
 

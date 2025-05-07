@@ -176,7 +176,7 @@ pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+            bail!("Timeout waiting for all nodes to be unready.");
         }
     };
     tracing::info!("All nodes are starting up.");
@@ -410,7 +410,7 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be ready.");
-            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+            bail!("Timeout waiting for all nodes to be ready.");
         }
     }
     tracing::info!("All nodes are ready.");

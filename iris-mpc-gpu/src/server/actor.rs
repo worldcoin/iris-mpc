@@ -2409,10 +2409,10 @@ impl ServerActor {
                     i
                 );
                 metrics::counter!("mpc.mismatch").increment(1);
-                return Err(eyre!(
+                bail!(
                     "Match results mismatch with node {}. MPC protocol produced out of sync results.",
                     i
-                ));
+                );
             }
         }
         Ok(())
@@ -2468,10 +2468,10 @@ impl ServerActor {
                     i
                 );
                 metrics::counter!("batch.mismatch").increment(1);
-                return Err(eyre!(
+                bail!(
                     "Batch mismatch with node {}. Queues seem to be out of sync.",
                     i
-                ));
+                );
             }
         }
 
