@@ -784,7 +784,11 @@ impl HawkResult {
     }
 
     fn merged_results(&self) -> Vec<u32> {
-        let match_ids = self.match_ids();
+        let match_ids = self.select_indices(Filter {
+            eyes: Both,
+            orient: Both,
+        });
+
         self.connect_plans.0[0]
             .iter()
             .enumerate()
@@ -825,13 +829,6 @@ impl HawkResult {
             .collect_vec()
     }
 
-    fn match_ids(&self) -> Vec<Vec<u32>> {
-        self.select_indices(Filter {
-            eyes: Both,
-            orient: Both,
-        })
-    }
-
     fn matched_batch_request_ids(&self) -> Vec<Vec<String>> {
         let per_match = |id: &MatchId| match id {
             MatchId::IntraBatch(req_i) => Some(self.batch.request_ids[*req_i].clone()),
@@ -856,7 +853,10 @@ impl HawkResult {
 
         let matches = self.is_matches().to_vec();
 
-        let match_ids = self.match_ids();
+        let match_ids = self.select_indices(Filter {
+            eyes: Both,
+            orient: Only(Normal),
+        });
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
