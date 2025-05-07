@@ -1,10 +1,7 @@
 use aws_sdk_kms::{types::KeyAgreementAlgorithmSpec, Client};
 
 /// Derive a shared secret from two KMS keys
-pub async fn derive_shared_secret(
-    own_key_arn: &str,
-    other_key_arn: &str,
-) -> Result<[u8; 32]> {
+pub async fn derive_shared_secret(own_key_arn: &str, other_key_arn: &str) -> Result<[u8; 32]> {
     let shared_config = aws_config::from_env().load().await;
 
     let client = Client::new(&shared_config);

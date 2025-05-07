@@ -297,15 +297,14 @@ impl ServerActor {
         let n_queries = max_batch_size * ROTATIONS;
 
         // helper closure to generate the next chacha seeds
-        let mut next_chacha_seeds =
-            |seeds: ([u32; 8], [u32; 8])| -> Result<([u32; 8], [u32; 8])> {
-                let nonce = kdf_nonce;
-                kdf_nonce += 1;
-                Ok((
-                    derive_seed(seeds.0, &kdf_salt, nonce)?,
-                    derive_seed(seeds.1, &kdf_salt, nonce)?,
-                ))
-            };
+        let mut next_chacha_seeds = |seeds: ([u32; 8], [u32; 8])| -> Result<([u32; 8], [u32; 8])> {
+            let nonce = kdf_nonce;
+            kdf_nonce += 1;
+            Ok((
+                derive_seed(seeds.0, &kdf_salt, nonce)?,
+                derive_seed(seeds.1, &kdf_salt, nonce)?,
+            ))
+        };
 
         tracing::info!("GPU actor: Starting engines...");
 
@@ -2373,11 +2372,7 @@ impl ServerActor {
         }
     }
 
-    fn sync_match_results(
-        &mut self,
-        max_batch_size: usize,
-        match_results: &[u32],
-    ) -> Result<()> {
+    fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
         assert!(match_results.len() <= max_batch_size);
         let mut buffer = self
             .device_manager
