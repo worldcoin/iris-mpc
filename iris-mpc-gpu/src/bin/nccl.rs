@@ -28,7 +28,7 @@ async fn root(Path(device_id): Path<String>) -> String {
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 12)]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     let args = env::args().collect::<Vec<_>>();
     let n_devices = CudaDevice::count().unwrap() as usize;
     let party_id: usize = args[1].parse().unwrap();

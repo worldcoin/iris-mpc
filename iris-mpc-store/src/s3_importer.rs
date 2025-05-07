@@ -25,12 +25,12 @@ pub struct S3StoredIris {
 }
 
 impl S3StoredIris {
-    pub fn from_bytes(bytes: &[u8]) -> eyre::Result<Self, eyre::Error> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
         let mut cursor = 0;
 
         // Helper closure to extract a slice of a given size
         let extract_slice =
-            |bytes: &[u8], cursor: &mut usize, size: usize| -> eyre::Result<Vec<u8>, eyre::Error> {
+            |bytes: &[u8], cursor: &mut usize, size: usize| -> Result<Vec<u8>, eyre::Error> {
                 if *cursor + size > bytes.len() {
                     bail!("Exceeded total bytes while extracting slice",);
                 }
@@ -118,8 +118,8 @@ impl S3StoredIris {
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream>;
-    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream>;
+    async fn list_objects(&self, prefix: &str) -> Result<Vec<String>>;
 }
 
 pub struct S3Store {
@@ -135,7 +135,7 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
         let res = self
             .client
             .get_object()
@@ -148,7 +148,7 @@ impl ObjectStore for S3Store {
         Ok(res.body)
     }
 
-    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
+    async fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
         let mut objects = Vec::new();
         let mut continuation_token = None;
 
@@ -211,7 +211,7 @@ impl LastSnapshotDetails {
 pub async fn last_snapshot_timestamp(
     store: &impl ObjectStore,
     prefix_name: String,
-) -> eyre::Result<LastSnapshotDetails> {
+) -> Result<LastSnapshotDetails> {
     tracing::info!("Looking for last snapshot time in prefix: {}", prefix_name);
     let timestamps_path = format!("{}/timestamps/", prefix_name);
     store
@@ -234,7 +234,7 @@ pub async fn fetch_and_parse_chunks(
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
-) -> eyre::Result<()> {
+) -> Result<()> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
         MAX_RANGE_SIZE
@@ -325,7 +325,7 @@ async fn read_range_in_chunk(
     offset_within_chunk: usize,
     range_size: usize,
     tx: Sender<S3StoredIris>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let mut stream = store
         .get_object(
             key,
@@ -395,7 +395,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
             let bytes = self
                 .objects
                 .get(key)
@@ -410,7 +410,7 @@ mod tests {
             Ok(ByteStream::from(SdkBody::from(sliced_bytes)))
         }
 
-        async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
+        async fn list_objects(&self, _: &str) -> Result<Vec<String>> {
             Ok(self.objects.keys().cloned().collect())
         }
     }
@@ -434,7 +434,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ObjectStore for IntentionalFailureStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
             let range_hash = format!("{}_{},{}", key, range.0, range.1);
             let mut failures = self.remaining_failures.lock().await;
             let n_remaining = failures
@@ -449,7 +449,7 @@ mod tests {
             self.inner.get_object(key, range).await
         }
 
-        async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
+        async fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
             self.inner.list_objects(prefix).await
         }
     }

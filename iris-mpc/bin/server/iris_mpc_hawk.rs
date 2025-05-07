@@ -6,7 +6,7 @@ use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     println!("Init config");

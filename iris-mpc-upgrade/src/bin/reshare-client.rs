@@ -23,7 +23,7 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 
 const APP_NAME: &str = "SMPC";
 
-async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 32]> {
+async fn derive_common_seed(config: &ReShareClientConfig) -> Result<[u8; 32]> {
     let shared_secret = if config.environment == "testing" {
         // TODO: remove once localstack fixes KMS bug that returns different shared
         // secrets
@@ -45,7 +45,7 @@ async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 3
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     install_tracing();
     rustls::crypto::ring::default_provider()
         .install_default()

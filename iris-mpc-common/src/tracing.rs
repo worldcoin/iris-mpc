@@ -4,7 +4,7 @@ use std::{backtrace::Backtrace, panic};
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-pub fn initialize_tracing(config: &Config) -> eyre::Result<TracingShutdownHandle> {
+pub fn initialize_tracing(config: &Config) -> Result<TracingShutdownHandle> {
     if let Some(service) = &config.service {
         let tracing_shutdown_handle = DatadogBattery::init(
             service.traces_endpoint.as_deref(),

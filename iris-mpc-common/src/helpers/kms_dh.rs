@@ -4,7 +4,7 @@ use aws_sdk_kms::{types::KeyAgreementAlgorithmSpec, Client};
 pub async fn derive_shared_secret(
     own_key_arn: &str,
     other_key_arn: &str,
-) -> eyre::Result<[u8; 32]> {
+) -> Result<[u8; 32]> {
     let shared_config = aws_config::from_env().load().await;
 
     let client = Client::new(&shared_config);

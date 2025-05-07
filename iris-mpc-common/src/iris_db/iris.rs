@@ -74,7 +74,7 @@ impl IrisCodeArray {
     }
 
     /// Decode from base64 string compatible with Open IRIS
-    pub fn from_base64(s: &str) -> eyre::Result<Self> {
+    pub fn from_base64(s: &str) -> Result<Self> {
         let decoded_bytes = BASE64_STANDARD.decode(s)?;
         if decoded_bytes.len() % 8 != 0 {
             bail!("Invalid length for u64 array");
@@ -95,7 +95,7 @@ impl IrisCodeArray {
     }
 
     /// Encode to base64 string compatible with Open IRIS
-    pub fn to_base64(&self) -> eyre::Result<String> {
+    pub fn to_base64(&self) -> Result<String> {
         Ok(BASE64_STANDARD.encode(
             self.0
                 .iter()
@@ -346,7 +346,7 @@ mod tests {
         let distance = original_iris.get_distance(&mirrored_iris);
         assert_float_eq!(distance, 0.0, abs <= 1e-6);
     }
-    pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
+    pub fn parse_test_data(s: &str) -> Result<(&str, HashMap<i32, String>)> {
         let lines = s.lines();
         let mut lines = lines.map(|s| s.trim()).filter(|s| !s.is_empty());
         let code: &str = lines.next().context("Missing code")?;

@@ -14,7 +14,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
     let max_indexation_height = args.max_indexation_height.unwrap_or(0);

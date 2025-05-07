@@ -1,6 +1,6 @@
 use iris_mpc_common::{config::Config, helpers::kms_dh::derive_shared_secret};
 
-pub async fn initialize_chacha_seeds(config: Config) -> eyre::Result<([u32; 8], [u32; 8])> {
+pub async fn initialize_chacha_seeds(config: Config) -> Result<([u32; 8], [u32; 8])> {
     // Init RNGs
     let own_key_arn = config
         .kms_key_arns

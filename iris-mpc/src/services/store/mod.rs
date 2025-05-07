@@ -20,7 +20,7 @@ async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
@@ -82,7 +82,7 @@ pub async fn load_db<T: ObjectStore>(
     config: &Config,
     s3_loader_params: Option<S3LoaderParams<T>>,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 

@@ -16,7 +16,7 @@ use tonic::transport::Server;
 const APP_NAME: &str = "SMPC";
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     install_tracing();
     let config = ReShareServerConfig::parse();
 

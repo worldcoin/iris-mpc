@@ -23,7 +23,7 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+) -> Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
     let mask_share: GaloisRingTrimmedMaskCodeShare =
@@ -107,7 +107,7 @@ pub async fn process_identity_deletions(
     store: &Store,
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<()> {
+) -> Result<()> {
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }

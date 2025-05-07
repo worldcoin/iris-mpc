@@ -64,7 +64,7 @@ impl Modification {
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
-    pub fn update_result_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+    pub fn update_result_message_node_id(&mut self, party_id: usize) -> Result<()> {
         if let Some(message) = &self.result_message_body {
             // Parse the JSON message
             match serde_json::from_str::<serde_json::Value>(message) {
@@ -117,7 +117,7 @@ impl SyncResult {
     }
 
     /// Check if the common part of the config is the same across all nodes.
-    pub fn check_common_config(&self) -> eyre::Result<()> {
+    pub fn check_common_config(&self) -> Result<()> {
         let config = self.my_state.common_config.clone();
         for state in &self.all_states {
             if state.common_config != config {

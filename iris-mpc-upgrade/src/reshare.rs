@@ -565,7 +565,7 @@ pub struct RecombinedIrisCodeBatch {
 }
 
 impl RecombinedIrisCodeBatch {
-    pub async fn insert_into_store(self, store: &Store) -> eyre::Result<()> {
+    pub async fn insert_into_store(self, store: &Store) -> Result<()> {
         let to_be_inserted = izip!(
             &self.left_iris_codes,
             &self.left_masks,

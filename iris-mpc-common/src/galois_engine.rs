@@ -368,7 +368,7 @@ pub mod degree4 {
             BASE64_STANDARD.encode::<Vec<u8>>(as_vec_u8)
         }
 
-        pub fn from_base64(s: &str) -> eyre::Result<Self> {
+        pub fn from_base64(s: &str) -> Result<Self> {
             let decoded_bytes = BASE64_STANDARD.decode(s)?;
             Ok(bincode::deserialize(&decoded_bytes)?)
         }
@@ -406,7 +406,7 @@ pub mod degree4 {
     pub fn preprocess_iris_message_shares(
         code_share: GaloisRingIrisCodeShare,
         mask_share: GaloisRingTrimmedMaskCodeShare,
-    ) -> eyre::Result<GaloisShares> {
+    ) -> Result<GaloisShares> {
         let mut code_share = code_share;
         let mut mask_share = mask_share;
 

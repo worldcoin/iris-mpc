@@ -373,7 +373,7 @@ async fn load_db(
     store: &IrisStore,
     store_len: usize,
     store_load_parallelism: usize,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
 
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
@@ -407,7 +407,7 @@ async fn load_db(
 async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);

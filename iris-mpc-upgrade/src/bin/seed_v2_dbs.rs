@@ -39,7 +39,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     let party_1_pg_client = PostgresClient::new(
