@@ -1,6 +1,7 @@
 use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use eyre::bail;
+use eyre::Result;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -289,6 +290,7 @@ impl ExactSizeIterator for Bits<'_> {}
 #[cfg(test)]
 mod tests {
     use super::{IrisCode, IrisCodeArray};
+    use eyre::Result;
     use eyre::{Context, ContextCompat};
     use float_eq::assert_float_eq;
     use std::collections::HashMap;

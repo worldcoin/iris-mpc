@@ -7,6 +7,7 @@ pub mod degree4 {
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
+    use eyre::Result;
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
     use serde::{Deserialize, Serialize};
     use serde_big_array::BigArray;

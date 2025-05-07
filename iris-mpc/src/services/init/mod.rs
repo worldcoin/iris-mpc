@@ -1,3 +1,4 @@
+use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::kms_dh::derive_shared_secret};
 
 pub async fn initialize_chacha_seeds(config: Config) -> Result<([u32; 8], [u32; 8])> {

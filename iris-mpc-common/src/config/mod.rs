@@ -1,5 +1,6 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
+use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 

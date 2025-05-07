@@ -1,5 +1,5 @@
 use aws_sdk_s3::Client as S3Client;
-use eyre::eyre;
+use eyre::{bail, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;

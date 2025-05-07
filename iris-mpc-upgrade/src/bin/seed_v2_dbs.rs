@@ -1,4 +1,5 @@
 use clap::Parser;
+use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,

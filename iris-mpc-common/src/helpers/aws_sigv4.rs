@@ -5,6 +5,7 @@
 //!
 //! [link]: https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
 
+use eyre::Result;
 use hmac::{Hmac, Mac};
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};

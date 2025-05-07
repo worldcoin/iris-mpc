@@ -1,6 +1,7 @@
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
-use eyre::{eyre, WrapErr};
+use eyre::Result;
+use eyre::{bail, WrapErr};
 use iris_mpc_common::config::{Config, ModeOfDeployment};
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{

@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::helpers::smpc_request::SQSMessage;
 use aws_sdk_sqs::Client;
 use eyre::Context;
+use eyre::Result;
 
 /// SQS messages contain a sequence number when they originate from SNS and raw message delivery is enabled.
 /// This function reads the top of the requests SQS queue and returns its sequence number.

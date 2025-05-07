@@ -6,6 +6,7 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
+use eyre::{bail, Result};
 use eyre::{eyre, Context, Report};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;

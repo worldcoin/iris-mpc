@@ -11,6 +11,7 @@ use cudarc::{
     driver::{CudaDevice, CudaSlice},
     nccl::{Comm, Id},
 };
+use eyre::Result;
 use iris_mpc_gpu::helpers::id_wrapper::IdWrapper;
 use std::{env, str::FromStr, sync::LazyLock, time::Instant};
 

@@ -15,6 +15,7 @@ use cudarc::{
     },
     nccl::Id,
 };
+use eyre::Result;
 use std::{
     sync::{Arc, Mutex},
     thread::sleep,

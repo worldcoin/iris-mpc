@@ -1,5 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 use eyre::Context;
+use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, helpers::smpc_request::IrisCodeSharesJSON,
     iris_db::iris::IrisCode,

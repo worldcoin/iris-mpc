@@ -1,4 +1,5 @@
 use crate::config::Config;
+use eyre::Result;
 use metrics_exporter_statsd::StatsdBuilder;
 use std::{backtrace::Backtrace, panic};
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};

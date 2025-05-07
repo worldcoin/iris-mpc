@@ -8,6 +8,7 @@ use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SnsCli
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
+use eyre::Result;
 use eyre::{Context, ContextCompat};
 use iris_mpc_common::helpers::{
     aws::{

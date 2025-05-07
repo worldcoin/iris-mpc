@@ -3,6 +3,7 @@ pub mod job;
 pub mod result_message;
 
 use aws_sdk_s3::Client as S3Client;
+use eyre::Result;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
     preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,

@@ -1,4 +1,5 @@
 use aws_sdk_sns::types::MessageAttributeValue;
+use eyre::Result;
 use std::collections::HashMap;
 
 pub const TRACE_ID_MESSAGE_ATTRIBUTE_NAME: &str = "TraceID";

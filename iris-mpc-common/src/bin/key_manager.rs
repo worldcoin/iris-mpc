@@ -9,6 +9,7 @@ use aws_sdk_secretsmanager::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
+use eyre::Result;
 use rand::{thread_rng, Rng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};

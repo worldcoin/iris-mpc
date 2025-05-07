@@ -13,6 +13,7 @@ use cudarc::{
         CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
+use eyre::Result;
 use iris_mpc_common::galois_engine::CompactGaloisRingShares;
 use std::marker::{Send, Sync};
 

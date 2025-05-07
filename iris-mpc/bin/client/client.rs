@@ -1,4 +1,5 @@
 use clap::Parser;
+use eyre::Result;
 use iris_mpc::client::e2e::{run_client, Opt};
 
 #[tokio::main]

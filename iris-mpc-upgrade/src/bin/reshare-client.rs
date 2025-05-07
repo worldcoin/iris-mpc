@@ -1,4 +1,5 @@
 use clap::Parser;
+use eyre::Result;
 use futures::StreamExt;
 use hkdf::Hkdf;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};

@@ -1,5 +1,6 @@
 use axum::{routing::get, Router};
 use eyre::Context;
+use eyre::Result;
 use std::io::{Error as IoError, ErrorKind};
 
 pub fn install_tracing() {
