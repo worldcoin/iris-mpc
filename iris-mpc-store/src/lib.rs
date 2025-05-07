@@ -258,7 +258,7 @@ impl Store {
         &self,
         min_last_modified_at: Option<i64>,
         partitions: usize,
-    ) -> impl Stream<Item = eyre::Result<DbStoredIris>> + '_ {
+    ) -> impl Stream<Item = Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions).max(1);
 

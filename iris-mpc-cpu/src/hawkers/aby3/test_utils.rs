@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -98,7 +98,7 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
         _ => {
-            return Err(eyre!("Invalid player index: {player_index}"));
+            bail!("Invalid player index: {player_index}");
         }
     };
     Ok(res)

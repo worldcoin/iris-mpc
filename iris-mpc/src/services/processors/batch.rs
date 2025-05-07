@@ -99,7 +99,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
         client,
@@ -169,7 +169,7 @@ impl<'a> BatchProcessor<'a> {
         }
     }
 
-    pub async fn receive_batch(&mut self) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
@@ -454,7 +454,7 @@ impl<'a> BatchProcessor<'a> {
 
         Ok(())
     }
-    async fn handle_share_processing_error(&self, index: usize) -> eyre::Result<()> {
+    async fn handle_share_processing_error(&self, index: usize) -> Result<()> {
         let request_id = self.batch_query.request_ids[index].clone();
         let request_type = &self.batch_query.request_types[index];
 

@@ -1,6 +1,7 @@
 #![allow(clippy::needless_range_loop)]
 
 use clap::Parser;
+use eyre::Result;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
@@ -14,7 +15,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
     let max_indexation_height = args.max_indexation_height.unwrap_or(0);
