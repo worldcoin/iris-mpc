@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y ca-certificates awscli curl
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
+COPY --from=build-app /src/iris-mpc-upgrade-hawk/target/release/iris-mpc-hawk-genesis /bin/iris-mpc-hawk-genesis
 
 COPY scripts/run-server-docker.sh .
 
