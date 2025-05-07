@@ -4,6 +4,7 @@ mod test_threshold_and_or_tree_test {
         driver::{CudaDevice, CudaStream},
         nccl::Id,
     };
+    use eyre::Result;
     use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},

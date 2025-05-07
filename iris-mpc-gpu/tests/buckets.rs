@@ -4,6 +4,7 @@ mod buckets_test {
         driver::{CudaDevice, CudaStream},
         nccl::Id,
     };
+    use eyre::Result;
     use iris_mpc_common::iris_db::iris::IrisCodeArray;
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, htod_on_stream_sync},
