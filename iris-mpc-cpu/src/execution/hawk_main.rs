@@ -849,7 +849,7 @@ impl HawkResult {
     }
 
     fn job_result(self) -> ServerJobResult {
-        use Orientation::Mirror;
+        use Orientation::{Mirror, Normal};
         use StoreId::{Left, Right};
 
         let n_requests = self.is_matches.len();
@@ -860,12 +860,12 @@ impl HawkResult {
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
-            orient: Both,
+            orient: Only(Normal),
         });
 
         let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
             eyes: Only(Right),
-            orient: Both,
+            orient: Only(Normal),
         });
 
         let (full_face_mirror_match_ids, _) = self.select(Filter {
