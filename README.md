@@ -185,6 +185,16 @@ cargo test --release --features db_dependent -- --test-threads=1 # require a run
 
 If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
+## CPU Genesis
+
+docker-compose -f docker-compose.test.yaml up
+docker build -f Dockerfile.genesis.dev.hawk -t genesis2:latest .
+
+```bash
+docker build -f Dockerfile.genesis.dev.hawk -t genesis:latest .
+docker-compose -f docker-compose.test.genesis.yaml up
+```
+
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)

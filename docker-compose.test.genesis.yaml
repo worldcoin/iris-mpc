@@ -3,7 +3,7 @@ include:
 
 services:
   hawk_participant_0:
-    image: hawk-server-local-build:latest
+    image: genesis:latest
     env_file:
       - .test.env
       - .test.hawk0.env
@@ -16,13 +16,13 @@ services:
       - "127.0.0.1:4000:4000"
       - "3000:3000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
       interval: 10s
       retries: 10
     entrypoint: ./run-server-docker.sh 0 genesis
 
   hawk_participant_1:
-    image: hawk-server-local-build:latest
+    image: genesis:latest
     env_file:
       - .test.env
       - .test.hawk1.env
@@ -35,13 +35,13 @@ services:
       - "127.0.0.1:4001:4001"
       - "3001:3001"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3001/health" ]
       interval: 10s
       retries: 10
     entrypoint: ./run-server-docker.sh 1 genesis
 
   hawk_participant_2:
-    image: hawk-server-local-build:latest
+    image: genesis:latest
     env_file:
       - .test.env
       - .test.hawk2.env
@@ -54,7 +54,7 @@ services:
       - "127.0.0.1:4002:4002"
       - "3002:3002"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      test: [ "CMD", "curl", "-f", "http://localhost:3002/health" ]
       interval: 10s
       retries: 10
     entrypoint: ./run-server-docker.sh 2 genesis
