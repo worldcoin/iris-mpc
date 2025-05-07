@@ -1,4 +1,4 @@
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};

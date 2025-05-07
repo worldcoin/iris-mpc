@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {

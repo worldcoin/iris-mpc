@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};

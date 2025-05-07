@@ -10,7 +10,7 @@ use crate::{
 };
 
 use backon::{ExponentialBuilder, Retryable};
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
 use std::{
     collections::{HashMap, HashSet},

@@ -1,5 +1,5 @@
 use crate::shares::{bit::Bit, ring_impl::RingElement, IntRing2k};
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 
 /// Size of a PRF key in bytes
 const PRF_KEY_SIZE: usize = 16;

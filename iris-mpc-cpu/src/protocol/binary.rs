@@ -9,7 +9,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use eyre::{eyre, Error, Result};
+use eyre::{bail, eyre, Error, Result};
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use aws_sdk_s3::{primitives::ByteStream, Client};
+use eyre::bail;
 use eyre::eyre;
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
