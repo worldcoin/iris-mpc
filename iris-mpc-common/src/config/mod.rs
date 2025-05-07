@@ -1,5 +1,6 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
+use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -405,7 +406,7 @@ fn default_hawk_server_deletions_enabled() -> bool {
 }
 
 impl Config {
-    pub fn load_config(prefix: &str) -> eyre::Result<Config> {
+    pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
         let settings = settings
             .add_source(

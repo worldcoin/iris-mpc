@@ -3,6 +3,7 @@ pub mod job;
 pub mod result_message;
 
 use aws_sdk_s3::Client as S3Client;
+use eyre::Result;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
     preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -23,7 +24,7 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
+) -> Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
     let mask_share: GaloisRingTrimmedMaskCodeShare =
@@ -107,7 +108,7 @@ pub async fn process_identity_deletions(
     store: &Store,
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<()> {
+) -> Result<()> {
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }
