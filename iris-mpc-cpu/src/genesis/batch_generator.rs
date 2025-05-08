@@ -66,7 +66,7 @@ impl BatchGenerator {
 
         // Set indexation range.
         let height_of_protocol = fetcher::fetch_height_of_protocol(iris_store).await?;
-        let height_of_indexed = fetcher::fetch_height_of_indexed(iris_store).await?;
+        let height_of_indexed = fetcher::fetch_height_of_indexed().await;
         self.range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
 
         tracing::info!(

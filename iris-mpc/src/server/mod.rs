@@ -29,6 +29,7 @@ use iris_mpc_common::server_coordination::{
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
+use iris_mpc_cpu::genesis::utils::fetcher::{fetch_height_of_indexed, PREV_IRIS_INDEX_FILE};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
@@ -39,6 +40,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
+
+use std::path::Path;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -71,6 +74,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     background_tasks.check_tasks();
 
     wait_for_others_unready(&config).await?;
+    check_consensus_on_iris_height(&config).await?;
     init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
 
     background_tasks.check_tasks();
@@ -115,6 +119,11 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&config).await?;
+    if check_consensus_on_iris_height(&config).await.is_err() {
+        shutdown_handler.trigger_manual_shutdown();
+        tracing::warn!("Shutting down has been triggered");
+        return Ok(());
+    }
 
     background_tasks.check_tasks();
 

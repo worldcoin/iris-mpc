@@ -72,6 +72,7 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
 
     // Await coordinator to signal network state = unready.
     coordinator::wait_for_others_unready(&config).await?;
+    coordinator::check_consensus_on_iris_height(&config).await?;
 
     // Await coordinator to signal network state = healthy.
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
@@ -154,8 +155,25 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
+        let mut prev_iris_index = fetch_height_of_indexed().await;
+        let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
+
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            let curr_iris_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
+            match curr_iris_index_opt {
+                Some(index) if index <= prev_iris_index => {
+                    tracing::info!(
+                "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
+                batch_generator.batch_count(),
+                batch.len(),
+                now.elapsed(),
+            );
+                    continue;
+                }
+                _ => (),
+            }
+
             tracing::info!(
                 "HNSW GENESIS: Indexing new batch: idx={} :: irises={} :: time {:?}",
                 batch_generator.batch_count(),
@@ -176,7 +194,20 @@ async fn exec_main_loop(
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
 
             // Housekeeping: increment count of pending batches.
-            shutdown_handler.increment_batches_pending_completion()
+            shutdown_handler.increment_batches_pending_completion();
+
+            if curr_iris_index_opt.is_none() {
+                tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
+                continue;
+            };
+            let curr_iris_index = curr_iris_index_opt.unwrap();
+
+            let file_content = curr_iris_index.to_string();
+            fs::write(prev_iris_index_path, file_content)
+                .await
+                .map_err(|e| tracing::error!("{}", e))
+                .unwrap_or(());
+            prev_iris_index = curr_iris_index;
         }
 
         Ok(())

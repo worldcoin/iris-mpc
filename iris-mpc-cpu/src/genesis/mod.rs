@@ -1,7 +1,7 @@
 mod batch_generator;
 mod hawk_handle;
 mod hawk_job;
-mod utils;
+pub mod utils;
 
 pub use batch_generator::{BatchGenerator, BatchIterator};
 pub use hawk_handle::Handle;
