@@ -32,6 +32,7 @@ mod tests {
             end_time_utc_timestamp: Some(known_end_time),
             // This field is #[serde(skip_serializing)]
             next_start_time_utc_timestamp: Some(Utc::now()),
+            is_mirror_orientation: false,
         };
 
         // Serialize to JSON
@@ -137,6 +138,7 @@ mod tests {
                     + chrono::Duration::seconds(15),
             ),
             next_start_time_utc_timestamp: None,
+            is_mirror_orientation: false,
         };
 
         // Serialize
