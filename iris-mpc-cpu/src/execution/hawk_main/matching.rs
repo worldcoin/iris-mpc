@@ -190,6 +190,7 @@ impl BatchStep3 {
                 .select(Filter {
                     eyes: Both,
                     orient: Both,
+                    intra_batch: true,
                 })
                 .any(|id| match id {
                     MatchId::Search(_) => true,
@@ -284,6 +285,7 @@ impl Step3 {
 pub struct Filter {
     pub eyes: OnlyOrBoth<StoreId>,
     pub orient: OnlyOrBoth<Orientation>,
+    pub intra_batch: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -314,6 +316,6 @@ impl Filter {
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {
-        self.luc_rule(left, right)
+        self.intra_batch && self.luc_rule(left, right)
     }
 }
