@@ -49,7 +49,7 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::{Deref, Not},
+    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -422,15 +422,18 @@ impl HawkActor {
     pub async fn insert(
         &mut self,
         sessions: &[HawkSessionRef],
-        plans: Vec<InsertPlan>,
-    ) -> Result<Vec<ConnectPlan>> {
+        plans: VecRequests<Option<InsertPlan>>,
+    ) -> Result<VecRequests<Option<ConnectPlan>>> {
         let insert_plans = join_plans(plans);
-        let mut connect_plans = vec![];
-        for plan in insert_plans {
-            // Parallel insertions are not supported, so only one session is needed.
-            let mut session = sessions[0].write().await;
-            let cp = self.insert_one(&mut session, plan).await?;
-            connect_plans.push(cp);
+        let mut connect_plans = vec![None; insert_plans.len()];
+
+        // Parallel insertions are not supported, so only one session is needed.
+        let mut session = sessions[0].write().await;
+
+        for (plan, cp) in izip!(insert_plans, &mut connect_plans) {
+            if let Some(plan) = plan {
+                *cp = Some(self.insert_one(&mut session, plan).await?);
+            }
         }
         Ok(connect_plans)
     }
@@ -750,7 +753,6 @@ pub struct HawkResult {
     batch: BatchQuery,
     match_results: matching::BatchStep3,
     connect_plans: HawkMutation,
-    is_matches: VecRequests<bool>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 }
 
@@ -758,47 +760,15 @@ impl HawkResult {
     fn new(
         batch: BatchQuery,
         match_results: matching::BatchStep3,
+        connect_plans: HawkMutation,
         anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     ) -> Self {
-        // Get matches from the graph.
-        let is_matches = match_results.is_matches();
-        let n_requests = is_matches.len();
-
         HawkResult {
             batch,
             match_results,
-            connect_plans: HawkMutation([vec![None; n_requests], vec![None; n_requests]]),
-            is_matches,
+            connect_plans,
             anonymized_bucket_statistics,
         }
-    }
-
-    fn filter_for_insertion<T>(
-        &self,
-        both_insert_plans: BothEyes<VecRequests<T>>,
-    ) -> (VecRequests<usize>, BothEyes<VecRequests<T>>) {
-        let filtered = both_insert_plans.map(|plans| {
-            izip!(plans, self.is_matches())
-                .filter_map(|(plan, &is_match)| is_match.not().then_some(plan))
-                .collect_vec()
-        });
-
-        let indices = self
-            .is_matches()
-            .iter()
-            .enumerate()
-            .filter_map(|(index, &is_match)| is_match.not().then_some(index))
-            .collect();
-
-        (indices, filtered)
-    }
-
-    fn set_connect_plan(&mut self, request_i: usize, side: StoreId, plan: ConnectPlan) {
-        self.connect_plans.0[side as usize][request_i] = Some(plan);
-    }
-
-    fn is_matches(&self) -> &[bool] {
-        &self.is_matches
     }
 
     fn merged_results(&self) -> Vec<u32> {
@@ -867,9 +837,8 @@ impl HawkResult {
         use Orientation::{Mirror, Normal};
         use StoreId::{Left, Right};
 
-        let n_requests = self.is_matches.len();
-
-        let matches = self.is_matches().to_vec();
+        let matches = self.match_results.is_matches();
+        let n_requests = matches.len();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
@@ -1096,31 +1065,33 @@ impl HawkHandle {
             .update_anon_stats(&sessions[0][0], &search_results)
             .await?;
 
-        let mut results = HawkResult::new(
-            request.batch,
-            match_result,
-            hawk_actor.anonymized_bucket_statistics.clone(),
-        );
-
-        let (insert_indices, search_results) = results.filter_for_insertion(search_results);
+        let is_matches = match_result.is_matches();
 
         // Insert into the in memory stores.
         // For both eyes.
+        let mut connect_plans = HawkMutation([vec![], vec![]]);
         for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
-            // Focus on the main results (forget rotations).
-            let insert_plans = search_results
-                .into_iter()
-                .map(VecRots::into_center)
-                .collect();
+            // Focus on the insertions: skip matches, and keep only the centered irises.
+            let insert_plans = izip!(search_results, &is_matches)
+                .map(|(search_result, &is_match)| {
+                    if is_match {
+                        None
+                    } else {
+                        Some(search_result.into_center())
+                    }
+                })
+                .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
-            let plans = hawk_actor.insert(sessions, insert_plans).await?;
-
-            // Convert to Vec<Option> matching the request order.
-            for (i, plan) in izip!(&insert_indices, plans) {
-                results.set_connect_plan(*i, *side, plan);
-            }
+            connect_plans.0[*side as usize] = hawk_actor.insert(sessions, insert_plans).await?;
         }
+
+        let results = HawkResult::new(
+            request.batch,
+            match_result,
+            connect_plans,
+            hawk_actor.anonymized_bucket_statistics.clone(),
+        );
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
@@ -1164,20 +1135,25 @@ impl Consensus {
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
-fn join_plans(mut plans: Vec<InsertPlan>) -> Vec<InsertPlan> {
-    let set_ep = plans.iter().any(|plan| plan.set_ep);
+fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>> {
+    let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
     if set_ep {
         // There can be at most one new entry point.
         let highest = plans
             .iter()
-            .map(|plan| plan.links.len())
+            .map(|plan| match plan {
+                Some(plan) => plan.links.len(),
+                None => 0,
+            })
             .position_max()
             .unwrap();
 
-        for plan in &mut plans {
-            plan.set_ep = false;
+        // Set the entry point to false for all but the highest.
+        for (i, plan) in plans.iter_mut().enumerate() {
+            if let Some(plan) = plan {
+                plan.set_ep = i == highest;
+            }
         }
-        plans[highest].set_ep = true;
     }
     plans
 }
