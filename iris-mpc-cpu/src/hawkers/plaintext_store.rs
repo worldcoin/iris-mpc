@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
@@ -57,9 +57,7 @@ impl PlaintextStore {
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.points.len() {
-            return Err(eyre!(
-                "Cannot generate graph larger than underlying vector store"
-            ));
+            bail!("Cannot generate graph larger than underlying vector store");
         }
 
         for idx in 0..graph_size {

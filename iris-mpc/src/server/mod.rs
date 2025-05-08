@@ -467,11 +467,11 @@ async fn sync_dbs_rollback(
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if min_db_len + max_rollback(config) < my_db_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 my_db_len,
                 min_db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",

@@ -1,5 +1,5 @@
 use aws_sdk_s3::Client as S3Client;
-use eyre::eyre;
+use eyre::{bail, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
@@ -20,7 +20,7 @@ async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
@@ -82,7 +82,7 @@ pub async fn load_db<T: ObjectStore>(
     config: &Config,
     s3_loader_params: Option<S3LoaderParams<T>>,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 
@@ -144,7 +144,7 @@ pub async fn load_db<T: ObjectStore>(
 
             if serial_id == 0 {
                 tracing::error!("Invalid iris serial_id {}", serial_id);
-                return Err(eyre!("Invalid iris serial_id {}", serial_id));
+                bail!("Invalid iris serial_id {}", serial_id);
             } else if serial_id > store_len {
                 tracing::warn!(
                     "Skip loading rolled back item: serial_id {} > store_len {}",
@@ -215,10 +215,7 @@ pub async fn load_db<T: ObjectStore>(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        return Err(eyre!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        ));
+        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
     tracing::info!("Preprocessing db");
