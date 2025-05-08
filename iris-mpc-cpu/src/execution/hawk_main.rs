@@ -1023,7 +1023,7 @@ impl HawkHandle {
 
         let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
 
-        let mut do_search = async |orient| -> Result<_> {
+        let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
@@ -1032,10 +1032,6 @@ impl HawkHandle {
             // For both eyes, all requests, and rotations.
             let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
-
-            hawk_actor
-                .update_anon_stats(&sessions[0][0], &search_results)
-                .await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids);
