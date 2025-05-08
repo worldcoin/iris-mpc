@@ -73,6 +73,7 @@ mod tests {
         assert_eq!(value["party_id"], json!(999));
         assert_eq!(value["n_buckets"], json!(2));
         assert_eq!(value["match_distances_buffer_size"], json!(128));
+        assert_eq!(value["is_mirror_orientation"], json!(false));
     }
 
     #[test]
@@ -92,7 +93,8 @@ mod tests {
             "party_id": 123,
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
-            "end_time_utc_timestamp": null
+            "end_time_utc_timestamp": null,
+            "is_mirror_orientation": false
         })
         .to_string();
 
@@ -118,6 +120,8 @@ mod tests {
         // next_start_time_utc is skip_serializing, so it wouldn't appear in JSON.
         // If your struct allows it in deserialization, it would default to None
         assert_eq!(stats.next_start_time_utc_timestamp, None);
+
+        assert_eq!(stats.is_mirror_orientation, false);
     }
 
     #[test]
@@ -176,5 +180,11 @@ mod tests {
         // next_start_time_utc won't match because it was not serialized
         // So it should come back as None
         assert_eq!(roundtrip_stats.next_start_time_utc_timestamp, None);
+
+        // is_mirror_orientation should be preserved correctly
+        assert_eq!(
+            roundtrip_stats.is_mirror_orientation,
+            original_stats.is_mirror_orientation
+        );
     }
 }
