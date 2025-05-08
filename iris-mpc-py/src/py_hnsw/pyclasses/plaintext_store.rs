@@ -1,8 +1,7 @@
+use std::sync::Arc;
+
 use super::iris_code::PyIrisCode;
-use iris_mpc_cpu::{
-    hawkers::plaintext_store::{PlaintextIris, PlaintextPoint, PlaintextStore},
-    py_bindings,
-};
+use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
@@ -17,15 +16,12 @@ impl PyPlaintextStore {
     }
 
     pub fn get(&self, id: u32) -> PyIrisCode {
-        self.0.points[id as usize].data.0.clone().into()
+        (*self.0.points[id as usize]).clone().into()
     }
 
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
         let new_id = self.0.points.len() as u32;
-        self.0.points.push(PlaintextPoint {
-            data: PlaintextIris(iris.0),
-            is_persistent: true,
-        });
+        self.0.points.push(Arc::new(iris.0));
         new_id
     }
 

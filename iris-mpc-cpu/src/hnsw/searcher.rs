@@ -13,7 +13,7 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -209,16 +209,29 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
-impl Default for HnswSearcher {
-    fn default() -> Self {
-        HnswSearcher {
+#[allow(non_snake_case)]
+impl HnswSearcher {
+    /// Construct an HnswSearcher with specified parameters, constructed using
+    /// `HnswParamas::new`.
+    pub fn new(ef_constr: usize, ef_search: usize, M: usize) -> Self {
+        Self {
+            params: HnswParams::new(ef_constr, ef_search, M),
+        }
+    }
+
+    /// Construct an HnswSearcher with test parameters suitable for exercising
+    /// search functionality.
+    ///
+    /// This function is provided in lieu of a `Default` implementation because
+    /// good parameter selections for HNSW search generally depend on the
+    /// underlying data distribution, so there isn't a reasonable "generally
+    /// applicable" default value.
+    pub fn new_with_test_parameters() -> Self {
+        Self {
             params: HnswParams::new(64, 32, 32),
         }
     }
-}
 
-#[allow(non_snake_case)]
-impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
@@ -274,7 +287,7 @@ impl HnswSearcher {
     ) -> Result<()> {
         match ef {
             0 => {
-                return Err(eyre!("ef cannot be 0"));
+                bail!("ef cannot be 0");
             }
             1 => {
                 let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
@@ -1043,6 +1056,8 @@ impl HnswSearcher {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
     use aes_prng::AesRng;
@@ -1052,15 +1067,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() -> Result<()> {
-        let vector_store = &mut PlaintextStore::default();
+        let vector_store = &mut PlaintextStore::new();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::default();
+        let db = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(|raw_query| vector_store.prepare_query(raw_query))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes.
@@ -1079,7 +1094,7 @@ mod tests {
         let queries2 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(|raw_query| vector_store.prepare_query(raw_query))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes with helper function
