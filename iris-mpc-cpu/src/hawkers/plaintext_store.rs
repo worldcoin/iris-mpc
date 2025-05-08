@@ -12,14 +12,18 @@ use iris_mpc_common::iris_db::{
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
 use eyre::{bail, Result};
 
+/// Vector store which works over plaintext iris codes and distance computations.
+///
+/// This variant is only suitable for single-threaded operation.
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
-    pub points: Vec<Arc<IrisCode>>,
+    pub points: Vec<IrisCode>,
 }
 
 impl PlaintextStore {
@@ -28,21 +32,10 @@ impl PlaintextStore {
         Self::default()
     }
 
-    /// Generate a new `PlaintextStore` with the specified database of
-    /// `IrisCode` entries.
-    pub async fn new_from_vec(iris_codes: Vec<IrisCode>) -> Self {
-        Self {
-            points: iris_codes.into_iter().map(Arc::new).collect(),
-        }
-    }
-
     /// Generate a new `PlaintextStore` of specified size with random entries.
-    pub async fn new_random<R: RngCore + Clone + CryptoRng>(
-        rng: &mut R,
-        store_size: usize,
-    ) -> Self {
-        let iris_codes = IrisDB::new_random_rng(store_size, rng).db;
-        PlaintextStore::new_from_vec(iris_codes).await
+    pub fn new_random<R: RngCore + Clone + CryptoRng>(rng: &mut R, store_size: usize) -> Self {
+        let points = IrisDB::new_random_rng(store_size, rng).db;
+        Self { points }
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this
@@ -76,8 +69,19 @@ impl PlaintextStore {
     }
 }
 
+fn fraction_is_match(dist: &(u16, u16)) -> bool {
+    let (a, b) = *dist;
+    (a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO
+}
+
+fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
+    let (a, b) = *dist_1; // a/b
+    let (c, d) = *dist_2; // c/d
+    (a as u32) * (d as u32) < (b as u32) * (c as u32)
+}
+
 impl VectorStore for PlaintextStore {
-    type QueryRef = Arc<IrisCode>;
+    type QueryRef = IrisCode;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
@@ -99,8 +103,7 @@ impl VectorStore for PlaintextStore {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        let (a, b) = *distance; // a/b
-        Ok((a as f64) < (b as f64) * MATCH_THRESHOLD_RATIO)
+        Ok(fraction_is_match(distance))
     }
 
     async fn less_than(
@@ -109,9 +112,7 @@ impl VectorStore for PlaintextStore {
         distance2: &Self::DistanceRef,
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
-        let (a, b) = *distance1; // a/b
-        let (c, d) = *distance2; // c/d
-        Ok((a as i32) * (d as i32) - (b as i32) * (c as i32) < 0)
+        Ok(fraction_less_than(distance1, distance2))
     }
 }
 
@@ -122,82 +123,138 @@ impl VectorStoreMut for PlaintextStore {
     }
 }
 
+/// PlaintextStore with synchronization primitives for multithreaded use.
+#[derive(Default, Debug, Clone)]
+pub struct SharedPlaintextStore {
+    pub points: Arc<RwLock<Vec<IrisCode>>>,
+}
+
+impl SharedPlaintextStore {
+    pub fn new() -> Self {
+        Default::default()
+    }
+}
+
+impl From<PlaintextStore> for SharedPlaintextStore {
+    fn from(value: PlaintextStore) -> Self {
+        Self {
+            points: Arc::new(RwLock::new(value.points)),
+        }
+    }
+}
+
+impl VectorStore for SharedPlaintextStore {
+    type QueryRef = IrisCode;
+    type VectorRef = VectorId;
+    type DistanceRef = (u16, u16);
+
+    async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
+        let store = self.points.read().await;
+        vectors
+            .iter()
+            .map(|id| store.get(id.index() as usize).unwrap().clone())
+            .collect()
+    }
+
+    async fn eval_distance(
+        &mut self,
+        query: &Self::QueryRef,
+        vector: &Self::VectorRef,
+    ) -> Result<Self::DistanceRef> {
+        debug!(event_type = EvaluateDistance.id());
+        let store = self.points.read().await;
+        let vector_code = &store[vector.index() as usize];
+        Ok(query.get_distance_fraction(vector_code))
+    }
+
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+        Ok(fraction_is_match(distance))
+    }
+
+    async fn less_than(
+        &mut self,
+        distance1: &Self::DistanceRef,
+        distance2: &Self::DistanceRef,
+    ) -> Result<bool> {
+        debug!(event_type = CompareDistance.id());
+        Ok(fraction_less_than(distance1, distance2))
+    }
+}
+
+impl VectorStoreMut for SharedPlaintextStore {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        let mut store = self.points.write().await;
+        store.push(query.clone());
+        VectorId::from_0_index((store.len() - 1) as u32)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::HnswSearcher;
+    use crate::hnsw::{graph::layered_graph::migrate, HnswSearcher};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::SeedableRng;
+    use tokio::task::JoinSet;
     use tracing_test::traced_test;
 
     #[tokio::test]
     #[traced_test]
     async fn test_basic_ops() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut plaintext_store = PlaintextStore::new();
+        let mut store = PlaintextStore::new();
 
-        let cleartext_database = IrisDB::new_random_rng(10, &mut rng).db;
-
-        let queries = cleartext_database
-            .iter()
-            .cloned()
-            .map(Arc::new)
-            .collect_vec();
+        let db = IrisDB::new_random_rng(10, &mut rng).db;
 
         let mut ids = Vec::new();
-        for q in queries.iter() {
-            ids.push(plaintext_store.insert(q).await);
+        for q in db.iter() {
+            ids.push(store.insert(q).await);
         }
 
-        let d01 = plaintext_store.eval_distance(&queries[0], &ids[1]).await?;
-        let d02 = plaintext_store.eval_distance(&queries[0], &ids[2]).await?;
-        let d03 = plaintext_store.eval_distance(&queries[0], &ids[3]).await?;
-        let d10 = plaintext_store.eval_distance(&queries[1], &ids[0]).await?;
-        let d12 = plaintext_store.eval_distance(&queries[1], &ids[2]).await?;
-        let d13 = plaintext_store.eval_distance(&queries[1], &ids[3]).await?;
-        let d23 = plaintext_store.eval_distance(&queries[2], &ids[3]).await?;
-        let d30 = plaintext_store.eval_distance(&queries[3], &ids[0]).await?;
-
-        let db0 = &cleartext_database[0];
-        let db1 = &cleartext_database[1];
-        let db2 = &cleartext_database[2];
-        let db3 = &cleartext_database[3];
+        let d01 = store.eval_distance(&db[0], &ids[1]).await?;
+        let d02 = store.eval_distance(&db[0], &ids[2]).await?;
+        let d03 = store.eval_distance(&db[0], &ids[3]).await?;
+        let d10 = store.eval_distance(&db[1], &ids[0]).await?;
+        let d12 = store.eval_distance(&db[1], &ids[2]).await?;
+        let d13 = store.eval_distance(&db[1], &ids[3]).await?;
+        let d23 = store.eval_distance(&db[2], &ids[3]).await?;
+        let d30 = store.eval_distance(&db[3], &ids[0]).await?;
 
         assert_eq!(
-            plaintext_store.less_than(&d01, &d23).await?,
-            db0.get_distance(db1) < db2.get_distance(db3)
+            store.less_than(&d01, &d23).await?,
+            db[0].get_distance(&db[1]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d23, &d01).await?,
-            db2.get_distance(db3) < db0.get_distance(db1)
+            store.less_than(&d23, &d01).await?,
+            db[2].get_distance(&db[3]) < db[0].get_distance(&db[1])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d13).await?,
-            db0.get_distance(db2) < db1.get_distance(db3)
+            store.less_than(&d02, &d13).await?,
+            db[0].get_distance(&db[2]) < db[1].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d03, &d12).await?,
-            db0.get_distance(db3) < db1.get_distance(db2)
+            store.less_than(&d03, &d12).await?,
+            db[0].get_distance(&db[3]) < db[1].get_distance(&db[2])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d10, &d23).await?,
-            db1.get_distance(db0) < db2.get_distance(db3)
+            store.less_than(&d10, &d23).await?,
+            db[1].get_distance(&db[0]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d12, &d30).await?,
-            db1.get_distance(db2) < db3.get_distance(db0)
+            store.less_than(&d12, &d30).await?,
+            db[1].get_distance(&db[2]) < db[3].get_distance(&db[0])
         );
 
         assert_eq!(
-            plaintext_store.less_than(&d02, &d01).await?,
-            db0.get_distance(db2) < db0.get_distance(db1)
+            store.less_than(&d02, &d01).await?,
+            db[0].get_distance(&db[2]) < db[0].get_distance(&db[1])
         );
 
         Ok(())
@@ -209,20 +266,67 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 1;
         let searcher = HnswSearcher::new_with_test_parameters();
-        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size).await;
-        let mut ptxt_graph = ptxt_vector
+        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
+        let ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
         for i in 0..database_size {
-            let query = ptxt_vector.points.get(i).unwrap().clone();
+            let query = Arc::new(ptxt_vector.points.get(i).unwrap().clone());
             let cleartext_neighbors = searcher
-                .search(&mut ptxt_vector, &mut ptxt_graph, &query, 1)
+                .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
             assert!(
                 searcher
                     .is_match(&mut ptxt_vector, &[cleartext_neighbors])
                     .await?,
             );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_parallel_plaintext_hnsw_matcher() -> Result<()> {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let database_size = 16;
+
+        let searcher = HnswSearcher::new_with_test_parameters();
+        let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
+        let ptxt_graph = ptxt_vector
+            .generate_graph(&mut rng, database_size, &searcher)
+            .await?;
+
+        let mut shared_vector = SharedPlaintextStore::from(ptxt_vector);
+        let shared_graph = Arc::new(migrate(ptxt_graph, |id| id));
+
+        for ids in (0..database_size)
+            .map(|id| VectorId::from_0_index(id as u32))
+            .chunks(4)
+            .into_iter()
+        {
+            let ids: Vec<_> = ids.into_iter().collect();
+            let queries = shared_vector.vectors_as_queries(ids.clone()).await;
+
+            let mut jobs = JoinSet::new();
+            for query in queries {
+                let mut sh_vec = shared_vector.clone();
+                let searcher = searcher.clone();
+                let graph = Arc::clone(&shared_graph);
+                jobs.spawn(async move { searcher.search(&mut sh_vec, &graph, &query, 1).await });
+            }
+
+            let results = jobs
+                .join_all()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>>>()?;
+            for result_neighbors in results {
+                assert!(
+                    searcher
+                        .is_match(&mut shared_vector, &[result_neighbors])
+                        .await?
+                )
+            }
         }
 
         Ok(())
