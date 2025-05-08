@@ -55,9 +55,10 @@ impl BatchGenerator {
         iris_store: &IrisStore,
         _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
+        env: String,
     ) -> Result<(), IndexationError> {
         // Set indexation exclusions.
-        self.exclusions = fetcher::fetch_iris_deletions_temp(s3_client).await.unwrap();
+        self.exclusions = fetcher::fetch_iris_deletions(s3_client, env).await.unwrap();
         tracing::info!(
             "HNSW GENESIS: Deletions for exclusion count = {}",
             self.exclusions.len(),
