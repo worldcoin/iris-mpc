@@ -1,5 +1,3 @@
-#![allow(clippy::needless_range_loop)]
-
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::config::{Config, Opt};

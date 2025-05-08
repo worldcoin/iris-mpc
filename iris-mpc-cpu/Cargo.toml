@@ -83,6 +83,10 @@ name = "generate_benchmark_data"
 path = "bin/generate_benchmark_data.rs"
 
 [[bin]]
+name = "generate-serial-ids-for-deletion"
+path = "bin/generate_serial_ids_for_deletion.rs"
+
+[[bin]]
 name = "hawk_main"
 path = "bin/hawk_main.rs"
 
