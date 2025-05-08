@@ -1,6 +1,6 @@
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
-use eyre::ensure;
+use eyre::{ensure, Result};
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -20,7 +20,7 @@ pub const PREV_IRIS_INDEX_FILE: &str = "prev_iris_index.txt";
 /// Height of indexed Iris's.
 ///
 pub async fn fetch_height_of_indexed() -> IrisSerialId {
-    async fn try_fetch_from_disk() -> eyre::Result<IrisSerialId> {
+    async fn try_fetch_from_disk() -> Result<IrisSerialId> {
         let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
         prev_iris_index_path.try_exists()?;
         ensure!(

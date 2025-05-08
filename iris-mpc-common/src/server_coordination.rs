@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::helpers::fetch_index::fetch_height_of_indexed;
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::sync::{SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
@@ -201,7 +202,7 @@ pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
 }
 
 /// Assumption This function assumes that each of the nodes have finished indexing the irises before it is called.
-async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
+pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Checking consensus on iris height");
     // Check other nodes and wait until all nodes are ready.
     let all_readiness_addresses = get_check_addresses(

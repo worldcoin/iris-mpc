@@ -205,7 +205,7 @@ async fn exec_main_loop(
             let file_content = curr_iris_index.to_string();
             fs::write(prev_iris_index_path, file_content)
                 .await
-                .map_err(|e| tracing::error!("{}", e))
+                .inspect_err(|err| tracing::error!("{}"))
                 .unwrap_or(());
             prev_iris_index = curr_iris_index;
         }
