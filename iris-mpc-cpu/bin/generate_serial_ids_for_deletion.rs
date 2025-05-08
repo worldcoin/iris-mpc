@@ -17,7 +17,7 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Struct for deserialization.
+    // Struct for JSON encoding.
     #[derive(Serialize, Deserialize)]
     struct Output {
         deleted_serial_ids: Vec<u64>,
