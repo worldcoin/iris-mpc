@@ -121,7 +121,7 @@ mod tests {
         // If your struct allows it in deserialization, it would default to None
         assert_eq!(stats.next_start_time_utc_timestamp, None);
 
-        assert_eq!(stats.is_mirror_orientation, false);
+        assert!(!stats.is_mirror_orientation);
     }
 
     #[test]
