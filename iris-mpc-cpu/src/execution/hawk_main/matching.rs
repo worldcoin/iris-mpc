@@ -1,5 +1,6 @@
 use super::{
-    rot::VecRots, BothEyes, InsertPlan, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, StoreId,
+    VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
@@ -25,12 +26,12 @@ pub struct BatchStep1(VecRequests<Step1>);
 impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
-        luc_ids: VecRequests<Vec<VectorId>>,
+        luc_ids: &VecRequests<Vec<VectorId>>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
             izip!(&plans[LEFT], &plans[RIGHT], luc_ids)
-                .map(|(left, right, luc)| Step1::new([left, right], luc))
+                .map(|(left, right, luc)| Step1::new([left, right], luc.clone()))
                 .collect_vec(),
         )
     }
@@ -44,15 +45,25 @@ impl BatchStep1 {
         })
     }
 
-    pub fn step2(self, missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>) -> BatchStep2 {
+    pub fn step2(
+        self,
+        missing_is_match: &BothEyes<VecRequests<MapEdges<bool>>>,
+        intra_matches: VecRequests<Vec<IntraMatch>>,
+    ) -> BatchStep2 {
         assert_eq!(self.0.len(), missing_is_match[LEFT].len());
         assert_eq!(self.0.len(), missing_is_match[RIGHT].len());
+        assert_eq!(self.0.len(), intra_matches.len());
         BatchStep2(
-            izip!(self.0, &missing_is_match[LEFT], &missing_is_match[RIGHT])
-                .map(|(step, missing_left, missing_right)| {
-                    step.step2([missing_left, missing_right])
-                })
-                .collect_vec(),
+            izip!(
+                self.0,
+                &missing_is_match[LEFT],
+                &missing_is_match[RIGHT],
+                intra_matches,
+            )
+            .map(|(step, missing_left, missing_right, intra_matches)| {
+                step.step2([missing_left, missing_right], intra_matches)
+            })
+            .collect_vec(),
         )
     }
 }
@@ -112,7 +123,11 @@ impl Step1 {
             .collect_vec()
     }
 
-    fn step2(self, missing_is_match: BothEyes<&MapEdges<bool>>) -> Step2 {
+    fn step2(
+        self,
+        missing_is_match: BothEyes<&MapEdges<bool>>,
+        intra_matches: Vec<IntraMatch>,
+    ) -> Step2 {
         let luc_results = self
             .luc_ids
             .iter()
@@ -126,6 +141,7 @@ impl Step1 {
         let mut step2 = Step2 {
             full_join: self.inner_join,
             luc_results,
+            intra_matches,
         };
 
         for id in &self.anti_join[LEFT] {
@@ -144,44 +160,149 @@ impl Step1 {
     }
 }
 
+/// Results for a batch of requests.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
-    pub fn is_matches(&self) -> VecRequests<bool> {
-        self.0.iter().map(Step2::is_match).collect_vec()
-    }
-
-    pub fn filter_map<F, OUT>(&self, f: F) -> VecRequests<VecEdges<OUT>>
-    where
-        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
-    {
-        self.0.iter().map(|step| step.filter_map(&f)).collect_vec()
+    pub fn step3(self, mirror: Self) -> BatchStep3 {
+        assert_eq!(self.0.len(), mirror.0.len());
+        BatchStep3(
+            izip!(self.0, mirror.0)
+                .map(|(normal, mirror)| Step3 { normal, mirror })
+                .collect_vec(),
+        )
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchStep3(VecRequests<Step3>);
+
+impl BatchStep3 {
+    pub fn is_matches(&self) -> VecRequests<bool> {
+        self.0.iter().map(Step3::is_match).collect_vec()
+    }
+
+    /// The IDs of the vectors that matched at least partially.
+    pub fn select(&self, filter: Filter) -> VecRequests<Vec<MatchId>> {
+        self.0
+            .iter()
+            .map(|step| step.select(filter).collect_vec())
+            .collect_vec()
+    }
+}
+
+/// Results for one request.
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
+    intra_matches: Vec<IntraMatch>,
 }
 
 impl Step2 {
-    /// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
-    ///
-    /// LUC *OR* policy: "Local" irises match if either side matches.
+    /// The IDs of the vectors that matched this request.
+    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        let search = self
+            .full_join
+            .iter()
+            .filter(move |(_, [l, r])| filter.search_rule(*l, *r))
+            .map(|(id, _)| MatchId::Search(*id));
+
+        let luc = self
+            .luc_results
+            .iter()
+            .filter(move |(_, [l, r])| filter.luc_rule(*l, *r))
+            .map(|(id, _)| MatchId::Luc(*id));
+
+        let intra = self
+            .intra_matches
+            .iter()
+            .filter(move |m| filter.intra_rule(m.is_match[LEFT], m.is_match[RIGHT]))
+            .map(|m| MatchId::IntraBatch(m.other_request_i));
+
+        chain!(search, luc, intra)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MatchId {
+    Search(VectorId),
+    Luc(VectorId),
+    IntraBatch(usize),
+}
+
+/// Combines the results from mirrored checks.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Step3 {
+    normal: Step2,
+    mirror: Step2,
+}
+
+impl Step3 {
+    /// It is a match if either normal or mirrored iris matches.
     fn is_match(&self) -> bool {
-        let search = self.full_join.iter().any(|(_, [l, r])| *l && *r);
-
-        let luc = self.luc_results.iter().any(|(_, [l, r])| *l || *r);
-
-        search || luc
+        self.select(Filter {
+            eyes: Both,
+            orient: Both,
+        })
+        .next()
+        .is_some()
     }
 
-    fn filter_map<F, OUT>(&self, f: F) -> VecEdges<OUT>
-    where
-        F: Fn(&(VectorId, BothEyes<bool>)) -> Option<OUT>,
-    {
-        self.full_join.iter().filter_map(f).collect_vec()
+    /// The IDs of the vectors that matched at least partially.
+    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        chain!(
+            matches!(filter.orient, Only(Normal) | Both).then_some(self.normal.select(filter)),
+            matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select(filter)),
+        )
+        .flatten()
+    }
+}
+
+/// Search *AND* policy: only match if both eyes match (like `mergeDbResults`).
+///
+/// LUC *OR* policy: "Local" irises match if either side matches.
+///
+/// Intra-batch *OR* policy: match against requests before this request in the same batch.
+///
+/// Partial matches: set `eyes: Only(Left)` or `eyes: Only(Right)`.
+///
+/// Mirror matches: set `orient: Only(Mirror)`.
+#[derive(Copy, Clone)]
+pub struct Filter {
+    pub eyes: OnlyOrBoth<StoreId>,
+    pub orient: OnlyOrBoth<Orientation>,
+}
+
+#[derive(Copy, Clone)]
+pub enum OnlyOrBoth<T> {
+    Only(T),
+    Both,
+}
+
+use OnlyOrBoth::{Both, Only};
+use Orientation::{Mirror, Normal};
+use StoreId::{Left, Right};
+
+impl Filter {
+    fn search_rule(&self, left: bool, right: bool) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both => left && right,
+        }
+    }
+
+    fn luc_rule(&self, left: bool, right: bool) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both => left || right,
+        }
+    }
+
+    fn intra_rule(&self, left: bool, right: bool) -> bool {
+        self.luc_rule(left, right)
     }
 }
