@@ -26,7 +26,7 @@ _RESOURCES="$( get_path_to_parent "${_HERE}" )/resources"
 _ROOT="$( get_path_to_parent "$( get_path_to_parent "${_HERE}" )" )"
 
 # Set path -> output.
-_OUTPUT="${_RESOURCES}/dev_serial_ids_marked_as_deleted.json"
+_OUTPUT="${_RESOURCES}/dev_deleted_serial_ids.json"
 
 # Execute job.
 pushd "${_ROOT}" || exit
