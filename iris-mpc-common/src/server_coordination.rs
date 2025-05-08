@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::helpers::fetch_index::fetch_height_of_indexed;
+use crate::helpers::fetch_index::{fetch_height_of_indexed, IrisSerialId};
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::sync::{SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
@@ -224,7 +224,7 @@ pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
                 let res = reqwest::get(host.as_str()).await;
 
                 if let Ok(resp) = res {
-                    let height_i = resp.text().await.unwrap().parse::<i64>().unwrap();
+                    let height_i = resp.text().await.unwrap().parse::<IrisSerialId>().unwrap();
                     heights[i] = Some(height_i);
                 }
                 // If all nodes are connected, notify the main thread.

@@ -23,13 +23,12 @@ use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
-    get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    check_consensus_on_iris_height, get_others_sync_state, init_heartbeat_task, init_task_monitor,
+    set_node_ready, start_coordination_server, wait_for_others_ready, wait_for_others_unready,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
 };
-use iris_mpc_cpu::genesis::utils::fetcher::{fetch_height_of_indexed, PREV_IRIS_INDEX_FILE};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
@@ -40,8 +39,6 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
-
-use std::path::Path;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);

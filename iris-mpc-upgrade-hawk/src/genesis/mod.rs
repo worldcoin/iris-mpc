@@ -8,6 +8,7 @@ use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
+        fetch_index::{fetch_height_of_indexed, IrisSerialId, PREV_IRIS_INDEX_FILE},
         inmemory_store::InMemoryStore,
         shutdown_handler::ShutdownHandler,
         sync::{SyncResult, SyncState},
@@ -25,10 +26,11 @@ use iris_mpc_cpu::{
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::{
     collections::HashSet,
+    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::time::timeout;
+use tokio::{fs, time::timeout};
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -160,7 +162,9 @@ async fn exec_main_loop(
 
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let curr_iris_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
+            let curr_iris_index_opt = batch
+                .last()
+                .map(|db_stored_iris| db_stored_iris.id().try_into().expect("todo"));
             match curr_iris_index_opt {
                 Some(index) if index <= prev_iris_index => {
                     tracing::info!(
@@ -200,12 +204,12 @@ async fn exec_main_loop(
                 tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
                 continue;
             };
-            let curr_iris_index = curr_iris_index_opt.unwrap();
+            let curr_iris_index: IrisSerialId = curr_iris_index_opt.unwrap();
 
             let file_content = curr_iris_index.to_string();
             fs::write(prev_iris_index_path, file_content)
                 .await
-                .inspect_err(|err| tracing::error!("{}"))
+                .inspect_err(|err| tracing::error!("{}", err))
                 .unwrap_or(());
             prev_iris_index = curr_iris_index;
         }
