@@ -1,5 +1,6 @@
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
+use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
@@ -68,6 +69,7 @@ pub(crate) async fn fetch_iris_batch(
 ///
 /// # Arguments
 ///
+/// * `config` - Application configuration instance.
 /// * `s3_client` - A configured AWS S3 client instance.
 ///
 /// # Returns
@@ -76,8 +78,8 @@ pub(crate) async fn fetch_iris_batch(
 ///
 #[allow(dead_code)]
 pub(crate) async fn fetch_iris_deletions(
+    config: &Config,
     s3_client: &S3_Client,
-    env: String,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
     #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -86,20 +88,19 @@ pub(crate) async fn fetch_iris_deletions(
     }
 
     // Compose bucket and key based on environment
-    let bucket = format!("wf-smpcv2-{}-sync-protocol", env);
-    let key = format!("{}_deleted_serial_ids.json", env);
-
+    let s3_bucket = config.get_s3_bucket_for_iris_deletions();
+    let s3_key = config.get_s3_key_for_iris_deletions();
     tracing::info!(
         "Fetching deleted serial ids from S3 bucket: {}, key: {}",
-        bucket,
-        key
+        s3_bucket,
+        s3_key
     );
 
     // Fetch from S3.
     let s3_response = s3_client
         .get_object()
-        .bucket(&bucket)
-        .key(&key)
+        .bucket(&s3_bucket)
+        .key(&s3_key)
         .send()
         .await
         .map_err(|err| {
