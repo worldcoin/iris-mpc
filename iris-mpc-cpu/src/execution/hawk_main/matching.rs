@@ -245,6 +245,7 @@ impl Step3 {
         self.select(Filter {
             eyes: Both,
             orient: Both,
+            intra_batch: true,
         })
         .next()
         .is_some()
@@ -273,6 +274,7 @@ impl Step3 {
 pub struct Filter {
     pub eyes: OnlyOrBoth<StoreId>,
     pub orient: OnlyOrBoth<Orientation>,
+    pub intra_batch: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -303,6 +305,6 @@ impl Filter {
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {
-        self.luc_rule(left, right)
+        self.intra_batch && self.luc_rule(left, right)
     }
 }
