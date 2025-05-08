@@ -110,8 +110,7 @@ pub async fn start_coordination_server(
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 )
                 .route(
-                    // todo(einar)
-                    "/height",
+                    "/height-of-graph-genesis-indexation",
                     get({
                         let height = fetch_height_of_indexed().await;
                         // We are only ready once this flag is set to true.
