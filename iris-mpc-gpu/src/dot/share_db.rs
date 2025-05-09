@@ -571,6 +571,117 @@ impl ShareDB {
         }
     }
 
+    pub fn load_host_db_subset_into_chunk_buffers(
+        &self,
+        db: &[Vec<Vec<u16>>],
+        buffers: &DBChunkBuffers,
+        streams: &[CudaStream],
+    ) {
+        let a0_host = db
+            .iter()
+            .map(|device_db| {
+                device_db
+                    .iter()
+                    .flat_map(|record| record.iter().map(|&x| ((x as i8) as i32 - 128) as i8))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        let a1_host = db
+            .iter()
+            .map(|device_db| {
+                device_db
+                    .iter()
+                    .flat_map(|record| record.iter().map(|&x: &u16| ((x >> 8) as i32 - 128) as i8))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        for idx in 0..self.device_manager.device_count() {
+            let device = self.device_manager.device(idx);
+            device.bind_to_thread().unwrap();
+
+            assert_eq!(a0_host[idx].len(), db[idx].len() * self.code_length);
+            assert_eq!(a1_host[idx].len(), db[idx].len() * self.code_length);
+
+            // SAFETY: We have valid buffers allocated and the source pointers are the two vectors above. We sync the streams at the end of this function, so the two vecs are still valid and in scope for the full duration of this copy call.
+            unsafe {
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_0[idx].device_ptr(),
+                        a0_host[idx].as_ptr() as *mut _,
+                        self.code_length * db[idx].len(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.limb_1[idx].device_ptr(),
+                        a1_host[idx].as_ptr() as *mut _,
+                        self.code_length * db[idx].len(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+            }
+        }
+        // we calculate the sums async to the above copy
+        let a0_sums = a0_host
+            .iter()
+            .map(|a0| {
+                a0[..]
+                    .chunks_exact(self.code_length)
+                    .map(|chunk| chunk.iter().map(|&x| x as u32).sum::<u32>())
+                    .collect::<Vec<u32>>()
+            })
+            .collect::<Vec<_>>();
+
+        let a1_sums = a1_host
+            .iter()
+            .map(|a1| {
+                a1[..]
+                    .chunks_exact(self.code_length)
+                    .map(|chunk| chunk.iter().map(|&x| x as u32).sum::<u32>())
+                    .collect::<Vec<u32>>()
+            })
+            .collect::<Vec<_>>();
+
+        for idx in 0..self.device_manager.device_count() {
+            // SAFETY: We have valid buffers allocated and the source pointers are the two vectors above. We sync the streams at the end of this function, so the two vecs are still valid and in scope for the full duration of this copy call.
+            unsafe {
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.sums.limb_0[idx].device_ptr(),
+                        a0_sums[idx].as_ptr() as *mut _,
+                        db[idx].len() * size_of::<u32>(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+
+                cudarc::driver::sys::lib()
+                    .cuMemcpyHtoDAsync_v2(
+                        *buffers.sums.limb_1[idx].device_ptr(),
+                        a1_sums[idx].as_ptr() as *mut _,
+                        db[idx].len() * size_of::<u32>(),
+                        streams[idx].stream,
+                    )
+                    .result()
+                    .unwrap();
+            }
+        }
+
+        // Synchronize all streams to make sure the above copy is done and the Vecs can go out of scope again
+        for idx in 0..self.device_manager.device_count() {
+            // SAFETY: We have valid streams
+            unsafe {
+                cudarc::driver::result::stream::synchronize(streams[idx].stream).unwrap();
+            }
+        }
+    }
+
     pub fn prefetch_db_subset_into_chunk_buffers(
         &self,
         db: &SlicedProcessedDatabase,

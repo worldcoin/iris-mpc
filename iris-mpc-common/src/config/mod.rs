@@ -239,6 +239,8 @@ pub struct Config {
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
+    #[serde(default)]
+    pub load_only_full_scan_side_in_memory: bool,
     // used to fix max batch size to 1 for correctness testing purposes
     #[serde(default = "default_override_max_batch_size")]
     pub override_max_batch_size: bool,
@@ -624,7 +626,8 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
-            override_max_batch_size: _, // for testing purposes only
+            load_only_full_scan_side_in_memory: _, // could be different for each server
+            override_max_batch_size: _,            // for testing purposes only
         } = value;
 
         Self {

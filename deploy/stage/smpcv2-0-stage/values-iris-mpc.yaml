@@ -90,10 +90,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "1200000"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "100000" # "1300000"
+    value: "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
@@ -114,10 +114,10 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "false"
+    value: "true"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "50"
+    value: "1000"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "true"
@@ -157,7 +157,10 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name : SMPC__ENABLE_DEBUG_TIMING
+  - name: SMPC__ENABLE_DEBUG_TIMING
+    value: "true"
+
+  - name: SMPC__LOAD_ONLY_FULL_SCAN_SIDE_IN_MEMORY
     value: "true"
 
 initContainer:

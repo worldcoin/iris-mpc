@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 bincode = "1.3.3"
 cudarc = { version = "0.13.4", features = ["cuda-12020", "nccl"] }
 eyre.workspace = true
