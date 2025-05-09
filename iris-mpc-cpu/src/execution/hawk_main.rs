@@ -851,13 +851,13 @@ impl HawkResult {
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
             orient: Only(Normal),
-            intra_batch: true,
+            intra_batch: false,
         });
 
         let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Normal),
-            intra_batch: true,
+            intra_batch: false,
         });
 
         let (full_face_mirror_match_ids, _) = self.select(Filter {
@@ -870,7 +870,7 @@ impl HawkResult {
             self.select(Filter {
                 eyes: Only(Left),
                 orient: Only(Mirror),
-                intra_batch: true,
+                intra_batch: false,
             });
 
         let (
@@ -879,7 +879,7 @@ impl HawkResult {
         ) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Mirror),
-            intra_batch: true,
+            intra_batch: false,
         });
 
         let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
