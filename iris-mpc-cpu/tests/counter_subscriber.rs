@@ -174,7 +174,7 @@ async fn init_hnsw(
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
-    let mut vector_store = PlaintextStore::new_random(rng, db_size).await;
+    let mut vector_store = PlaintextStore::new_random(rng, db_size);
     let graph_store = vector_store.generate_graph(rng, db_size, &searcher).await?;
     let query1 = Arc::new(IrisCode::random_rng(rng));
     let query2 = Arc::new(IrisCode::random_rng(rng));
@@ -206,10 +206,10 @@ async fn hnsw_search_queries_par(
     for q in [query1, query2].into_iter() {
         let searcher = searcher.clone();
         let mut vector_store = vector_store.clone();
-        let mut graph_store = graph_store.clone();
+        let graph_store = graph_store.clone();
         jobs.spawn(async move {
             searcher
-                .search(&mut vector_store, &mut graph_store, &q, 1)
+                .search(&mut vector_store, &graph_store, &q, 1)
                 .await?;
 
             Ok(())

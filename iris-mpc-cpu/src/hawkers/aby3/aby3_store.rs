@@ -442,7 +442,7 @@ mod tests {
                     let query = store.storage.get_vector(&v).await;
                     let query = prepare_query((*query).clone());
                     let neighbors = db
-                        .search(&mut *store, &mut aby3_graph, &query, 1)
+                        .search(&mut *store, &aby3_graph, &query, 1)
                         .await
                         .unwrap();
                     tracing::debug!("Finished checking query");
@@ -493,7 +493,7 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let query = cleartext_data.0.points.get(i).unwrap().clone();
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &mut cleartext_data.1, &query, 1)
+                .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -505,16 +505,14 @@ mod tests {
             for (v, g) in vector_graph_stores.iter_mut() {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
-                let mut g = g.clone();
+                let g = g.clone();
                 let q = v_lock.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let secret_neighbors = hawk_searcher
-                        .search(&mut *v_lock, &mut g, &q, 1)
-                        .await
-                        .unwrap();
+                    let secret_neighbors =
+                        hawk_searcher.search(&mut *v_lock, &g, &q, 1).await.unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -527,13 +525,13 @@ mod tests {
             for (v, g) in secret_data.iter() {
                 let hawk_searcher = hawk_searcher.clone();
                 let v = v.clone();
-                let mut g = g.clone();
+                let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
                     let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
                     let secret_neighbors = hawk_searcher
-                        .search(&mut *v_lock, &mut g, &query, 1)
+                        .search(&mut *v_lock, &g, &query, 1)
                         .await
                         .unwrap();
 
@@ -674,14 +672,12 @@ mod tests {
             plaintext_inserts.push(plaintext_store.insert(p).await);
         }
 
-        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
-
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -754,17 +750,15 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let mut jobs = JoinSet::new();
             for (store, graph) in vectors_and_graphs.iter_mut() {
-                let mut graph = graph.clone();
+                let graph = graph.clone();
                 let searcher = searcher.clone();
                 let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
-                    let secret_neighbors = searcher
-                        .search(&mut *store, &mut graph, &q, 1)
-                        .await
-                        .unwrap();
+                    let secret_neighbors =
+                        searcher.search(&mut *store, &graph, &q, 1).await.unwrap();
                     searcher
                         .is_match(&mut *store, &[secret_neighbors])
                         .await

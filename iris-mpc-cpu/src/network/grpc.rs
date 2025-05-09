@@ -853,11 +853,11 @@ mod tests {
                 let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
-                let mut graph = graph.clone();
+                let graph = graph.clone();
                 jobs.spawn(async move {
                     let mut store_lock = store.lock().await;
                     let secret_neighbors = searcher
-                        .search(&mut *store_lock, &mut graph, &q, 1)
+                        .search(&mut *store_lock, &graph, &q, 1)
                         .await
                         .unwrap();
                     searcher
