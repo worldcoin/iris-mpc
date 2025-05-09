@@ -139,12 +139,7 @@ async fn exec_main_loop(
     // Initialise batch generator.
     let mut batch_generator = BatchGenerator::new(config.max_batch_size, max_indexation_height);
     batch_generator
-        .init(
-            iris_store,
-            graph_store,
-            s3_client,
-            config.environment.clone(),
-        )
+        .init(config, iris_store, graph_store, s3_client)
         .await?;
 
     let res: Result<()> = async {
