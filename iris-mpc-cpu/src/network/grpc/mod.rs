@@ -25,7 +25,10 @@ type InStreams = HashMap<Identity, InStream>;
 #[derive(Default, Clone, Debug)]
 pub struct GrpcConfig {
     pub timeout_duration: Duration,
+    // number of gRPC connections to create
     pub connection_parallelism: usize,
+    // number of application level sessions per gRPC stream.
+    pub stream_parallelism: usize,
 }
 
 #[cfg(test)]
@@ -35,7 +38,7 @@ mod tests {
         execution::{local::generate_local_identities, player::Role, session::SessionId},
         hawkers::aby3::{aby3_store::prepare_query, test_utils::shared_random_setup},
         hnsw::HnswSearcher,
-        network::Networking,
+        network::{NetworkType, Networking},
     };
     use aes_prng::AesRng;
     use futures::future::join_all;
@@ -72,7 +75,12 @@ mod tests {
     #[traced_test]
     async fn test_grpc_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
-        let players = setup_local_grpc_networking(identities.clone()).await?;
+        let players = setup_local_grpc_networking(
+            identities.clone(),
+            NetworkType::default_connection_parallelism(),
+            NetworkType::default_stream_parallelism(),
+        )
+        .await?;
 
         let mut jobs = JoinSet::new();
 
@@ -205,7 +213,12 @@ mod tests {
     async fn test_grpc_comms_fail() -> Result<()> {
         let parties = generate_local_identities();
 
-        let players = setup_local_grpc_networking(parties.clone()).await?;
+        let players = setup_local_grpc_networking(
+            parties.clone(),
+            NetworkType::default_connection_parallelism(),
+            NetworkType::default_stream_parallelism(),
+        )
+        .await?;
 
         let mut jobs = JoinSet::new();
 
@@ -308,7 +321,7 @@ mod tests {
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
             database_size,
-            crate::network::NetworkType::GrpcChannel,
+            crate::network::NetworkType::default_grpc(),
         )
         .await
         .unwrap();

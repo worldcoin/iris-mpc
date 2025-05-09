@@ -89,6 +89,9 @@ pub struct HawkArgs {
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
+    #[clap(short, long, default_value_t = 1)]
+    pub stream_parallelism: usize,
+
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
@@ -265,6 +268,7 @@ impl HawkActor {
         let grpc_config = GrpcConfig {
             timeout_duration: Duration::from_secs(10),
             connection_parallelism: args.connection_parallelism,
+            stream_parallelism: args.stream_parallelism,
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
@@ -1119,7 +1123,7 @@ impl HawkHandle {
 
 #[derive(Default)]
 struct Consensus {
-    next_session_id: u64,
+    next_session_id: u32,
 }
 
 impl Consensus {

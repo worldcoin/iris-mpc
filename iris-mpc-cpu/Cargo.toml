@@ -66,9 +66,14 @@ tonic-build = "0.12.3"
 
 [features]
 db_dependent = []
+networking_benchmark = []
 
 [[bench]]
 name = "hnsw"
+harness = false
+
+[[bench]]
+name = "networking"
 harness = false
 
 [[bench]]

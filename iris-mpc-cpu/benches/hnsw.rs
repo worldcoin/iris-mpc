@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use aes_prng::AesRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
@@ -20,29 +18,19 @@ use iris_mpc_cpu::{
         },
         shared_iris::GaloisRingSharedIris,
     },
-    shares::{share::DistanceShare, IntRing2k, RingElement, Share},
+    shares::share::DistanceShare,
 };
-use rand::{Rng, RngCore, SeedableRng};
-use rand_distr::{Distribution, Standard};
+use rand::SeedableRng;
+use std::sync::Arc;
 use tokio::task::JoinSet;
 
-pub fn create_random_sharing<R, ShareRing>(rng: &mut R, input: ShareRing) -> Vec<Share<ShareRing>>
-where
-    R: RngCore,
-    ShareRing: IntRing2k + std::fmt::Display,
-    Standard: Distribution<ShareRing>,
-{
-    let val = RingElement(input);
-    let a = RingElement(rng.gen());
-    let b = RingElement(rng.gen());
-    let c = val - a - b;
+#[path = "bench_utils.rs"]
+mod bench_utils;
+use bench_utils::create_random_sharing;
 
-    let share1 = Share::new(a, c);
-    let share2 = Share::new(b, a);
-    let share3 = Share::new(c, b);
-
-    vec![share1, share2, share3]
-}
+const DEFAULT_CONNECTION_PARALLELISM: usize = 1;
+const DEFAULT_STREAM_PARALLELISM: usize = 1;
+const DEFAULT_REQUEST_PARALLELISM: usize = 1;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("plaintext_hnsw");
@@ -105,7 +93,13 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc(
+                DEFAULT_CONNECTION_PARALLELISM,
+                DEFAULT_STREAM_PARALLELISM,
+                DEFAULT_REQUEST_PARALLELISM,
+            )
+            .await
+            .unwrap();
 
             let mut jobs = JoinSet::new();
             for (index, player_session) in sessions.into_iter().enumerate() {
@@ -145,7 +139,13 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc(
+                DEFAULT_CONNECTION_PARALLELISM,
+                DEFAULT_STREAM_PARALLELISM,
+                DEFAULT_REQUEST_PARALLELISM,
+            )
+            .await
+            .unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
