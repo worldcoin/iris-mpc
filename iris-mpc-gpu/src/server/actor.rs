@@ -45,7 +45,7 @@ use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
-    mem,
+    fmt, mem,
     sync::Arc,
     time::Instant,
 };
@@ -106,6 +106,15 @@ const SUPERMATCH_THRESHOLD: usize = 4_000;
 pub enum Orientation {
     Normal,
     Mirror,
+}
+
+impl fmt::Display for Orientation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Orientation::Normal => write!(f, "Normal"),
+            Orientation::Mirror => write!(f, "Mirror"),
+        }
+    }
 }
 
 pub struct ServerActor {
@@ -1655,7 +1664,7 @@ impl ServerActor {
         Ok(result)
     }
 
-    fn try_calculate_bucket_stats(&mut self, eye_db: Eye, is_mirror: bool) {
+    fn try_calculate_bucket_stats(&mut self, eye_db: Eye, orientation: Orientation) {
         // we use the batch_streams for this
         let streams = &self.streams[0];
 
@@ -1664,26 +1673,26 @@ impl ServerActor {
             match_distances_buffers_masks,
             match_distances_counters,
             match_distances_indices,
-        ) = match (eye_db, is_mirror) {
-            (Eye::Left, false) => (
+        ) = match (eye_db, orientation) {
+            (Eye::Left, Orientation::Normal) => (
                 &self.match_distances_buffer_codes_left,
                 &self.match_distances_buffer_masks_left,
                 &self.match_distances_counter_left,
                 &self.match_distances_indices_left,
             ),
-            (Eye::Right, false) => (
+            (Eye::Right, Orientation::Normal) => (
                 &self.match_distances_buffer_codes_right,
                 &self.match_distances_buffer_masks_right,
                 &self.match_distances_counter_right,
                 &self.match_distances_indices_right,
             ),
-            (Eye::Left, true) => (
+            (Eye::Left, Orientation::Mirror) => (
                 &self.match_distances_buffer_codes_left_mirror,
                 &self.match_distances_buffer_masks_left_mirror,
                 &self.match_distances_counter_left_mirror,
                 &self.match_distances_indices_left_mirror,
             ),
-            (Eye::Right, true) => (
+            (Eye::Right, Orientation::Mirror) => (
                 &self.match_distances_buffer_codes_right_mirror,
                 &self.match_distances_buffer_masks_right_mirror,
                 &self.match_distances_counter_right_mirror,
@@ -1701,9 +1710,9 @@ impl ServerActor {
             .collect::<Vec<_>>();
 
         tracing::info!(
-            "Matching distances collected ({} - mirror: {}): {:?}",
+            "Matching distances collected ({} - orientation: {}): {:?}",
             eye_db,
-            is_mirror,
+            orientation,
             bucket_distance_counters
         );
 
@@ -1713,9 +1722,9 @@ impl ServerActor {
         {
             let now = Instant::now();
             tracing::info!(
-                "Collected enough match distances, starting bucket calculation: {} eye, is_mirror: {}",
+                "Collected enough match distances, starting bucket calculation: {} eye, orientation: {}",
                 eye_db,
-                is_mirror
+                orientation
             );
 
             self.device_manager.await_streams(streams);
@@ -1776,8 +1785,8 @@ impl ServerActor {
 
             tracing::info!("Buckets: {:?}", buckets);
 
-            match (eye_db, is_mirror) {
-                (Eye::Left, false) => {
+            match (eye_db, orientation) {
+                (Eye::Left, Orientation::Normal) => {
                     self.anonymized_bucket_statistics_left.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
@@ -1789,7 +1798,7 @@ impl ServerActor {
                         self.anonymized_bucket_statistics_left
                     );
                 }
-                (Eye::Right, false) => {
+                (Eye::Right, Orientation::Normal) => {
                     self.anonymized_bucket_statistics_right.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
@@ -1801,7 +1810,7 @@ impl ServerActor {
                         self.anonymized_bucket_statistics_right
                     );
                 }
-                (Eye::Left, true) => {
+                (Eye::Left, Orientation::Mirror) => {
                     self.anonymized_bucket_statistics_left_mirror.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
@@ -1813,7 +1822,7 @@ impl ServerActor {
                         self.anonymized_bucket_statistics_left_mirror
                     );
                 }
-                (Eye::Right, true) => {
+                (Eye::Right, Orientation::Mirror) => {
                     self.anonymized_bucket_statistics_right_mirror.fill_buckets(
                         &buckets,
                         MATCH_THRESHOLD_RATIO,
@@ -1839,8 +1848,8 @@ impl ServerActor {
                 };
 
             // Reset all buffers used in this calculation
-            match (eye_db, is_mirror) {
-                (Eye::Left, false) => {
+            match (eye_db, orientation) {
+                (Eye::Left, Orientation::Normal) => {
                     reset_all_buffers(
                         &self.match_distances_counter_left,
                         &self.match_distances_indices_left,
@@ -1848,7 +1857,7 @@ impl ServerActor {
                         &self.match_distances_buffer_masks_left,
                     );
                 }
-                (Eye::Right, false) => {
+                (Eye::Right, Orientation::Normal) => {
                     reset_all_buffers(
                         &self.match_distances_counter_right,
                         &self.match_distances_indices_right,
@@ -1856,7 +1865,7 @@ impl ServerActor {
                         &self.match_distances_buffer_masks_right,
                     );
                 }
-                (Eye::Left, true) => {
+                (Eye::Left, Orientation::Mirror) => {
                     reset_all_buffers(
                         &self.match_distances_counter_left_mirror,
                         &self.match_distances_indices_left_mirror,
@@ -1864,7 +1873,7 @@ impl ServerActor {
                         &self.match_distances_buffer_masks_left_mirror,
                     );
                 }
-                (Eye::Right, true) => {
+                (Eye::Right, Orientation::Mirror) => {
                     reset_all_buffers(
                         &self.match_distances_counter_right_mirror,
                         &self.match_distances_indices_right_mirror,
@@ -2007,11 +2016,7 @@ impl ServerActor {
         );
 
         // we try to calculate the bucket stats here if we have collected enough of them
-        if orientation == Orientation::Normal {
-            self.try_calculate_bucket_stats(eye_db, false);
-        } else if orientation == Orientation::Mirror {
-            self.try_calculate_bucket_stats(eye_db, true);
-        }
+        self.try_calculate_bucket_stats(eye_db, orientation);
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2188,11 +2193,7 @@ impl ServerActor {
         orientation: Orientation,
     ) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        if orientation == Orientation::Normal {
-            self.try_calculate_bucket_stats(eye_db, false);
-        } else if orientation == Orientation::Mirror {
-            self.try_calculate_bucket_stats(eye_db, true);
-        }
+        self.try_calculate_bucket_stats(eye_db, orientation);
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
