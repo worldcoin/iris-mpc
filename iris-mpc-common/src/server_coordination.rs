@@ -6,7 +6,11 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{bail, Error, Result, WrapErr};
+use eyre::{ensure, Error, OptionExt as _, Result, WrapErr};
+use futures::future::try_join_all;
+use futures::FutureExt as _;
+use itertools::Itertools as _;
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -329,7 +333,9 @@ pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
     let iris_heights =
         try_get_endpoint_all_nodes(config, "height-of-graph-genesis-indexation").await?;
 
-    let height = fetch_height_of_indexed().await;
+    // REVIEW: Merge after height endpoint
+    // let height = fetch_height_of_indexed().await;
+    let height = 1;
     let response_texts_futs: Vec<_> = iris_heights.into_iter().map(|resp| resp.text()).collect();
     let response_texts = try_join_all(response_texts_futs).await?;
     let response_parses: Result<Vec<_>> = response_texts
