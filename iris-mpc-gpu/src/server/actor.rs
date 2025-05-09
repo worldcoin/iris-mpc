@@ -1873,7 +1873,6 @@ impl ServerActor {
                     );
                 }
             }
-            
             reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
 
             self.device_manager.await_streams(streams);
