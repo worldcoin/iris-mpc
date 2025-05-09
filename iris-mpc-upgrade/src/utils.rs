@@ -1,5 +1,6 @@
 use axum::{routing::get, Router};
 use eyre::Context;
+use eyre::Result;
 use std::io::{Error as IoError, ErrorKind};
 
 pub fn install_tracing() {
@@ -16,7 +17,7 @@ pub fn install_tracing() {
         .init();
 }
 
-pub async fn spawn_healthcheck_server(healthcheck_port: usize) -> eyre::Result<()> {
+pub async fn spawn_healthcheck_server(healthcheck_port: usize) -> Result<()> {
     let app = Router::new().route("/health", get(|| async {})); // Implicit 200 response
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", healthcheck_port))
         .await

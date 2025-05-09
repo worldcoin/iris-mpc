@@ -1,3 +1,4 @@
+use eyre::Result;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
@@ -15,7 +16,7 @@ pub struct SyncState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResult {
-    my_state: SyncState,
+    pub my_state: SyncState,
     all_states: Vec<SyncState>,
 }
 
@@ -64,7 +65,7 @@ impl Modification {
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
-    pub fn update_result_message_node_id(&mut self, party_id: usize) -> eyre::Result<()> {
+    pub fn update_result_message_node_id(&mut self, party_id: usize) -> Result<()> {
         if let Some(message) = &self.result_message_body {
             // Parse the JSON message
             match serde_json::from_str::<serde_json::Value>(message) {
@@ -102,6 +103,10 @@ impl SyncResult {
         }
     }
 
+    /// Returns `None` if all states have equal database length.  If not all
+    /// database lengths are the same, instead returns `Some(smallest_len)`,
+    /// indicating that other databases probably should be rolled back to this
+    /// smallest size.
     pub fn must_rollback_storage(&self) -> Option<usize> {
         let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
         let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
@@ -112,7 +117,8 @@ impl SyncResult {
         }
     }
 
-    pub fn check_common_config(&self) -> eyre::Result<()> {
+    /// Check if the common part of the config is the same across all nodes.
+    pub fn check_common_config(&self) -> Result<()> {
         let config = self.my_state.common_config.clone();
         for state in &self.all_states {
             if state.common_config != config {

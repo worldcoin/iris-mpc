@@ -17,7 +17,6 @@ use iris_mpc_common::{
     postgres::PostgresClient,
     vector_id::VectorId,
 };
-
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
@@ -159,6 +158,80 @@ impl Store {
         Ok(count.0 as usize)
     }
 
+    /// Fetches an ordered vector of rows from Iris table matched by a set of serial identifiers.
+    ///
+    /// # Arguments
+    ///
+    /// * `identifiers` - Serial identifiers of Irises to be fetched.
+    ///
+    /// # Returns
+    ///
+    /// An ordered vector of `DbStoredIris` instances.
+    ///
+    pub async fn fetch_iris_batch(
+        &self,
+        identifiers: Vec<u64>,
+    ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
+        // TODO: define max batch size constant.
+        assert!(
+            !identifiers.is_empty() && identifiers.len() <= 64,
+            "Invalid identifier set"
+        );
+
+        tracing::info!(
+            "Iris Store: Fetching a batch of {} Irises",
+            identifiers.len()
+        );
+
+        // Conversion required for sql interpolation.
+        let identifiers: Vec<i64> = identifiers.into_iter().map(|x| x as i64).collect();
+
+        let irises = sqlx::query_as::<_, DbStoredIris>(
+            r#"
+            SELECT * FROM irises
+            ORDER BY id ASC
+            WHERE id = ANY($1)
+            "#,
+        )
+        .bind(&identifiers)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(irises)
+    }
+
+    /// Fetches first row from Iris table matched by id.
+    ///
+    /// # Arguments
+    ///
+    /// * `serial_id` - Serial ID of Iris to be fetched.
+    ///
+    /// # Returns
+    ///
+    /// Maybe a `DbStoredIris` instance.
+    ///
+    pub async fn fetch_iris_by_serial_id(
+        &self,
+        serial_id: u64,
+    ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
+        tracing::info!(
+            "PostgreSQL Store: Fetching Iris by serial-id ({})",
+            serial_id
+        );
+
+        // Conversion required for sql interpolation.
+        let id_of_iris = serial_id as i32;
+
+        Ok(
+            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
+                .bind(id_of_iris)
+                .fetch_one(&self.pool)
+                .await
+                .expect("DB operation failure :: Fetch Iris by ID."),
+        )
+    }
+
+    /// Stream irises in order.
     /// (only for testing) Stream irises in order.
     pub async fn stream_irises(
         &self,
@@ -188,7 +261,7 @@ impl Store {
         &self,
         min_last_modified_at: Option<i64>,
         partitions: usize,
-    ) -> impl Stream<Item = eyre::Result<DbStoredIris>> + '_ {
+    ) -> impl Stream<Item = Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
         let partition_size = count.div_ceil(partitions).max(1);
 

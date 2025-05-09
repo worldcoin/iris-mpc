@@ -18,10 +18,35 @@ create_bucket() {
   awslocal s3 mb s3://"${BUCKET_NAME_TO_CREATE}"
 }
 
+upload_file_to_bucket() {
+  local BUCKET_NAME=$1
+  local FILE_PATH=$2
+  local S3_KEY=$3
+  awslocal s3 cp "$FILE_PATH" "s3://$BUCKET_NAME/$S3_KEY"
+}
 
 echo "Creating S3 bucket..."
 create_bucket "wf-dev-public-keys"
 create_bucket "wf-smpcv2-dev-sns-requests"
+create_bucket "wf-smpcv2-dev-sync-protocol"
+
+# Ensure dev_deleted_serial_ids.json exists before uploading
+echo "Creating default dev_deleted_serial_ids.json"
+cat > ./dev_deleted_serial_ids.json <<EOF
+{
+    "deleted_serial_ids": [
+        1,
+        2,
+        4,
+        100
+    ]
+}
+EOF
+
+
+# add data to the genesis-deletion bucket
+echo "Sample data for wf-smpcv2-dev-sync-protocol"
+upload_file_to_bucket "wf-smpcv2-dev-sync-protocol" "./dev_deleted_serial_ids.json" "dev_deleted_serial_ids.json"
 
 # mpcv2 queues and topics
 SNS_IRIS_MPC_INPUTS_TOPIC_NAME=iris-mpc-input.fifo

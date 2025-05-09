@@ -232,14 +232,16 @@ impl<Vector: Clone, Distance: Clone> Clone for SortedNeighborhood<Vector, Distan
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
     use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]
     async fn test_neighborhood() -> Result<()> {
-        let mut store = PlaintextStore::default();
-        let query = store.prepare_query(IrisCode::default());
+        let mut store = PlaintextStore::new();
+        let query = Arc::new(IrisCode::default());
         let vector = store.insert(&query).await;
         let distance = store.eval_distance(&query, &vector).await?;
 

@@ -256,6 +256,7 @@ struct Buffers {
     lifted_shares_buckets1: Option<Vec<ChunkShare<u32>>>,
     lifted_shares_buckets2: Option<Vec<ChunkShare<u32>>>,
     lifting_corrections: Option<Vec<ChunkShare<u16>>>,
+    buckets_recv_buffer: Option<Vec<ChunkShare<u32>>>,
     // This is also the buffer where the result is stored:
     lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
     lifted_shares_split2: Option<Vec<ChunkShare<u64>>>,
@@ -269,7 +270,7 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
+    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize, n_buckets: Option<usize>) -> Self {
         let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_buckets1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_buckets2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
@@ -286,6 +287,9 @@ impl Buffers {
         let ot_m1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
+        let buckets_recv_buffer =
+            n_buckets.map(|n_buckets| Self::allocate_buffer(n_buckets, devices));
+
         Buffers {
             lifted_shares,
             lifted_shares_buckets1,
@@ -294,6 +298,7 @@ impl Buffers {
             lifted_shares_split1_result,
             lifted_shares_split2,
             lifted_shares_split3,
+            buckets_recv_buffer,
             binary_adder_s,
             binary_adder_c,
             ot_m0,
@@ -416,6 +421,7 @@ impl Circuits {
         peer_id: usize,
         input_size: usize, // per GPU
         alloc_size: usize,
+        n_buckets: Option<usize>,
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
@@ -442,7 +448,7 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let buffers = Buffers::new(&devs, alloc_size);
+        let buffers = Buffers::new(&devs, alloc_size, n_buckets);
 
         Circuits {
             peer_id,
@@ -2542,7 +2548,7 @@ impl Circuits {
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
         let res = buckets.as_view();
 
-        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.buckets_recv_buffer);
         let mut rcv_buffer = rcv_buffer_[0].get_range(0, buckets.len());
 
         result::group_start().unwrap();
@@ -2556,7 +2562,7 @@ impl Circuits {
 
         let c = dtoh_on_stream_sync(&rcv_buffer.a, &self.devs[0], &streams[0]).unwrap();
 
-        Buffers::return_buffer(&mut self.buffers.lifted_shares, rcv_buffer_);
+        Buffers::return_buffer(&mut self.buffers.buckets_recv_buffer, rcv_buffer_);
         self.buffers.check_buffers();
 
         a.iter()

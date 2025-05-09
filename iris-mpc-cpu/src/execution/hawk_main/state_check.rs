@@ -1,4 +1,4 @@
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
@@ -52,9 +52,9 @@ impl HawkSession {
         let next_state = decode(net.receive_next().await)?;
 
         if prev_state != my_state || next_state != my_state {
-            return Err(eyre!(
+            bail!(
                 "Party states have diverged: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
-            ));
+            );
         }
         Ok(())
     }

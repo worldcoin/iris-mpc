@@ -8,9 +8,11 @@ pub mod id;
 pub mod iris_db;
 pub mod job;
 pub mod postgres;
+pub mod server_coordination;
 pub mod shamir;
 #[cfg(feature = "helpers")]
 pub mod test;
+pub mod tracing;
 pub mod vector_id;
 
 pub const IRIS_CODE_LENGTH: usize = 12_800;

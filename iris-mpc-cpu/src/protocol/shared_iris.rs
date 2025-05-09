@@ -38,10 +38,16 @@ impl GaloisRingSharedIris {
     }
 
     pub fn try_from_buffers(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Arc<Self>> {
-        Ok(Arc::new(GaloisRingSharedIris {
+        Ok(Arc::new(Self::try_from_buffers_inner(
+            party_id, code, mask,
+        )?))
+    }
+
+    pub fn try_from_buffers_inner(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Self> {
+        Ok(GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::new(code.try_into()?, party_id),
             mask: GaloisRingTrimmedMaskCodeShare::new(mask.try_into()?, party_id),
-        }))
+        })
     }
 
     /// Generate iris code shares of an input iris code using local randomness
