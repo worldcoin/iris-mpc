@@ -746,6 +746,25 @@ impl HawkRequest {
             })
             .collect_vec()
     }
+
+    fn reauth_id(
+        &self,
+        iris_store: &SharedIrises,
+        orient: Orientation,
+    ) -> VecRequests<Option<VectorId>> {
+        izip!(&self.batch.request_types, &self.batch.request_ids)
+            .map(|(request_type, request_id)| {
+                if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
+                    self.batch
+                        .reauth_target_indices
+                        .get(request_id)
+                        .map(|&idx| iris_store.from_0_indices(&[idx])[0])
+                } else {
+                    None
+                }
+            })
+            .collect_vec()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -800,6 +819,8 @@ impl HawkResult {
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
+        use MatchId::*;
+
         self.match_results
             .select(filter)
             .iter()
@@ -807,9 +828,8 @@ impl HawkResult {
                 matches
                     .iter()
                     .filter_map(|&m| match m {
-                        MatchId::Search(id) => Some(id),
-                        MatchId::Luc(id) => Some(id),
-                        MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
+                        Search(id) | Luc(id) | Reauth(id) => Some(id),
+                        IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
                     .collect_vec()
@@ -838,7 +858,6 @@ impl HawkResult {
         use StoreId::{Left, Right};
 
         let matches = self.match_results.is_matches();
-        let n_requests = matches.len();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
@@ -885,6 +904,21 @@ impl HawkResult {
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
         let batch = self.batch;
+
+        // Reauth.
+        let successful_reauths = match_ids
+            .iter()
+            .enumerate()
+            .map(|(idx, matches)| {
+                if batch.request_types[idx] != REAUTH_MESSAGE_TYPE {
+                    return false;
+                }
+                let reauth_id = batch.request_ids[idx].clone();
+                // Expect a match with target reauth index
+                matches.contains(batch.reauth_target_indices.get(&reauth_id).unwrap())
+            })
+            .collect::<Vec<bool>>();
+
         ServerJobResult {
             merged_results,
             request_ids: batch.request_ids,
@@ -913,12 +947,14 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
-            successful_reauths: vec![false; n_requests], // TODO.
-            reauth_target_indices: Default::default(),   // TODO.
-            reauth_or_rule_used: Default::default(),     // TODO.
-            reset_update_indices: vec![],                // TODO.
-            reset_update_request_ids: vec![],            // TODO.
-            reset_update_shares: vec![],                 // TODO.
+
+            successful_reauths,
+            reauth_target_indices: batch.reauth_target_indices,
+            reauth_or_rule_used: batch.reauth_use_or_rule,
+
+            reset_update_indices: vec![],     // TODO.
+            reset_update_request_ids: vec![], // TODO.
+            reset_update_shares: vec![],      // TODO.
 
             modifications: batch.modifications,
 
@@ -1021,10 +1057,12 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
-
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
+            let (luc_ids, reauth_ids) = {
+                let store = hawk_actor.iris_store[LEFT].read().await;
+                (request.luc_ids(&store), request.reauth_id(&store, orient))
+            };
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
@@ -1034,7 +1072,7 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids);
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, &reauth_ids);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(

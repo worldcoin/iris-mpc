@@ -27,11 +27,12 @@ impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
+        reauth_ids: &VecRequests<Option<VectorId>>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
-            izip!(&plans[LEFT], &plans[RIGHT], luc_ids)
-                .map(|(left, right, luc)| Step1::new([left, right], luc.clone()))
+            izip!(&plans[LEFT], &plans[RIGHT], luc_ids, reauth_ids)
+                .map(|(left, right, luc, rea)| Step1::new([left, right], luc.clone(), *rea))
                 .collect_vec(),
         )
     }
@@ -72,10 +73,15 @@ struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
     luc_ids: Vec<VectorId>,
+    reauth_id: Option<VectorId>,
 }
 
 impl Step1 {
-    fn new(search_results: BothEyes<&VecRots<InsertPlan>>, luc_ids: Vec<VectorId>) -> Step1 {
+    fn new(
+        search_results: BothEyes<&VecRots<InsertPlan>>,
+        luc_ids: Vec<VectorId>,
+        reauth_id: Option<VectorId>,
+    ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
@@ -89,6 +95,7 @@ impl Step1 {
 
         let mut step1 = Step1::with_capacity(full_join.len());
         step1.luc_ids = luc_ids;
+        step1.reauth_id = reauth_id;
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
@@ -110,6 +117,7 @@ impl Step1 {
                 Vec::with_capacity(capacity / 2),
             ],
             luc_ids: Vec::new(),
+            reauth_id: None,
         }
     }
 
@@ -117,7 +125,7 @@ impl Step1 {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
 
-        chain!(anti_join, &self.luc_ids)
+        chain!(anti_join, &self.luc_ids, &self.reauth_id)
             .cloned()
             .unique()
             .collect_vec()
@@ -138,9 +146,16 @@ impl Step1 {
             })
             .collect_vec();
 
+        let reauth_result = self.reauth_id.map(|id| {
+            let is_match =
+                [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
+            (id, is_match)
+        });
+
         let mut step2 = Step2 {
             full_join: self.inner_join,
             luc_results,
+            reauth_result,
             intra_matches,
         };
 
@@ -197,6 +212,7 @@ impl BatchStep3 {
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
+    reauth_result: Option<(VectorId, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
 }
 
@@ -215,13 +231,18 @@ impl Step2 {
             .filter(move |(_, [l, r])| filter.luc_rule(*l, *r))
             .map(|(id, _)| MatchId::Luc(*id));
 
+        let reauth = self
+            .reauth_result
+            .filter(move |(_, [l, r])| filter.reauth_rule(*l, *r))
+            .map(|(id, _)| MatchId::Reauth(id));
+
         let intra = self
             .intra_matches
             .iter()
             .filter(move |m| filter.intra_rule(m.is_match[LEFT], m.is_match[RIGHT]))
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
-        chain!(search, luc, intra)
+        chain!(search, luc, reauth, intra)
     }
 }
 
@@ -229,6 +250,7 @@ impl Step2 {
 pub enum MatchId {
     Search(VectorId),
     Luc(VectorId),
+    Reauth(VectorId),
     IntraBatch(usize),
 }
 
@@ -300,6 +322,10 @@ impl Filter {
             Only(Right) => right,
             Both => left || right,
         }
+    }
+
+    fn reauth_rule(&self, left: bool, right: bool) -> bool {
+        self.search_rule(left, right)
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {
