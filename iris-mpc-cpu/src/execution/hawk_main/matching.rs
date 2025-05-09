@@ -196,8 +196,11 @@ impl BatchStep3 {
                     MatchId::Search(_) => true,
                     MatchId::Luc(_) => true,
                     MatchId::IntraBatch(request_i) => {
-                        let other_is_unique = !is_matches.get(request_i).unwrap_or(&true);
-                        other_is_unique
+                        match is_matches.get(request_i) {
+                            Some(true) => false, // the request we matched with was before us in the batch, and was a match, so we are not blocked by this intra-batch match
+                            Some(false) => true, // the request we matched with was before us in the batch, and was unique, so we are blocked by this intra-batch match
+                            None => false, // The request we matched with is after us in the batch, so we are not blocked by it.
+                        }
                     }
                 });
             is_matches.push(is_match);
