@@ -1265,9 +1265,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-channel"
-version = "0.5.13"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33480d6946193aa8033910124896ca395333cae7e2d1113d1fef6c3272217df2"
+checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
 dependencies = [
  "crossbeam-utils",
 ]
@@ -2314,6 +2314,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
  "aws-sdk-sqs",
+ "axum",
  "base64 0.22.1",
  "bincode",
  "bytemuck",
@@ -2329,6 +2330,8 @@ dependencies = [
  "hmac",
  "http 1.1.0",
  "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
  "percent-encoding",
  "rand",
  "rayon",
@@ -2340,6 +2343,7 @@ dependencies = [
  "sha2",
  "sodiumoxide",
  "sqlx",
+ "telemetry-batteries",
  "thiserror",
  "time",
  "tokio",
@@ -2360,6 +2364,8 @@ dependencies = [
  "async-channel",
  "async-stream",
  "async-trait",
+ "aws-config",
+ "aws-sdk-s3",
  "backon",
  "bincode",
  "bytemuck",
@@ -2377,6 +2383,7 @@ dependencies = [
  "num-traits",
  "prost",
  "rand",
+ "rand_chacha",
  "rand_distr",
  "rstest",
  "serde",
@@ -2384,6 +2391,7 @@ dependencies = [
  "siphasher",
  "sqlx",
  "static_assertions",
+ "thiserror",
  "tokio",
  "tokio-stream",
  "tonic",
@@ -2492,6 +2500,44 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "iris-mpc-upgrade-hawk"
+version = "0.1.0"
+dependencies = [
+ "aws-config",
+ "aws-sdk-s3",
+ "aws-sdk-secretsmanager",
+ "aws-sdk-sns",
+ "aws-sdk-sqs",
+ "base64 0.22.1",
+ "bytemuck",
+ "chrono",
+ "clap",
+ "criterion",
+ "dotenvy",
+ "eyre",
+ "futures",
+ "iris-mpc-common",
+ "iris-mpc-cpu",
+ "iris-mpc-gpu",
+ "iris-mpc-store",
+ "itertools 0.13.0",
+ "metrics 0.22.3",
+ "metrics-exporter-statsd 0.7.0",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sodiumoxide",
+ "sqlx",
+ "static_assertions",
+ "telemetry-batteries",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -3596,6 +3642,7 @@ checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
 dependencies = [
  "ppv-lite86",
  "rand_core",
+ "serde",
 ]
 
 [[package]]

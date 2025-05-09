@@ -1,17 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
+use eyre::{bail, Result};
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
-use tokio::sync::Mutex;
+use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -30,7 +31,7 @@ type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
 pub fn setup_local_player_preloaded_db(
     database: HashMap<VectorId, IrisRef>,
-) -> eyre::Result<SharedIrisesRef> {
+) -> Result<SharedIrisesRef> {
     Ok(SharedIrises::new(database).to_arc())
 }
 
@@ -38,14 +39,14 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
     network_t: NetworkType,
-) -> eyre::Result<Vec<Aby3StoreRef>> {
+) -> Result<Vec<Aby3StoreRef>> {
     let identities = generate_local_identities();
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
     for (i, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from(PointId::from(i));
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
+        let vector_id = VectorId::from_0_index(i as u32);
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -53,8 +54,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let storages: Vec<SharedIrisesRef> = shared_irises
         .into_iter()
-        .map(|player_irises| setup_local_player_preloaded_db(player_irises).unwrap())
-        .collect();
+        .map(setup_local_player_preloaded_db)
+        .collect::<Result<Vec<_>>>()?;
     let runtime = LocalRuntime::mock_setup(network_t).await?;
 
     runtime
@@ -65,9 +66,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .collect()
 }
 
-pub async fn setup_local_store_aby3_players(
-    network_t: NetworkType,
-) -> eyre::Result<Vec<Aby3StoreRef>> {
+pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Vec<Aby3StoreRef>> {
     let runtime = LocalRuntime::mock_setup(network_t).await?;
     runtime
         .sessions
@@ -83,23 +82,26 @@ pub async fn setup_local_store_aby3_players(
 
 /// Returns the index of the party in the session, which is used to propagate messages to the correct party.
 /// The index must be in the range [0, 2] and unique per party.
-pub async fn get_owner_index(store: &Aby3StoreRef) -> eyre::Result<usize> {
+pub async fn get_owner_index(store: &Aby3StoreRef) -> Result<usize> {
     let store = store.lock().await;
     Ok(store.session.network_session.own_role().index())
 }
 
 /// Returns a trivial share of a distance.
 /// That is the additive sharing (distance, 0, 0)
-pub fn get_trivial_share(distance: u16, player_index: usize) -> Share<u32> {
+pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32>> {
     let distance_elem = RingElement(distance as u32);
     let zero_elem = RingElement(0_u32);
 
-    match player_index {
+    let res = match player_index {
         0 => Share::new(distance_elem, zero_elem),
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
-        _ => panic!("Invalid player index"),
-    }
+        _ => {
+            bail!("Invalid player index: {player_index}");
+        }
+    };
+    Ok(res)
 }
 
 /// Returns the distance between two vectors inserted into Aby3Store.
@@ -107,15 +109,18 @@ pub async fn eval_vector_distance(
     store: &mut Aby3Store,
     vector1: &<Aby3Store as VectorStore>::VectorRef,
     vector2: &<Aby3Store as VectorStore>::VectorRef,
-) -> <Aby3Store as VectorStore>::DistanceRef {
+) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
     let point1 = store.storage.get_vector(vector1).await;
     let mut point2 = (*store.storage.get_vector(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
     let pairs = vec![(&*point1, &point2)];
-    let dist = store.eval_pairwise_distances(pairs).await;
-    store.lift_distances(dist).await.unwrap()[0].clone()
+    let dist = store.eval_pairwise_distances(pairs).await?;
+    Ok(store.lift_distances(dist).await?[0].clone())
 }
+
+// TODO Since GraphMem no longer caches distances, this function is now just a
+// no-op.  Should refactor it as a call to clone.
 
 /// Converts a plaintext graph store to a secret-shared graph store.
 ///
@@ -125,8 +130,6 @@ pub async fn eval_vector_distance(
 /// i.e., the sharing of a value x is a triple (x, 0, 0).
 async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Aby3Store> {
     let ep = graph_store.get_entry_point().await;
-    let new_ep = ep.map(|(vector_ref, layer_count)| (VectorId::from(vector_ref), layer_count));
-
     let layers = graph_store.get_layers();
 
     let mut shared_layers = vec![];
@@ -134,17 +137,15 @@ async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Ab
         let links = layer.get_links_map();
         let mut shared_layer = Layer::new();
         for (source_v, queue) in links {
-            let source_v = VectorId::from(*source_v);
             let mut shared_queue = vec![];
             for target_v in queue.iter() {
-                let target_v = VectorId::from(*target_v);
-                shared_queue.push(target_v);
+                shared_queue.push(*target_v);
             }
-            shared_layer.set_links(source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
+            shared_layer.set_links(*source_v, SortedEdgeIds::from_ascending_vec(shared_queue));
         }
         shared_layers.push(shared_layer);
     }
-    GraphMem::from_precomputed(new_ep, shared_layers)
+    GraphMem::from_precomputed(ep, shared_layers)
 }
 
 /// Generates 3 pairs of vector stores and graphs from a plaintext
@@ -159,7 +160,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-) -> eyre::Result<(
+) -> Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
@@ -192,7 +193,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         .await
         .into_iter()
         .map(|res| res.map_err(eyre::Report::new))
-        .collect::<eyre::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     Ok((plaintext, secret_shared_stores))
 }
@@ -205,7 +206,7 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
     plaingraph_file: &str,
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<(
+) -> Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
@@ -229,13 +230,16 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-) -> eyre::Result<(
+) -> Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    let searcher = HnswSearcher::default();
-    let (plaintext_vector_store, plaintext_graph_store) =
-        PlaintextStore::create_random(rng, database_size, &searcher).await?;
+    let searcher = HnswSearcher::new_with_test_parameters();
+
+    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size);
+    let plaintext_graph_store = plaintext_vector_store
+        .generate_graph(rng, database_size, &searcher)
+        .await?;
 
     let protocol_stores =
         setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t).await?;
@@ -256,7 +260,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
         .await
         .into_iter()
         .map(|res| res.map_err(eyre::Report::new))
-        .collect::<eyre::Result<Vec<_>>>()?;
+        .collect::<Result<Vec<_>>>()?;
     let plaintext = (plaintext_vector_store, plaintext_graph_store);
     Ok((plaintext, secret_shared_stores))
 }
@@ -267,7 +271,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
 pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<(
+) -> Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
@@ -280,7 +284,7 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
 pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<(
+) -> Result<(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
@@ -293,7 +297,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-) -> eyre::Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
     let rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
@@ -312,25 +316,33 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             .map(|id| prepare_query(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         let store = store.clone();
-        let task = tokio::spawn(async move {
-            let mut store_lock = store.lock().await;
-            let mut graph_store = GraphMem::new();
-            let searcher = HnswSearcher::default();
-            // insert queries
-            for query in queries.iter() {
-                searcher
-                    .insert(&mut *store_lock, &mut graph_store, query, &mut rng_searcher)
-                    .await;
-            }
-            (store.clone(), graph_store)
-        });
+        let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3Store>)>> =
+            tokio::spawn(async move {
+                let mut store_lock = store.lock().await;
+                let mut graph_store = GraphMem::new();
+                let searcher = HnswSearcher::new_with_test_parameters();
+                // insert queries
+                for query in queries.iter() {
+                    searcher
+                        .insert(&mut *store_lock, &mut graph_store, query, &mut rng_searcher)
+                        .await?;
+                }
+                Ok((store.clone(), graph_store))
+            });
         jobs.push(task);
     }
-    join_all(jobs)
+    let res: Vec<_> = join_all(jobs)
         .await
         .into_iter()
         .map(|res| res.map_err(eyre::Report::new))
-        .collect()
+        .collect();
+
+    let mut unwrapped = Vec::with_capacity(res.len());
+    for r in res {
+        unwrapped.push(r??);
+    }
+
+    Ok(unwrapped)
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -338,7 +350,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
 pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
     shared_random_setup(rng, database_size, NetworkType::LocalChannel).await
 }
 
@@ -347,6 +359,6 @@ pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoR
 pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> eyre::Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
     shared_random_setup(rng, database_size, NetworkType::GrpcChannel).await
 }

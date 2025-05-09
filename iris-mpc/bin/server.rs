@@ -6,10 +6,10 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
-use eyre::{eyre, Context, Report};
+use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc::services::init::{initialize_chacha_seeds, initialize_tracing};
+use iris_mpc::services::init::initialize_chacha_seeds;
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
@@ -17,6 +17,8 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::server_coordination::ReadyProbeResponse;
+use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -64,6 +66,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use tokio::sync::mpsc::Receiver;
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
     task::{spawn_blocking, JoinHandle},
@@ -91,7 +94,7 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
+) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
     let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
@@ -109,7 +112,7 @@ fn preprocess_iris_message_shares(
     mask_share: GaloisRingTrimmedMaskCodeShare,
     code_share_mirrored: GaloisRingIrisCodeShare,
     mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<GaloisShares> {
+) -> Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
 
@@ -147,6 +150,62 @@ fn preprocess_iris_message_shares(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn receive_batch_stream(
+    party_id: usize,
+    client: Client,
+    sns_client: SNSClient,
+    s3_client: S3Client,
+    config: Config,
+    store: Store,
+    mut skip_request_ids: Vec<String>,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    shutdown_handler: Arc<ShutdownHandler>,
+    uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
+) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
+    let (tx, rx) = mpsc::channel(1);
+
+    tokio::spawn(async move {
+        loop {
+            let permit = match tx.reserve().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+
+            // Skip requests based on the startup sync, only in the first iteration.
+            let skip_request_ids = mem::take(&mut skip_request_ids);
+
+            let batch = receive_batch(
+                party_id,
+                &client,
+                &sns_client,
+                &s3_client,
+                &config,
+                &store,
+                &skip_request_ids,
+                shares_encryption_key_pairs.clone(),
+                &shutdown_handler,
+                &uniqueness_error_result_attributes,
+                &reauth_error_result_attributes,
+                &reset_error_result_attributes,
+            )
+            .await;
+
+            let stop = matches!(batch, Err(_) | Ok(None));
+            permit.send(batch);
+
+            if stop {
+                break;
+            }
+        }
+        tracing::info!("Stopping batch receiver.");
+    });
+
+    rx
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn receive_batch(
     party_id: usize,
     client: &Client,
@@ -160,7 +219,7 @@ async fn receive_batch(
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
@@ -320,36 +379,54 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+                        if let Some(enable_mirror_attacks) =
+                            uniqueness_request.full_face_mirror_attacks_detection_enabled
+                        {
+                            if enable_mirror_attacks
+                                != batch_query.full_face_mirror_attacks_detection_enabled
+                            {
+                                batch_query.full_face_mirror_attacks_detection_enabled =
+                                    enable_mirror_attacks;
+                                tracing::info!(
+                                    "Setting mirror attack to {} for batch due to request from {}",
+                                    enable_mirror_attacks,
+                                    uniqueness_request.signup_id
+                                );
+                            }
+                        }
+
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
                             batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(
-                                "Setting skip_persistence to {} for requuest id {}",
+                                "Setting skip_persistence to {} for request id {}",
                                 skip_persistence,
                                 uniqueness_request.signup_id
                             );
                         } else {
                             batch_query.skip_persistence.push(false);
                         }
-                        if config.luc_enabled {
-                            if config.luc_lookback_records > 0 {
-                                batch_query.luc_lookback_records = config.luc_lookback_records;
-                            }
-                            if config.luc_serial_ids_from_smpc_request {
-                                if let Some(serial_ids) =
-                                    uniqueness_request.or_rule_serial_ids.clone()
-                                {
-                                    // convert from 1-based serial id to 0-based index in actor
-                                    batch_query
-                                        .or_rule_indices
-                                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                                } else {
-                                    tracing::warn!(
+
+                        if config.luc_enabled && config.luc_lookback_records > 0 {
+                            batch_query.luc_lookback_records = config.luc_lookback_records;
+                        }
+
+                        let or_rule_indices = if config.luc_enabled
+                            && config.luc_serial_ids_from_smpc_request
+                        {
+                            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref()
+                            {
+                                // convert from 1-based serial id to 0-based index in actor
+                                serial_ids.iter().map(|x| x - 1).collect()
+                            } else {
+                                tracing::warn!(
                                         "LUC serial ids from request enabled, but no serial_ids were passed"
                                     );
-                                    batch_query.or_rule_indices.push(vec![]);
-                                }
+                                vec![]
                             }
-                        }
+                        } else {
+                            vec![]
+                        };
+                        batch_query.or_rule_indices.push(or_rule_indices);
 
                         batch_query
                             .request_ids
@@ -615,9 +692,10 @@ async fn receive_batch(
                             batch_query
                                 .reset_update_indices
                                 .push(reset_update_request.serial_id - 1);
+                            batch_query.sns_message_ids.push(sns_message_id.clone());
                             batch_query
-                                .request_ids
-                                .push(reset_update_request.reset_id.clone());
+                                .reset_update_request_ids
+                                .push(reset_update_request.reset_id);
                             batch_query.reset_update_shares.push(GaloisSharesBothSides {
                                 code_left: left_shares.0,
                                 mask_left: left_shares.1,
@@ -930,7 +1008,7 @@ async fn send_last_modifications_to_sns(
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
-) -> eyre::Result<()> {
+) -> Result<()> {
     // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
@@ -1023,7 +1101,7 @@ async fn send_last_modifications_to_sns(
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     println!("Init config");
@@ -1051,7 +1129,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-async fn server_main(config: Config) -> eyre::Result<()> {
+async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -1206,13 +1284,6 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     tracing::info!("Sync state: {:?}", my_state);
 
-    #[derive(Debug, Serialize, Deserialize, Clone)]
-    struct ReadyProbeResponse {
-        image_name: String,
-        uuid: String,
-        shutting_down: bool,
-    }
-
     let health_shutdown_handler = Arc::clone(&shutdown_handler);
 
     let _health_check_abort = background_tasks.spawn({
@@ -1318,7 +1389,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+            bail!("Timeout waiting for all nodes to be unready.");
         }
     };
     tracing::info!("All nodes are starting up.");
@@ -1503,11 +1574,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if db_len + max_rollback < store_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 store_len,
                 db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",
@@ -1695,7 +1766,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
     let (mut handle, store) = rx.await??;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
+    let skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
 
@@ -1714,10 +1785,15 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matches,
             matches_with_skip_persistence,
             match_ids,
+            full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
             partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_counters_right,
             left_iris_requests,
             right_iris_requests,
             deleted_ids,
@@ -1732,6 +1808,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             reset_update_shares,
             mut modifications,
             actor_data: _,
+            full_face_mirror_attack_detected,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1773,19 +1850,55 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                             true => None,
                         },
                         Some(matched_batch_request_ids[i].clone()),
-                        match partial_match_counters_left.is_empty() {
-                            false => Some(partial_match_counters_left[i]),
-                            true => None,
-                        },
                         match partial_match_counters_right.is_empty() {
                             false => Some(partial_match_counters_right[i]),
                             true => None,
                         },
+                        match partial_match_counters_left.is_empty() {
+                            false => Some(partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        match full_face_mirror_match_ids[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_match_ids[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_ids_left[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_partial_match_ids_left[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_ids_right[i].is_empty() {
+                            false => Some(
+                                full_face_mirror_partial_match_ids_right[i]
+                                    .iter()
+                                    .map(|x| x + 1)
+                                    .collect::<Vec<_>>(),
+                            ),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_counters_left.is_empty() {
+                            false => Some(full_face_mirror_partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        match full_face_mirror_partial_match_counters_right.is_empty() {
+                            false => Some(full_face_mirror_partial_match_counters_right[i]),
+                            true => None,
+                        },
+                        full_face_mirror_attack_detected[i],
                     );
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -1793,7 +1906,23 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                 .enumerate()
                 .filter_map(
                     // Find the indices of non-matching queries in the batch.
-                    |(query_idx, is_match)| if !is_match { Some(query_idx) } else { None },
+                    |(query_idx, is_match)| {
+                        if !is_match {
+                                Some(query_idx)
+                        } else {
+                            // Check for full face mirror attack (only for UNIQUENESS requests) and log it.
+                            if request_types[query_idx] == UNIQUENESS_MESSAGE_TYPE && full_face_mirror_attack_detected[query_idx]
+                            {
+                                tracing::warn!(
+                                    "Mirror attack detected for request_id {} - Not persisting to database",
+                                    request_ids[query_idx]
+                                );
+                                metrics::counter!("mirror.attack.rejected").increment(1);
+                            }
+                            // It matched, don't include.
+                            None
+                        }
+                    },
                 )
                 .map(|query_idx| {
                     let serial_id = (merged_results[query_idx] + 1) as i64;
@@ -1926,11 +2055,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     );
-                    return Err(eyre!(
+                    bail!(
                         "Serial IDs do not match between memory and db: {:?} != {:?}",
                         memory_serial_ids,
                         db_serial_ids
-                    ));
+                    );
                 }
             }
 
@@ -1976,7 +2105,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &dummy_deletion_shares.1,
                         &dummy_deletion_shares.0,
                         &dummy_deletion_shares.1,
-                    );
+                    )
+                    .await?;
                 }
 
                 // persist reset_update results into db
@@ -1995,7 +2125,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         &shares.mask_left,
                         &shares.code_right,
                         &shares.mask_right,
-                    );
+                    )
+                    .await?;
                 }
             }
 
@@ -2087,7 +2218,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         serde_json::to_string(anonymized_bucket_statistics)
                             .wrap_err("failed to serialize anonymized statistics result")
                     })
-                    .collect::<eyre::Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 send_results_to_sns(
                     anonymized_statistics_results,
@@ -2152,7 +2283,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be ready.");
-            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+            bail!("Timeout waiting for all nodes to be ready.");
         }
     }
     tracing::info!("All nodes are ready.");
@@ -2171,7 +2302,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
-    let res: eyre::Result<()> = async {
+    let res: Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
         //
@@ -2186,35 +2317,36 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
 
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
-        let shares_encryption_key_pair = shares_encryption_key_pair.clone();
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let mut next_batch = receive_batch(
+        let mut batch_stream = receive_batch_stream(
             party_id,
-            &aws_clients.sqs_client,
-            &aws_clients.sns_client,
-            &aws_clients.s3_client,
-            &config,
-            &store,
-            &skip_request_ids,
+            aws_clients.sqs_client.clone(),
+            aws_clients.sns_client.clone(),
+            aws_clients.s3_client.clone(),
+            config.clone(),
+            store.clone(),
+            skip_request_ids,
             shares_encryption_key_pair.clone(),
-            &shutdown_handler,
-            &uniqueness_error_result_attribute,
-            &reauth_error_result_attribute,
-            &reset_check_error_result_attribute,
+            shutdown_handler.clone(),
+            uniqueness_error_result_attribute,
+            reauth_error_result_attribute,
+            reset_check_error_result_attribute,
         );
 
         loop {
             let now = Instant::now();
 
-            let _batch = next_batch.await?;
-            if _batch.is_none() {
-                tracing::info!("No more batches to process, exiting main loop");
-                return Ok(());
-            }
-            let batch = _batch.unwrap();
+            let batch = match batch_stream.recv().await {
+                Some(Ok(None)) | None => {
+                    tracing::info!("No more batches to process, exiting main loop");
+                    return Ok(());
+                }
+                Some(Err(e)) => {
+                    return Err(e.into());
+                }
+                Some(Ok(Some(batch))) => batch,
+            };
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -2237,25 +2369,10 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
             let result_future = handle.submit_batch_query(batch);
 
-            next_batch = receive_batch(
-                party_id,
-                &aws_clients.sqs_client,
-                &aws_clients.sns_client,
-                &aws_clients.s3_client,
-                &config,
-                &store,
-                &skip_request_ids,
-                shares_encryption_key_pair.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attribute,
-                &reauth_error_result_attribute,
-                &reset_check_error_result_attribute,
-            );
-
             // await the result
             let result = timeout(processing_timeout, result_future.await)
                 .await
-                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))?;
+                .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))??;
 
             tx.send(result).await?;
 
@@ -2296,7 +2413,7 @@ async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
@@ -2354,7 +2471,7 @@ async fn load_db(
     s3_load_max_retries: usize,
     s3_load_initial_backoff_ms: u64,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 
@@ -2406,7 +2523,7 @@ async fn load_db(
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
-                return Err(eyre!("Invalid iris index {}", index));
+                bail!("Invalid iris index {}", index);
             } else if index > store_len {
                 tracing::warn!(
                     "Skip loading rolled back item: index {} > store_len {}",
@@ -2477,10 +2594,7 @@ async fn load_db(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        return Err(eyre!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        ));
+        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
     tracing::info!("Preprocessing db");

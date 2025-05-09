@@ -3,6 +3,7 @@ use crate::{
     helpers::{statistics::BucketStatistics, sync::Modification},
 };
 use core::fmt;
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -98,6 +99,9 @@ pub struct BatchQuery {
     pub reset_update_indices: Vec<u32>,
     pub reset_update_request_ids: Vec<String>,
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
+
+    // Boolean value for mirror attack detection enabled
+    pub full_face_mirror_attacks_detection_enabled: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -114,9 +118,10 @@ pub struct ServerJobResult<A = ()> {
     // Boolean array to indicate if the query was unique which includes the matches that were not
     // entered into the DB
     pub matches_with_skip_persistence: Vec<bool>,
-
     // For each query, the serial ids to which the query matched to
     pub match_ids: Vec<Vec<u32>>,
+    // For each query, the serial ids to which the query matched to for full face mirror attacks
+    pub full_face_mirror_match_ids: Vec<Vec<u32>>,
     // For each query, the serial ids to which the query partially matched to
     // on the left eye. These include also potential match ids - note that a match
     // is included in the match_ids if it matches on both side (AND rule)
@@ -124,12 +129,18 @@ pub struct ServerJobResult<A = ()> {
     pub partial_match_ids_left: Vec<Vec<u32>>,
     // same, but for the right side
     pub partial_match_ids_right: Vec<Vec<u32>>,
+    // same but for full face mirror attacks
+    pub full_face_mirror_partial_match_ids_left: Vec<Vec<u32>>,
+    pub full_face_mirror_partial_match_ids_right: Vec<Vec<u32>>,
     // The total count of matches for each query on the left eye. This is included
     // because taking the len(partial_match_ids_left) is not enough: we truncate the
     // partial matches to 2048 entries, so we want to know how many total matches there are
     pub partial_match_counters_left: Vec<usize>,
     // Same, but for the right side
     pub partial_match_counters_right: Vec<usize>,
+    // Same, but for mirror attacks
+    pub full_face_mirror_partial_match_counters_left: Vec<usize>,
+    pub full_face_mirror_partial_match_counters_right: Vec<usize>,
     // Original iris shares left for storage
     pub left_iris_requests: IrisQueryBatchEntries,
     pub right_iris_requests: IrisQueryBatchEntries,
@@ -147,13 +158,14 @@ pub struct ServerJobResult<A = ()> {
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     // Used for roll forward in the case of needing to r-run mutations
     pub modifications: HashMap<u32, Modification>,
-    /// Actor-specific data (e.g. graph mutations).
+    // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
-
     // Reset Update specific fields
     pub reset_update_indices: Vec<u32>,
     pub reset_update_request_ids: Vec<String>,
     pub reset_update_shares: Vec<GaloisSharesBothSides>,
+    // Boolean array to indicate if the query is a full face mirror attack attempt.
+    pub full_face_mirror_attack_detected: Vec<bool>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -187,5 +199,5 @@ pub trait JobSubmissionHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult<Self::A>>;
+    ) -> impl Future<Output = Result<ServerJobResult<Self::A>>>;
 }

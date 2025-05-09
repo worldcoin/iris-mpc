@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use aes_prng::AesRng;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, SamplingMode};
 use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
@@ -55,16 +57,17 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
         let (vector, graph) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            let mut vector = PlaintextStore::default();
+            let mut vector = PlaintextStore::new();
             let mut graph = GraphMem::new();
-            let searcher = HnswSearcher::default();
+            let searcher = HnswSearcher::new_with_test_parameters();
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
-                let query = vector.prepare_query(raw_query.clone());
+                let query = Arc::new(raw_query.clone());
                 searcher
                     .insert(&mut vector, &mut graph, &query, &mut rng)
-                    .await;
+                    .await
+                    .unwrap();
             }
             (vector, graph)
         });
@@ -73,13 +76,14 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || (vector.clone(), graph.clone()),
                 |(mut db_vectors, mut graph)| async move {
-                    let searcher = HnswSearcher::default();
+                    let searcher = HnswSearcher::new_with_test_parameters();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let query = db_vectors.prepare_query(on_the_fly_query);
+                    let query = Arc::new(on_the_fly_query);
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, &mut rng)
-                        .await;
+                        .await
+                        .unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             )
@@ -166,9 +170,8 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
                     let pairs = [(&x1, &y1), (&x2, &y2)];
-                    let ds_and_ts = galois_ring_pairwise_distance(&mut player_session, &pairs)
-                        .await
-                        .unwrap();
+                    let ds_and_ts =
+                        galois_ring_pairwise_distance(&mut player_session, &pairs).await;
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
@@ -229,7 +232,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(
@@ -251,7 +254,8 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                                 let mut vector_store = vector_store.lock().await;
                                 searcher
                                     .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
-                                    .await;
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;
@@ -267,7 +271,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(
@@ -281,13 +285,16 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let vector_store = vector_store.clone();
-                            let mut graph_store = graph_store;
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search(&mut *vector_store, &mut graph_store, &query, 1)
-                                    .await;
-                                searcher.is_match(&mut *vector_store, &[neighbors]).await;
+                                    .search(&mut *vector_store, &graph_store, &query, 1)
+                                    .await
+                                    .unwrap();
+                                searcher
+                                    .is_match(&mut *vector_store, &[neighbors])
+                                    .await
+                                    .unwrap();
                             });
                         }
                         jobs.join_all().await;

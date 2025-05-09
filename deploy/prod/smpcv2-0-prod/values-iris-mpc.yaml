@@ -110,6 +110,9 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
 
+  - name: SMPC__ENABLE_RESET
+    value: "true"
+
   - name: SMPC__LUC_ENABLED
     value: "true"
 
@@ -146,9 +149,6 @@ env:
     value: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
 
   - name: SMPC__IMAGE_NAME
-    value: $(IMAGE_NAME)
-  
-  - name: SMPC__HELLO
     value: $(IMAGE_NAME)
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT

@@ -1,27 +1,27 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::{
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{GraphMem, HnswSearcher},
 };
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
 use serde_json::{self, Deserializer};
-use std::{fs::File, io::BufReader};
+use std::{fs::File, io::BufReader, sync::Arc};
 
 pub fn search(
     query: IrisCode,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> (PointId, f64) {
+) -> (VectorId, f64) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .unwrap();
 
     rt.block_on(async move {
-        let query = vector.prepare_query(query);
-        let neighbors = searcher.search(vector, graph, &query, 1).await;
+        let query = Arc::new(query);
+        let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
     })
@@ -33,7 +33,7 @@ pub fn insert(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> PointId {
+) -> VectorId {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -42,8 +42,11 @@ pub fn insert(
     rt.block_on(async move {
         let mut rng = ThreadRng::default();
 
-        let query = vector.prepare_query(iris);
-        searcher.insert(vector, graph, &query, &mut rng).await
+        let query = Arc::new(iris);
+        searcher
+            .insert(vector, graph, &query, &mut rng)
+            .await
+            .unwrap()
     })
 }
 
@@ -51,7 +54,7 @@ pub fn insert_uniform_random(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
-) -> PointId {
+) -> VectorId {
     let mut rng = ThreadRng::default();
     let raw_query = IrisCode::random_rng(&mut rng);
 
@@ -73,9 +76,11 @@ pub fn fill_uniform_random(
         let mut rng = ThreadRng::default();
 
         for idx in 0..num {
-            let raw_query = IrisCode::random_rng(&mut rng);
-            let query = vector.prepare_query(raw_query.clone());
-            searcher.insert(vector, graph, &query, &mut rng).await;
+            let query = Arc::new(IrisCode::random_rng(&mut rng));
+            searcher
+                .insert(vector, graph, &query, &mut rng)
+                .await
+                .unwrap();
             if idx % 100 == 99 {
                 println!("{}", idx + 1);
             }
@@ -108,8 +113,11 @@ pub fn fill_from_ndjson_file(
         // Iterate over each deserialized object
         for json_pt in stream {
             let raw_query = (&json_pt.unwrap()).into();
-            let query = vector.prepare_query(raw_query);
-            searcher.insert(vector, graph, &query, &mut rng).await;
+            let query = Arc::new(raw_query);
+            searcher
+                .insert(vector, graph, &query, &mut rng)
+                .await
+                .unwrap();
         }
     })
 }

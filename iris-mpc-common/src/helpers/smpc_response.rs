@@ -18,9 +18,15 @@ pub struct UniquenessResult {
     pub matched_serial_ids_right: Option<Vec<u32>>,
     pub partial_matches_count_right: Option<usize>,
     pub partial_matches_count_left: Option<usize>,
+    pub full_face_mirror_matched_serial_ids: Option<Vec<u32>>,
+    pub full_face_mirror_matched_serial_ids_left: Option<Vec<u32>>,
+    pub full_face_mirror_matched_serial_ids_right: Option<Vec<u32>>,
+    pub full_face_mirror_partial_matches_count_left: Option<usize>,
+    pub full_face_mirror_partial_matches_count_right: Option<usize>,
     pub matched_batch_request_ids: Option<Vec<String>>,
     pub error: Option<bool>,
     pub error_reason: Option<String>,
+    pub full_face_mirror_attack_detected: bool,
 }
 
 impl UniquenessResult {
@@ -36,6 +42,12 @@ impl UniquenessResult {
         matched_batch_request_ids: Option<Vec<String>>,
         partial_matches_count_right: Option<usize>,
         partial_matches_count_left: Option<usize>,
+        full_face_mirror_matched_serial_ids: Option<Vec<u32>>,
+        full_face_mirror_matched_serial_ids_left: Option<Vec<u32>>,
+        full_face_mirror_matched_serial_ids_right: Option<Vec<u32>>,
+        full_face_mirror_partial_matches_count_left: Option<usize>,
+        full_face_mirror_partial_matches_count_right: Option<usize>,
+        full_face_mirror_attack_detected: bool,
     ) -> Self {
         Self {
             node_id,
@@ -45,11 +57,17 @@ impl UniquenessResult {
             matched_serial_ids,
             matched_serial_ids_left,
             matched_serial_ids_right,
+            full_face_mirror_matched_serial_ids,
+            full_face_mirror_matched_serial_ids_left,
+            full_face_mirror_matched_serial_ids_right,
+            full_face_mirror_partial_matches_count_left,
+            full_face_mirror_partial_matches_count_right,
             matched_batch_request_ids,
             partial_matches_count_right,
             partial_matches_count_left,
             error: None,
             error_reason: None,
+            full_face_mirror_attack_detected,
         }
     }
 
@@ -65,8 +83,14 @@ impl UniquenessResult {
             matched_batch_request_ids: None,
             partial_matches_count_right: None,
             partial_matches_count_left: None,
+            full_face_mirror_matched_serial_ids: None,
+            full_face_mirror_matched_serial_ids_left: None,
+            full_face_mirror_matched_serial_ids_right: None,
+            full_face_mirror_partial_matches_count_left: None,
+            full_face_mirror_partial_matches_count_right: None,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
+            full_face_mirror_attack_detected: false,
         }
     }
 }

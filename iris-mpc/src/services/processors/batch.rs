@@ -6,6 +6,7 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::types::MessageSystemAttributeName;
 use aws_sdk_sqs::Client;
+use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare, GaloisShares,
@@ -27,12 +28,68 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::job::{BatchMetadata, BatchQuery};
 use iris_mpc_store::Store;
 use std::collections::HashMap;
+use std::mem;
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
 
 #[allow(clippy::too_many_arguments)]
-pub async fn receive_batch(
+pub fn receive_batch_stream(
+    party_id: usize,
+    client: Client,
+    sns_client: SNSClient,
+    s3_client: S3Client,
+    config: Config,
+    store: Store,
+    mut skip_request_ids: Vec<String>,
+    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    shutdown_handler: Arc<ShutdownHandler>,
+    uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
+) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
+    let (tx, rx) = mpsc::channel(1);
+
+    tokio::spawn(async move {
+        loop {
+            let permit = match tx.reserve().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+
+            // Skip requests based on the startup sync, only in the first iteration.
+            let skip_request_ids = mem::take(&mut skip_request_ids);
+
+            let batch = receive_batch(
+                party_id,
+                &client,
+                &sns_client,
+                &s3_client,
+                &config,
+                &store,
+                &skip_request_ids,
+                shares_encryption_key_pairs.clone(),
+                &shutdown_handler,
+                &uniqueness_error_result_attributes,
+                &reauth_error_result_attributes,
+            )
+            .await;
+
+            let stop = matches!(batch, Err(_) | Ok(None));
+            permit.send(batch);
+
+            if stop {
+                break;
+            }
+        }
+        tracing::info!("Stopping batch receiver.");
+    });
+
+    rx
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
@@ -44,7 +101,7 @@ pub async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
         client,
@@ -114,7 +171,7 @@ impl<'a> BatchProcessor<'a> {
         }
     }
 
-    pub async fn receive_batch(&mut self) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
@@ -231,7 +288,6 @@ impl<'a> BatchProcessor<'a> {
                 tokio::time::sleep(SQS_POLLING_INTERVAL).await;
             }
         }
-
         Ok(())
     }
 
@@ -519,7 +575,7 @@ impl<'a> BatchProcessor<'a> {
 
         Ok(())
     }
-    async fn handle_share_processing_error(&self, index: usize) -> eyre::Result<()> {
+    async fn handle_share_processing_error(&self, index: usize) -> Result<()> {
         let request_id = self.batch_query.request_ids[index].clone();
         let request_type = &self.batch_query.request_types[index];
 
@@ -603,21 +659,27 @@ impl<'a> BatchProcessor<'a> {
     }
 
     fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) {
-        if self.config.luc_enabled {
-            if self.config.luc_lookback_records > 0 {
-                self.batch_query.luc_lookback_records = self.config.luc_lookback_records;
-            }
+        let config = &self.config;
 
-            if self.config.luc_serial_ids_from_smpc_request {
-                if let Some(serial_ids) = &uniqueness_request.or_rule_serial_ids {
-                    self.batch_query
-                        .or_rule_indices
-                        .push(serial_ids.iter().map(|x| x - 1).collect());
-                } else {
-                    tracing::error!("Received a uniqueness request without serial_ids");
-                }
-            }
+        if config.luc_enabled && config.luc_lookback_records > 0 {
+            self.batch_query.luc_lookback_records = config.luc_lookback_records;
         }
+
+        let or_rule_indices = if config.luc_enabled && config.luc_serial_ids_from_smpc_request {
+            if let Some(serial_ids) = uniqueness_request.or_rule_serial_ids.as_ref() {
+                // convert from 1-based serial id to 0-based index in actor
+                serial_ids.iter().map(|x| x - 1).collect()
+            } else {
+                tracing::warn!(
+                    "LUC serial ids from request enabled, but no serial_ids were passed"
+                );
+                vec![]
+            }
+        } else {
+            vec![]
+        };
+
+        self.batch_query.or_rule_indices.push(or_rule_indices);
     }
 
     fn add_iris_shares_task(&mut self, s3_key: String) -> Result<(), ReceiveRequestError> {

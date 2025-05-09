@@ -25,7 +25,7 @@ use cudarc::{
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
-use eyre::eyre;
+use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -84,20 +84,29 @@ impl JobSubmissionHandle for ServerActorHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = ServerJobResult> {
+    ) -> impl Future<Output = Result<ServerJobResult>> {
         let (tx, rx) = oneshot::channel();
         let job = ServerJob {
             batch,
             return_channel: tx,
         };
         self.job_queue.send(job).await.unwrap();
-        rx.map(|x| x.unwrap())
+        rx.map(|x| Ok(x?))
     }
 }
 
 pub(crate) const DB_CHUNK_SIZE: usize = 1 << 15;
 const KDF_SALT: &str = "111a1a93518f670e9bb0c2c68888e2beb9406d4c4ed571dc77b801e676ae3091"; // Random 32 byte salt
 const SUPERMATCH_THRESHOLD: usize = 4_000;
+
+// Orientation enum to indicate the orientation of the iris code during the batch processing.
+// Normal: Normal orientation of the iris code.
+// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Orientation {
+    Normal,
+    Mirror,
+}
 
 pub struct ServerActor {
     job_queue: mpsc::Receiver<ServerJob>,
@@ -172,7 +181,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
         Self::new_with_device_manager(
@@ -206,7 +215,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
         let comms = device_manager.instantiate_network_from_ids(party_id, &ids)?;
@@ -244,7 +253,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<(Self, ServerActorHandle)> {
+    ) -> Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
             party_id,
@@ -281,22 +290,21 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
         let kdf_salt: Salt = Salt::new(HKDF_SHA256, &hex::decode(KDF_SALT)?);
         let n_queries = max_batch_size * ROTATIONS;
 
         // helper closure to generate the next chacha seeds
-        let mut next_chacha_seeds =
-            |seeds: ([u32; 8], [u32; 8])| -> eyre::Result<([u32; 8], [u32; 8])> {
-                let nonce = kdf_nonce;
-                kdf_nonce += 1;
-                Ok((
-                    derive_seed(seeds.0, &kdf_salt, nonce)?,
-                    derive_seed(seeds.1, &kdf_salt, nonce)?,
-                ))
-            };
+        let mut next_chacha_seeds = |seeds: ([u32; 8], [u32; 8])| -> Result<([u32; 8], [u32; 8])> {
+            let nonce = kdf_nonce;
+            kdf_nonce += 1;
+            Ok((
+                derive_seed(seeds.0, &kdf_salt, nonce)?,
+                derive_seed(seeds.1, &kdf_salt, nonce)?,
+            ))
+        };
 
         tracing::info!("GPU actor: Starting engines...");
 
@@ -372,6 +380,7 @@ impl ServerActor {
             party_id,
             phase2_batch_chunk_size,
             phase2_batch_chunk_size / 64,
+            None,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -381,6 +390,7 @@ impl ServerActor {
             party_id,
             phase2_chunk_size,
             phase2_chunk_size / 64,
+            None,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -390,6 +400,7 @@ impl ServerActor {
             party_id,
             match_distances_buffer_size,
             match_distances_buffer_size / 64,
+            Some(n_buckets),
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -523,7 +534,51 @@ impl ServerActor {
                 batch,
                 return_channel,
             } = job;
-            let _ = self.process_batch_query(batch, return_channel);
+            let now = Instant::now();
+            if batch.full_face_mirror_attacks_detection_enabled {
+                tracing::info!("Full face mirror attack detection enabled");
+                match self.process_batch_query(batch.clone(), Orientation::Mirror, None) {
+                    Ok(mirrored_results) => {
+                        match self.process_batch_query(
+                            batch,
+                            Orientation::Normal,
+                            Some(mirrored_results),
+                        ) {
+                            Ok(combined_results) => {
+                                // Send the combined results to the return channel
+                                let _ = return_channel.send(combined_results);
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    "Error processing batch query (normal flow): {:?}",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query (mirror flow): {:?}", e);
+                    }
+                }
+            } else {
+                tracing::info!("Full face mirror attack detection disabled");
+                let result = self.process_batch_query(batch, Orientation::Normal, None);
+                match result {
+                    Ok(results) => {
+                        // Send the results to the return channel
+                        let _ = return_channel.send(results);
+                    }
+                    Err(e) => {
+                        tracing::error!("Error processing batch query: {:?}", e);
+                    }
+                }
+            }
+            tracing::info!(
+                "Full batch duration took:  {:?}",
+                now.elapsed().as_secs_f64()
+            );
+
+            metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -559,9 +614,13 @@ impl ServerActor {
     fn process_batch_query(
         &mut self,
         batch: BatchQuery,
-        return_channel: oneshot::Sender<ServerJobResult>,
-    ) -> eyre::Result<()> {
+        orientation: Orientation,
+        previous_results: Option<ServerJobResult>,
+    ) -> Result<ServerJobResult> {
         let now = Instant::now();
+        // we only want to perform deletions and reset updates for the first query
+        // this ensures we do not perform the same request twice and enables faster processing
+        let is_first_query = previous_results.is_none();
 
         let batch = PreprocessedBatchQuery::from(batch);
         let mut events: HashMap<&str, Vec<Vec<CUevent>>> = HashMap::new();
@@ -599,6 +658,14 @@ impl ServerActor {
                 && batch_size * ROTATIONS == batch.left_iris_interpolated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.code.len()
                 && batch_size * ROTATIONS == batch.right_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS
+                    == batch.left_mirrored_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS
+                    == batch.left_mirrored_iris_interpolated_requests.mask.len()
+                && batch_size * ROTATIONS
+                    == batch.right_mirrored_iris_interpolated_requests.code.len()
+                && batch_size * ROTATIONS
+                    == batch.right_mirrored_iris_interpolated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.code.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests.mask.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests.code.len()
@@ -609,6 +676,14 @@ impl ServerActor {
                     == batch.right_iris_interpolated_requests_preprocessed.len()
                 && batch_size * ROTATIONS == batch.left_iris_rotated_requests_preprocessed.len()
                 && batch_size * ROTATIONS == batch.right_iris_rotated_requests_preprocessed.len()
+                && batch_size * ROTATIONS
+                    == batch
+                        .left_mirrored_iris_interpolated_requests_preprocessed
+                        .len()
+                && batch_size * ROTATIONS
+                    == batch
+                        .right_mirrored_iris_interpolated_requests_preprocessed
+                        .len()
                 && batch_size == batch.skip_persistence.len(),
             "Query batch sizes mismatch"
         );
@@ -620,7 +695,9 @@ impl ServerActor {
             "Reset update batch sizes mismatch"
         );
 
-        if !batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0 {
+        if (!batch.or_rule_indices.is_empty() || batch.luc_lookback_records > 0)
+            && orientation == Orientation::Normal
+        {
             assert!(
                 (batch.or_rule_indices.len() == batch_size) || (batch.luc_lookback_records > 0)
             );
@@ -671,7 +748,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.deletion_requests_indices.is_empty() {
+        if !batch.deletion_requests_indices.is_empty() && is_first_query {
             tracing::info!("Performing deletions");
             // Prepare dummy deletion shares
             let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
@@ -714,7 +791,7 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         // PERFORM RESET UPDATES (IF ANY)
         ///////////////////////////////////////////////////////////////////
-        if !batch.reset_update_request_ids.is_empty() {
+        if !batch.reset_update_request_ids.is_empty() && is_first_query {
             tracing::info!("Performing reset updates");
 
             // Overwrite the in-memory db
@@ -765,11 +842,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side1 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, orientation)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(self.full_scan_side)
+                .get_iris_interpolated_requests_preprocessed(self.full_scan_side, orientation)
                 .mask
                 .clone(),
             code_query_insert: batch
@@ -818,6 +895,7 @@ impl ServerActor {
             &mut events,
             self.full_scan_side,
             batch_size,
+            orientation,
         );
 
         ///////////////////////////////////////////////////////////////////
@@ -861,11 +939,11 @@ impl ServerActor {
         // *Query* variant including Lagrange interpolation.
         let compact_query_side2 = CompactQuery {
             code_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side)
+                .get_iris_interpolated_requests_preprocessed(other_side, orientation)
                 .code
                 .clone(),
             mask_query: batch
-                .get_iris_interpolated_requests_preprocessed(other_side)
+                .get_iris_interpolated_requests_preprocessed(other_side, orientation)
                 .mask
                 .clone(),
             code_query_insert: batch
@@ -915,16 +993,17 @@ impl ServerActor {
                 DB_CHUNK_SIZE
             );
 
-            tracing::info!("Comparing right eye queries against DB and self");
+            tracing::info!("Comparing {} eye queries against DB and self", other_side);
             self.compare_query_against_db_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
                 &mut events,
                 other_side,
                 batch_size,
+                orientation,
             );
         } else {
-            tracing::info!("Comparing right eye queries against DB subset");
+            tracing::info!("Comparing {} eye queries against DB subset", other_side);
             self.compare_query_against_db_subset_and_self(
                 &compact_device_queries_side2,
                 &compact_device_sums_side2,
@@ -932,6 +1011,7 @@ impl ServerActor {
                 other_side,
                 batch_size,
                 &partial_matches_side1,
+                orientation,
             );
         }
 
@@ -1113,21 +1193,99 @@ impl ServerActor {
         let mut merged_results =
             get_merged_results(&host_results, self.device_manager.device_count());
 
+        // Check for mirror attack detection when we have previous results and are in normal orientation
+        let request_count = batch.request_ids.len();
+        let mut full_face_mirror_match_ids: Vec<Vec<u32>> = vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_left: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_ids_right: Vec<Vec<u32>> =
+            vec![vec![]; request_count];
+        let mut full_face_mirror_partial_match_counters_left: Vec<usize> =
+            vec![0usize; request_count];
+        let mut full_face_mirror_partial_match_counters_right: Vec<usize> =
+            vec![0usize; request_count];
+        let full_face_mirror_attack_detected: Vec<bool> =
+            if orientation == Orientation::Normal && previous_results.is_some() {
+                let mirror_results = previous_results.clone().unwrap();
+                let attack_detected = (0..request_count)
+                    .map(|i| {
+                        // Here we check that the normal merged result is non-match while the mirrored merged result shows a match.
+                        merged_results[i] == NON_MATCH_ID
+                            && mirror_results.matches_with_skip_persistence[i]
+                            // Ensures that mirror attack detection is only applied to uniqueness requests.
+                            // This constraint is necessary due to the implementation of the `matches` and
+                            // `matches_with_skip_persistence` vectors:
+                            // 1. The `matches` vector is initialized by the `calculate_insertion_indices()` function
+                            //    with all elements set to `true` by default.
+                            // 2. During iteration over the `uniqueness_insertion_list`, only elements corresponding
+                            //    to unique requests have their value set to `false` in the `matches` vector.
+                            // 3. Consequently, non-uniqueness requests (reauth, reset, deletion) retain their
+                            //    initial `true` value in the `matches` vector, which would incorrectly cause
+                            //    the mirror attack detection algorithm to classify them as full face mirror attacks.
+                            && batch.request_types[i] == UNIQUENESS_MESSAGE_TYPE
+                    })
+                    .collect();
+                full_face_mirror_match_ids = mirror_results.match_ids;
+                full_face_mirror_partial_match_ids_left = mirror_results.partial_match_ids_left;
+                full_face_mirror_partial_match_ids_right = mirror_results.partial_match_ids_right;
+                full_face_mirror_partial_match_counters_left =
+                    mirror_results.partial_match_counters_left;
+                full_face_mirror_partial_match_counters_right =
+                    mirror_results.partial_match_counters_right;
+
+                // Edge case: when both normal and mirrored matches occur
+                // This happens when both merged_results and mirror_results.merged_results
+                // indicate a match (i.e. not equal to NON_MATCH_ID).
+                let both_matched_count = (0..request_count)
+                    .filter(|&i| {
+                        merged_results[i] != NON_MATCH_ID
+                            && mirror_results.matches_with_skip_persistence[i]
+                    })
+                    .count();
+
+                // Log and count the edge cases if any are detected
+                if both_matched_count > 0 {
+                    tracing::info!(
+                        "Detected {} cases where both normal and mirrored matches occurred",
+                        both_matched_count
+                    );
+                    metrics::counter!("mirror.attack.both_matched")
+                        .increment(both_matched_count as u64);
+                }
+
+                attack_detected
+            } else {
+                vec![false; request_count]
+            };
+
         // sync the results across nodes, since these are the ones which the insertions are based upon
         self.sync_match_results(self.max_batch_size, &merged_results)?;
 
         // List the indices of the uniqueness requests that did not match as well as the
         // skipped requests that did not match We do not insert the skipped
         // requests into the DB
+        // Full face mirror attack detection additional check:
+        // This is being executed for both mirrored and normal mode. In the second run(normal mode) we have the previous results(mirror_results) available
+        // We only add entries in the uniqueness_insertion_list if they did not match in the mirror orientation as well
         let (uniqueness_insertion_list, skipped_unique_insertions): (Vec<_>, Vec<_>) =
             merged_results
                 .iter()
                 .enumerate()
                 .filter(|&(idx, &num)| {
-                    batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
+                    // Basic condition: must be a uniqueness request, with no match, and below supermatcher threshold
+                    let basic_condition = batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
                         && num == NON_MATCH_ID
                         && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
-                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD
+                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD;
+
+                    // When in normal mode and we have mirrored results, only consider that
+                    // the entry was unique if it did not match in the mirror orientation as well
+                    match (orientation, &previous_results) {
+                        (Orientation::Normal, Some(mirror_results)) => {
+                            basic_condition && !mirror_results.matches_with_skip_persistence[idx]
+                        }
+                        _ => basic_condition, // In mirror mode or without previous results
+                    }
                 })
                 .map(|(idx, _num)| idx)
                 .partition(|&idx| !batch.skip_persistence[idx]);
@@ -1187,25 +1345,31 @@ impl ServerActor {
             })
             .collect::<Vec<bool>>();
         let mut reauth_updates_per_device = vec![vec![]; self.device_manager.device_count()];
-        for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
-            if !*success {
-                continue;
+
+        // reauth_updates_per_device only used in the normal orientation during the db write, we can skip in mirrored orientation
+        if orientation == Orientation::Normal {
+            for (reauth_pos, success) in successful_reauths.clone().iter().enumerate() {
+                if !*success {
+                    continue;
+                }
+                let reauth_id = batch.request_ids[reauth_pos].clone();
+                let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
+                let device_index = reauth_index % self.device_manager.device_count() as u32;
+                reauth_updates_per_device[device_index as usize].push(reauth_pos);
             }
-            let reauth_id = batch.request_ids[reauth_pos].clone();
-            let reauth_index = *batch.reauth_target_indices.get(&reauth_id).unwrap();
-            let device_index = reauth_index % self.device_manager.device_count() as u32;
-            reauth_updates_per_device[device_index as usize].push(reauth_pos);
         }
 
-        // Write back to in-memory db
+        // Write back to in-memory db - only in normal mode
         let previous_total_db_size = self.current_db_sizes.iter().sum::<usize>();
         let n_insertions = uniqueness_insertion_list
             .iter()
             .map(|x| x.len())
             .sum::<usize>();
 
-        // Check if we actually have space left to write the new entries
-        if previous_total_db_size + n_insertions > self.max_db_size {
+        // Check if we actually have space left to write the new entries - only relevant for normal mode
+        if orientation == Orientation::Normal
+            && previous_total_db_size + n_insertions > self.max_db_size
+        {
             tracing::error!(
                 "Cannot write new entries, since DB size would be exceeded, current: {}, batch \
                  insertions: {}, max: {}",
@@ -1216,7 +1380,10 @@ impl ServerActor {
             eyre::bail!("DB size exceeded");
         }
 
-        if self.disable_persistence {
+        // Only persist in normal mode, never in mirror mode
+        if orientation == Orientation::Mirror {
+            tracing::info!("Mirror mode - not persisting results to in-memory DB");
+        } else if self.disable_persistence {
             tracing::info!("Persistence is disabled, not writing to DB");
         } else {
             record_stream_time!(
@@ -1316,36 +1483,40 @@ impl ServerActor {
             );
         }
 
-        // Pass to internal sender thread
-        return_channel
-            .send(ServerJobResult {
-                merged_results,
-                request_ids: batch.request_ids,
-                request_types: batch.request_types,
-                metadata: batch.metadata,
-                matches,
-                matches_with_skip_persistence,
-                match_ids: match_ids_filtered,
-                partial_match_ids_left,
-                partial_match_ids_right,
-                partial_match_counters_left,
-                partial_match_counters_right,
-                left_iris_requests: batch.left_iris_requests,
-                right_iris_requests: batch.right_iris_requests,
-                deleted_ids: batch.deletion_requests_indices,
-                matched_batch_request_ids,
-                anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
-                anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
-                successful_reauths,
-                reauth_target_indices: batch.reauth_target_indices,
-                reauth_or_rule_used: batch.reauth_use_or_rule,
-                reset_update_indices: batch.reset_update_indices,
-                reset_update_request_ids: batch.reset_update_request_ids,
-                reset_update_shares: batch.reset_update_shares,
-                modifications: batch.modifications,
-                actor_data: (),
-            })
-            .unwrap();
+        // Instead of sending to return_channel, we'll return this at the end
+        let result = ServerJobResult {
+            merged_results,
+            request_ids: batch.request_ids,
+            request_types: batch.request_types,
+            metadata: batch.metadata,
+            matches,
+            matches_with_skip_persistence,
+            match_ids: match_ids_filtered,
+            full_face_mirror_match_ids,
+            partial_match_ids_left,
+            partial_match_ids_right,
+            full_face_mirror_partial_match_ids_left,
+            full_face_mirror_partial_match_ids_right,
+            partial_match_counters_left,
+            partial_match_counters_right,
+            full_face_mirror_partial_match_counters_left,
+            full_face_mirror_partial_match_counters_right,
+            left_iris_requests: batch.left_iris_requests,
+            right_iris_requests: batch.right_iris_requests,
+            deleted_ids: batch.deletion_requests_indices,
+            matched_batch_request_ids,
+            anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
+            anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+            successful_reauths,
+            reauth_target_indices: batch.reauth_target_indices,
+            reauth_or_rule_used: batch.reauth_use_or_rule,
+            reset_update_indices: batch.reset_update_indices,
+            reset_update_request_ids: batch.reset_update_request_ids,
+            reset_update_shares: batch.reset_update_shares,
+            modifications: batch.modifications,
+            actor_data: (),
+            full_face_mirror_attack_detected,
+        };
 
         self.anonymized_bucket_statistics_left.buckets.clear();
         self.anonymized_bucket_statistics_right.buckets.clear();
@@ -1383,9 +1554,10 @@ impl ServerActor {
             / now.elapsed().as_secs_f64()
             / 1e6;
         tracing::info!(
-            "Batch took {:?} [{:.2} Melems/s]",
+            "Batch took {:?} [{:.2} Melems/s] (orientation: {:?})",
             now.elapsed(),
-            processed_mil_elements_per_second
+            processed_mil_elements_per_second,
+            orientation
         );
 
         metrics::histogram!("batch_duration").record(now.elapsed().as_secs_f64());
@@ -1419,7 +1591,7 @@ impl ServerActor {
         metrics::gauge!("gpu_memory_free_sum").set(sum_free as f64);
         metrics::gauge!("gpu_memory_total_sum").set(sum_total as f64);
 
-        Ok(())
+        Ok(result)
     }
 
     fn try_calculate_bucket_stats(&mut self, eye_db: Eye) {
@@ -1707,6 +1879,7 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "Finished batch deduplication");
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn compare_query_against_db_subset_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
@@ -1715,6 +1888,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
+        orientation: Orientation,
     ) {
         assert!(
             eye_db == Eye::Right,
@@ -1722,7 +1896,9 @@ impl ServerActor {
         );
 
         // we try to calculate the bucket stats here if we have collected enough of them
-        self.try_calculate_bucket_stats(eye_db);
+        if orientation == Orientation::Normal {
+            self.try_calculate_bucket_stats(eye_db);
+        }
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -1896,9 +2072,12 @@ impl ServerActor {
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
+        orientation: Orientation,
     ) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        self.try_calculate_bucket_stats(eye_db);
+        if orientation == Orientation::Normal {
+            self.try_calculate_bucket_stats(eye_db);
+        }
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2163,6 +2342,7 @@ impl ServerActor {
                                 * (100 + self.match_distances_buffer_size_extra_percent)
                                 / 100,
                             request_streams,
+                            orientation == Orientation::Mirror,
                         );
                         self.phase2.return_result_buffer(res);
                     }
@@ -2195,11 +2375,7 @@ impl ServerActor {
         }
     }
 
-    fn sync_match_results(
-        &mut self,
-        max_batch_size: usize,
-        match_results: &[u32],
-    ) -> eyre::Result<()> {
+    fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
         assert!(match_results.len() <= max_batch_size);
         let mut buffer = self
             .device_manager
@@ -2231,10 +2407,10 @@ impl ServerActor {
                     i
                 );
                 metrics::counter!("mpc.mismatch").increment(1);
-                return Err(eyre!(
+                bail!(
                     "Match results mismatch with node {}. MPC protocol produced out of sync results.",
                     i
-                ));
+                );
             }
         }
         Ok(())
@@ -2245,7 +2421,7 @@ impl ServerActor {
         valid_entries: &[bool],
         max_batch_size: usize,
         batch_hash: &[u8],
-    ) -> eyre::Result<Vec<bool>> {
+    ) -> Result<Vec<bool>> {
         assert!(valid_entries.len() <= max_batch_size);
         let hash_len = batch_hash.len();
         let mut buffer = self
@@ -2290,10 +2466,10 @@ impl ServerActor {
                     i
                 );
                 metrics::counter!("batch.mismatch").increment(1);
-                return Err(eyre!(
+                bail!(
                     "Batch mismatch with node {}. Queues seem to be out of sync.",
                     i
-                ));
+                );
             }
         }
 
@@ -2304,7 +2480,7 @@ impl ServerActor {
         &self,
         code_share: &GaloisRingIrisCodeShare,
         mask_share: &GaloisRingTrimmedMaskCodeShare,
-    ) -> eyre::Result<(DeviceCompactQuery, DeviceCompactSums)> {
+    ) -> Result<(DeviceCompactQuery, DeviceCompactSums)> {
         let compact_query = {
             let code = preprocess_query(
                 &code_share
@@ -2382,7 +2558,7 @@ fn log_timers(events: HashMap<&str, Vec<Vec<CUevent>>>) {
 }
 
 /// Internal helper function to derive a new seed from the given seed and nonce.
-fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> eyre::Result<[u32; 8]> {
+fn derive_seed(seed: [u32; 8], kdf_salt: &Salt, nonce: usize) -> Result<[u32; 8]> {
     let pseudo_rand_key = kdf_salt.extract(bytemuck::cast_slice(&seed));
     let nonce = nonce.to_be_bytes();
     let context = vec![nonce.as_slice()];
@@ -2416,6 +2592,7 @@ fn open(
     batch_size: usize,
     max_bucket_distances: usize,
     streams: &[CudaStream],
+    is_mirror_orientation: bool,
 ) {
     let n_devices = x.len();
     let mut a = Vec::with_capacity(n_devices);
@@ -2460,6 +2637,7 @@ fn open(
         batch_size,
         max_bucket_distances,
         streams,
+        is_mirror_orientation,
     );
 }
 

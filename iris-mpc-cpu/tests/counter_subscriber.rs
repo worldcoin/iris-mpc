@@ -16,7 +16,7 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::{PlaintextStore, PointId},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
@@ -25,14 +25,17 @@ use iris_mpc_cpu::{
     },
 };
 use rand::SeedableRng;
-use std::{collections::HashMap, sync::atomic::Ordering};
+use std::{
+    collections::HashMap,
+    sync::{atomic::Ordering, Arc},
+};
 use tokio::{self, task::JoinSet};
 use tracing_subscriber::prelude::*;
 
 #[tokio::test]
 async fn test_counter_subscriber() -> Result<()> {
     let rng = &mut AesRng::seed_from_u64(0_u64);
-    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await;
+    let (searcher, vector_store, graph_store, query1, query2) = init_hnsw(200, rng).await?;
 
     // Set up tracing Subscriber for counting operations
 
@@ -69,10 +72,10 @@ async fn test_counter_subscriber() -> Result<()> {
             &searcher,
             &mut vector_store,
             &mut graph_store,
-            query1,
-            query2,
+            query1.clone(),
+            query2.clone(),
         )
-        .await;
+        .await?;
 
         let end = (
             dist_evaluations_counter.load(Ordering::Relaxed),
@@ -94,8 +97,8 @@ async fn test_counter_subscriber() -> Result<()> {
             &searcher,
             &mut vector_store,
             &mut graph_store,
-            query1,
-            query2,
+            query1.clone(),
+            query2.clone(),
         )
         .await;
 
@@ -122,10 +125,10 @@ async fn test_counter_subscriber() -> Result<()> {
             &searcher,
             &mut vector_store,
             &mut graph_store,
-            query1,
-            query2,
+            query1.clone(),
+            query2.clone(),
         )
-        .await;
+        .await?;
         let end = clone_counter_map(&param_openings_map).await;
 
         map_diffs(&end, &start)
@@ -140,8 +143,8 @@ async fn test_counter_subscriber() -> Result<()> {
             &searcher,
             &mut vector_store,
             &mut graph_store,
-            query1,
-            query2,
+            query1.clone(),
+            query2.clone(),
         )
         .await;
         let end = clone_counter_map(&param_openings_map).await;
@@ -161,53 +164,55 @@ async fn test_counter_subscriber() -> Result<()> {
 async fn init_hnsw(
     db_size: usize,
     rng: &mut AesRng,
-) -> (
+) -> Result<(
     HnswSearcher,
     PlaintextStore,
     GraphMem<PlaintextStore>,
-    PointId,
-    PointId,
-) {
+    Arc<IrisCode>,
+    Arc<IrisCode>,
+)> {
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
-    let (mut vector_store, graph_store) = PlaintextStore::create_random(rng, db_size, &searcher)
-        .await
-        .unwrap();
-    let queries: Vec<_> = (0..=1)
-        .map(|_| vector_store.prepare_query(IrisCode::random_rng(rng)))
-        .collect();
-    (searcher, vector_store, graph_store, queries[0], queries[1])
+    let mut vector_store = PlaintextStore::new_random(rng, db_size);
+    let graph_store = vector_store.generate_graph(rng, db_size, &searcher).await?;
+    let query1 = Arc::new(IrisCode::random_rng(rng));
+    let query2 = Arc::new(IrisCode::random_rng(rng));
+    Ok((searcher, vector_store, graph_store, query1, query2))
 }
 
 async fn hnsw_search_queries_seq(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
-    query1: PointId,
-    query2: PointId,
-) {
+    query1: Arc<IrisCode>,
+    query2: Arc<IrisCode>,
+) -> Result<()> {
     for q in [query1, query2].into_iter() {
-        searcher.search(vector_store, graph_store, &q, 1).await;
+        searcher.search(vector_store, graph_store, &q, 1).await?;
     }
+
+    Ok(())
 }
 
 async fn hnsw_search_queries_par(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
-    query1: PointId,
-    query2: PointId,
+    query1: Arc<IrisCode>,
+    query2: Arc<IrisCode>,
 ) {
-    let mut jobs = JoinSet::new();
+    let mut jobs: JoinSet<Result<()>> = JoinSet::new();
     for q in [query1, query2].into_iter() {
         let searcher = searcher.clone();
         let mut vector_store = vector_store.clone();
-        let mut graph_store = graph_store.clone();
+        let graph_store = graph_store.clone();
         jobs.spawn(async move {
             searcher
-                .search(&mut vector_store, &mut graph_store, &q, 1)
-                .await;
+                .search(&mut vector_store, &graph_store, &q, 1)
+                .await?;
+
+            Ok(())
         });
     }
     jobs.join_all().await;

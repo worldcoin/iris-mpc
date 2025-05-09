@@ -8,6 +8,7 @@ use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SnsCli
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
 use clap::Parser;
+use eyre::Result;
 use eyre::{Context, ContextCompat};
 use iris_mpc_common::helpers::{
     aws::{
@@ -83,7 +84,7 @@ pub struct Opt {
 
 /// The core client functionality is moved into an async function so it can be
 /// called from a benchmark harness without spawning a new process.
-pub async fn run_client(opts: Opt) -> eyre::Result<()> {
+pub async fn run_client(opts: Opt) -> Result<()> {
     // Create the client and await its creation
     let mut client = E2EClient::new(opts.clone()).await;
 
@@ -170,7 +171,7 @@ impl E2EClient {
         }
     }
 
-    pub async fn initialize(&mut self, public_key_base_url: String) -> eyre::Result<()> {
+    pub async fn initialize(&mut self, public_key_base_url: String) -> Result<()> {
         // Download public keys for each participant
         self.encryption_public_keys = Vec::new();
         for i in 0..3 {
@@ -199,7 +200,7 @@ impl E2EClient {
         Ok(())
     }
 
-    pub async fn run(&self) -> eyre::Result<()> {
+    pub async fn run(&self) -> Result<()> {
         let n_queries = if self.data_from_file.is_some() && self.populate_file_data_limit.is_some()
         {
             let limit = self.populate_file_data_limit.unwrap_or(0);
@@ -225,7 +226,7 @@ impl E2EClient {
         Ok(())
     }
 
-    async fn populate_only_file_data(&self, limit: usize) -> eyre::Result<()> {
+    async fn populate_only_file_data(&self, limit: usize) -> Result<()> {
         let mut party_shares_index: usize = 0;
         let mut batch_idx = 0;
         while party_shares_index < limit {
@@ -269,7 +270,7 @@ impl E2EClient {
         Ok(())
     }
 
-    async fn run_e2e_test(&self) -> eyre::Result<()> {
+    async fn run_e2e_test(&self) -> Result<()> {
         let used_file_indices = Arc::new(Mutex::new(HashSet::new()));
         let used_response_indices = Arc::new(Mutex::new(HashSet::new()));
         for batch_idx in 0..self.n_batches {
@@ -387,7 +388,7 @@ impl E2EClient {
         &self,
         n_queries: usize,
         sqs_client: SqsClient,
-    ) -> tokio::task::JoinHandle<eyre::Result<()>> {
+    ) -> tokio::task::JoinHandle<Result<()>> {
         let response_queue_url = self.response_queue_url.clone();
         let expected_results = self.expected_results.clone();
         let requests = self.requests.clone();
@@ -462,7 +463,7 @@ impl E2EClient {
         })
     }
 
-    async fn send_enrollment_request(&self, party_shares: IrisCodePartyShares) -> eyre::Result<()> {
+    async fn send_enrollment_request(&self, party_shares: IrisCodePartyShares) -> Result<()> {
         let mut iris_shares_file_hashes: [String; 3] = Default::default();
         let mut iris_codes_shares_base64: [String; 3] = Default::default();
 
@@ -516,6 +517,7 @@ impl E2EClient {
             s3_key: bucket_key,
             or_rule_serial_ids: None,
             skip_persistence: None,
+            full_face_mirror_attacks_detection_enabled: Some(true),
         };
 
         let message_attributes = {

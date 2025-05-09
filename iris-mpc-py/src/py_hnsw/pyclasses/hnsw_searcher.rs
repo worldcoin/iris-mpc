@@ -6,8 +6,14 @@ use iris_mpc_cpu::{
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct PyHnswSearcher(pub HnswSearcher);
+
+impl Default for PyHnswSearcher {
+    fn default() -> Self {
+        Self(HnswSearcher::new_with_test_parameters())
+    }
+}
 
 #[pymethods]
 #[allow(non_snake_case)]
@@ -59,7 +65,7 @@ impl PyHnswSearcher {
         graph: &mut PyGraphStore,
     ) -> u32 {
         let id = py_bindings::hnsw::insert(iris.0, &self.0, &mut vector.0, &mut graph.0);
-        id.0
+        id.serial_id()
     }
 
     pub fn insert_uniform_random(
@@ -68,7 +74,7 @@ impl PyHnswSearcher {
         graph: &mut PyGraphStore,
     ) -> u32 {
         let id = py_bindings::hnsw::insert_uniform_random(&self.0, &mut vector.0, &mut graph.0);
-        id.0
+        id.serial_id()
     }
 
     pub fn fill_uniform_random(
@@ -106,7 +112,7 @@ impl PyHnswSearcher {
     ) -> (u32, f64) {
         let (id, dist) =
             py_bindings::hnsw::search(query.0.clone(), &self.0, &mut vector.0, &mut graph.0);
-        (id.0, dist)
+        (id.serial_id(), dist)
     }
 
     #[staticmethod]

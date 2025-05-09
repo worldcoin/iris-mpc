@@ -10,7 +10,7 @@ concurrency:
 jobs:
   e2e:
     runs-on: gpu
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -41,6 +41,7 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
+          sudo apt install -y wget
           wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2004/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt update
@@ -70,7 +71,7 @@ jobs:
           toolchain: 1.85.0
 
       - name: GPU Dependent Tests
-        timeout-minutes: 10
+        timeout-minutes: 15
         run: cargo test -p iris-mpc-gpu --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:

@@ -1,8 +1,9 @@
-use eyre::{eyre, Result};
-use itertools::{chain, Itertools};
+use eyre::{bail, eyre, Result};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
+
+use crate::network::value::{NetworkValue, StateChecksum};
 
 use super::{HawkSession, HawkSessionRef};
 
@@ -34,29 +35,35 @@ impl SetHash {
 impl HawkSession {
     pub async fn state_check(session: &HawkSessionRef) -> Result<()> {
         let mut session = session.write().await;
-
         let my_state = session.checksum().await;
-
         let net = &mut session.aby3_store.session.network_session;
-        net.send_prev(my_state.clone()).await?;
-        net.send_next(my_state.clone()).await?;
-        let prev_state = net.receive_prev().await?;
-        let next_state = net.receive_next().await?;
+
+        // Send my state to others.
+        let my_msg = || NetworkValue::StateChecksum(my_state.clone()).to_network();
+        net.send_prev(my_msg()).await?;
+        net.send_next(my_msg()).await?;
+
+        // Receive their state.
+        let decode = |msg| match NetworkValue::from_network(msg) {
+            Ok(NetworkValue::StateChecksum(c)) => Ok(c),
+            _ => Err(eyre!("Could not deserialize StateChecksum")),
+        };
+        let prev_state = decode(net.receive_prev().await)?;
+        let next_state = decode(net.receive_next().await)?;
 
         if prev_state != my_state || next_state != my_state {
-            return Err(eyre!(
-                "Out-of-sync: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
-            ));
+            bail!(
+                "Party states have diverged: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
+            );
         }
         Ok(())
     }
 
-    async fn checksum(&self) -> Vec<u8> {
-        let iris_checksum = self.aby3_store.storage.checksum().await;
-
-        let graph_checksum = self.graph_store.read().await.checksum();
-
-        chain(iris_checksum.to_le_bytes(), graph_checksum.to_le_bytes()).collect_vec()
+    async fn checksum(&self) -> StateChecksum {
+        StateChecksum {
+            irises: self.aby3_store.storage.checksum().await,
+            graph: self.graph_store.read().await.checksum(),
+        }
     }
 }
 
@@ -65,6 +72,7 @@ mod test {
     use super::*;
     use crate::hnsw::graph::neighborhood::SortedEdgeIds;
     use iris_mpc_common::vector_id::VectorId;
+    use itertools::Itertools;
 
     #[test]
     fn test_set_hash() {

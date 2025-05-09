@@ -32,12 +32,12 @@ pub struct EntryPoint<VectorRef> {
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub struct GraphMem<V: VectorStore> {
     /// Starting vector and layer for HNSW search
-    entry_point: Option<EntryPoint<V::VectorRef>>,
+    pub entry_point: Option<EntryPoint<V::VectorRef>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
-    layers: Vec<Layer<V>>,
+    pub layers: Vec<Layer<V>>,
 }
 
 impl<V: VectorStore> Clone for GraphMem<V> {
@@ -168,7 +168,7 @@ impl<V: VectorStore> GraphMem<V> {
 pub struct Layer<V: VectorStore> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
+    pub links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
     set_hash: SetHash,
 }
 
@@ -252,11 +252,12 @@ where
 mod tests {
     use super::*;
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PointId},
+        hawkers::plaintext_store::PlaintextStore,
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use eyre::Result;
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
     use rand::{RngCore, SeedableRng};
 
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
@@ -278,8 +279,8 @@ mod tests {
     }
 
     impl VectorStore for TestStore {
-        type QueryRef = PointId; // Vector ID, pending insertion.
-        type VectorRef = PointId; // Vector ID, inserted.
+        type QueryRef = usize; // Vector ID, pending insertion.
+        type VectorRef = usize; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn vectors_as_queries(
@@ -293,52 +294,49 @@ mod tests {
             &mut self,
             query: &Self::QueryRef,
             vector: &Self::VectorRef,
-        ) -> Self::DistanceRef {
+        ) -> Result<Self::DistanceRef> {
             // Hamming distance
-            let vector_0 = self.points[&(query.0 as usize)].data;
-            let vector_1 = self.points[&(vector.0 as usize)].data;
-            hamming_distance(vector_0, vector_1)
+            let vector_0 = self.points[query].data;
+            let vector_1 = self.points[vector].data;
+            Ok(hamming_distance(vector_0, vector_1))
         }
 
-        async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool {
-            *distance == 0
+        async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+            Ok(*distance == 0)
         }
 
         async fn less_than(
             &mut self,
             distance1: &Self::DistanceRef,
             distance2: &Self::DistanceRef,
-        ) -> bool {
-            *distance1 < *distance2
+        ) -> Result<bool> {
+            Ok(*distance1 < *distance2)
         }
     }
 
     impl VectorStoreMut for TestStore {
         async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
             // The query is now accepted in the store. It keeps the same ID.
-            self.points
-                .get_mut(&(query.0 as usize))
-                .unwrap()
-                .is_persistent = true;
+            self.points.get_mut(query).unwrap().is_persistent = true;
             *query
         }
     }
 
     #[tokio::test]
-    async fn test_from_another_naive() {
+    async fn test_from_another_naive() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         let raw_queries = IrisDB::new_random_rng(10, &mut rng);
 
         for raw_query in raw_queries.db {
-            let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let query = Arc::new(raw_query);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -348,33 +346,36 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
         }
 
         let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
         assert_eq!(graph_store, equal_graph_store);
 
-        let different_graph_store: GraphMem<PlaintextStore> =
-            migrate(graph_store.clone(), |v| PointId(v.0 * 2));
+        let different_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| {
+            VectorId::from_0_index(v.index() * 2)
+        });
         assert_ne!(graph_store, different_graph_store);
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn test_from_another() {
+    async fn test_from_another() -> Result<()> {
         let mut vector_store = PlaintextStore::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::default();
+        let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, PointId> =
+        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =
             HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
-            let query = vector_store.prepare_query(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng);
+            let query = Arc::new(raw_query);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await;
+                .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
                 .insert_from_search_results(
@@ -384,9 +385,9 @@ mod tests {
                     neighbors,
                     set_ep,
                 )
-                .await;
+                .await?;
 
-            point_ids_map.insert(query, PointId(rng.next_u32()));
+            point_ids_map.insert(inserted, rng.next_u32() as usize);
         }
 
         let new_graph_store: GraphMem<TestStore> =
@@ -414,5 +415,7 @@ mod tests {
                 }
             }
         }
+
+        Ok(())
     }
 }

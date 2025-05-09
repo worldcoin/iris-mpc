@@ -1,3 +1,4 @@
+use eyre::Result;
 use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
@@ -43,18 +44,18 @@ pub trait VectorStore: Debug {
         &mut self,
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
-    ) -> Self::DistanceRef;
+    ) -> Result<Self::DistanceRef>;
 
     /// Check whether a distance is a match, meaning the query is considered
     /// equivalent to a previously inserted vector.
-    async fn is_match(&mut self, distance: &Self::DistanceRef) -> bool;
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool>;
 
     /// Compare two distances.
     async fn less_than(
         &mut self,
         distance1: &Self::DistanceRef,
         distance2: &Self::DistanceRef,
-    ) -> bool;
+    ) -> Result<bool>;
 
     // Batch variants
 
@@ -62,18 +63,23 @@ pub trait VectorStore: Debug {
     /// to help comparison to other vectors.
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
 
+    /// Retain only vectors that are valid and currently usable by other methods.
+    async fn only_valid_vectors(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::VectorRef> {
+        vectors
+    }
+
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.
     async fn eval_distance_pairs(
         &mut self,
         pairs: &[(Self::QueryRef, Self::VectorRef)],
-    ) -> Vec<Self::DistanceRef> {
+    ) -> Result<Vec<Self::DistanceRef>> {
         let mut results = Vec::with_capacity(pairs.len());
         for (query, vector) in pairs {
-            results.push(self.eval_distance(query, vector).await);
+            results.push(self.eval_distance(query, vector).await?);
         }
-        results
+        Ok(results)
     }
 
     /// Evaluate the distances between all queries and all vectors (cartesian product).
@@ -83,25 +89,25 @@ pub trait VectorStore: Debug {
         &mut self,
         queries: &[Self::QueryRef],
         vectors: &[Self::VectorRef],
-    ) -> Vec<Self::DistanceRef> {
+    ) -> Result<Vec<Self::DistanceRef>> {
         let mut results = Vec::with_capacity(queries.len() * vectors.len());
         for query in queries {
             for vector in vectors {
-                results.push(self.eval_distance(query, vector).await);
+                results.push(self.eval_distance(query, vector).await?);
             }
         }
-        results
+        Ok(results)
     }
 
     /// Check whether a batch of distances are matches.
     /// The default implementation is a loop over `is_match`.
     /// Override for more efficient batch match checks.
-    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Vec<bool> {
+    async fn is_match_batch(&mut self, distances: &[Self::DistanceRef]) -> Result<Vec<bool>> {
         let mut results = Vec::with_capacity(distances.len());
         for distance in distances {
-            results.push(self.is_match(distance).await);
+            results.push(self.is_match(distance).await?);
         }
-        results
+        Ok(results)
     }
 
     /// Compare pairs of distances in batch. For each pair (a, b),
@@ -111,12 +117,12 @@ pub trait VectorStore: Debug {
     async fn less_than_batch(
         &mut self,
         distances: &[(Self::DistanceRef, Self::DistanceRef)],
-    ) -> Vec<bool> {
+    ) -> Result<Vec<bool>> {
         let mut results: Vec<bool> = Vec::with_capacity(distances.len());
         for (d1, d2) in distances {
-            results.push(self.less_than(d1, d2).await);
+            results.push(self.less_than(d1, d2).await?);
         }
-        results
+        Ok(results)
     }
 }
 
