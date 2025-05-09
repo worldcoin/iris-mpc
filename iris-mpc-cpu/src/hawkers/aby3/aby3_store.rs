@@ -92,21 +92,31 @@ impl SharedIrises {
         }
     }
 
+    /// Inserts the given iris into the database with the specified id.
+    ///
+    /// Updates the checksum hash to reflect the new or replaced entry for the
+    /// associated serial id, and updates the `next_id` field to be the next
+    /// value after the inserted serial id if this value is larger than the
+    /// current value of `next_id`.
     pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        let was_there = self
+        let prev_entry = self
             .points
             .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
+
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
-        if was_there.is_none() {
-            self.set_hash.add_unordered(vector_id);
+        // If overwriting entry, remove previous vector id from set_hash
+        if let Some((version, _)) = prev_entry {
+            let prev_vector_id = VectorId::new(vector_id.serial_id(), version);
+            self.set_hash.remove(prev_vector_id);
         }
+        self.set_hash.add_unordered(vector_id);
     }
 
-    fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId::from_serial_id(self.next_id);
-        self.next_id += 1;
-        new_id
+    /// Return the next id for new insertions, which should have the serial id
+    /// following the largest previously inserted serial id, and version 0.
+    fn next_id(&self) -> VectorId {
+        VectorId::from_serial_id(self.next_id)
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -201,10 +211,16 @@ impl SharedIrisesRef {
 
     pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
         let new_vector = Arc::new(query.query.clone());
-        let mut body = self.body.write().await;
-        let new_id = body.next_id();
-        body.insert(new_id, new_vector);
+        let mut store = self.body.write().await;
+        let new_id = store.next_id();
+        store.insert(new_id, new_vector);
         new_id
+    }
+
+    pub async fn insert_with_id(&mut self, id: VectorId, query: &QueryRef) {
+        let new_vector = Arc::new(query.query.clone());
+        let mut body = self.body.write().await;
+        body.insert(id, new_vector);
     }
 
     pub async fn checksum(&self) -> u64 {
