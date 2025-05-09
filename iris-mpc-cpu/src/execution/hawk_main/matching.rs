@@ -179,8 +179,33 @@ impl BatchStep2 {
 pub struct BatchStep3(VecRequests<Step3>);
 
 impl BatchStep3 {
+    /// The final decision of whether the request is a match or unique.
+    ///
+    /// Emulate the behavior of inserting entries one by one. Intra-batch matches
+    /// only count if they are unique and being inserted themselves.
     pub fn is_matches(&self) -> VecRequests<bool> {
-        self.0.iter().map(Step3::is_match).collect_vec()
+        let mut is_matches = Vec::with_capacity(self.0.len());
+        for request in &self.0 {
+            let is_match = request
+                .select(Filter {
+                    eyes: Both,
+                    orient: Both,
+                    intra_batch: true,
+                })
+                .any(|id| match id {
+                    MatchId::Search(_) => true,
+                    MatchId::Luc(_) => true,
+                    MatchId::IntraBatch(request_i) => {
+                        match is_matches.get(request_i) {
+                            Some(true) => false, // the request we matched with was before us in the batch, and was a match, so we are not blocked by this intra-batch match
+                            Some(false) => true, // the request we matched with was before us in the batch, and was unique, so we are blocked by this intra-batch match
+                            None => false, // The request we matched with is after us in the batch, so we are not blocked by it.
+                        }
+                    }
+                });
+            is_matches.push(is_match);
+        }
+        is_matches
     }
 
     /// The IDs of the vectors that matched at least partially.
@@ -240,17 +265,6 @@ struct Step3 {
 }
 
 impl Step3 {
-    /// It is a match if either normal or mirrored iris matches.
-    fn is_match(&self) -> bool {
-        self.select(Filter {
-            eyes: Both,
-            orient: Both,
-            intra_batch: true,
-        })
-        .next()
-        .is_some()
-    }
-
     /// The IDs of the vectors that matched at least partially.
     fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
         chain!(
