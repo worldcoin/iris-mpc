@@ -1827,113 +1827,53 @@ impl ServerActor {
                 }
             }
 
+            let reset_all_buffers =
+                |counter: &[CudaSlice<u32>],
+                 indices: &[CudaSlice<u32>],
+                 codes: &[ChunkShare<u16>],
+                 masks: &[ChunkShare<u16>]| {
+                    reset_slice(self.device_manager.devices(), counter, 0, streams);
+                    reset_slice(self.device_manager.devices(), indices, 0xff, streams);
+                    reset_share(self.device_manager.devices(), masks, 0xff, streams);
+                    reset_share(self.device_manager.devices(), codes, 0xff, streams);
+                };
+
             // Reset all buffers used in this calculation
             match (eye_db, is_mirror) {
                 (Eye::Left, false) => {
-                    reset_slice(
-                        self.device_manager.devices(),
+                    reset_all_buffers(
                         &self.match_distances_counter_left,
-                        0,
-                        streams,
-                    );
-                    reset_slice(
-                        self.device_manager.devices(),
                         &self.match_distances_indices_left,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
-                        &self.match_distances_buffer_masks_left,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
                         &self.match_distances_buffer_codes_left,
-                        0xff,
-                        streams,
+                        &self.match_distances_buffer_masks_left,
                     );
                 }
                 (Eye::Right, false) => {
-                    reset_slice(
-                        self.device_manager.devices(),
+                    reset_all_buffers(
                         &self.match_distances_counter_right,
-                        0,
-                        streams,
-                    );
-                    reset_slice(
-                        self.device_manager.devices(),
                         &self.match_distances_indices_right,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
-                        &self.match_distances_buffer_masks_right,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
                         &self.match_distances_buffer_codes_right,
-                        0xff,
-                        streams,
+                        &self.match_distances_buffer_masks_right,
                     );
                 }
                 (Eye::Left, true) => {
-                    reset_slice(
-                        self.device_manager.devices(),
+                    reset_all_buffers(
                         &self.match_distances_counter_left_mirror,
-                        0,
-                        streams,
-                    );
-                    reset_slice(
-                        self.device_manager.devices(),
                         &self.match_distances_indices_left_mirror,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
-                        &self.match_distances_buffer_masks_left_mirror,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
                         &self.match_distances_buffer_codes_left_mirror,
-                        0xff,
-                        streams,
+                        &self.match_distances_buffer_masks_left_mirror,
                     );
                 }
                 (Eye::Right, true) => {
-                    reset_slice(
-                        self.device_manager.devices(),
+                    reset_all_buffers(
                         &self.match_distances_counter_right_mirror,
-                        0,
-                        streams,
-                    );
-                    reset_slice(
-                        self.device_manager.devices(),
                         &self.match_distances_indices_right_mirror,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
-                        &self.match_distances_buffer_masks_right_mirror,
-                        0xff,
-                        streams,
-                    );
-                    reset_share(
-                        self.device_manager.devices(),
                         &self.match_distances_buffer_codes_right_mirror,
-                        0xff,
-                        streams,
+                        &self.match_distances_buffer_masks_right_mirror,
                     );
                 }
             }
+            
             reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
 
             self.device_manager.await_streams(streams);
