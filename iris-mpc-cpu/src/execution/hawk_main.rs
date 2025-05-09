@@ -794,6 +794,7 @@ impl HawkResult {
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Both,
+            intra_batch: true,
         });
 
         self.connect_plans.0[0]
@@ -832,6 +833,7 @@ impl HawkResult {
                         IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
+                    .unique()
                     .collect_vec()
             })
             .collect_vec()
@@ -847,6 +849,7 @@ impl HawkResult {
             .select(Filter {
                 eyes: Both,
                 orient: Both,
+                intra_batch: true,
             })
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
@@ -862,27 +865,32 @@ impl HawkResult {
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (full_face_mirror_match_ids, _) = self.select(Filter {
             eyes: Both,
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
             self.select(Filter {
                 eyes: Only(Left),
                 orient: Only(Mirror),
+                intra_batch: false,
             });
 
         let (
@@ -891,6 +899,7 @@ impl HawkResult {
         ) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
