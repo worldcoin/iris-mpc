@@ -812,6 +812,7 @@ impl HawkResult {
                         MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
+                    .unique()
                     .collect_vec()
             })
             .collect_vec()
