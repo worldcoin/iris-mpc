@@ -2326,6 +2326,7 @@ dependencies = [
  "dotenvy",
  "eyre",
  "float_eq",
+ "futures",
  "hex",
  "hmac",
  "http 1.1.0",
