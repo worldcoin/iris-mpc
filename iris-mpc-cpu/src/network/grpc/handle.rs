@@ -36,7 +36,7 @@ struct ConnectToPartyTask {
 enum GrpcTask {
     ConnectToParty(ConnectToPartyTask),
     CreateOutgoingStreams(SessionId),
-    CreateIncomingStreams(SessionId),
+    ObtainIncomingStreams(SessionId),
     StartMessageStream(StartMessageStreamTask),
     IsSessionReady(SessionId),
 }
@@ -104,7 +104,7 @@ impl GrpcHandle {
                             .map(|_| MessageResult::Empty);
                         let _ = job.return_channel.send(job_result);
                     }
-                    GrpcTask::CreateIncomingStreams(session_id) => {
+                    GrpcTask::ObtainIncomingStreams(session_id) => {
                         let job_result = grpc
                             .obtain_incoming_streams(session_id)
                             .await
@@ -236,7 +236,7 @@ impl GrpcHandle {
         self.wait_for_session(session_id).await?;
 
         // Fetch incoming streams from GrpcNetworking
-        let task = GrpcTask::CreateIncomingStreams(session_id);
+        let task = GrpcTask::ObtainIncomingStreams(session_id);
         let res = self.submit(task).await?;
         let instreams = match res {
             MessageResult::IncomingStreams(streams) => Ok(streams),

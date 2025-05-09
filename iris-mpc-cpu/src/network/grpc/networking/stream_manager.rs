@@ -8,7 +8,10 @@ use std::{
     collections::{HashMap, HashSet},
     str::FromStr,
 };
-use tokio::sync::mpsc::{self};
+use tokio::{
+    sync::mpsc::{self, error::TryRecvError},
+    time::{Duration, Instant},
+};
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Request, Status};
 use tracing::error;
 
@@ -107,13 +110,24 @@ impl StreamManager {
                 while let Some(message) = hawk_rx.recv().await {
                     let mut payload_len = message.data.len();
                     let mut requests = vec![message];
-                    // todo: add a slight delay to batch more.
-                    while let Ok(msg) = hawk_rx.try_recv() {
-                        payload_len += msg.data.len();
-                        requests.push(msg);
-                        // maximum gRPC payload size is 4MB.
-                        if payload_len >= 1 << 21 {
-                            break;
+                    let start_time = Instant::now();
+                    loop {
+                        match hawk_rx.try_recv() {
+                            Ok(msg) => {
+                                payload_len += msg.data.len();
+                                requests.push(msg);
+                                // maximum gRPC payload size is 4MB.
+                                if payload_len >= 1 << 21 {
+                                    break;
+                                }
+                            }
+                            Err(TryRecvError::Empty) => {
+                                if start_time.elapsed() >= Duration::from_micros(500) {
+                                    break;
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                            Err(_) => break,
                         }
                     }
                     let requests = SendRequests { requests };
