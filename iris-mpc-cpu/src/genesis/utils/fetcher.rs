@@ -1,23 +1,18 @@
 use super::{errors::IndexationError, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
+use eyre::Result;
+use iris_mpc_common::helpers::fetch_index;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
 /// Fetches height of indexed from store.
 ///
-/// # Arguments
-///
-/// * `store` - Iris PostgreSQL store provider.
-///
 /// # Returns
 ///
-/// Height of indexed Iris's.
+/// Index of lastest iris.
 ///
-pub(crate) async fn fetch_height_of_indexed(
-    _: &IrisPgresStore,
-) -> Result<IrisSerialId, IndexationError> {
-    // TODO: fetch from store.
-    Ok(1)
+pub async fn fetch_height_of_indexed() -> IrisSerialId {
+    fetch_index::fetch_height_of_indexed().await
 }
 
 /// Fetches height of protocol from store.
