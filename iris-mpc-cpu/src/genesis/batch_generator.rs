@@ -63,7 +63,7 @@ impl BatchGenerator {
             .await
             .unwrap();
         tracing::info!(
-            "HNSW GENESIS: Deletions for exclusion count = {}",
+            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
             self.exclusions.len(),
         );
 
@@ -71,9 +71,8 @@ impl BatchGenerator {
         let height_of_protocol = fetcher::fetch_height_of_protocol(iris_store).await?;
         let height_of_indexed = fetcher::fetch_height_of_indexed(iris_store).await?;
         self.range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
-
         tracing::info!(
-            "HNSW GENESIS: Range of serial-id's to index = {}..{}",
+            "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
             height_of_indexed,
             height_of_protocol
         );
@@ -100,7 +99,10 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
-                tracing::info!("HNSW GENESIS: Excluding deletion :: serial-id={}", next_id);
+                tracing::info!(
+                    "HNSW GENESIS :: Batch Generator :: Excluding deletion :: serial-id={}",
+                    next_id
+                );
             }
         }
 
@@ -110,7 +112,7 @@ impl BatchGenerator {
 
         self.batch_count += 1;
         tracing::info!(
-            "HNSW GENESIS: Constructed new batch for indexation: idx={} :: irises={}",
+            "HNSW GENESIS :: Batch Generator :: Constructed new batch for indexation: idx={} :: irises={}",
             self.batch_count,
             batch.len(),
         );
@@ -135,7 +137,7 @@ impl BatchIterator for BatchGenerator {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
 
             tracing::info!(
-                "HNSW GENESIS: Fetched new batch for indexation: idx={} :: irises={}",
+                "HNSW GENESIS :: Fetched new batch for indexation: idx={} :: irises={}",
                 self.batch_count,
                 batch.len(),
             );

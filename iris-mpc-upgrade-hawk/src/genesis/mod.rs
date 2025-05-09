@@ -86,7 +86,7 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
 
     // Escape if coordinator has signalled a shutdown.
     if shutdown_handler.is_shutting_down() {
-        tracing::warn!("Shutting down has been triggered");
+        tracing::warn!("HNSW GENESIS :: Server :: Shutting down has been triggered");
         return Ok(());
     }
 
@@ -102,9 +102,8 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
-    tracing::info!("HNSW GENESIS: Executing main loop");
-
     // Execute main loop.
+    tracing::info!("HNSW GENESIS :: Server :: Executing main loop");
     exec_main_loop(
         &config,
         max_indexation_height,
@@ -135,15 +134,17 @@ async fn exec_main_loop(
 ) -> Result<()> {
     // Initialise Hawk handle.
     let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
+    tracing::info!("HNSW GENESIS :: Server :: Hawk handle initialised");
 
     // Initialise batch generator.
     let mut batch_generator = BatchGenerator::new(config.max_batch_size, max_indexation_height);
     batch_generator
         .init(config, iris_store, graph_store, s3_client)
         .await?;
+    tracing::info!("HNSW GENESIS :: Server :: Batch generator initialised");
 
     let res: Result<()> = async {
-        tracing::info!("Entering main loop");
+        tracing::info!("HNSW GENESIS :: Server :: Entering main loop");
 
         // Housekeeping: set processing timer info.
         let now = Instant::now();
@@ -152,7 +153,7 @@ async fn exec_main_loop(
         // Index until batch generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             tracing::info!(
-                "HNSW GENESIS: Indexing new batch: idx={} :: irises={} :: time {:?}",
+                "HNSW GENESIS :: Server :: Indexing new batch: idx={} :: irises={} :: time {:?}",
                 batch_generator.batch_count(),
                 batch.len(),
                 now.elapsed(),
@@ -168,7 +169,12 @@ async fn exec_main_loop(
             let result_future = hawk_handle.submit_batch(&batch);
             timeout(processing_timeout, result_future.await)
                 .await
-                .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
+                .map_err(|e| {
+                    eyre!(
+                        "HNSW GENESIS :: Server :: HawkActor processing timeout: {:?}",
+                        e
+                    )
+                })??;
 
             // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion()
@@ -181,13 +187,16 @@ async fn exec_main_loop(
     match res {
         Ok(_) => {
             tracing::info!(
-                "Main loop exited normally. Waiting for last batch results to be processed before shutting down..."
+                "HNSW GENESIS :: Server :: Main loop exited normally. Waiting for last batch results to be processed before shutting down..."
             );
             shutdown_handler.wait_for_pending_batches_completion().await;
         }
         Err(e) => {
-            tracing::error!("HawkActor processing error: {:?}", e);
-            tracing::info!("Initiating shutdown");
+            tracing::error!(
+                "HNSW GENESIS :: Server :: HawkActor processing error: {:?}",
+                e
+            );
+            tracing::info!("HNSW GENESIS :: Server :: Initiating shutdown");
 
             // Ensure hawk handle is dropped so as to initiate shutdown.
             drop(hawk_handle);
@@ -229,7 +238,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        "HNSW GENESIS :: Server :: Initializing HawkActor with args: party_index: {}, addresses: {:?}",
         hawk_args.party_index,
         node_addresses
     );
@@ -287,9 +296,15 @@ async fn get_service_clients(
         .await?;
 
         // Set stores - may take time if migrations are performed upon schemas.
-        tracing::info!("Creating new iris store from: {:?}", db_config_iris,);
+        tracing::info!(
+            "HNSW GENESIS :: Server :: Creating new iris store from: {:?}",
+            db_config_iris,
+        );
         let store_iris = IrisStore::new(&pg_client_iris).await?;
-        tracing::info!("Creating new graph store from: {:?}", db_config_graph);
+        tracing::info!(
+            "HNSW GENESIS :: Server :: Creating new graph store from: {:?}",
+            db_config_graph
+        );
         let store_graph = GraphStore::new(&pg_client_graph).await?;
 
         Ok((store_iris, store_graph))
@@ -330,17 +345,17 @@ async fn init_graph_from_stores(
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
     // ANCHOR: Load the database
-    tracing::info!("⚓️ ANCHOR: Load the database");
+    tracing::info!("HNSW GENESIS :: Server :: ⚓️ ANCHOR: Load the database");
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
     let parallelism = config
         .database
         .as_ref()
-        .ok_or(eyre!("Missing database config"))?
+        .ok_or(eyre!("HNSW GENESIS :: Server :: Missing database config"))?
         .load_parallelism;
 
     tracing::info!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
+        "HNSW GENESIS :: Server :: Initialize iris db: Loading from DB (parallelism: {})",
         parallelism
     );
 
@@ -387,15 +402,21 @@ async fn load_db(
     load_db_records(actor, &mut all_serial_ids, stream_db).await;
 
     if !all_serial_ids.is_empty() {
-        tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+        tracing::error!(
+            "HNSW GENESIS :: Server :: Not all serial_ids were loaded: {:?}",
+            all_serial_ids
+        );
+        bail!(
+            "HNSW GENESIS :: Server :: Not all serial_ids were loaded: {:?}",
+            all_serial_ids
+        );
     }
 
-    tracing::info!("Preprocessing db");
+    tracing::info!("HNSW GENESIS :: Server :: Preprocessing db");
     actor.preprocess_db();
 
     tracing::info!(
-        "Loaded set records from db into memory in {:?} [DB sizes: {:?}]",
+        "HNSW GENESIS :: Server :: Loaded set records from db into memory in {:?} [DB sizes: {:?}]",
         total_load_time.elapsed(),
         actor.current_db_sizes()
     );
@@ -443,7 +464,7 @@ async fn load_db_records<'a>(
     }
 
     tracing::info!(
-        "Aurora Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
+        "HNSW GENESIS :: Server :: Aurora Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
          memory: {:?}",
         record_counter,
         time_waiting_for_stream,
@@ -452,13 +473,13 @@ async fn load_db_records<'a>(
 }
 
 // TODO : implement db sync genesis
-// async fn sync_dbs_genesis(
-//     _config: &Config,
-//     _sync_result: &SyncResult,
-//     _iris_store: &IrisStore,
-// ) -> Result<()> {
-//     todo!();
-// }
+async fn sync_dbs_genesis(
+    _config: &Config,
+    _sync_result: &SyncResult,
+    _iris_store: &IrisStore,
+) -> Result<()> {
+    todo!();
+}
 
 /// Validates application config.
 fn validate_config(config: &Config) {
@@ -478,8 +499,14 @@ fn validate_config(config: &Config) {
         );
     }
 
-    tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-    tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+    tracing::info!(
+        "HNSW GENESIS :: Server :: Mode of compute: {:?}",
+        config.mode_of_compute
+    );
+    tracing::info!(
+        "HNSW GENESIS :: Server :: Mode of deployment: {:?}",
+        config.mode_of_deployment
+    );
 }
 
 /// Validates consistency of PostGres stores.

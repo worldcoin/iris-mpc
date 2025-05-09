@@ -58,7 +58,7 @@ impl Handle {
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
                 if stop {
-                    tracing::error!("HawkActor is in an inconsistent state, therefore stopping.");
+                    tracing::error!("HNSW GENESIS :: Hawk Handle :: HawkActor is in an inconsistent state, therefore stopping.");
                     break;
                 }
             }
@@ -97,7 +97,7 @@ impl Handle {
         request: &JobRequest,
     ) -> Result<JobResult> {
         tracing::info!(
-            "Genesis Hawk job processing ::{} elements within batch",
+            "HNSW GENESIS :: Hawk Handle :: Genesis Hawk job processing ::{} elements within batch",
             request.identifiers.len()
         );
         let _ = Instant::now();
