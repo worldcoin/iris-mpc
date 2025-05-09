@@ -380,6 +380,7 @@ impl ServerActor {
             party_id,
             phase2_batch_chunk_size,
             phase2_batch_chunk_size / 64,
+            None,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -389,6 +390,7 @@ impl ServerActor {
             party_id,
             phase2_chunk_size,
             phase2_chunk_size / 64,
+            None,
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -398,6 +400,7 @@ impl ServerActor {
             party_id,
             match_distances_buffer_size,
             match_distances_buffer_size / 64,
+            Some(n_buckets),
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
             comms.clone(),
@@ -3037,7 +3040,7 @@ pub fn generate_luc_records(
 
     // If there are no OR rules, return only the lookback records
     if or_rule_indices.is_empty() {
-        or_rule_indices = vec![vec![]; batch_size];
+        return lookback_records;
     }
 
     // Otherwise, merge them into each inner vector of or_rule_indices
