@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::helpers::sqs::get_next_sns_seq_num;
-use crate::helpers::utils::get_check_addresses;
+use crate::server_coordination::get_check_addresses;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

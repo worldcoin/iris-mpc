@@ -3,6 +3,7 @@ use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
     Client as S3Client,
 };
+use aws_sdk_sqs::Client as SQSClient;
 use eyre::{bail, eyre, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
@@ -54,7 +55,8 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
     let mut background_tasks = coordinator::init_task_monitor();
 
     // Set service clients.
-    let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
+    let ((aws_s3_client, sqs_client), iris_store, graph_store) =
+        get_service_clients(&config).await?;
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(&config, &iris_store, &graph_store).await?;
@@ -63,6 +65,7 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
     let my_state = get_sync_state(&config, &iris_store).await?;
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
+        &sqs_client,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
@@ -244,9 +247,9 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
 
 async fn get_service_clients(
     config: &Config,
-) -> Result<(S3Client, IrisStore, GraphPg<Aby3Store>), Report> {
+) -> Result<((S3Client, SQSClient), IrisStore, GraphPg<Aby3Store>), Report> {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_client(config: &Config) -> S3Client {
+    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient) {
         // Get region from config or use default
         let region = config
             .clone()
@@ -261,8 +264,8 @@ async fn get_service_clients(
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
-
-        S3Client::from_conf(s3_config)
+        let sqs_client = SQSClient::new(&shared_config);
+        (S3Client::from_conf(s3_config), sqs_client)
     }
 
     /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.

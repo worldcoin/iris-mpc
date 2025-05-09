@@ -8,7 +8,6 @@ use aws_sdk_sns::types::MessageAttributeValue;
 
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
-use iris_mpc_common::helpers::batch_sync::get_own_batch_sync_state;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -20,7 +19,6 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::helpers::utils::get_check_addresses;
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -36,8 +34,6 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use std::collections::HashMap;
 use std::mem;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -67,9 +63,14 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut background_tasks = init_task_monitor();
 
-    let is_ready_flag =
-        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
-            .await;
+    let is_ready_flag = start_coordination_server(
+        &config,
+        &aws_clients.sqs_client,
+        &mut background_tasks,
+        &shutdown_handler,
+        &my_state,
+    )
+    .await;
 
     background_tasks.check_tasks();
 
@@ -172,8 +173,6 @@ fn process_config(config: &Config) {
     }
 
     // Load batch_size config
-    let max_sync_lookback: usize = config.max_batch_size * 2;
-    let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 }
 
@@ -187,7 +186,7 @@ fn max_rollback(config: &Config) -> usize {
     config.max_batch_size * 2
 }
 
-/// Returnes initialized PostgreSQL clients for interacting
+/// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let schema_name = format!(
