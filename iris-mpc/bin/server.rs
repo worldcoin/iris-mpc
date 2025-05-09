@@ -1800,6 +1800,8 @@ async fn server_main(config: Config) -> Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_mirror,
+            anonymized_bucket_statistics_right_mirror,
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
@@ -2222,6 +2224,36 @@ async fn server_main(config: Config) -> Result<()> {
 
                 send_results_to_sns(
                     anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send mirror orientation statistics separately with their own flag
+            if (config_bg.enable_sending_mirror_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left_mirror.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_mirror.buckets.is_empty())
+            {
+                tracing::info!("Sending mirror orientation anonymized stats results");
+                let mirror_anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left_mirror,
+                    anonymized_bucket_statistics_right_mirror,
+                ];
+                // transform to vector of string
+                let mirror_anonymized_statistics_results = mirror_anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize mirror anonymized statistics result")
+                    })
+                    .collect::<eyre::Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    mirror_anonymized_statistics_results,
                     &metadata,
                     &sns_client_bg,
                     &config_bg,

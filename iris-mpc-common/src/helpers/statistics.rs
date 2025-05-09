@@ -39,6 +39,8 @@ pub struct BucketStatistics {
     #[serde(skip_deserializing)]
     #[serde(with = "ts_seconds_option")]
     pub next_start_time_utc_timestamp: Option<DateTime<Utc>>,
+    // Flag to indicate if these statistics are from mirror orientation processing
+    pub is_mirror_orientation: bool,
 }
 
 impl BucketStatistics {
@@ -84,6 +86,7 @@ impl BucketStatistics {
             start_time_utc_timestamp: Utc::now(),
             end_time_utc_timestamp: None,
             next_start_time_utc_timestamp: None,
+            is_mirror_orientation: false,
         }
     }
 
