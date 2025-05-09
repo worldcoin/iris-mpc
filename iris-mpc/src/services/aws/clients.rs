@@ -45,3 +45,16 @@ impl AwsClients {
         })
     }
 }
+
+// implement clone for AwsClients
+impl Clone for AwsClients {
+    fn clone(&self) -> Self {
+        Self {
+            sqs_client: self.sqs_client.clone(),
+            sns_client: self.sns_client.clone(),
+            s3_client: self.s3_client.clone(),
+            db_chunks_s3_client: self.db_chunks_s3_client.clone(),
+            secrets_manager_client: self.secrets_manager_client.clone(),
+        }
+    }
+}
