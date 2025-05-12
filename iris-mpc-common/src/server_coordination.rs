@@ -358,11 +358,8 @@ const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
 
 pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Result<Vec<Response>> {
     const NODE_COUNT: usize = 3;
-    let full_urls = get_check_addresses(
-        &config.node_hostnames.clone(),
-        &config.healthcheck_ports.clone(),
-        endpoint,
-    );
+    let full_urls =
+        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, endpoint);
     let node_urls = (0..NODE_COUNT)
         .map(|j| (config.party_id + j) % NODE_COUNT)
         .map(|i| (i, full_urls[i].to_owned()))
