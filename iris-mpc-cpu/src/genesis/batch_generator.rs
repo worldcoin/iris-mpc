@@ -27,6 +27,23 @@ pub struct BatchGenerator {
 
 // Constructor.
 impl BatchGenerator {
+    pub fn new(
+        batch_size: usize,
+        range: Range<IrisSerialId>,
+        exclusions: Vec<IrisSerialId>,
+    ) -> Self {
+        Self {
+            batch_size,
+            exclusions,
+            batch_count: 0,
+            range: range.clone(),
+            range_iter: range.peekable(),
+        }
+    }
+}
+
+// Constructor.
+impl BatchGenerator {
     pub async fn new_from_services(
         config: &Config,
         max_indexation_height: Option<u64>,
@@ -57,13 +74,7 @@ impl BatchGenerator {
             range.end
         );
 
-        Ok(Self {
-            exclusions,
-            batch_count: 0,
-            batch_size: config.max_batch_size,
-            range: range.clone(),
-            range_iter: range.peekable(),
-        })
+        Ok(Self::new(config.max_batch_size, range, exclusions))
     }
 }
 
@@ -174,23 +185,6 @@ mod tests {
     use iris_mpc_common::postgres::{AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
 
-    // Constructor.
-    impl BatchGenerator {
-        pub fn new(
-            batch_size: usize,
-            range: Range<IrisSerialId>,
-            exclusions: Vec<IrisSerialId>,
-        ) -> Self {
-            Self {
-                batch_size,
-                exclusions,
-                batch_count: 0,
-                range: range.clone(),
-                range_iter: range.peekable(),
-            }
-        }
-    }
-
     // Defaults.
     const DEFAULT_RNG_SEED: u64 = 0;
     const DEFAULT_PARTY_ID: usize = 0;
@@ -219,22 +213,9 @@ mod tests {
         Ok((iris_store, pg_client, pg_schema))
     }
 
-    // Test new from specific range.
-    #[tokio::test]
-    async fn test_new_01() -> Result<()> {
-        let instance = BatchGenerator::new(10, 1..100, Vec::new());
-        assert_eq!(instance.batch_count, 0);
-        assert_eq!(instance.batch_size, 10);
-        assert_eq!(instance.range.start, 1);
-        assert_eq!(instance.range.end, 100);
-        assert_eq!(instance.exclusions.len(), 0);
-
-        Ok(())
-    }
-
     // Test new from range pulled from dB.
     #[tokio::test]
-    async fn test_new_02() -> Result<()> {
+    async fn test_new() -> Result<()> {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
@@ -244,6 +225,30 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(instance.range.end, 100);
+
+        // Unset resources.
+        cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
+
+    // Test iteration.
+    #[tokio::test]
+    async fn test_iterator() -> Result<()> {
+        // Set resources.
+        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+
+        let mut instance = BatchGenerator::new(
+            10,
+            1..(iris_store.count_irises().await.unwrap() as u64 + 1),
+            Vec::new(),
+        );
+
+        // Expecting 10 batches of 10 Iris's per batch.
+        while let Some(batch) = instance.next_batch(&iris_store).await? {
+            assert_eq!(batch.len(), 10);
+        }
+        assert_eq!(instance.batch_count, 10);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;

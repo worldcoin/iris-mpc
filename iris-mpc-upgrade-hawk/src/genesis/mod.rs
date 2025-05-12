@@ -136,8 +136,8 @@ async fn exec_main_loop(
     let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
     tracing::info!("HNSW GENESIS :: Server :: Hawk handle initialised");
 
-    // Initialise batch generator.
-    let batch_generator = BatchGenerator::new_from_services(
+    // Set batch generator.
+    let mut batch_generator = BatchGenerator::new_from_services(
         config,
         max_indexation_height,
         iris_store,
@@ -145,14 +145,9 @@ async fn exec_main_loop(
         s3_client,
     )
     .await?;
+    tracing::info!("HNSW GENESIS :: Server :: Batch generator instantiated");
 
-    // let mut batch_generator =
-    //     BatchGenerator::new(config.max_batch_size, 1..max_indexation_height, Vec::new());
-    // batch_generator
-    //     .init(config, iris_store, graph_store, s3_client)
-    //     .await?;
-    tracing::info!("HNSW GENESIS :: Server :: Batch generator initialised");
-
+    // Set main loop result.
     let res: Result<()> = async {
         tracing::info!("HNSW GENESIS :: Server :: Entering main loop");
 
@@ -160,7 +155,7 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        // Index until batch generator is exhausted.
+        // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             tracing::info!(
                 "HNSW GENESIS :: Server :: Indexing new batch: idx={} :: irises={} :: time {:?}",
@@ -194,6 +189,7 @@ async fn exec_main_loop(
     }
     .await;
 
+    // Process main loop result.
     match res {
         Ok(_) => {
             tracing::info!(
