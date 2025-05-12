@@ -25,81 +25,45 @@ pub struct BatchGenerator {
     range_iter: Peekable<Range<IrisSerialId>>,
 }
 
-// Batch generation iterator interface.
-pub trait BatchIterator {
-    // Count of generated batches.
-    fn batch_count(&self) -> usize;
-
-    // Iterator over batches of Iris data to be indexed.
-    fn next_batch(
-        &mut self,
-        iris_store: &IrisStore,
-    ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
-}
-
-// Constructors.
+// Constructor.
 impl BatchGenerator {
-    pub fn new_with_range(
-        batch_size: usize,
-        indexation_range: Range<IrisSerialId>,
-        exclusions: Vec<IrisSerialId>,
-    ) -> Self {
-        Self {
-            batch_size,
-            exclusions,
-            batch_count: 0,
-            range: indexation_range.clone(),
-            range_iter: indexation_range.peekable(),
-        }
-    }
-}
-
-// Defaults.
-impl Default for BatchGenerator {
-    fn default() -> Self {
-        let indexation_range = 0..0;
-
-        Self {
-            batch_size: 64,
-            exclusions: Vec::<IrisSerialId>::new(),
-            batch_count: 0,
-            range: indexation_range.clone(),
-            range_iter: indexation_range.peekable(),
-        }
-    }
-}
-
-// Initializer.
-impl BatchGenerator {
-    pub async fn init(
-        &mut self,
+    pub async fn new_from_services(
         config: &Config,
+        max_indexation_height: Option<u64>,
         iris_store: &IrisStore,
         _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
-    ) -> Result<(), IndexationError> {
-        // Set serial identifiers to be excluded form indexation.
-        self.exclusions = fetcher::fetch_iris_deletions(config, s3_client)
+    ) -> Result<Self, IndexationError> {
+        // Set exclusions, i.e. identifiers marked as deleted.
+        let exclusions = fetcher::fetch_iris_deletions(config, s3_client)
             .await
             .unwrap();
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
-            self.exclusions.len(),
-        );
-
-        // Set heights.
-        let height_of_protocol = fetcher::fetch_height_of_protocol(iris_store).await?;
-        let height_of_indexed = fetcher::fetch_height_of_indexed(iris_store).await?;
 
         // Set range of indexation.
-        self.range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
+        let range_end = match max_indexation_height {
+            Some(height) => height,
+            None => fetcher::fetch_height_of_registrations(iris_store).await?,
+        } + 1;
+        let range_start = fetcher::fetch_height_of_indexed(iris_store).await?;
+        let range = range_start..range_end + 1;
+
+        tracing::info!(
+            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
+            exclusions.len(),
+        );
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
-            height_of_indexed,
-            height_of_protocol
+            range.start,
+            range.end
         );
 
-        Ok(())
+        Ok(Self {
+            exclusions,
+            batch_count: 0,
+            batch_size: config.max_batch_size,
+            range: range.clone(),
+            range_iter: range.peekable(),
+        })
     }
 }
 
@@ -155,7 +119,19 @@ impl BatchGenerator {
     }
 }
 
-// Implement our BatchIterator trait
+// Batch iterator interface.
+pub trait BatchIterator {
+    // Count of generated batches.
+    fn batch_count(&self) -> usize;
+
+    // Iterator over batches of Iris data to be indexed.
+    fn next_batch(
+        &mut self,
+        iris_store: &IrisStore,
+    ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
+}
+
+// Batch iterator implementation.
 impl BatchIterator for BatchGenerator {
     // Count of generated batches.
     fn batch_count(&self) -> usize {
@@ -198,6 +174,28 @@ mod tests {
     use iris_mpc_common::postgres::{AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
 
+    // Constructor.
+    impl BatchGenerator {
+        pub fn new(
+            batch_size: usize,
+            range: Range<IrisSerialId>,
+            exclusions: Vec<IrisSerialId>,
+        ) -> Self {
+            Self {
+                batch_size,
+                exclusions,
+                batch_count: 0,
+                range: range.clone(),
+                range_iter: range.peekable(),
+            }
+        }
+    }
+
+    // Defaults.
+    const DEFAULT_RNG_SEED: u64 = 0;
+    const DEFAULT_PARTY_ID: usize = 0;
+    const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
+
     // Returns a set of test resources.
     async fn get_resources() -> Result<(IrisStore, PostgresClient, String)> {
         // Set PostgreSQL client + store.
@@ -210,29 +208,21 @@ mod tests {
 
         // Set dB with 100 Iris's.
         iris_store
-            .init_db_with_random_shares(0, 0, 100, true)
+            .init_db_with_random_shares(
+                DEFAULT_RNG_SEED,
+                DEFAULT_PARTY_ID,
+                DEFAULT_SIZE_OF_IRIS_DB,
+                true,
+            )
             .await?;
 
         Ok((iris_store, pg_client, pg_schema))
     }
 
-    // Test new from default.
-    #[tokio::test]
-    async fn test_new_01() -> Result<()> {
-        let instance = BatchGenerator::default();
-        assert_eq!(instance.batch_count, 0);
-        assert_eq!(instance.batch_size, 64);
-        assert_eq!(instance.range.start, 0);
-        assert_eq!(instance.range.end, 0);
-        assert_eq!(instance.exclusions.len(), 0);
-
-        Ok(())
-    }
-
     // Test new from specific range.
     #[tokio::test]
-    async fn test_new_02() -> Result<()> {
-        let instance = BatchGenerator::new_with_range(10, 1..100, Vec::new());
+    async fn test_new_01() -> Result<()> {
+        let instance = BatchGenerator::new(10, 1..100, Vec::new());
         assert_eq!(instance.batch_count, 0);
         assert_eq!(instance.batch_size, 10);
         assert_eq!(instance.range.start, 1);
@@ -244,11 +234,11 @@ mod tests {
 
     // Test new from range pulled from dB.
     #[tokio::test]
-    async fn test_new_03() -> Result<()> {
+    async fn test_new_02() -> Result<()> {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let instance = BatchGenerator::new_with_range(
+        let instance = BatchGenerator::new(
             10,
             1..(iris_store.count_irises().await.unwrap() as u64),
             Vec::new(),

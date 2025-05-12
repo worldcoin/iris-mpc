@@ -169,74 +169,28 @@ impl Store {
         &self,
         identifiers: Vec<u64>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
-        #[cfg(test)]
-        println!(
-            "Iris Store: Fetching a batch of {} Irises",
-            identifiers.len()
-        );
-
         // TODO: define max batch size constant.
         assert!(
             !identifiers.is_empty() && identifiers.len() <= 64,
             "Invalid identifier set"
         );
 
-        #[cfg(test)]
-        println!(
-            "Iris Store: Fetching a batch of {} Irises",
-            identifiers.len()
-        );
-        tracing::info!(
-            "Iris Store: Fetching a batch of {} Irises",
-            identifiers.len()
-        );
-
-        // Conversion required for sql interpolation.
+        // Map identifiers - necessary for sql interpolation.
         let identifiers: Vec<i64> = identifiers.into_iter().map(|x| x as i64).collect();
 
-        let irises = sqlx::query_as::<_, DbStoredIris>(
+        // Exec query.
+        let data = sqlx::query_as::<_, DbStoredIris>(
             r#"
             SELECT * FROM irises
-            ORDER BY id ASC
             WHERE id = ANY($1)
+            ORDER BY id ASC
             "#,
         )
         .bind(&identifiers)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(irises)
-    }
-
-    /// Fetches first row from Iris table matched by id.
-    ///
-    /// # Arguments
-    ///
-    /// * `serial_id` - Serial ID of Iris to be fetched.
-    ///
-    /// # Returns
-    ///
-    /// Maybe a `DbStoredIris` instance.
-    ///
-    pub async fn fetch_iris_by_serial_id(
-        &self,
-        serial_id: u64,
-    ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
-        tracing::info!(
-            "PostgreSQL Store: Fetching Iris by serial-id ({})",
-            serial_id
-        );
-
-        // Conversion required for sql interpolation.
-        let id_of_iris = serial_id as i32;
-
-        Ok(
-            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
-                .bind(id_of_iris)
-                .fetch_one(&self.pool)
-                .await
-                .expect("DB operation failure :: Fetch Iris by ID."),
-        )
+        Ok(data)
     }
 
     /// Stream irises in order.

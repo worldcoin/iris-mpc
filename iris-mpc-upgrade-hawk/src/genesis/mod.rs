@@ -43,7 +43,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// * `config` - Application configuration instance.
 /// * `max_indexation_height` - Maximum height to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()> {
+pub async fn exec_main(config: Config, max_indexation_height: Option<u64>) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -123,7 +123,7 @@ pub async fn exec_main(config: Config, max_indexation_height: u64) -> Result<()>
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    max_indexation_height: u64,
+    max_indexation_height: Option<u64>,
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
@@ -137,11 +137,20 @@ async fn exec_main_loop(
     tracing::info!("HNSW GENESIS :: Server :: Hawk handle initialised");
 
     // Initialise batch generator.
-    let mut batch_generator =
-        BatchGenerator::new_with_range(config.max_batch_size, 1..max_indexation_height, Vec::new());
-    batch_generator
-        .init(config, iris_store, graph_store, s3_client)
-        .await?;
+    let batch_generator = BatchGenerator::new_from_services(
+        config,
+        max_indexation_height,
+        iris_store,
+        graph_store,
+        s3_client,
+    )
+    .await?;
+
+    // let mut batch_generator =
+    //     BatchGenerator::new(config.max_batch_size, 1..max_indexation_height, Vec::new());
+    // batch_generator
+    //     .init(config, iris_store, graph_store, s3_client)
+    //     .await?;
     tracing::info!("HNSW GENESIS :: Server :: Batch generator initialised");
 
     let res: Result<()> = async {

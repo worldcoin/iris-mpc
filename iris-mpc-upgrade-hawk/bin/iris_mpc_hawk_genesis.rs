@@ -16,7 +16,7 @@ struct Args {
 async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
-    let max_indexation_height = args.max_indexation_height.unwrap_or(0);
+    let max_indexation_height = args.max_indexation_height;
 
     // Set config.
     println!("Initialising config");

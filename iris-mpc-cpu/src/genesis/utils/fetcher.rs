@@ -21,7 +21,7 @@ pub(crate) async fn fetch_height_of_indexed(
     Ok(1)
 }
 
-/// Fetches height of protocol from store.
+/// Fetches number of registered Iris's within remote store.
 ///
 /// # Arguments
 ///
@@ -31,7 +31,7 @@ pub(crate) async fn fetch_height_of_indexed(
 ///
 /// Height of stored Iris's.
 ///
-pub(crate) async fn fetch_height_of_protocol(
+pub(crate) async fn fetch_height_of_registrations(
     iris_store: &IrisPgresStore,
 ) -> Result<IrisSerialId, IndexationError> {
     iris_store
@@ -68,7 +68,7 @@ pub(crate) async fn fetch_iris_batch(
     let data = iris_store
         .fetch_iris_batch(identifiers)
         .await
-        .map_err(|_| IndexationError::PostgresFetchIrisBatch)?;
+        .map_err(|err| IndexationError::PostgresFetchIrisBatch(err.to_string()))?;
 
     Ok(data)
 }
@@ -139,4 +139,91 @@ pub(crate) async fn fetch_iris_deletions(
     })?;
 
     Ok(s3_object.deleted_serial_ids)
+}
+
+// ------------------------------------------------------------------------
+// Tests.
+// ------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::{fetch_height_of_indexed, fetch_height_of_registrations, fetch_iris_batch};
+    use eyre::Result;
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+    use iris_mpc_store::{
+        test_utils::{cleanup, temporary_name, test_db_url},
+        Store as IrisStore,
+    };
+    use itertools::Itertools;
+
+    // Defaults.
+    const DEFAULT_RNG_SEED: u64 = 0;
+    const DEFAULT_PARTY_ID: usize = 0;
+    const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
+
+    // Returns a set of test resources.
+    async fn get_resources() -> Result<(IrisStore, PostgresClient, String)> {
+        // Set PostgreSQL client + store.
+        let pg_schema = temporary_name();
+        let pg_client =
+            PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+
+        // Set store.
+        let iris_store = IrisStore::new(&pg_client).await?;
+
+        // Set dB with 100 Iris's.
+        iris_store
+            .init_db_with_random_shares(
+                DEFAULT_RNG_SEED,
+                DEFAULT_PARTY_ID,
+                DEFAULT_SIZE_OF_IRIS_DB,
+                true,
+            )
+            .await?;
+
+        Ok((iris_store, pg_client, pg_schema))
+    }
+
+    #[tokio::test]
+    async fn test_fetch_height_of_indexed() -> Result<()> {
+        // Set resources.
+        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+
+        let height = fetch_height_of_indexed(&iris_store).await.unwrap();
+        assert_eq!(height, 1);
+
+        // Unset resources.
+        cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_height_of_protocol() -> Result<()> {
+        // Set resources.
+        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+
+        let height = fetch_height_of_registrations(&iris_store).await.unwrap();
+        assert_eq!(height, 100);
+
+        // Unset resources.
+        cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_iris_batch() -> Result<()> {
+        // Set resources.
+        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+
+        let identifiers: Vec<u64> = (1..11).collect_vec();
+        let data = fetch_iris_batch(&iris_store, identifiers).await.unwrap();
+        assert_eq!(data.len(), 10);
+
+        // Unset resources.
+        cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
 }
