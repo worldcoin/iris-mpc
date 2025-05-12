@@ -309,14 +309,31 @@ pub fn set_node_ready(is_ready_flag: Arc<AtomicBool>) {
 /// indicating readiness to execute the main server loop.
 pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be ready");
+
     // Check other nodes and wait until all nodes are ready.
-    let connected_and_ready = try_get_endpoint_all_nodes(config, "ready").await?;
+    'outer: loop {
+        'retry: {
+            let connected_and_ready_res = try_get_endpoint_all_nodes(config, "ready").await;
 
-    let all_ready = connected_and_ready
-        .iter()
-        .all(|resp| resp.status().is_success());
+            if connected_and_ready_res.is_err() {
+                break 'retry;
+            }
 
-    ensure!(all_ready, "One or more nodes were not ready.");
+            let connected_and_ready = connected_and_ready_res.unwrap();
+
+            tracing::debug!("{:#?}", &connected_and_ready);
+            // connected_and_ready.remove(config.party_id);
+
+            let all_ready = connected_and_ready
+                .iter()
+                .all(|resp| resp.status().is_success());
+
+            if all_ready {
+                break 'outer;
+            }
+        }
+        tracing::debug!("One or more nodes were not ready.  Retrying ..");
+    }
 
     tracing::info!("All nodes are ready.");
 
