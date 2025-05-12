@@ -28,15 +28,14 @@ pub fn init_task_monitor() -> TaskMonitor {
     TaskMonitor::new()
 }
 
-pub fn get_check_addresses(
-    hostnames: Vec<String>,
-    ports: Vec<String>,
-    endpoint: &str,
-) -> Vec<String> {
+pub fn get_check_addresses<S>(hostnames: &[S], ports: &[S], endpoint: &str) -> Vec<String>
+where
+    S: AsRef<str>,
+{
     hostnames
         .iter()
         .zip(ports.iter())
-        .map(|(host, port)| format!("http://{}:{}/{}", host, port, endpoint))
+        .map(|(host, port)| format!("http://{}:{}/{}", host.as_ref(), port.as_ref(), endpoint))
         .collect::<Vec<String>>()
 }
 
@@ -149,11 +148,8 @@ pub async fn start_coordination_server(
 pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
     // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "ready",
-    );
+    let all_readiness_addresses =
+        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "ready");
 
     let party_id = config.party_id;
 
@@ -210,11 +206,8 @@ pub async fn init_heartbeat_task(
     let (heartbeat_tx, heartbeat_rx) = oneshot::channel();
     let mut heartbeat_tx = Some(heartbeat_tx);
 
-    let all_health_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "health",
-    );
+    let all_health_addresses =
+        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "health");
 
     let party_id = config.party_id;
     let image_name = config.image_name.clone();
@@ -333,8 +326,8 @@ pub async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Res
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
     let all_startup_sync_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
+        &config.node_hostnames,
+        &config.healthcheck_ports,
         "startup-sync",
     );
 
@@ -384,11 +377,8 @@ pub fn set_node_ready(is_ready_flag: Arc<AtomicBool>) {
 /// indicating readiness to execute the main server loop.
 pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
-        "ready",
-    );
+    let all_readiness_addresses =
+        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "ready");
 
     let party_id = config.party_id;
     let ready_check = tokio::spawn(async move {
