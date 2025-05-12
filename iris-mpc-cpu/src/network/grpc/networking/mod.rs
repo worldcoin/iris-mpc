@@ -71,7 +71,7 @@ impl GrpcNetworking {
     pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             bail!(
-                "Player {:?} has already connected to player {:?}",
+                "{:?} has already connected to {:?}",
                 self.party_id,
                 party_id
             );
@@ -89,7 +89,7 @@ impl GrpcNetworking {
             .into_iter()
             .collect::<Result<Result<Vec<PartyNodeClient<_>>, _>, _>>()??;
         tracing::trace!(
-            "Player {:?} connected to player {:?} at address {:?}",
+            "{:?} connected to {:?} at address {:?}",
             self.party_id,
             party_id,
             address
@@ -118,7 +118,7 @@ impl GrpcNetworking {
         self.inbound_sessions
             .remove(&session_id)
             .ok_or(eyre!(format!(
-                "Session {session_id:?} hasn't been added to message queues"
+                "{session_id:?} hasn't been added to message queues"
             )))
     }
 }
@@ -156,7 +156,7 @@ impl GrpcNetworking {
 
         // logging here to avoid a clone.
         tracing::debug!(
-            "Player {:?} has added incoming stream  {:?} from player {:?}",
+            "{:?} has added incoming stream  {:?} from {:?}",
             self.party_id,
             stream_id,
             sender_id
