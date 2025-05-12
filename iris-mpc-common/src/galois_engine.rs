@@ -402,9 +402,9 @@ pub mod degree4 {
         pub code_interpolated: Vec<GaloisRingIrisCodeShare>,
         /// Mask rotations with Lagrange interpolations.
         pub mask_interpolated: Vec<GaloisRingTrimmedMaskCodeShare>,
-        /// Iris mirrored
+        /// Iris mirrored with Lagrange interpolations.
         pub code_mirrored: Vec<GaloisRingIrisCodeShare>,
-        /// Mask mirrored
+        /// Mask mirrored with Lagrange interpolations.
         pub mask_mirrored: Vec<GaloisRingTrimmedMaskCodeShare>,
     }
 

@@ -663,13 +663,12 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query
             .right_iris_interpolated_requests
             .mask
-            .extend(share_right.mask_interpolated.clone());
+            .extend(share_right.mask_interpolated);
 
         self.batch_query
             .left_mirrored_iris_interpolated_requests
             .code
             .extend(share_left.code_mirrored);
-
         self.batch_query
             .left_mirrored_iris_interpolated_requests
             .mask
