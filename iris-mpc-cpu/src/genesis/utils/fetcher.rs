@@ -1,4 +1,4 @@
-use super::{errors::IndexationError, types::IrisSerialId};
+use super::{errors::IndexationError, logger, types::IrisSerialId};
 use aws_sdk_s3::Client as S3_Client;
 use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
@@ -56,11 +56,19 @@ pub(crate) async fn fetch_iris_batch(
     iris_store: &IrisPgresStore,
     identifiers: Vec<IrisSerialId>,
 ) -> Result<Vec<DbStoredIris>, IndexationError> {
+    logger::log_info(
+        "Fetcher",
+        format!(
+            "Fetching Iris batch for indexation: irises={:?}",
+            identifiers
+        )
+        .as_str(),
+    );
+
     let data = iris_store
         .fetch_iris_batch(identifiers)
         .await
-        .map_err(|_| IndexationError::PostgresFetchIrisBatch)
-        .unwrap();
+        .map_err(|_| IndexationError::PostgresFetchIrisBatch)?;
 
     Ok(data)
 }

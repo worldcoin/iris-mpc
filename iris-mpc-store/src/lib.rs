@@ -169,12 +169,23 @@ impl Store {
         &self,
         identifiers: Vec<u64>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
+        #[cfg(test)]
+        println!(
+            "Iris Store: Fetching a batch of {} Irises",
+            identifiers.len()
+        );
+
         // TODO: define max batch size constant.
         assert!(
             !identifiers.is_empty() && identifiers.len() <= 64,
             "Invalid identifier set"
         );
 
+        #[cfg(test)]
+        println!(
+            "Iris Store: Fetching a batch of {} Irises",
+            identifiers.len()
+        );
         tracing::info!(
             "Iris Store: Fetching a batch of {} Irises",
             identifiers.len()

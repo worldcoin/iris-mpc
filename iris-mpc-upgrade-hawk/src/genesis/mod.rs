@@ -137,7 +137,8 @@ async fn exec_main_loop(
     tracing::info!("HNSW GENESIS :: Server :: Hawk handle initialised");
 
     // Initialise batch generator.
-    let mut batch_generator = BatchGenerator::new(config.max_batch_size, max_indexation_height);
+    let mut batch_generator =
+        BatchGenerator::new_with_range(config.max_batch_size, 1..max_indexation_height, Vec::new());
     batch_generator
         .init(config, iris_store, graph_store, s3_client)
         .await?;
@@ -473,12 +474,13 @@ async fn load_db_records<'a>(
 }
 
 // TODO : implement db sync genesis
+#[allow(dead_code)]
 async fn sync_dbs_genesis(
     _config: &Config,
     _sync_result: &SyncResult,
     _iris_store: &IrisStore,
 ) -> Result<()> {
-    todo!();
+    todo!("If network state decoheres then re-synchronize");
 }
 
 /// Validates application config.
@@ -486,7 +488,7 @@ fn validate_config(config: &Config) {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
         panic!(
-            "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
+            "HNSW GENESIS :: Server :: Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
         );
     }
@@ -494,7 +496,7 @@ fn validate_config(config: &Config) {
     // Validate modes of compute/deployment.
     if config.mode_of_deployment != ModeOfDeployment::Standard {
         panic!(
-            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
+            "HNSW GENESIS :: Server :: Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
             config.mode_of_deployment
         );
     }
@@ -519,17 +521,20 @@ async fn validate_consistency_of_stores(
     let store_len = iris_store.count_irises().await?;
     if store_len > config.max_db_size {
         tracing::error!(
-            "Database size {} exceeds maximum allowed {}",
+            "HNSW GENESIS :: Server :: Database size {} exceeds maximum allowed {}",
             store_len,
             config.max_db_size
         );
         bail!(
-            "Database size {} exceeds maximum allowed {}",
+            "HNSW GENESIS :: Server :: Database size {} exceeds maximum allowed {}",
             store_len,
             config.max_db_size
         );
     }
-    tracing::info!("Size of the database after init: {}", store_len);
+    tracing::info!(
+        "HNSW GENESIS :: Server :: Size of the database after init: {}",
+        store_len
+    );
 
     // TODO - check the database size matches where genesis should run too
     // We would only want to run genesis from a certain serial id to the other serial id

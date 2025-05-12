@@ -1,6 +1,7 @@
-use super::utils::{errors::IndexationError, fetcher, types::IrisSerialId};
+use super::utils::{errors::IndexationError, fetcher, logger, types::IrisSerialId};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
+use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
@@ -17,8 +18,8 @@ pub struct BatchGenerator {
     // Set of Iris serial identifiers to exclude from indexing.
     exclusions: Vec<IrisSerialId>,
 
-    // Maximum height to which to index.
-    max_indexation_height: IrisSerialId,
+    // Range of Iris serial identifiers to be indexed.
+    range: Range<IrisSerialId>,
 
     // Iterator over range of Iris serial identifiers to be indexed.
     range_iter: Peekable<Range<IrisSerialId>>,
@@ -36,15 +37,34 @@ pub trait BatchIterator {
     ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
 }
 
-// Constructor.
+// Constructors.
 impl BatchGenerator {
-    pub fn new(batch_size: usize, max_indexation_height: IrisSerialId) -> Self {
+    pub fn new_with_range(
+        batch_size: usize,
+        indexation_range: Range<IrisSerialId>,
+        exclusions: Vec<IrisSerialId>,
+    ) -> Self {
         Self {
             batch_size,
-            max_indexation_height,
+            exclusions,
             batch_count: 0,
-            exclusions: vec![],
-            range_iter: (0..0).peekable(),
+            range: indexation_range.clone(),
+            range_iter: indexation_range.peekable(),
+        }
+    }
+}
+
+// Defaults.
+impl Default for BatchGenerator {
+    fn default() -> Self {
+        let indexation_range = 0..0;
+
+        Self {
+            batch_size: 64,
+            exclusions: Vec::<IrisSerialId>::new(),
+            batch_count: 0,
+            range: indexation_range.clone(),
+            range_iter: indexation_range.peekable(),
         }
     }
 }
@@ -58,7 +78,7 @@ impl BatchGenerator {
         _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
     ) -> Result<(), IndexationError> {
-        // Set indexation exclusions.
+        // Set serial identifiers to be excluded form indexation.
         self.exclusions = fetcher::fetch_iris_deletions(config, s3_client)
             .await
             .unwrap();
@@ -67,9 +87,11 @@ impl BatchGenerator {
             self.exclusions.len(),
         );
 
-        // Set indexation range.
+        // Set heights.
         let height_of_protocol = fetcher::fetch_height_of_protocol(iris_store).await?;
         let height_of_indexed = fetcher::fetch_height_of_indexed(iris_store).await?;
+
+        // Set range of indexation.
         self.range_iter = (height_of_indexed..height_of_protocol + 1).peekable();
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
@@ -93,7 +115,7 @@ impl BatchGenerator {
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
-            if next_id > self.max_indexation_height {
+            if next_id > self.range.end {
                 break;
             }
             if !self.exclusions.contains(&next_id) {
@@ -108,9 +130,16 @@ impl BatchGenerator {
 
         if batch.is_empty() {
             return None;
+        } else {
+            self.batch_count += 1;
         }
 
-        self.batch_count += 1;
+        #[cfg(test)]
+        println!(
+            "HNSW GENESIS :: Batch Generator :: Constructed new batch for indexation: idx={} :: irises={}",
+            self.batch_count,
+            batch.len(),
+        );
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Constructed new batch for indexation: idx={} :: irises={}",
             self.batch_count,
@@ -118,6 +147,11 @@ impl BatchGenerator {
         );
 
         Some(batch)
+    }
+
+    // Helper: component logging.
+    pub fn log_info(&self, msg: String) {
+        logger::log_info("Batch Generator", msg.as_str());
     }
 }
 
@@ -134,17 +168,96 @@ impl BatchIterator for BatchGenerator {
         iris_store: &IrisStore,
     ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
-            let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-
-            tracing::info!(
-                "HNSW GENESIS :: Fetched new batch for indexation: idx={} :: irises={}",
+            self.log_info(format!(
+                "Fetching Iris batch for indexation: idx={} :: irises={}",
                 self.batch_count,
-                batch.len(),
+                identifiers.len()
+            ));
+
+            let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
+            logger::log_info(
+                "Batch Generator",
+                format!("Iris batch fetched: idx={}", self.batch_count,).as_str(),
             );
 
             Ok(Some(batch))
         } else {
             Ok(None)
         }
+    }
+}
+
+// ------------------------------------------------------------------------
+// Tests.
+// ------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eyre::Result;
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+    use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
+
+    // Returns a set of test resources.
+    async fn get_resources() -> Result<(IrisStore, PostgresClient, String)> {
+        // Set PostgreSQL client + store.
+        let pg_schema = temporary_name();
+        let pg_client =
+            PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+
+        // Set store.
+        let iris_store = IrisStore::new(&pg_client).await?;
+
+        // Set dB with 100 Iris's.
+        iris_store
+            .init_db_with_random_shares(0, 0, 100, true)
+            .await?;
+
+        Ok((iris_store, pg_client, pg_schema))
+    }
+
+    // Test new from default.
+    #[tokio::test]
+    async fn test_new_01() -> Result<()> {
+        let instance = BatchGenerator::default();
+        assert_eq!(instance.batch_count, 0);
+        assert_eq!(instance.batch_size, 64);
+        assert_eq!(instance.range.start, 0);
+        assert_eq!(instance.range.end, 0);
+        assert_eq!(instance.exclusions.len(), 0);
+
+        Ok(())
+    }
+
+    // Test new from specific range.
+    #[tokio::test]
+    async fn test_new_02() -> Result<()> {
+        let instance = BatchGenerator::new_with_range(10, 1..100, Vec::new());
+        assert_eq!(instance.batch_count, 0);
+        assert_eq!(instance.batch_size, 10);
+        assert_eq!(instance.range.start, 1);
+        assert_eq!(instance.range.end, 100);
+        assert_eq!(instance.exclusions.len(), 0);
+
+        Ok(())
+    }
+
+    // Test new from range pulled from dB.
+    #[tokio::test]
+    async fn test_new_03() -> Result<()> {
+        // Set resources.
+        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+
+        let instance = BatchGenerator::new_with_range(
+            10,
+            1..(iris_store.count_irises().await.unwrap() as u64),
+            Vec::new(),
+        );
+        assert_eq!(instance.range.end, 100);
+
+        // Unset resources.
+        cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
     }
 }
