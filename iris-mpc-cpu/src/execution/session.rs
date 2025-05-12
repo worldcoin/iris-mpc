@@ -16,7 +16,14 @@ impl From<u32> for SessionId {
     }
 }
 
-pub type StreamId = SessionId;
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StreamId(pub u32);
+
+impl From<u32> for StreamId {
+    fn from(id: u32) -> Self {
+        StreamId(id)
+    }
+}
 pub type NetworkingImpl = Box<dyn Networking + Send + Sync>;
 
 #[derive(Debug)]
