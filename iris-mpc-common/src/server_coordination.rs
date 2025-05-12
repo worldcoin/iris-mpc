@@ -392,12 +392,12 @@ pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Resu
     )
     .await;
 
-    // Fail if any channel has not received a response.
+    let msg = "Error occured reading response channels";
     try_join_all(rxs)
         .now_or_never()
-        .ok_or_eyre("sdfdf")?
+        .ok_or_eyre(msg)?
         .inspect_err(|err| {
-            tracing::error!("Error occured reading response channels: {}", err);
+            tracing::error!("{}: {}", msg, err);
         })
-        .wrap_err("Error occured reading response channels")
+        .wrap_err(msg)
 }
