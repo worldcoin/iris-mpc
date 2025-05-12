@@ -24,7 +24,7 @@ pub struct GrpcSession {
 impl Networking for GrpcSession {
     async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()> {
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
-            "Outgoing stream for {receiver:?} in session {:?} not found",
+            "Outgoing stream for {receiver:?} in {:?} not found",
             self.session_id
         ))?;
         trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
@@ -53,13 +53,13 @@ impl Networking for GrpcSession {
 
     async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
         let incoming_stream = self.in_streams.get_mut(sender).ok_or(eyre!(
-            "Incoming stream for {sender:?} in session {:?} not found",
+            "Incoming stream for {sender:?} in {:?} not found",
             self.session_id
         ))?;
         match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
             Ok(res) => res.ok_or(eyre!("No message received")).map(|msg| msg.data),
             Err(_) => Err(eyre!(
-                "Party {:?}: Timeout while waiting for message from {sender:?} in session \
+                "{:?}: Timeout while waiting for message from {sender:?} in \
                  {:?}",
                 self.own_identity,
                 self.session_id

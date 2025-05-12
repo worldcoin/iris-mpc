@@ -234,7 +234,7 @@ mod tests {
                     .send(message.clone(), &Identity::from("eve"))
                     .await;
                 assert_eq!(
-                    "Outgoing stream for Identity(\"eve\") in session SessionId(0) not found",
+                    "Outgoing stream for Identity(\"eve\") in SessionId(0) not found",
                     res.unwrap_err().to_string()
                 );
             });
@@ -250,7 +250,7 @@ mod tests {
                 let res = sessions[0].receive(&Identity::from("eve")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Incoming stream for Identity(\"eve\") in session SessionId(1) not found"
+                    "Incoming stream for Identity(\"eve\") in SessionId(1) not found"
                 );
             });
         }
@@ -268,7 +268,7 @@ mod tests {
                     .await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Outgoing stream for Identity(\"alice\") in session SessionId(2) not found",
+                    "Outgoing stream for Identity(\"alice\") in SessionId(2) not found",
                 );
             });
         }
@@ -286,7 +286,7 @@ mod tests {
 
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Session SessionId(3) has already been created by player Identity(\"alice\")"
+                    "SessionId(3) has already been created by Identity(\"alice\")"
                 );
             });
         }
@@ -301,8 +301,8 @@ mod tests {
                 let res = sessions[0].receive(&Identity::from("bob")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Party Identity(\"alice\"): Timeout while waiting for message from \
-                     Identity(\"bob\") in session SessionId(4)"
+                    "Identity(\"alice\"): Timeout while waiting for message from \
+                     Identity(\"bob\") in SessionId(4)"
                 );
             });
         }
