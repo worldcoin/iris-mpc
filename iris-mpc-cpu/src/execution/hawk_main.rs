@@ -922,13 +922,14 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
-            successful_reauths: vec![false; n_requests], // TODO.
-            reauth_target_indices: Default::default(),   // TODO.
-            reauth_or_rule_used: Default::default(),     // TODO.
-            reset_update_indices: vec![],                // TODO.
-            reset_update_request_ids: vec![],            // TODO.
-            reset_update_shares: vec![],                 // TODO.
-
+            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
+            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
+            successful_reauths: vec![false; n_requests],                           // TODO.
+            reauth_target_indices: Default::default(),                             // TODO.
+            reauth_or_rule_used: Default::default(),                               // TODO.
+            reset_update_indices: vec![],                                          // TODO.
+            reset_update_request_ids: vec![],                                      // TODO.
+            reset_update_shares: vec![],                                           // TODO.
             modifications: batch.modifications,
 
             actor_data: self.connect_plans,
