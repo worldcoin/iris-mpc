@@ -50,26 +50,52 @@ impl GaloisRingSharedIris {
         })
     }
 
-    /// Generate iris code shares of an input iris code using local randomness
+    /// Generate iris code shares of an input iris code using local randomness, alongside with
+    /// its mirrored component
     pub fn generate_shares_locally<R: Rng + CryptoRng>(
         rng: &mut R,
         iris: IrisCode,
-    ) -> [GaloisRingSharedIris; 3] {
+    ) -> ([GaloisRingSharedIris; 3], [GaloisRingSharedIris; 3]) {
         let code_shares = GaloisRingIrisCodeShare::encode_iris_code(&iris.code, &iris.mask, rng);
         let mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, rng);
-        [
-            GaloisRingSharedIris {
-                code: code_shares[0].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
-            },
-            GaloisRingSharedIris {
-                code: code_shares[1].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
-            },
-            GaloisRingSharedIris {
-                code: code_shares[2].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
-            },
-        ]
+        let code_shares_mirrored = code_shares
+            .iter()
+            .map(|code| code.mirrored())
+            .collect::<Vec<_>>();
+        let mask_shares_mirrored = mask_shares
+            .iter()
+            .map(|mask| mask.mirrored())
+            .collect::<Vec<_>>();
+
+        (
+            [
+                GaloisRingSharedIris {
+                    code: code_shares[0].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
+                },
+                GaloisRingSharedIris {
+                    code: code_shares[1].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
+                },
+                GaloisRingSharedIris {
+                    code: code_shares[2].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
+                },
+            ],
+            [
+                GaloisRingSharedIris {
+                    code: code_shares_mirrored[0].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[0]),
+                },
+                GaloisRingSharedIris {
+                    code: code_shares_mirrored[1].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[1]),
+                },
+                GaloisRingSharedIris {
+                    code: code_shares_mirrored[2].clone(),
+                    mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[2]),
+                },
+            ],
+        )
     }
 }

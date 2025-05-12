@@ -1237,22 +1237,37 @@ mod tests {
             .into_iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
             .collect_vec();
-        // Unzip: party -> iris_id -> share
+
+        // Unzip: party -> iris_id -> (share, share_mirrored)
         let irises = (0..n_parties)
             .map(|party_index| {
                 irises
                     .iter()
-                    .map(|iris| iris[party_index].clone())
+                    .map(|(iris, iris_mirrored)| {
+                        (
+                            iris[party_index].clone(),
+                            iris_mirrored[party_index].clone(),
+                        )
+                    })
                     .collect_vec()
             })
             .collect_vec();
 
         let all_results = izip!(irises, handles.clone())
-        .map(|(shares, mut handle)| async move {
+            .map(|(shares, mut handle)| async move {
                 // TODO: different test irises for each eye.
-                let shares_right = shares.clone();
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right);
+
+                let shares_right_cloned = shares.clone();
+                let shares_left_cloned = shares.clone();
+
+                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
 
                 let batch = BatchQuery {
                     // Iris shares.
@@ -1325,14 +1340,17 @@ mod tests {
     }
 
     /// Prepare shares in the same format as `receive_batch()`.
-    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 4] {
+    fn receive_batch_shares(
+        shares: Vec<GaloisRingSharedIris>,
+        mirrored_shares: Vec<GaloisRingSharedIris>,
+    ) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for share in shares {
+        for (share, mirrored_share) in izip!(shares, mirrored_shares) {
             let one = preprocess_iris_message_shares(
-                share.code.clone(),
-                share.mask.clone(),
                 share.code,
                 share.mask,
+                mirrored_share.code,
+                mirrored_share.mask,
             )
             .unwrap();
             out[0].code.push(one.code);
@@ -1341,9 +1359,8 @@ mod tests {
             out[1].mask.extend(one.mask_rotated);
             out[2].code.extend(one.code_interpolated.clone());
             out[2].mask.extend(one.mask_interpolated.clone());
-            // TODO: mirrored.
-            out[3].code.extend(one.code_interpolated);
-            out[3].mask.extend(one.mask_interpolated);
+            out[3].code.extend(one.code_mirrored);
+            out[3].mask.extend(one.mask_mirrored);
         }
         out
     }

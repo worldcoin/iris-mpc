@@ -409,6 +409,7 @@ mod tests {
         let shared_irises: Vec<_> = cleartext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .map(|(shares, _mirrored_shares)| shares)
             .collect();
 
         let stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
@@ -559,6 +560,7 @@ mod tests {
         let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .map(|(shares, _mirrored_shares)| shares)
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store
@@ -660,6 +662,7 @@ mod tests {
         let shared_irises: Vec<_> = plaintext_database
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .map(|(shares, _mirrored_shares)| shares)
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
         // Now do the work for the plaintext store

@@ -265,9 +265,9 @@ async fn main() -> Result<()> {
         n_read += vectors_batch.len();
 
         for (left, right) in vectors_batch {
-            let left_shares =
+            let (left_shares, _) =
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
-            let right_shares =
+            let (right_shares, _) =
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
 
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
