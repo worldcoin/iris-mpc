@@ -607,6 +607,8 @@ impl<'a> BatchProcessor<'a> {
             mask_rotated: dummy_mask_share.all_rotations(),
             code_interpolated: dummy_code_share.all_rotations(),
             mask_interpolated: dummy_mask_share.all_rotations(),
+            code_mirrored: dummy_code_share.all_rotations(),
+            mask_mirrored: dummy_mask_share.all_rotations(),
         };
 
         ((dummy.clone(), dummy), false)
@@ -661,6 +663,24 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query
             .right_iris_interpolated_requests
             .mask
-            .extend(share_right.mask_interpolated);
+            .extend(share_right.mask_interpolated.clone());
+
+        self.batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(share_left.code_mirrored);
+
+        self.batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(share_left.mask_mirrored);
+        self.batch_query
+            .right_mirrored_iris_interpolated_requests
+            .code
+            .extend(share_right.code_mirrored);
+        self.batch_query
+            .right_mirrored_iris_interpolated_requests
+            .mask
+            .extend(share_right.mask_mirrored);
     }
 }

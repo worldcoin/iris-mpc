@@ -1328,7 +1328,13 @@ mod tests {
     fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
         for share in shares {
-            let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
+            let one = preprocess_iris_message_shares(
+                share.code.clone(),
+                share.mask.clone(),
+                share.code,
+                share.mask,
+            )
+            .unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);
