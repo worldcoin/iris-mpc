@@ -136,9 +136,9 @@ pub async fn start_coordination_server(
 /// Note: The response to this query is expected initially to be `503 Service Unavailable`.
 pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-    // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "ready");
+
+    // Check other nodes and wait until all nodes are unready.
+    let connected_but_unready = try_get_endpoint_all_nodes(config, "ready").await?;
 
     let all_unready = connected_but_unready
         .iter()
@@ -281,15 +281,6 @@ pub async fn init_heartbeat_task(
 pub async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
-    let all_startup_sync_addresses = get_check_addresses(
-        &config.node_hostnames,
-        &config.healthcheck_ports,
-        "startup-sync",
-    );
-
-    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
-    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
-
     tracing::info!("Database store length is: {}", my_state.db_len);
 
     let connected_and_ready = try_get_endpoint_all_nodes(config, "startup-sync").await?;
@@ -368,8 +359,8 @@ const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
 pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Result<Vec<Response>> {
     const NODE_COUNT: usize = 3;
     let full_urls = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
+        &config.node_hostnames.clone(),
+        &config.healthcheck_ports.clone(),
         endpoint,
     );
     let node_urls = (0..NODE_COUNT)
