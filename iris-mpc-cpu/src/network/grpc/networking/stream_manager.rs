@@ -82,6 +82,7 @@ impl StreamManager {
             clients.len()
         );
 
+        let stream_parallelism = self.config.stream_parallelism;
         for (client_id, clients) in clients.iter() {
             let round_robin = (stream_id.0 as usize) % clients.len();
             let mut client = clients[round_robin].clone();
@@ -117,7 +118,7 @@ impl StreamManager {
                                 payload_len += msg.data.len();
                                 requests.push(msg);
                                 // maximum gRPC payload size is 4MB.
-                                if payload_len >= 1 << 21 {
+                                if requests.len() == stream_parallelism || payload_len >= 1 << 21 {
                                     break;
                                 }
                             }
