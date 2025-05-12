@@ -321,9 +321,6 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
 
             let connected_and_ready = connected_and_ready_res.unwrap();
 
-            tracing::debug!("{:#?}", &connected_and_ready);
-            // connected_and_ready.remove(config.party_id);
-
             let all_ready = connected_and_ready
                 .iter()
                 .all(|resp| resp.status().is_success());
