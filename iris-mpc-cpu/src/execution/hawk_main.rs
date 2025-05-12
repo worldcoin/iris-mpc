@@ -1236,7 +1236,12 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
+            .map(|iris| {
+                (
+                    GaloisRingSharedIris::generate_shares_locally(iris_rng, iris),
+                    GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris),
+                )
+            })
             .collect_vec();
 
         // Unzip: party -> iris_id -> (share, share_mirrored)

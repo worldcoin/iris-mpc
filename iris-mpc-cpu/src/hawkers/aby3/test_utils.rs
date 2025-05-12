@@ -46,8 +46,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     for (i, iris) in plain_store.points.iter().enumerate() {
         let vector_id = VectorId::from_0_index(i as u32);
-        let (all_shares, _all_mirrored_shares) =
-            GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -305,7 +304,6 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
         .map(|id| {
             GaloisRingSharedIris::generate_shares_locally(rng, cleartext_database[id].clone())
         })
-        .map(|(shares, _mirrored_shares)| shares)
         .collect();
 
     let local_stores = setup_local_store_aby3_players(network_t).await?;

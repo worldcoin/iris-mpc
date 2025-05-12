@@ -715,9 +715,9 @@ mod tests {
 
         let iris_db = IrisDB::new_random_rng(2, &mut rng).db;
 
-        let (first_entry, _) =
+        let first_entry =
             GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
-        let (second_entry, _) =
+        let second_entry =
             GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
 
         let mut jobs = JoinSet::new();

@@ -149,14 +149,10 @@ fn bench_gr_primitives(c: &mut Criterion) {
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
-            let (x1, _) =
-                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
-            let (y1, _) =
-                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[2].clone());
-            let (x2, _) =
-                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
-            let (y2, _) =
-                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[3].clone());
+            let x1 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[0].clone());
+            let y1 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[2].clone());
+            let x2 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[1].clone());
+            let y2 = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris_db[3].clone());
 
             let mut jobs = JoinSet::new();
             for (index, player_session) in sessions.iter().enumerate() {
@@ -239,7 +235,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                        let (raw_query, _) = GaloisRingSharedIris::generate_shares_locally(
+                        let raw_query = GaloisRingSharedIris::generate_shares_locally(
                             &mut rng,
                             on_the_fly_query,
                         );
@@ -278,7 +274,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                        let (raw_query, _) = GaloisRingSharedIris::generate_shares_locally(
+                        let raw_query = GaloisRingSharedIris::generate_shares_locally(
                             &mut rng,
                             on_the_fly_query,
                         );
