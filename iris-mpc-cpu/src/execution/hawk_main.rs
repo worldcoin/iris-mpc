@@ -1238,7 +1238,7 @@ mod tests {
             .into_iter()
             .map(|iris| {
                 (
-                    GaloisRingSharedIris::generate_shares_locally(iris_rng, iris),
+                    GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone()),
                     GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris),
                 )
             })
