@@ -8,6 +8,7 @@ pub mod id;
 pub mod iris_db;
 pub mod job;
 pub mod postgres;
+pub mod serialization;
 pub mod server_coordination;
 pub mod shamir;
 #[cfg(feature = "helpers")]

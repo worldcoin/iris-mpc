@@ -11,6 +11,8 @@ use crate::{
         VectorStore,
     },
 };
+use eyre::Result;
+use iris_mpc_common::serialization::{ReadPacked, WritePacked};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -26,6 +28,41 @@ pub struct EntryPoint<VectorRef> {
 
     /// The layer at which HNSW search begins
     pub layer: usize,
+}
+
+impl<VectorRef> ReadPacked for EntryPoint<VectorRef>
+where
+    VectorRef: ReadPacked,
+{
+    fn read_packed<R: std::io::Read>(reader: &mut R) -> Result<Self> {
+        let point = VectorRef::read_packed(reader)?;
+        let mut layer_bytes = [0u8; std::mem::size_of::<usize>()];
+        reader.read_exact(&mut layer_bytes)?;
+        let layer = usize::from_le_bytes(layer_bytes);
+        Ok(EntryPoint { point, layer })
+    }
+}
+
+impl<VectorRef> WritePacked for EntryPoint<VectorRef>
+where
+    VectorRef: WritePacked,
+{
+    fn write_packed<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
+        self.point.write_packed(writer)?;
+        writer.write_all(&self.layer.to_le_bytes())?;
+        Ok(())
+    }
+}
+
+impl<VectorRef> EntryPoint<VectorRef>
+where
+    VectorRef: WritePacked,
+{
+    pub fn to_packed(self) -> Result<Vec<u8>> {
+        let mut ret = vec![];
+        self.write_packed(&mut ret)?;
+        Ok(ret)
+    }
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
