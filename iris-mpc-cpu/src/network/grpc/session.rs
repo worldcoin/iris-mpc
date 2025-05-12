@@ -38,7 +38,13 @@ impl Networking for GrpcSession {
             "session_id" => self.session_id.0.to_string(),
         )
         .increment(value.len() as u64);
-        let request = SendRequest { data: value };
+        if cfg!(feature = "networking_benchmark") {
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        let request = SendRequest {
+            session_id: self.session_id.0,
+            data: value,
+        };
         outgoing_stream
             .send(request)
             .map_err(|e| eyre!(e.to_string()))?;

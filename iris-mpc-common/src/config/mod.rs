@@ -189,6 +189,9 @@ pub struct Config {
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
+    #[serde(default = "default_hawk_stream_parallelism")]
+    pub hawk_stream_parallelism: usize,
+
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
 
@@ -356,11 +359,15 @@ fn default_n_buckets() -> usize {
 }
 
 fn default_hawk_request_parallelism() -> usize {
-    10
+    1024
+}
+
+fn default_hawk_stream_parallelism() -> usize {
+    8
 }
 
 fn default_hawk_connection_parallelism() -> usize {
-    10
+    16
 }
 
 fn default_hawk_server_healthcheck_port() -> usize {
@@ -537,6 +544,7 @@ pub struct CommonConfig {
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
+    hawk_stream_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
@@ -610,6 +618,7 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
@@ -662,6 +671,7 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
             hnsw_param_M,

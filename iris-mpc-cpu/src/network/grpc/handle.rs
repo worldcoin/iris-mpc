@@ -1,10 +1,12 @@
 use crate::{
     execution::player::Identity,
-    network::SessionId,
-    proto_generated::party_node::{party_node_server::PartyNode, SendRequest, SendResponse},
+    network::{SessionId, StreamId},
+    proto_generated::party_node::{
+        party_node_server::PartyNode, SendRequest, SendRequests, SendResponse,
+    },
 };
 use eyre::{eyre, Result};
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver},
@@ -16,12 +18,14 @@ use tonic::{async_trait, Request, Response, Status, Streaming};
 
 use super::networking::GrpcNetworking;
 use super::session::GrpcSession;
-use super::{err_to_status, GrpcConfig, InStreams, OutStreams, TonicResult};
+use super::{err_to_status, GrpcConfig, InStream, InStreams, OutStream, OutStreams, TonicResult};
 
 struct StartMessageStreamTask {
     sender: Identity,
-    session_id: SessionId,
-    stream: UnboundedReceiver<SendRequest>,
+    stream_id: StreamId,
+    stream: UnboundedReceiver<SendRequests>,
+    inbound_forwarder: HashMap<u32, OutStream>,
+    inbound_sessions: HashMap<SessionId, InStream>,
 }
 
 struct ConnectToPartyTask {
@@ -32,7 +36,7 @@ struct ConnectToPartyTask {
 enum GrpcTask {
     ConnectToParty(ConnectToPartyTask),
     CreateOutgoingStreams(SessionId),
-    CreateIncomingStreams(SessionId),
+    ObtainIncomingStreams(SessionId),
     StartMessageStream(StartMessageStreamTask),
     IsSessionReady(SessionId),
 }
@@ -89,14 +93,20 @@ impl GrpcHandle {
                     }
                     GrpcTask::StartMessageStream(task) => {
                         let job_result = grpc
-                            .start_message_stream(task.sender, task.session_id, task.stream)
+                            .start_message_stream(
+                                task.sender,
+                                task.stream_id,
+                                task.stream,
+                                task.inbound_forwarder,
+                                task.inbound_sessions,
+                            )
                             .await
                             .map(|_| MessageResult::Empty);
                         let _ = job.return_channel.send(job_result);
                     }
-                    GrpcTask::CreateIncomingStreams(session_id) => {
+                    GrpcTask::ObtainIncomingStreams(session_id) => {
                         let job_result = grpc
-                            .create_incoming_streams(session_id)
+                            .obtain_incoming_streams(session_id)
                             .await
                             .map(MessageResult::IncomingStreams);
                         let _ = job.return_channel.send(job_result);
@@ -133,7 +143,7 @@ impl GrpcHandle {
 impl PartyNode for GrpcHandle {
     async fn start_message_stream(
         &self,
-        request: Request<Streaming<SendRequest>>,
+        request: Request<Streaming<SendRequests>>,
     ) -> TonicResult<Response<SendResponse>> {
         let sender_id: Identity = request
             .metadata()
@@ -143,23 +153,23 @@ impl PartyNode for GrpcHandle {
             .map_err(|_| Status::unauthenticated("Sender ID is not a string"))?
             .to_string()
             .into();
-        let session_id: u64 = request
+        let stream_id: u32 = request
             .metadata()
-            .get("session_id")
-            .ok_or(Status::not_found("Session ID not found"))?
+            .get("stream_id")
+            .ok_or(Status::not_found("Stream ID not found"))?
             .to_str()
-            .map_err(|_| Status::not_found("Session ID malformed"))?
+            .map_err(|_| Status::not_found("Stream ID malformed"))?
             .parse()
-            .map_err(|_| Status::invalid_argument("Session ID is not a u64 number"))?;
-        let session_id = SessionId::from(session_id);
+            .map_err(|_| Status::invalid_argument("Stream ID is not a u32 number"))?;
+        let stream_id = StreamId::from(stream_id);
 
         let mut incoming_stream = request.into_inner();
 
         tracing::debug!(
-            "Player {:?} is starting message stream with player {:?} in session {:?}",
+            "Player {:?} is starting message stream with player {:?} in stream {:?}",
             self.party_id,
             sender_id,
-            session_id
+            stream_id.0
         );
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -170,26 +180,31 @@ impl PartyNode for GrpcHandle {
             }
         });
 
-        tracing::debug!(
-            "Player {:?} has spawned message loop with player {:?} in session {:?}",
-            self.party_id,
-            sender_id,
-            session_id
-        );
+        // create channels for the sessions
+        let mut inbound_forwarder: HashMap<u32, OutStream> = HashMap::new();
+        let mut inbound_sessions: HashMap<SessionId, InStream> = HashMap::new();
+        let start_id = stream_id.0 * self.config.stream_parallelism as u32;
+        for session_id in start_id..start_id + self.config.stream_parallelism as u32 {
+            let (hawk_tx, hawk_rx) = mpsc::unbounded_channel::<SendRequest>();
+            inbound_forwarder.insert(session_id, hawk_tx);
+            inbound_sessions.insert(SessionId::from(session_id), hawk_rx);
+        }
 
         let task = StartMessageStreamTask {
             sender: sender_id.clone(),
-            session_id,
+            stream_id,
             stream: rx,
+            inbound_forwarder,
+            inbound_sessions,
         };
         let task = GrpcTask::StartMessageStream(task);
         let _ = self.submit(task).await.map_err(err_to_status)?;
 
         tracing::debug!(
-            "Player {:?} has started message stream with player {:?} in session {:?}",
+            "Player {:?} has started message stream with player {:?} in stream {:?}",
             self.party_id,
             sender_id,
-            session_id
+            stream_id.0
         );
 
         Ok(Response::new(SendResponse {}))
@@ -221,7 +236,7 @@ impl GrpcHandle {
         self.wait_for_session(session_id).await?;
 
         // Fetch incoming streams from GrpcNetworking
-        let task = GrpcTask::CreateIncomingStreams(session_id);
+        let task = GrpcTask::ObtainIncomingStreams(session_id);
         let res = self.submit(task).await?;
         let instreams = match res {
             MessageResult::IncomingStreams(streams) => Ok(streams),
