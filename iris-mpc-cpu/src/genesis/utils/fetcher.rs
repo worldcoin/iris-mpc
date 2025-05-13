@@ -1,6 +1,6 @@
-use super::{errors::IndexationError, logger, types::IrisSerialId};
+use super::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
-use iris_mpc_common::config::Config;
+use iris_mpc_common::{config::Config, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
@@ -150,7 +150,10 @@ pub(crate) async fn fetch_iris_deletions(
 mod tests {
     use super::{fetch_height_of_indexed, fetch_height_of_registrations, fetch_iris_batch};
     use eyre::Result;
-    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+    use iris_mpc_common::{
+        postgres::{AccessMode, PostgresClient},
+        IrisSerialId,
+    };
     use iris_mpc_store::{
         test_utils::{cleanup, temporary_name, test_db_url},
         Store as IrisStore,
@@ -218,7 +221,7 @@ mod tests {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let identifiers: Vec<u64> = (1..11).collect_vec();
+        let identifiers: Vec<IrisSerialId> = (1..11).collect_vec();
         let data = fetch_iris_batch(&iris_store, identifiers).await.unwrap();
         assert_eq!(data.len(), 10);
 

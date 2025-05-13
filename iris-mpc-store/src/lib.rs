@@ -12,7 +12,7 @@ use iris_mpc_common::{
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
-    vector_id::VectorId,
+    vector_id::{SerialId, VectorId},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
@@ -93,6 +93,13 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+// Convertor: DbStoredIris -> IrisIdentifiers.
+impl From<&DbStoredIris> for VectorId {
+    fn from(value: &DbStoredIris) -> Self {
+        VectorId::new(value.serial_id() as SerialId, value.version_id())
+    }
+}
+
 #[derive(sqlx::FromRow, Debug, Default)]
 struct StoredState {
     request_id: String,
@@ -167,7 +174,7 @@ impl Store {
     ///
     pub async fn fetch_iris_batch(
         &self,
-        identifiers: Vec<u64>,
+        identifiers: Vec<u32>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
         // TODO: define max batch size constant.
         assert!(

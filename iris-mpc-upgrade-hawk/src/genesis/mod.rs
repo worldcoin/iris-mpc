@@ -14,7 +14,7 @@ use iris_mpc_common::{
         task_monitor::TaskMonitor,
     },
     postgres::{AccessMode, PostgresClient},
-    server_coordination as coordinator,
+    server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
@@ -43,7 +43,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// * `config` - Application configuration instance.
 /// * `max_indexation_height` - Maximum height to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: Option<u64>) -> Result<()> {
+pub async fn exec_main(config: Config, max_indexation_height: Option<IrisSerialId>) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -123,7 +123,7 @@ pub async fn exec_main(config: Config, max_indexation_height: Option<u64>) -> Re
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    max_indexation_height: Option<u64>,
+    max_indexation_height: Option<IrisSerialId>,
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,

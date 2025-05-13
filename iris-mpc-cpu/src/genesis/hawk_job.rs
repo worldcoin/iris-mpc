@@ -1,10 +1,10 @@
-use super::utils::types::IrisIdentifier;
 use crate::{
     execution::hawk_main::{BothEyes, VecRequests},
     hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
+use iris_mpc_common::IrisVectorId;
 use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -28,7 +28,7 @@ pub struct Job {
 #[derive(Clone, Debug)]
 pub struct JobRequest {
     // Incoming batch of iris identifiers for subsequent correlation.
-    pub identifiers: Vec<IrisIdentifier>,
+    pub identifiers: Vec<IrisVectorId>,
 
     // HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
@@ -38,7 +38,7 @@ pub struct JobRequest {
 impl JobRequest {
     pub fn new(party_id: usize, data: &[DbStoredIris]) -> Self {
         Self {
-            identifiers: data.iter().map(IrisIdentifier::from).collect(),
+            identifiers: data.iter().map(IrisVectorId::from).collect(),
             queries: Arc::new([
                 data.iter()
                     .map(|iris| {
@@ -80,7 +80,7 @@ pub struct JobResult {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResultOfBatchElement {
     // Identifier of iris.
-    iris_identifier: IrisIdentifier,
+    iris_vector_id: IrisVectorId,
 
     // Error flag - TEMP.
     did_error: bool,
@@ -88,9 +88,9 @@ pub struct JobResultOfBatchElement {
 
 /// Constructor.
 impl JobResultOfBatchElement {
-    pub fn new(iris_identifier: IrisIdentifier, did_error: bool) -> Self {
+    pub fn new(iris_identifier: IrisVectorId, did_error: bool) -> Self {
         Self {
-            iris_identifier,
+            iris_vector_id: iris_identifier,
             did_error,
         }
     }

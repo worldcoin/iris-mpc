@@ -1,7 +1,10 @@
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::config::{Config, Opt};
-use iris_mpc_common::tracing::initialize_tracing;
+use iris_mpc_common::{
+    config::{Config, Opt},
+    tracing::initialize_tracing,
+    IrisSerialId,
+};
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 #[derive(Parser)]
@@ -9,7 +12,7 @@ use iris_mpc_upgrade_hawk::genesis::exec_main;
 struct Args {
     // Maximum height of indexation.
     #[clap(long("max-height"))]
-    max_indexation_height: Option<u64>,
+    max_indexation_height: Option<IrisSerialId>,
 }
 
 #[tokio::main]

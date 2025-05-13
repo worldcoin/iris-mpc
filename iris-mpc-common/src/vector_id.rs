@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
+// An Iris pair serial identifier.
 pub type SerialId = u32;
+
+// An Iris pair version identifier.
 pub type VersionId = i16;
 
 /// Unique identifier for an immutable pair of iris codes.

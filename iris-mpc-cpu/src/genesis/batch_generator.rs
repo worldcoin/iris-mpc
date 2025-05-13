@@ -1,8 +1,8 @@
-use super::utils::{errors::IndexationError, fetcher, logger, types::IrisSerialId};
+use super::utils::{errors::IndexationError, fetcher, logger};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
-use iris_mpc_common::config::Config;
+use iris_mpc_common::{config::Config, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
 use std::{iter::Peekable, ops::Range};
@@ -46,7 +46,7 @@ impl BatchGenerator {
 impl BatchGenerator {
     pub async fn new_from_services(
         config: &Config,
-        max_indexation_height: Option<u64>,
+        max_indexation_height: Option<IrisSerialId>,
         iris_store: &IrisStore,
         _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
@@ -212,7 +212,7 @@ mod tests {
 
         let instance = BatchGenerator::new(
             10,
-            1..(iris_store.count_irises().await.unwrap() as u64),
+            1..(iris_store.count_irises().await.unwrap() as u32),
             Vec::new(),
         );
         assert_eq!(instance.range.end, 100);
@@ -231,7 +231,7 @@ mod tests {
 
         let mut instance = BatchGenerator::new(
             10,
-            1..(iris_store.count_irises().await.unwrap() as u64 + 1),
+            1..(iris_store.count_irises().await.unwrap() as u32 + 1),
             Vec::new(),
         );
 
