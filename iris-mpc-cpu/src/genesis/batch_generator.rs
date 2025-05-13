@@ -116,7 +116,7 @@ impl BatchGenerator {
     }
 
     // Helper: component logging.
-    pub fn log_info(msg: String) {
+    fn log_info(msg: String) {
         logger::log_info("Batch Generator", msg);
     }
 }
