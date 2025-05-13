@@ -664,9 +664,6 @@ pub mod degree4 {
             }
             let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
-            println!("dot_codes: {}", dot_codes);
-            println!("dot_masks: {}", dot_masks);
-
             0.5f64 - (dot_codes as i16) as f64 / (2f64 * dot_masks as f64)
         }
 
