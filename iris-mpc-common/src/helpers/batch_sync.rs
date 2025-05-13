@@ -37,6 +37,7 @@ pub async fn get_own_batch_sync_state(
     let next_sns_sequence_num = get_next_sns_seq_num(config, &sqs_client.clone())
         .await?
         .unwrap_or(0);
+    println!("fetching next_sns_sequence_num: {}", next_sns_sequence_num);
     let batch_sync_state = BatchSyncState {
         next_sns_sequence_num,
     };
@@ -46,13 +47,19 @@ pub async fn get_own_batch_sync_state(
 pub async fn get_batch_sync_states(
     config: &Config,
     sqs_client: &aws_sdk_sqs::Client,
+    own_state: Option<&BatchSyncState>,
 ) -> Vec<BatchSyncState> {
     let all_batch_size_sync_addresses = get_check_addresses(
-        config.node_hostnames.clone(),
-        config.healthcheck_ports.clone(),
+        &config.node_hostnames,
+        &config.healthcheck_ports,
         "batch-sync-state",
     );
-    let own_sync_state = get_own_batch_sync_state(config, sqs_client).await.unwrap();
+
+    let own_sync_state = match own_state {
+        Some(state) => state.clone(),
+        None => get_own_batch_sync_state(config, sqs_client).await.unwrap(),
+    };
+
     let next_node = &all_batch_size_sync_addresses[(config.party_id + 1) % 3];
     let prev_node = &all_batch_size_sync_addresses[(config.party_id + 2) % 3];
 

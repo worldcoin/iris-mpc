@@ -14,7 +14,9 @@ use iris_mpc_common::galois_engine::degree4::{
 use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
-use iris_mpc_common::helpers::batch_sync::{get_batch_sync_states, BatchSyncResult};
+use iris_mpc_common::helpers::batch_sync::{
+    get_batch_sync_states, BatchSyncResult, BatchSyncState,
+};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
@@ -135,6 +137,7 @@ pub struct BatchProcessor<'a> {
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
+    own_batch_sync_state: BatchSyncState,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -168,10 +171,14 @@ impl<'a> BatchProcessor<'a> {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
             msg_counter: 0,
+            own_batch_sync_state: BatchSyncState {
+                next_sns_sequence_num: 0,
+            },
         }
     }
 
     pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
+        println!("RECEIVE BATCH");
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
@@ -198,26 +205,23 @@ impl<'a> BatchProcessor<'a> {
     async fn poll_messages(&mut self) -> Result<(), ReceiveRequestError> {
         let max_batch_size = self.config.max_batch_size;
         let queue_url = &self.config.requests_queue_url;
-        let polling_timeout =
-            tokio::time::Duration::from_secs(self.config.batch_polling_timeout_secs);
-
-        // Try to fill the batch with a timeout
-        match tokio::time::timeout(
-            polling_timeout,
-            self.poll_until_batch_size(max_batch_size, queue_url),
-        )
-        .await
-        {
+        match self.poll_until_batch_size(max_batch_size, queue_url).await {
             // If we collected enough messages before timeout
-            Ok(result) => result?,
+            Ok(result) => result,
 
             // If timeout was reached before collecting enough messages
             Err(_) => {
                 tracing::info!("Batch polling timeout reached, checking other nodes' sync states");
 
                 // Get batch sync states from all nodes
-                let states = get_batch_sync_states(self.config, self.client).await;
-                let batch_sync_result = BatchSyncResult::new(states[0].clone(), states);
+                let states = get_batch_sync_states(
+                    self.config,
+                    self.client,
+                    Some(&self.own_batch_sync_state),
+                )
+                .await;
+                let batch_sync_result =
+                    BatchSyncResult::new(self.own_batch_sync_state.clone(), states);
 
                 // Get maximum and own sequence number across all nodes
                 let max_sequence_num = batch_sync_result.max_sns_sequence_num();
@@ -262,6 +266,7 @@ impl<'a> BatchProcessor<'a> {
             let rcv_message_output = self
                 .client
                 .receive_message()
+                .wait_time_seconds(self.config.batch_polling_timeout_secs as i32)
                 .max_number_of_messages(1)
                 .queue_url(queue_url)
                 .send()
@@ -302,6 +307,7 @@ impl<'a> BatchProcessor<'a> {
             let rcv_message_output = self
                 .client
                 .receive_message()
+                .wait_time_seconds(10)
                 .max_number_of_messages(1)
                 .queue_url(queue_url)
                 .send()
@@ -334,7 +340,7 @@ impl<'a> BatchProcessor<'a> {
                     }
 
                     // Process the message regardless of sequence number
-                    self.process_message(sqs_message).await?;
+                    self.process_message(sqs_message.clone()).await?;
 
                     // If we've reached or exceeded the target sequence number, we're done
                     if current_sequence_num >= target_sequence_num {
@@ -350,12 +356,26 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
+    fn update_own_batch_sync_state(&mut self, sequence_number: u128) {
+        self.own_batch_sync_state = BatchSyncState {
+            next_sns_sequence_num: sequence_number,
+        };
+    }
+
     async fn process_message(
         &mut self,
         sqs_message: aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
             .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
+
+        let sequence_number: u128 = message.sequence_number.parse::<u128>().map_err(|e| {
+            ReceiveRequestError::seq_number_parse_error(
+                format!("SQS sequence number {}", message.sequence_number),
+                e,
+            )
+        })?;
+        self.update_own_batch_sync_state(sequence_number);
 
         let message_attributes = message.message_attributes.clone();
         let batch_metadata = self.extract_batch_metadata(&message_attributes);
