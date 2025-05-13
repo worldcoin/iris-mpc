@@ -178,7 +178,6 @@ impl<'a> BatchProcessor<'a> {
     }
 
     pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
-        println!("RECEIVE BATCH");
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
@@ -240,13 +239,6 @@ impl<'a> BatchProcessor<'a> {
                 // Continue polling until we reach this sequence number
                 self.poll_until_sequence_num(max_sequence_num, queue_url)
                     .await?;
-                // if no messages are received, we poll until we receive the next 1 message
-                if self.msg_counter == 0 {
-                    tracing::info!(
-                        "No messages received, polling until we receive at least one message"
-                    );
-                    self.poll_until_batch_size(1, queue_url).await?;
-                }
             }
         }
 
@@ -266,7 +258,7 @@ impl<'a> BatchProcessor<'a> {
             let rcv_message_output = self
                 .client
                 .receive_message()
-                .wait_time_seconds(self.config.batch_polling_timeout_secs as i32)
+                .wait_time_seconds(self.config.batch_polling_timeout_secs)
                 .max_number_of_messages(1)
                 .queue_url(queue_url)
                 .send()
@@ -307,7 +299,7 @@ impl<'a> BatchProcessor<'a> {
             let rcv_message_output = self
                 .client
                 .receive_message()
-                .wait_time_seconds(10)
+                .wait_time_seconds(self.config.batch_polling_timeout_secs)
                 .max_number_of_messages(1)
                 .queue_url(queue_url)
                 .send()

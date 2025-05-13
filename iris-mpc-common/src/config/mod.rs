@@ -243,11 +243,7 @@ pub struct Config {
     pub full_scan_side: Eye,
 
     #[serde(default = "default_batch_polling_timeout_secs")]
-    pub batch_polling_timeout_secs: u64,
-
-    // used to fix max batch size to 1 for correctness testing purposes
-    #[serde(default = "default_override_max_batch_size")]
-    pub override_max_batch_size: bool,
+    pub batch_polling_timeout_secs: i32,
 }
 
 impl Config {
@@ -264,10 +260,6 @@ impl Config {
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
-}
-
-fn default_override_max_batch_size() -> bool {
-    false
 }
 
 /// Enumeration over set of compute modes.
@@ -411,7 +403,7 @@ fn default_hawk_server_deletions_enabled() -> bool {
     false
 }
 
-fn default_batch_polling_timeout_secs() -> u64 {
+fn default_batch_polling_timeout_secs() -> i32 {
     10
 }
 
@@ -562,7 +554,7 @@ pub struct CommonConfig {
     cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
-    batch_polling_timeout_secs: u64,
+    batch_polling_timeout_secs: i32,
 }
 
 impl From<Config> for CommonConfig {
@@ -637,7 +629,6 @@ impl From<Config> for CommonConfig {
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
-            override_max_batch_size: _, // for testing purposes only
             batch_polling_timeout_secs,
         } = value;
 
