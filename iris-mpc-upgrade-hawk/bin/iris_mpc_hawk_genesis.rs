@@ -5,6 +5,7 @@ use iris_mpc_common::{
     tracing::initialize_tracing,
     IrisSerialId,
 };
+use iris_mpc_cpu::genesis::logger;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 #[derive(Parser)]
@@ -40,11 +41,11 @@ async fn main() -> Result<()> {
     // Invoke main.
     match exec_main(config, max_indexation_height).await {
         Ok(_) => {
-            tracing::info!("Server exited normally");
+            logger::log_info("Server", "Exited normally".to_string());
         }
-        Err(e) => {
-            tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+        Err(err) => {
+            logger::log_error("Server", format!("Server exited with error: {:?}", err));
+            return Err(err);
         }
     }
     Ok(())

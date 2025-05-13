@@ -1,3 +1,19 @@
+/// Logs component error messages.
+///
+/// # Arguments
+///
+/// * `component` - A component encapsulating a unit of system functionality.
+/// * `msg` - An error message.
+///
+pub fn log_error(component: &str, msg: String) {
+    // In testing print to stdout.
+    #[cfg(test)]
+    println!("ERROR :: HNSW GENESIS :: {} :: {}", component, msg);
+
+    // Trace as normal.
+    tracing::error!("HNSW GENESIS :: {} :: {}", component, msg);
+}
+
 /// Logs component information messages.
 ///
 /// # Arguments
@@ -14,18 +30,18 @@ pub fn log_info(component: &str, msg: String) {
     tracing::info!("HNSW GENESIS :: {} :: {}", component, msg);
 }
 
-/// Logs component error messages.
+/// Logs component warning messages.
 ///
 /// # Arguments
 ///
 /// * `component` - A component encapsulating a unit of system functionality.
-/// * `msg` - An error message.
+/// * `msg` - An information message.
 ///
-pub fn log_error(component: &str, msg: String) {
+pub fn log_warn(component: &str, msg: String) {
     // In testing print to stdout.
     #[cfg(test)]
-    println!("ERROR :: HNSW GENESIS :: {} :: {}", component, msg);
+    println!("WARN :: HNSW GENESIS :: {} :: {}", component, msg);
 
     // Trace as normal.
-    tracing::error!("HNSW GENESIS :: {} :: {}", component, msg);
+    tracing::warn!("HNSW GENESIS :: {} :: {}", component, msg);
 }
