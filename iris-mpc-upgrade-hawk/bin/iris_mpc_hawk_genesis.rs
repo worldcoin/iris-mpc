@@ -25,7 +25,7 @@ async fn main() -> Result<()> {
     // How can i throw an error here if the max_indexation_height is not set?
     if max_indexation_height.is_none() {
         eprintln!("Error: --max-height argument is required.");
-        return Err(eyre::eyre!("--max-height argument is required."));
+        bail!("--max-height argument is required.");
     }
     let max_indexation_height = max_indexation_height.unwrap();
 
