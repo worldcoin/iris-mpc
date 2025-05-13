@@ -24,26 +24,6 @@ pub(crate) async fn fetch_height_of_indexed(
     Ok(1)
 }
 
-/// Fetches number of registered Iris's within remote store.
-///
-/// # Arguments
-///
-/// * `store` - Iris PostgreSQL store provider.
-///
-/// # Returns
-///
-/// Height of stored Iris's.
-///
-pub(crate) async fn fetch_height_of_registrations(
-    iris_store: &IrisPgresStore,
-) -> Result<IrisSerialId, IndexationError> {
-    iris_store
-        .count_irises()
-        .await
-        .map_err(|_| IndexationError::PostgresFetchIrisById)
-        .map(|val| val as IrisSerialId)
-}
-
 /// Fetch a batch of iris data for indexation.
 ///
 /// # Arguments
@@ -148,7 +128,7 @@ pub(crate) async fn fetch_iris_deletions(
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_height_of_indexed, fetch_height_of_registrations, fetch_iris_batch};
+    use super::{fetch_height_of_indexed, fetch_iris_batch};
     use eyre::Result;
     use iris_mpc_common::{
         postgres::{AccessMode, PostgresClient},
@@ -195,20 +175,6 @@ mod tests {
 
         let height = fetch_height_of_indexed(&iris_store).await.unwrap();
         assert_eq!(height, 1);
-
-        // Unset resources.
-        cleanup(&pg_client, &pg_schema).await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_fetch_height_of_protocol() -> Result<()> {
-        // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
-
-        let height = fetch_height_of_registrations(&iris_store).await.unwrap();
-        assert_eq!(height, 100);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;

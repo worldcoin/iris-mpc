@@ -10,7 +10,7 @@ use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,
         shutdown_handler::ShutdownHandler,
-        sync::{SyncResult, SyncState},
+        sync::{GenesisConfig, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     postgres::{AccessMode, PostgresClient},
@@ -43,7 +43,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// * `config` - Application configuration instance.
 /// * `max_indexation_height` - Maximum height to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: Option<IrisSerialId>) -> Result<()> {
+pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -56,11 +56,26 @@ pub async fn exec_main(config: Config, max_indexation_height: Option<IrisSerialI
     // Set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    // Bail if stores are inconsistent.
-    validate_consistency_of_stores(&config, &iris_store, &graph_store).await?;
+    // TODO: once https://github.com/worldcoin/iris-mpc/pull/1334/files is merged we can use the last_indexation_height
+    // for now we just use 0
+    let last_indexation_height = 0;
 
+    // Bail if stores are inconsistent.
+    validate_consistency_of_stores(
+        &config,
+        &iris_store,
+        max_indexation_height,
+        last_indexation_height,
+    )
+    .await?;
     // Await coordination server to start.
-    let my_state = get_sync_state(&config, &iris_store).await?;
+    let my_state = get_sync_state(
+        &config,
+        &iris_store,
+        max_indexation_height,
+        last_indexation_height,
+    )
+    .await?;
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
         &mut background_tasks,
@@ -80,6 +95,7 @@ pub async fn exec_main(config: Config, max_indexation_height: Option<IrisSerialI
     // Await coordinator to signal network state = synchronized.
     let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
     sync_result.check_common_config()?;
+    sync_result.check_genesis_config()?;
 
     // TODO: What should happen here - see Bryan.
     // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
@@ -123,7 +139,7 @@ pub async fn exec_main(config: Config, max_indexation_height: Option<IrisSerialI
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    max_indexation_height: Option<IrisSerialId>,
+    max_indexation_height: IrisSerialId,
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
@@ -322,7 +338,12 @@ async fn get_service_clients(
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
 /// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
-async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState> {
+async fn get_sync_state(
+    config: &Config,
+    store: &IrisStore,
+    max_indexation_height: IrisSerialId,
+    last_indexation_height: IrisSerialId,
+) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
@@ -331,12 +352,18 @@ async fn get_sync_state(config: &Config, store: &IrisStore) -> Result<SyncState>
 
     let next_sns_sequence_num = None;
 
+    let genesis_config = GenesisConfig {
+        max_indexation_height,
+        last_indexation_height,
+    };
+
     Ok(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
+        genesis_config: Some(genesis_config),
     })
 }
 
@@ -526,9 +553,10 @@ fn validate_config(config: &Config) {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    _graph_store: &GraphPg<Aby3Store>,
+    max_indexation_height: IrisSerialId,
+    last_indexation_height: IrisSerialId,
 ) -> Result<()> {
-    // Bail if current Iris store length exceeed maximum constraint - should never occur.
+    // Bail if current Iris store length exceeds maximum constraint - should never occur.
     let store_len = iris_store.count_irises().await?;
     if store_len > config.max_db_size {
         log_error(format!(
@@ -543,8 +571,33 @@ async fn validate_consistency_of_stores(
     }
     log_info(format!("Size of the database after init: {}", store_len));
 
-    // TODO - check the database size matches where genesis should run too
-    // We would only want to run genesis from a certain serial id to the other serial id
+    // Bail if max indexation height exceeds length of the database
+    let store_len_u32: u32 = store_len
+        .try_into()
+        .unwrap_or_else(|_| panic!("Value too large for u32"));
+    if max_indexation_height > store_len_u32 {
+        log_error(format!(
+            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
+            max_indexation_height, store_len_u32
+        ));
+        bail!(
+            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
+            max_indexation_height,
+            store_len_u32
+        );
+    }
+
+    if last_indexation_height > max_indexation_height {
+        log_error(format!(
+            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
+            last_indexation_height, max_indexation_height
+        ));
+        bail!(
+            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
+            last_indexation_height,
+            max_indexation_height
+        );
+    }
 
     Ok(())
 }
