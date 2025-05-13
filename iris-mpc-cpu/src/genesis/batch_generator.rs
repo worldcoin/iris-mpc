@@ -82,11 +82,10 @@ impl BatchGenerator {
 impl BatchGenerator {
     // Returns next batch of Iris serial identifiers to be indexed.
     fn get_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
+        // Escape if exhausted.
         self.range_iter.peek()?;
-        // if self.range_iter.peek().is_none() {
-        //     return None;
-        // }
 
+        // Construct next batch.
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
@@ -96,36 +95,28 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
-                tracing::info!(
-                    "HNSW GENESIS :: Batch Generator :: Excluding deletion :: serial-id={}",
-                    next_id
-                );
+                Self::log_info(format!("Excluding deletion :: serial-id={}", next_id));
             }
         }
 
+        // Escape if empty otherwise increment count.
         if batch.is_empty() {
             return None;
         } else {
             self.batch_count += 1;
         }
 
-        #[cfg(test)]
-        println!(
-            "HNSW GENESIS :: Batch Generator :: Constructed new batch for indexation: idx={} :: irises={}",
+        Self::log_info(format!(
+            "Constructed new batch for indexation: idx={} :: irises={}",
             self.batch_count,
-            batch.len(),
-        );
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Constructed new batch for indexation: idx={} :: irises={}",
-            self.batch_count,
-            batch.len(),
-        );
+            batch.len()
+        ));
 
         Some(batch)
     }
 
     // Helper: component logging.
-    pub fn log_info(&self, msg: String) {
+    pub fn log_info(msg: String) {
         logger::log_info("Batch Generator", msg);
     }
 }
@@ -156,7 +147,7 @@ impl BatchIterator for BatchGenerator {
     ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-            self.log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
+            Self::log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
 
             Ok(Some(batch))
         } else {
