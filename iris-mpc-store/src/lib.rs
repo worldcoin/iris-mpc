@@ -682,7 +682,8 @@ impl OnDemandLoader for Store {
         indices: &[usize],
     ) -> eyre::Result<Vec<(usize, Vec<u16>, Vec<u16>)>> {
         // Convert indices to i64 array
-        let ids: Vec<i64> = indices.iter().map(|&idx| idx as i64).collect();
+        // Note that incoming indices are 0-based so we need to convert them to 1-based
+        let ids: Vec<i64> = indices.iter().map(|&idx| (idx + 1) as i64).collect();
 
         let query = match side {
             iris_mpc_common::job::Eye::Left => {
@@ -702,7 +703,7 @@ impl OnDemandLoader for Store {
         let results: Vec<_> = results
             .into_iter()
             .map(|(id, code, mask)| {
-                let id = id as usize;
+                let id = id as usize - 1; // convert back to 0-based index
                 let code = cast_u8_to_u16(&code).to_vec();
                 let mask = cast_u8_to_u16(&mask).to_vec();
                 (id, code, mask)
@@ -1412,16 +1413,17 @@ pub mod tests {
         tx.commit().await?;
 
         // Load records on demand
-        let indices = [1, 2, 3, 4, 5];
+        // these indices are 0-based
+        let indices = [0, 1, 2, 3, 4];
 
         let loaded = store.load_records(Eye::Right, &indices).await?;
         for (id, code, mask) in loaded.iter() {
             assert!(
-                code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
+                code.iter().all(|&x| x == 789_u16 + *id as u16),
                 "loaded code is correct"
             );
             assert!(
-                mask.iter().all(|&x| x == 101_u16 + *id as u16 - 1),
+                mask.iter().all(|&x| x == 101_u16 + *id as u16),
                 "loaded code is correct"
             );
         }
@@ -1429,11 +1431,11 @@ pub mod tests {
         let loaded = store.load_records(Eye::Right, &indices).await?;
         for (id, code, mask) in loaded.iter() {
             assert!(
-                code.iter().all(|&x| x == 789_u16 + *id as u16 - 1),
+                code.iter().all(|&x| x == 789_u16 + *id as u16),
                 "loaded code is correct"
             );
             assert!(
-                mask.iter().all(|&x| x == 101_u16 + *id as u16 - 1),
+                mask.iter().all(|&x| x == 101_u16 + *id as u16),
                 "loaded code is correct"
             );
         }
