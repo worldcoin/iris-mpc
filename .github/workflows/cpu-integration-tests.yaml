@@ -39,5 +39,4 @@ jobs:
 
       - name: Execute tests in the running services
         run: |
-          echo "Skipping tests for now"
-#          docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
+          docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
