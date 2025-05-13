@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{ensure, Result};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
@@ -149,7 +149,10 @@ impl SyncResult {
             return Err(eyre::eyre!("Genesis config is None for local state"));
         }
         for state in &self.all_states {
-            ensure!(state.genesis_config == genesis_config, "Inconsistent genesis config");
+            ensure!(
+                state.genesis_config == genesis_config,
+                "Inconsistent genesis config"
+            );
         }
         Ok(())
     }

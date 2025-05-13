@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::Result;
+use eyre::{bail, Result};
 use iris_mpc_common::{
     config::{Config, Opt},
     tracing::initialize_tracing,
@@ -22,7 +22,6 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let max_indexation_height = args.max_indexation_height;
 
-    // How can i throw an error here if the max_indexation_height is not set?
     if max_indexation_height.is_none() {
         eprintln!("Error: --max-height argument is required.");
         bail!("--max-height argument is required.");
