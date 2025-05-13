@@ -112,13 +112,13 @@ impl StreamManager {
                     let mut payload_len = message.data.len();
                     let mut requests = vec![message];
                     let start_time = Instant::now();
-                    loop {
+                    while requests.len() != stream_parallelism {
                         match hawk_rx.try_recv() {
                             Ok(msg) => {
                                 payload_len += msg.data.len();
                                 requests.push(msg);
                                 // maximum gRPC payload size is 4MB.
-                                if requests.len() == stream_parallelism || payload_len >= 1 << 21 {
+                                if payload_len >= 1 << 21 {
                                     break;
                                 }
                             }
