@@ -13,7 +13,11 @@ use crate::hnsw::{
 use eyre::{eyre, Result};
 use iris_mpc_common::serialization::{ReadPacked, WritePacked};
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+use std::{
+    io::{Read, Write},
+    mem::size_of,
+    ops::{Deref, DerefMut},
+};
 use tracing::{debug, instrument};
 
 /// A sorted list of edge IDs (without distances).
@@ -21,8 +25,8 @@ use tracing::{debug, instrument};
 pub struct SortedEdgeIds<V>(pub Vec<V>);
 
 impl<V: ReadPacked> ReadPacked for SortedEdgeIds<V> {
-    fn read_packed<R: std::io::Read>(reader: &mut R) -> Result<Self> {
-        let mut len_bytes = [0u8; std::mem::size_of::<usize>()];
+    fn read_packed<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut len_bytes = [0u8; size_of::<usize>()];
         reader.read_exact(&mut len_bytes)?;
         let len = usize::from_le_bytes(len_bytes);
         let mut edges = Vec::with_capacity(len);
@@ -34,7 +38,7 @@ impl<V: ReadPacked> ReadPacked for SortedEdgeIds<V> {
 }
 
 impl<V: WritePacked> WritePacked for SortedEdgeIds<V> {
-    fn write_packed<W: std::io::Write>(&self, writer: &mut W) -> Result<()> {
+    fn write_packed<W: Write>(&self, writer: &mut W) -> Result<()> {
         writer.write_all(&(self.0.len()).to_le_bytes())?;
         for edge in &self.0 {
             edge.write_packed(writer)?;

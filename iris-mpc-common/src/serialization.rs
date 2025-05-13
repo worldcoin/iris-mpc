@@ -1,3 +1,6 @@
+//! These traits are used for custom binary serialization. They were initially
+//! developed to reduce the size of the HNSW graph database, to reduce load times.
+
 use eyre::Result;
 use std::io::{Read, Write};
 
