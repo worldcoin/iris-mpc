@@ -126,7 +126,7 @@ impl BatchGenerator {
 
     // Helper: component logging.
     pub fn log_info(&self, msg: String) {
-        logger::log_info("Batch Generator", msg.as_str());
+        logger::log_info("Batch Generator", msg);
     }
 }
 
@@ -155,17 +155,8 @@ impl BatchIterator for BatchGenerator {
         iris_store: &IrisStore,
     ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
-            self.log_info(format!(
-                "Fetching Iris batch for indexation: idx={} :: irises={}",
-                self.batch_count,
-                identifiers.len()
-            ));
-
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-            logger::log_info(
-                "Batch Generator",
-                format!("Iris batch fetched: idx={}", self.batch_count,).as_str(),
-            );
+            self.log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
 
             Ok(Some(batch))
         } else {

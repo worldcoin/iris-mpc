@@ -4,6 +4,9 @@ use iris_mpc_common::config::Config;
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
+// Component name for logging purposes.
+const COMPONENT: &str = "Fetcher";
+
 /// Fetches height of indexed from store.
 ///
 /// # Arguments
@@ -57,12 +60,11 @@ pub(crate) async fn fetch_iris_batch(
     identifiers: Vec<IrisSerialId>,
 ) -> Result<Vec<DbStoredIris>, IndexationError> {
     logger::log_info(
-        "Fetcher",
+        COMPONENT,
         format!(
             "Fetching Iris batch for indexation: irises={:?}",
             identifiers
-        )
-        .as_str(),
+        ),
     );
 
     let data = iris_store
@@ -98,10 +100,12 @@ pub(crate) async fn fetch_iris_deletions(
     // Compose bucket and key based on environment
     let s3_bucket = config.get_s3_bucket_for_iris_deletions();
     let s3_key = config.get_s3_key_for_iris_deletions();
-    tracing::info!(
-        "HNSW GENESIS :: Fetcher :: Fetching deleted serial ids from S3 bucket: {}, key: {}",
-        s3_bucket,
-        s3_key
+    logger::log_info(
+        COMPONENT,
+        format!(
+            "Fetching deleted serial ids from S3 bucket: {}, key: {}",
+            s3_bucket, s3_key
+        ),
     );
 
     // Fetch from S3.
@@ -112,28 +116,25 @@ pub(crate) async fn fetch_iris_deletions(
         .send()
         .await
         .map_err(|err| {
-            tracing::error!(
-                "HNSW GENESIS :: Fetcher :: Failed to download file from S3: {}",
-                err
+            logger::log_error(
+                COMPONENT,
+                format!("Failed to download file from S3: {}", err),
             );
             IndexationError::AwsS3ObjectDownload
         })?;
 
     // Consume S3 object stream.
-    let s3_object_body = s3_response.body.collect().await.map_err(|e| {
-        tracing::error!(
-            "HNSW GENESIS :: Fetcher :: Failed to get object body: {}",
-            e
-        );
+    let s3_object_body = s3_response.body.collect().await.map_err(|err| {
+        logger::log_error(COMPONENT, format!("Failed to get object body: {}", err));
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
     // Decode S3 object bytes.
     let s3_object_bytes = s3_object_body.into_bytes();
     let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes).map_err(|err| {
-        tracing::error!(
-            "HNSW GENESIS :: Fetcher :: Failed to deserialize S3 object: {}",
-            err
+        logger::log_error(
+            COMPONENT,
+            format!("Failed to deserialize S3 object: {}", err),
         );
         IndexationError::AwsS3ObjectDeserialize
     })?;
