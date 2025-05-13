@@ -257,6 +257,16 @@ impl Config {
             self.party_id.clone()
         )
     }
+
+    // Returns computed name of an S3 bucket for fetching iris deletions.
+    pub fn get_s3_bucket_for_iris_deletions(&self) -> String {
+        format!("wf-smpcv2-{}-sync-protocol", self.environment)
+    }
+
+    // Returns computed name of an S3 key for fetching iris deletions.
+    pub fn get_s3_key_for_iris_deletions(&self) -> String {
+        format!("{}_deleted_serial_ids.json", self.environment)
+    }
 }
 
 fn default_full_scan_side() -> Eye {

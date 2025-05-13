@@ -1,9 +1,11 @@
-#![allow(clippy::needless_range_loop)]
-
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::config::{Config, Opt};
-use iris_mpc_common::tracing::initialize_tracing;
+use iris_mpc_common::{
+    config::{Config, Opt},
+    tracing::initialize_tracing,
+    IrisSerialId,
+};
+use iris_mpc_cpu::genesis::logger;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 #[derive(Parser)]
@@ -11,14 +13,14 @@ use iris_mpc_upgrade_hawk::genesis::exec_main;
 struct Args {
     // Maximum height of indexation.
     #[clap(long("max-height"))]
-    max_indexation_height: Option<u64>,
+    max_indexation_height: Option<IrisSerialId>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
-    let max_indexation_height = args.max_indexation_height.unwrap_or(0);
+    let max_indexation_height = args.max_indexation_height;
 
     // Set config.
     println!("Initialising config");
@@ -39,11 +41,11 @@ async fn main() -> Result<()> {
     // Invoke main.
     match exec_main(config, max_indexation_height).await {
         Ok(_) => {
-            tracing::info!("Server exited normally");
+            logger::log_info("Server", "Exited normally".to_string());
         }
-        Err(e) => {
-            tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+        Err(err) => {
+            logger::log_error("Server", format!("Server exited with error: {:?}", err));
+            return Err(err);
         }
     }
     Ok(())
