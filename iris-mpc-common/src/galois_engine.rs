@@ -7,6 +7,7 @@ pub mod degree4 {
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
+    use eyre::Result;
     use rand::{rngs::StdRng, CryptoRng, Rng, SeedableRng};
     use serde::{Deserialize, Serialize};
     use serde_big_array::BigArray;
@@ -368,7 +369,7 @@ pub mod degree4 {
             BASE64_STANDARD.encode::<Vec<u8>>(as_vec_u8)
         }
 
-        pub fn from_base64(s: &str) -> eyre::Result<Self> {
+        pub fn from_base64(s: &str) -> Result<Self> {
             let decoded_bytes = BASE64_STANDARD.decode(s)?;
             Ok(bincode::deserialize(&decoded_bytes)?)
         }
@@ -401,12 +402,18 @@ pub mod degree4 {
         pub code_interpolated: Vec<GaloisRingIrisCodeShare>,
         /// Mask rotations with Lagrange interpolations.
         pub mask_interpolated: Vec<GaloisRingTrimmedMaskCodeShare>,
+        /// Iris mirrored with Lagrange interpolations.
+        pub code_mirrored: Vec<GaloisRingIrisCodeShare>,
+        /// Mask mirrored with Lagrange interpolations.
+        pub mask_mirrored: Vec<GaloisRingTrimmedMaskCodeShare>,
     }
 
     pub fn preprocess_iris_message_shares(
         code_share: GaloisRingIrisCodeShare,
         mask_share: GaloisRingTrimmedMaskCodeShare,
-    ) -> eyre::Result<GaloisShares> {
+        code_share_mirrored: GaloisRingIrisCodeShare,
+        mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
+    ) -> Result<GaloisShares> {
         let mut code_share = code_share;
         let mut mask_share = mask_share;
 
@@ -422,6 +429,15 @@ pub mod degree4 {
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
         GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
+        // Mirrored share and mask.
+        // Only interested in the Lagrange interpolated share and mask for the mirrored case.
+        let mut code_share_mirrored = code_share_mirrored;
+        let mut mask_share_mirrored = mask_share_mirrored;
+
+        // With Lagrange interpolation.
+        GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
+        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
+
         Ok(GaloisShares {
             code: store_iris_shares,
             mask: store_mask_shares,
@@ -429,6 +445,8 @@ pub mod degree4 {
             mask_rotated: db_mask_shares,
             code_interpolated: code_share.all_rotations(),
             mask_interpolated: mask_share.all_rotations(),
+            code_mirrored: code_share_mirrored.all_rotations(),
+            mask_mirrored: mask_share_mirrored.all_rotations(),
         })
     }
 

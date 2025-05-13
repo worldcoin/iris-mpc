@@ -322,6 +322,8 @@ pub mod test_utils {
 #[cfg(test)]
 #[cfg(feature = "db_dependent")]
 mod tests {
+    use std::sync::Arc;
+
     use super::{test_utils::TestGraphPg, *};
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
@@ -341,7 +343,7 @@ mod tests {
         let vectors = {
             let mut v = vec![];
             for raw_query in IrisDB::new_random_rng(10, rng).db {
-                let q = vector_store.prepare_query(raw_query);
+                let q = Arc::new(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
             v
@@ -349,8 +351,9 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
+            let q = vector_store.points[0].clone();
             for v in vectors.iter() {
-                d.push(vector_store.eval_distance(&vectors[0], v).await?);
+                d.push(vector_store.eval_distance(&q, v).await?);
             }
             d
         };
@@ -402,14 +405,14 @@ mod tests {
     async fn test_hnsw_db() -> Result<()> {
         let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
         let graph_mem = &mut GraphMem::new();
-        let vector_store = &mut PlaintextStore::default();
+        let vector_store = &mut PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::default();
+        let db = HnswSearcher::new_with_test_parameters();
 
         let queries1 = IrisDB::new_random_rng(10, rng)
             .db
             .into_iter()
-            .map(|raw_query| vector_store.prepare_query(raw_query))
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes.

@@ -1315,6 +1315,8 @@ impl TestCaseGenerator {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_mirror,
+                    anonymized_bucket_statistics_right_mirror,
                     successful_reauths,
                     reset_update_indices,
                     reset_update_request_ids,
@@ -1323,6 +1325,17 @@ impl TestCaseGenerator {
                 } = res;
 
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
+                    // Check that normal orientation statistics have is_mirror_orientation set to false
+                    assert!(!anonymized_bucket_statistics_left.is_mirror_orientation,
+                        "Normal orientation left statistics should have is_mirror_orientation = false");
+                    assert!(!anonymized_bucket_statistics_right.is_mirror_orientation,
+                        "Normal orientation right statistics should have is_mirror_orientation = false");
+                    // Check that mirror orientation statistics have is_mirror_orientation set to true
+                    assert!(anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                        "Mirror orientation left statistics should have is_mirror_orientation = true");
+                    assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                        "Mirror orientation right statistics should have is_mirror_orientation = true");
+
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left,
                         bucket_statistic_parameters.num_gpus,
@@ -1331,6 +1344,19 @@ impl TestCaseGenerator {
                     )?;
                     check_bucket_statistics(
                         anonymized_bucket_statistics_right,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                    // Also check mirror orientation statistics
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_left_mirror,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_right_mirror,
                         bucket_statistic_parameters.num_gpus,
                         bucket_statistic_parameters.num_buckets,
                         bucket_statistic_parameters.match_buffer_size,

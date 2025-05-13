@@ -33,10 +33,16 @@ env:
         name: application
 
   - name: SMPC__MAX_DB_SIZE
-    value: "1000000"
-  
+    value: "2000000"
+
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "64"
+
+  - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
+    value: "false"
+
   - name: SMPC__CPU_DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
@@ -46,6 +52,7 @@ env:
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "false"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
@@ -80,7 +87,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "120"
+    value: "240"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"

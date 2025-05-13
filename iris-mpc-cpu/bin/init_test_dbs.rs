@@ -1,4 +1,4 @@
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 
 use aes_prng::AesRng;
 use clap::Parser;
@@ -34,8 +34,17 @@ use tracing::{info, warn};
 
 use eyre::Result;
 
+/// Number of MPC parties.
+const N_PARTIES: usize = 3;
+
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
+
+/// Number of iris code pairs to generate secret shares for at a time.
+const SECRET_SHARING_BATCH_SIZE: usize = 5000;
+
+/// Number of secret-shared iris code pairs to persist to Postgres per transaction.
+const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
 /// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
 /// Postgres databases. This binary iteratively builds up a graph in stages
@@ -188,8 +197,6 @@ impl From<&Args> for Rngs {
     }
 }
 
-const N_PARTIES: usize = 3;
-
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -235,23 +242,56 @@ async fn main() -> Result<()> {
         info!("Initialized PRNGs from explicit seeds");
     }
 
-    info!("Initializing in-memory vectors from NDJSON file");
-    let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
-    if n_existing_irises > 0 {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .take(2 * n_existing_irises);
+    info!("⚓ ANCHOR: Converting plaintext iris codes locally into secret shares");
 
-        for (count, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
+    let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..N_PARTIES)
+        .map(|_| Vec::with_capacity(SECRET_SHARING_BATCH_SIZE))
+        .collect();
 
-            let side = count % 2;
-            let query = vectors[side].prepare_query(raw_query);
-            vectors[side].insert(&query).await;
+    let mut n_read: usize = 0;
+
+    let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
+    let reader = BufReader::new(file);
+
+    let stream = Deserializer::from_reader(reader)
+        .into_iter::<Base64IrisCode>()
+        .skip(2 * n_existing_irises)
+        .map(|x| IrisCode::from(&x.unwrap()))
+        .tuples();
+    let stream = limited_iterator(stream, num_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+
+    for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
+        let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
+        n_read += vectors_batch.len();
+
+        for (left, right) in vectors_batch {
+            let left_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
+            let right_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
+
+            for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
+                batch[party].push((shares_l, shares_r));
+            }
         }
+
+        let cur_batch_len = batch[0].len();
+        let last_idx = batch_idx * SECRET_SHARING_BATCH_SIZE + cur_batch_len + n_existing_irises;
+
+        for (db, shares) in izip!(&dbs, batch.iter_mut()) {
+            #[allow(clippy::drain_collect)]
+            let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
+            assert_eq!(end_serial_id, last_idx);
+        }
+        info!(
+            "Persisted {} locally generated shares",
+            last_idx - n_existing_irises
+        );
     }
+
+    info!("Finished persisting {} locally generated shares", n_read);
+
+    info!("⚓ ANCHOR: Constructing HNSW graph databases");
 
     info!("Initializing in-memory graphs from databases");
     let graphs = if n_existing_irises > 0 {
@@ -268,6 +308,43 @@ async fn main() -> Result<()> {
         [GraphMem::new(), GraphMem::new()]
     };
 
+    let n_existing_irises = {
+        let n_left = get_max_serial_id(&graphs[0]).unwrap_or(0);
+        let n_right = get_max_serial_id(&graphs[1]).unwrap_or(0);
+
+        assert_eq!(
+            n_left, n_right,
+            "Max serial id not equal in existing left and right HNSW graphs"
+        );
+        n_left as usize
+    };
+    info!(
+        "Detected {} existing irises in database HNSW graphs",
+        n_existing_irises
+    );
+
+    let num_irises = args
+        .target_db_size
+        .map(|target| target.saturating_sub(n_existing_irises));
+
+    info!("Initializing in-memory vectors from NDJSON file");
+    let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
+    if n_existing_irises > 0 {
+        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
+        let reader = BufReader::new(file);
+        let stream = Deserializer::from_reader(reader)
+            .into_iter::<Base64IrisCode>()
+            .take(2 * n_existing_irises);
+
+        for (count, json_pt) in stream.enumerate() {
+            let raw_query = (&json_pt.unwrap()).into();
+
+            let side = count % 2;
+            let query = Arc::new(raw_query);
+            vectors[side].insert(&query).await;
+        }
+    }
+
     info!(
         "Reading NDJSON file of plaintext iris codes: {:?}",
         args.path_to_iris_codes
@@ -279,7 +356,7 @@ async fn main() -> Result<()> {
     let receivers = [rx_l, rx_r];
     let mut jobs: JoinSet<Result<_>> = JoinSet::new();
 
-    info!("Initializing I/O thread upon which plaintext iris codes will be read");
+    info!("Initializing I/O thread for reading plaintext iris codes");
     let io_thread = tokio::task::spawn_blocking(move || {
         let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
         let reader = BufReader::new(file);
@@ -289,17 +366,12 @@ async fn main() -> Result<()> {
             .skip(2 * n_existing_irises);
         let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
 
-        let mut count = 0usize;
-        for json_pt in stream {
+        for (idx, json_pt) in stream.enumerate() {
             let raw_query = (&json_pt.unwrap()).into();
 
-            let side = count % 2;
+            let side = idx % 2;
             processors[side].blocking_send(raw_query).unwrap();
-
-            count += 1;
         }
-
-        count
     });
 
     info!("Initializing jobs to process plaintext iris codes");
@@ -318,7 +390,7 @@ async fn main() -> Result<()> {
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                let query = vector_store.prepare_query(raw_query);
+                let query = Arc::new(raw_query);
                 searcher
                     .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
                     .await?;
@@ -342,15 +414,15 @@ async fn main() -> Result<()> {
         .collect::<Result<_, _>>()?;
     results.sort_by_key(|x| x.0 as usize);
 
-    let n_read = io_thread.await?;
+    io_thread.await?;
 
     info!(
         "Finished building HNSW graphs with {} nodes",
         results[0].1.points.len()
     );
 
-    let (_, vector_r, graph_r, hnsw_rng_r) = results.remove(1);
-    let (_, vector_l, graph_l, hnsw_rng_l) = results.remove(0);
+    let (_, _, graph_r, hnsw_rng_r) = results.remove(1);
+    let (_, _, graph_l, hnsw_rng_l) = results.remove(0);
 
     for (party, db) in dbs.iter().enumerate() {
         for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
@@ -359,50 +431,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!("Converting plaintext iris codes locally into secret shares");
-
-    const BATCH_SIZE: usize = 10_000;
-    let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..N_PARTIES)
-        .map(|_| Vec::with_capacity(BATCH_SIZE))
-        .collect();
-
-    for (batch_idx, vectors_batch) in izip!(&vector_l.points, &vector_r.points)
-        .skip(n_existing_irises)
-        .chunks(BATCH_SIZE)
-        .into_iter()
-        .enumerate()
-    {
-        for (left, right) in vectors_batch {
-            let left_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.data.0.clone());
-            let right_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.data.0.clone());
-
-            for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-                batch[party].push((shares_l, shares_r));
-            }
-        }
-
-        let cur_batch_len = batch[0].len();
-        let last_idx = batch_idx * BATCH_SIZE + cur_batch_len + n_existing_irises;
-
-        for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-            #[allow(clippy::drain_collect)]
-            let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
-            assert_eq!(end_serial_id, last_idx);
-        }
-        info!(
-            "Persisted {} locally generated shares",
-            last_idx - n_existing_irises
-        );
-    }
-
     info!(
-        "Finished persisting {} locally generated shares",
-        n_read / 2
+        "Writing HNSW PRNG intermediate state to file: {}",
+        prng_state_filename
     );
-
-    info!("Serializing HNSW PRNG intermediate state");
     write_json(&(hnsw_rng_l, hnsw_rng_r), &prng_state_filename)?;
 
     info!("Exited successfully! 🎉");
@@ -478,7 +510,7 @@ impl DbContext {
         let start_serial_id = self.store.get_max_serial_id().await.unwrap_or(0) + 1;
         let end_serial_id = start_serial_id + shares.len() - 1;
 
-        for batch in &shares.iter().enumerate().chunks(1000) {
+        for batch in &shares.iter().enumerate().chunks(SECRET_SHARING_PG_TX_SIZE) {
             let iris_refs: Vec<_> = batch
                 .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
                     id: (start_serial_id + idx) as i64,
@@ -505,5 +537,17 @@ impl DbContext {
         let mut graph_ops = graph_tx.with_graph(side);
 
         graph_ops.load_to_mem().await
+    }
+}
+
+fn get_max_serial_id(graph: &GraphMem<PlaintextStore>) -> Option<u32> {
+    if let Some(layer) = graph.layers.first() {
+        layer
+            .get_links_map()
+            .keys()
+            .map(|vec_id| vec_id.serial_id())
+            .max()
+    } else {
+        None
     }
 }

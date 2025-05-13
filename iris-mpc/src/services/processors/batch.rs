@@ -87,7 +87,7 @@ pub fn receive_batch_stream(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn receive_batch(
+async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
@@ -99,7 +99,7 @@ pub async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
         client,
@@ -169,7 +169,7 @@ impl<'a> BatchProcessor<'a> {
         }
     }
 
-    pub async fn receive_batch(&mut self) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+    pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
@@ -198,9 +198,14 @@ impl<'a> BatchProcessor<'a> {
         let queue_url = &self.config.requests_queue_url;
 
         // Poll until we have enough messages
-        // temporary hack for staging to only process 1 message at a time
-        // this helps with the correctness test
-        while self.msg_counter < 1 {
+        // Config to only process 1 message at a time, this helps with the correctness test
+        let batch_size = if self.config.override_max_batch_size {
+            1
+        } else {
+            *CURRENT_BATCH_SIZE.lock().unwrap()
+        };
+
+        while self.msg_counter < batch_size {
             let rcv_message_output = self
                 .client
                 .receive_message()
@@ -449,7 +454,7 @@ impl<'a> BatchProcessor<'a> {
 
         Ok(())
     }
-    async fn handle_share_processing_error(&self, index: usize) -> eyre::Result<()> {
+    async fn handle_share_processing_error(&self, index: usize) -> Result<()> {
         let request_id = self.batch_query.request_ids[index].clone();
         let request_type = &self.batch_query.request_types[index];
 
@@ -602,6 +607,8 @@ impl<'a> BatchProcessor<'a> {
             mask_rotated: dummy_mask_share.all_rotations(),
             code_interpolated: dummy_code_share.all_rotations(),
             mask_interpolated: dummy_mask_share.all_rotations(),
+            code_mirrored: dummy_code_share.all_rotations(),
+            mask_mirrored: dummy_mask_share.all_rotations(),
         };
 
         ((dummy.clone(), dummy), false)
@@ -657,5 +664,22 @@ impl<'a> BatchProcessor<'a> {
             .right_iris_interpolated_requests
             .mask
             .extend(share_right.mask_interpolated);
+
+        self.batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(share_left.code_mirrored);
+        self.batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(share_left.mask_mirrored);
+        self.batch_query
+            .right_mirrored_iris_interpolated_requests
+            .code
+            .extend(share_right.code_mirrored);
+        self.batch_query
+            .right_mirrored_iris_interpolated_requests
+            .mask
+            .extend(share_right.mask_mirrored);
     }
 }
