@@ -149,15 +149,7 @@ impl SyncResult {
             return Err(eyre::eyre!("Genesis config is None for local state"));
         }
         for state in &self.all_states {
-            if state.genesis_config != genesis_config {
-                return Err(eyre::eyre!(
-                    "Inconsistent genesis config!\n
-                have: {:?}\n
-                got: {:?}",
-                    genesis_config,
-                    state.genesis_config
-                ));
-            }
+            ensure!(state.genesis_config == genesis_config, "Inconsistent genesis config");
         }
         Ok(())
     }
