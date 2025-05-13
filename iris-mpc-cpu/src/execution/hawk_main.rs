@@ -956,6 +956,8 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
+            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
