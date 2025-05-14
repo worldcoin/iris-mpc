@@ -46,7 +46,7 @@ impl BatchGenerator {
 impl BatchGenerator {
     pub async fn new_from_services(
         config: &Config,
-        max_indexation_height: Option<IrisSerialId>,
+        max_indexation_height: IrisSerialId,
         iris_store: &IrisStore,
         _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
@@ -56,11 +56,7 @@ impl BatchGenerator {
             .await
             .unwrap();
 
-        // Set range of indexation.
-        let range_end = match max_indexation_height {
-            Some(height) => height,
-            None => fetcher::fetch_height_of_registrations(iris_store).await?,
-        } + 1;
+        let range_end = max_indexation_height + 1;
         let range_start = fetcher::fetch_height_of_indexed(iris_store).await?;
         let range = range_start..range_end + 1;
 

@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::Result;
+use eyre::{bail, Result};
 use iris_mpc_common::{
     config::{Config, Opt},
     tracing::initialize_tracing,
@@ -21,6 +21,12 @@ async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
     let max_indexation_height = args.max_indexation_height;
+
+    if max_indexation_height.is_none() {
+        eprintln!("Error: --max-height argument is required.");
+        bail!("--max-height argument is required.");
+    }
+    let max_indexation_height = max_indexation_height.unwrap();
 
     // Set config.
     println!("Initialising config");
