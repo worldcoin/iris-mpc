@@ -11,17 +11,14 @@ use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::serialization::{ReadPacked, WritePacked};
 use itertools::izip;
-use sqlx::{
-    error::BoxDynError,
-    types::{Json, Text},
-    PgConnection, Postgres, Row, Transaction,
-};
+use sqlx::{error::BoxDynError, types::Text, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    links: Json<SortedEdgeIds<V::VectorRef>>,
+    // these can be turned into a SortedEdgeIds<V::VectorRef> using the ReadPacked trait
+    links: Vec<u8>,
     layer: i32,
 }
 
@@ -270,8 +267,9 @@ where
         let mut irises = self.stream_links();
         while let Some(row) = irises.next().await {
             let row = row?;
+            let links = SortedEdgeIds::read_packed(&mut &row.links[..])?;
             graph_mem
-                .set_links(row.source_ref.0, row.links.0, row.layer as usize)
+                .set_links(row.source_ref.0, links, row.layer as usize)
                 .await;
         }
 
