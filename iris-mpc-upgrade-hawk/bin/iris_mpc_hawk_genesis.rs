@@ -1,10 +1,6 @@
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{
-    config::{Config, Opt},
-    tracing::initialize_tracing,
-    IrisSerialId,
-};
+use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
 use iris_mpc_cpu::genesis::logger;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
@@ -19,10 +15,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Set args.
-    println!("Parsing args");
     let args = Args::parse();
-    println!("Parsed args: {:?}", args);
+
     let max_indexation_height_arg = args.max_indexation_height;
 
     if max_indexation_height_arg.is_none() {
