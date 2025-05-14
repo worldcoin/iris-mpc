@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   e2e:
-    runs-on: gpu
+    runs-on: arc-gpu-amd64-runner
     timeout-minutes: 20
     steps:
       - name: Checkout code

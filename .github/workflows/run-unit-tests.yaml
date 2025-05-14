@@ -13,8 +13,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on:
-      labels: ubuntu-22.04-64core
+    runs-on: ubuntu-22.04-8core
 
     services:
       postgres:
