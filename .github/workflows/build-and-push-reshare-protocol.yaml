@@ -9,7 +9,7 @@ on:
       - Dockerfile.reshare-protocol
       - iris-mpc-upgrade/**
       - scripts/reshare-client.sh
-      # - .github/workflows/build-and-push-reshare-protocol.yaml
+      - .github/workflows/build-and-push-reshare-protocol.yaml
 
   release:
     types:

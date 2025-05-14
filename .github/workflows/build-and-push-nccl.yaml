@@ -7,7 +7,7 @@ on:
       - "main"
     paths:
       - Dockerfile.nccl
-      # - .github/workflows/build-and-push-nccl.yaml
+      - .github/workflows/build-and-push-nccl.yaml
 
   workflow_dispatch:
 
