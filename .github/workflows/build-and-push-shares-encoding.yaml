@@ -14,7 +14,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}-shares-encoding
 jobs:
   docker:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-22.04-32core
     permissions:
       packages: write
       contents: read

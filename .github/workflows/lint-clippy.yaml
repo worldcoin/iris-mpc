@@ -7,7 +7,7 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
-  permissions:
+permissions:
   # Leaving clippy annotations on commits...
   contents: write
   # And on PRs
