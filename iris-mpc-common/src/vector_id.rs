@@ -80,6 +80,14 @@ impl VectorId {
     pub fn version_matches(&self, other_version: VersionId) -> bool {
         self.version == other_version
     }
+
+    /// Return the next version of this vector ID.
+    pub fn next_version(self) -> Self {
+        VectorId {
+            id: self.id,
+            version: self.version + 1,
+        }
+    }
 }
 
 #[cfg(test)]

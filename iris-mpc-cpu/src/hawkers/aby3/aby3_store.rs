@@ -45,6 +45,10 @@ impl Query {
             processed_query,
         })
     }
+
+    fn iris(&self) -> IrisRef {
+        Arc::new(self.query.clone())
+    }
 }
 
 /// Creates a new query from a secret shared iris.
@@ -98,9 +102,23 @@ impl SharedIrises {
             .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
-        if was_there.is_none() {
-            self.set_hash.add_unordered(vector_id);
+        if let Some((previous_version, _)) = was_there {
+            self.set_hash
+                .remove(VectorId::new(vector_id.serial_id(), previous_version));
         }
+        self.set_hash.add_unordered(vector_id);
+    }
+
+    pub fn append(&mut self, query: &QueryRef) -> VectorId {
+        let new_id = self.next_id();
+        self.insert(new_id, query.iris());
+        new_id
+    }
+
+    pub fn update(&mut self, vector_id: VectorId, query: &QueryRef) -> VectorId {
+        let new_id = vector_id.next_version();
+        self.insert(new_id, query.iris());
+        new_id
     }
 
     fn next_id(&mut self) -> VectorId {
@@ -199,12 +217,8 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
-    pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
-        let new_vector = Arc::new(query.query.clone());
-        let mut body = self.body.write().await;
-        let new_id = body.next_id();
-        body.insert(new_id, new_vector);
-        new_id
+    async fn append(&mut self, query: &QueryRef) -> VectorId {
+        self.body.write().await.append(query)
     }
 
     pub async fn checksum(&self) -> u64 {
@@ -373,7 +387,7 @@ impl VectorStore for Aby3Store {
 
 impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.insert(query).await
+        self.storage.append(query).await
     }
 }
 
@@ -603,7 +617,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.insert(p).await);
+                player_inserts.push(store_lock.storage.append(p).await);
             }
             aby3_inserts.push(player_inserts);
         }

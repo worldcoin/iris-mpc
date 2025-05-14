@@ -190,36 +190,81 @@ impl BatchStep2 {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Decision {
+    UniqueInsert,
+    UniqueReject,
+    ReauthUpdate(VectorId),
+    ReauthReject,
+}
+use Decision::*;
+
+impl Decision {
+    pub fn is_match(&self) -> bool {
+        match self {
+            UniqueReject | ReauthUpdate(_) => true,
+            UniqueInsert | ReauthReject => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep3(VecRequests<Step3>);
 
 impl BatchStep3 {
-    /// The final decision of whether the request is a match or unique.
+    /// The final decision of what to do with a request.
     ///
     /// Emulate the behavior of inserting entries one by one. Intra-batch matches
-    /// only count if they are unique and being inserted themselves.
-    pub fn is_matches(&self) -> VecRequests<bool> {
-        let mut is_matches = Vec::with_capacity(self.0.len());
+    /// only count if they are being inserted themselves.
+    pub fn decisions(&self) -> VecRequests<Decision> {
+        use Decision::*;
+
+        let filter = Filter {
+            eyes: Both,
+            orient: Both,
+            intra_batch: true,
+        };
+
+        let mut decisions = Vec::with_capacity(self.0.len());
+
         for request in &self.0 {
-            let is_match = request
-                .select(Filter {
-                    eyes: Both,
-                    orient: Both,
-                    intra_batch: true,
-                })
-                .any(|id| match id {
-                    Search(_) | Luc(_) | Reauth(_) => true,
-                    IntraBatch(request_i) => {
-                        match is_matches.get(request_i) {
-                            Some(true) => false, // the request we matched with was before us in the batch, and was a match, so we are not blocked by this intra-batch match
-                            Some(false) => true, // the request we matched with was before us in the batch, and was unique, so we are blocked by this intra-batch match
-                            None => false, // The request we matched with is after us in the batch, so we are not blocked by it.
+            let decision = match request.normal.reauth_result {
+                // Uniqueness request.
+                None => {
+                    let is_match = request.select(filter).any(|id| match id {
+                        Search(_) | Luc(_) | Reauth(_) => true,
+                        IntraBatch(request_i) => {
+                            match decisions.get(request_i) {
+                                // The request we matched with will be inserted, so we are blocked by this intra-batch match.
+                                Some(UniqueInsert) | Some(ReauthUpdate(_)) => true,
+                                // The request we matched with is rejected, so we are not blocked by this intra-batch match.
+                                Some(UniqueReject) | Some(ReauthReject) => false,
+                                // The request we matched with is after us in the batch, so we are not blocked by it.
+                                None => false,
+                            }
                         }
+                    });
+                    if is_match {
+                        UniqueReject
+                    } else {
+                        UniqueInsert
                     }
-                });
-            is_matches.push(is_match);
+                }
+
+                // Reauth request.
+                Some((reauth_id, [match_left, match_right])) => {
+                    let is_match = filter.reauth_rule(match_left, match_right);
+                    if is_match {
+                        ReauthUpdate(reauth_id)
+                    } else {
+                        ReauthReject
+                    }
+                }
+            };
+
+            decisions.push(decision);
         }
-        is_matches
+        decisions
     }
 
     /// The IDs of the vectors that matched at least partially.
