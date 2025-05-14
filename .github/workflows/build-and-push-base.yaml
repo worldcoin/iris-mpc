@@ -15,7 +15,7 @@ env:
   NCCL_VERSION: 2_22_3_1
 jobs:
   docker:
-    runs-on: ubuntu-22.04-32core
+    runs-on: ubuntu-22.04-8core
     permissions:
       packages: write
       contents: read
