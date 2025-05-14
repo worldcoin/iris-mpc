@@ -1,6 +1,5 @@
 name: Build All Targets
 
-
 on:
   push:
     paths-ignore:

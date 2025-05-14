@@ -1,6 +1,5 @@
 name: Build and push image from a branch [nocuda]
 
-
 on:
   workflow_dispatch:
     inputs:

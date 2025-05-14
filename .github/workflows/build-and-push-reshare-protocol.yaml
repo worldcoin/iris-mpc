@@ -1,6 +1,5 @@
 name: Build and push image for reshare-protocol
 
-
 on:
   push:
     branches:

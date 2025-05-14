@@ -1,6 +1,5 @@
 name: Build and push base docker image (CUDA, NCCL)
 
-
 on:
   push:
     paths:

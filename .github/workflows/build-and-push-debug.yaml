@@ -1,6 +1,5 @@
 name: Build and push docker Debug image
 
-
 on:
   workflow_dispatch:
 

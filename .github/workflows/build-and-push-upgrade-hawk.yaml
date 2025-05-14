@@ -1,6 +1,5 @@
 name: Build and push image for iris-mpc-genesis
 
-
 on:
   push:
     branches:

@@ -1,6 +1,5 @@
 name: Rust GPU Tests
 
-
 on:
   pull_request:
 

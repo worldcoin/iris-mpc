@@ -1,6 +1,5 @@
 name: Build and push image for iris-mpc-cpu
 
-
 on:
   push:
     branches:

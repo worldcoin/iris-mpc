@@ -1,6 +1,5 @@
 name: Branch - Hawk Build and push docker image 
 
-
 on:
   push:
     branches:

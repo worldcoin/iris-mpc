@@ -1,6 +1,5 @@
 name: Check Cargo Dependencies
 
-
 on:
   pull_request:
   workflow_dispatch:

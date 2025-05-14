@@ -1,6 +1,5 @@
 name: Build and push nccl docker image
 
-
 on:
   push:
     branches:

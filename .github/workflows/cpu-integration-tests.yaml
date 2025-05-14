@@ -1,6 +1,5 @@
 name: CPU Integration Tests
 
-
 on:
   pull_request:
 

@@ -1,6 +1,5 @@
 name: Lint Rustfmt
 
-
 on:
   push:
 

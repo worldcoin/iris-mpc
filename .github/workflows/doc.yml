@@ -1,6 +1,5 @@
 name: Check Doc Syntax
 
-
 on:
   push:
     paths-ignore:
