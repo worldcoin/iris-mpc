@@ -84,7 +84,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        &my_state,
+        Arc::clone(&my_state),
     )
     .await;
     background_tasks.check_tasks();
@@ -98,7 +98,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = synchronized.
-    let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
+    let sync_result = coordinator::get_others_sync_state(&config, Arc::clone(&my_state)).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -378,7 +378,7 @@ async fn get_sync_state(
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
-) -> Result<SyncState> {
+) -> Result<Arc<SyncState>> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
@@ -392,14 +392,14 @@ async fn get_sync_state(
         last_indexation_height,
     };
 
-    Ok(SyncState {
+    Ok(Arc::new(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
         genesis_config: Some(genesis_config),
-    })
+    }))
 }
 
 async fn init_graph_from_stores(

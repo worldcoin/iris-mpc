@@ -64,9 +64,13 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut background_tasks = init_task_monitor();
 
-    let is_ready_flag =
-        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
-            .await;
+    let is_ready_flag = start_coordination_server(
+        &config,
+        &mut background_tasks,
+        &shutdown_handler,
+        Arc::clone(&my_state),
+    )
+    .await;
 
     background_tasks.check_tasks();
 
@@ -76,7 +80,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let sync_result = get_others_sync_state(&config, &my_state).await?;
+    let sync_result = get_others_sync_state(&config, Arc::clone(&my_state)).await?;
     sync_result.check_common_config()?;
 
     maybe_sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
@@ -419,7 +423,7 @@ async fn build_sync_state(
     config: &Config,
     aws_clients: &AwsClients,
     store: &Store,
-) -> Result<SyncState> {
+) -> Result<Arc<SyncState>> {
     let db_len = store.count_irises().await? as u64;
     let deleted_request_ids = store
         .last_deleted_requests(max_sync_lookback(config))
@@ -428,14 +432,14 @@ async fn build_sync_state(
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
-    Ok(SyncState {
+    Ok(Arc::new(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
         genesis_config: None,
-    })
+    }))
 }
 
 /// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete stale
