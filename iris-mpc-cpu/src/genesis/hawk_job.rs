@@ -1,6 +1,6 @@
 use super::utils::types::IrisIdentifier;
 use crate::{
-    execution::hawk_main::{BothEyes, VecRequests},
+    execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
     protocol::shared_iris::GaloisRingSharedIris,
 };
@@ -72,8 +72,11 @@ impl JobRequest {
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
-    // Results of indexation.
-    pub results: Vec<JobResultOfBatchElement>,
+    /// Which identifiers inserted in the job
+    pub identifiers: Vec<IrisIdentifier>,
+
+    /// Connect plans for updating the HNSW graph in DB
+    pub connect_plans: HawkMutation,
 }
 
 /// An indexation result over a single iris.

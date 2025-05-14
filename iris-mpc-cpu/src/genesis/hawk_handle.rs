@@ -1,7 +1,7 @@
 use super::hawk_job::{Job, JobRequest, JobResult};
 use crate::{
     execution::hawk_main::{
-        insert, join_plans, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, HawkSessionRef, InsertPlan, LEFT, RIGHT
+        insert::{insert, insert_with_ids}, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, InsertPlan, LEFT, RIGHT
     },
     genesis::utils::types::IrisIdentifier,
     hawkers::aby3::aby3_store::QueryRef as Aby3QueryRef,
@@ -12,7 +12,9 @@ use futures::try_join;
 use iris_mpc_store::DbStoredIris;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
-use tokio::{sync::{mpsc, oneshot}, task::JoinSet};
+use tokio::{
+    sync::{mpsc, oneshot},
+};
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
@@ -115,47 +117,54 @@ impl Handle {
 
         // TODO implement automatic parallelism scaling
 
-        // ----------
+        // Iterate per side
+        let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
+            .map(|(queries_side, sessions_side)| {
+                let searcher = actor.searcher();
+                let queries = queries_side.clone();
+                let identifiers = request.identifiers.clone();
+                let sessions = sessions_side.clone();
 
-        // 1. Iterate through chunks of requests
+                // Per side do searches and insertions
+                async move {
+                    let n_sessions = sessions.len();
+                    let insert_session = sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                    let mut connect_plans = Vec::new();
 
-        let mut join: JoinSet<Result<()>> = JoinSet::new();
-        for (queries_side, sessions_side) in izip!(request.queries.iter(), sessions.iter()) {
-            let searcher = actor.searcher();
-            let queries = queries_side.clone();
-            let sessions = sessions_side.clone();
+                    // Process queries in a logical insertion batch for this side
+                    for queries_batch in queries.chunks(n_sessions) {
+                        let search_jobs =
+                            izip!(queries_batch.iter(), sessions.iter()).map(|(query, session)| {
+                                let query = query.clone();
+                                let searcher = searcher.clone();
+                                let session = session.clone();
+                                async move {
+                                    search_single_query_no_match_count(session, query, &searcher).await
+                                }
+                            });
 
-            // Per side do searches and insertions
-            join.spawn(async move {
-                let n_sessions = sessions.len();
-                let insert_session = sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                        let plans = parallelize(search_jobs)
+                            .await?
+                            .into_iter()
+                            .map(Some)
+                            .collect_vec();
 
-                for queries_batch in queries.chunks(n_sessions) {
-                    let search_jobs = izip!(queries_batch.iter(), sessions.iter())
-                        .map(|(query, session)| {
-                            let query = query.clone();
-                            let searcher = searcher.clone();
-                            let session = session.clone();
-                            async move {
-                                search_single_query_no_match_count(session, query, &searcher).await
-                            }
-                        });
-                    
-                    let plans: Vec<Option<_>> = parallelize(search_jobs)
-                        .await?
-                        .into_iter()
-                        .map(Some)
-                        .collect();
+                        // Insert into in-memory store, and return insertion plans for use by DB
+                        let plans = insert(plans, &searcher, insert_session).await?;
+                        connect_plans.extend(plans);
+                    }
 
-                    insert(plans, &searcher, insert_session).await?;
+                    Ok(connect_plans)
                 }
+            })
+            .collect_vec();
 
-                Ok(())
-            });
-        }
+        let results_ = parallelize(jobs_per_side.into_iter()).await?;
+        let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
-            results: Vec::new(),
+            identifiers: request.identifiers.clone(),
+            connect_plans: HawkMutation(results),
         })
     }
 

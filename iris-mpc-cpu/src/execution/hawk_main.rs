@@ -69,6 +69,7 @@ mod matching;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
+pub(crate) mod insert;
 pub mod state_check;
 use crate::protocol::ops::{
     compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,
@@ -428,7 +429,7 @@ impl HawkActor {
         sessions: &[HawkSessionRef],
         plans: VecRequests<Option<InsertPlan>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        insert(plans, &self.searcher, &sessions[0]).await
+        insert::insert(plans, &self.searcher, &sessions[0]).await
     }
 
     async fn update_anon_stats(
@@ -899,7 +900,7 @@ impl HawkResult {
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(BothEyes<Vec<Option<ConnectPlan>>>);
+pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
 
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
@@ -1097,74 +1098,6 @@ impl Consensus {
         self.next_session_id += 1;
         id
     }
-}
-
-/// Insert a collection of `InsertPlan` structs into the graph and vector store represented
-/// by `session`, adjusting the insertion plans as needed to repair any conflict from
-/// parallel searches.
-pub async fn insert(
-    plans: VecRequests<Option<InsertPlan>>,
-    searcher: &HnswSearcher,
-    session: &HawkSessionRef,
-) -> Result<VecRequests<Option<ConnectPlan>>> {
-    let insert_plans = join_plans(plans);
-    let mut connect_plans = vec![None; insert_plans.len()];
-
-    let mut session = session.write().await;
-
-    for (plan, cp) in izip!(insert_plans, &mut connect_plans) {
-        if let Some(plan) = plan {
-            *cp = Some(insert_one(plan, searcher, &mut session).await?);
-        }
-    }
-    Ok(connect_plans)
-}
-
-async fn insert_one(
-    insert_plan: InsertPlan,
-    searcher: &HnswSearcher,
-    session: &mut HawkSession,
-) -> Result<ConnectPlan> {
-    let inserted = session.aby3_store.storage.insert(&insert_plan.query).await;
-    let mut graph_store = session.graph_store.write().await;
-
-    let connect_plan = searcher
-        .insert_prepare(
-            &mut session.aby3_store,
-            graph_store.deref(),
-            inserted,
-            insert_plan.links,
-            insert_plan.set_ep,
-        )
-        .await?;
-
-    graph_store.insert_apply(connect_plan.clone()).await;
-
-    Ok(connect_plan)
-}
-
-/// Combine insert plans from parallel searches, repairing any conflict.
-pub fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>> {
-    let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
-    if set_ep {
-        // There can be at most one new entry point.
-        let highest = plans
-            .iter()
-            .map(|plan| match plan {
-                Some(plan) => plan.links.len(),
-                None => 0,
-            })
-            .position_max()
-            .unwrap();
-
-        // Set the entry point to false for all but the highest.
-        for (i, plan) in plans.iter_mut().enumerate() {
-            if let Some(plan) = plan {
-                plan.set_ep = i == highest;
-            }
-        }
-    }
-    plans
 }
 
 fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
