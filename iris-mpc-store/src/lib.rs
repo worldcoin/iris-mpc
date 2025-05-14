@@ -601,6 +601,7 @@ WHERE id = $1;
     ///
     /// If an entry already exists for this primary key, this overwrites the existing
     /// value with the value specified here.
+    // REVIEW(bgillesp): how about naming this `upsert_persistent_state`?
     pub async fn update_persistent_state<T: Serialize>(
         &self,
         tx: &mut Transaction<'_, Postgres>,

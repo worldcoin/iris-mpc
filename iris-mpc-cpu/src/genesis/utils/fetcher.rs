@@ -1,7 +1,6 @@
 use super::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
-use iris_mpc_common::helpers::fetch_index;
 use iris_mpc_common::{config::Config, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
@@ -9,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // Component name for logging purposes.
 const COMPONENT: &str = "Fetcher";
 
-/// Fetches height of indexed from store.
+/// Fetch height of indexed from store.
 ///
 /// # Returns
 ///
@@ -20,9 +19,34 @@ pub async fn fetch_height_of_indexed<D: AsRef<str>>(
     iris_store: &IrisPgresStore,
 ) -> IrisSerialId {
     iris_store
-        .get_persistent_state(domain, "height-of-graph-genesis-indexation")
+        // REVIEW(@bgillesp): is this how you intended the `domain` and `key` to be used?
+        .get_persistent_state(domain.as_ref(), "height-of-graph-genesis-indexation")
         .await
-        .unwrap_or(1.into())
+        .unwrap_or(Some(1))
+        .unwrap_or(1)
+}
+
+/// Set height of indexed from store.
+///
+/// # Returns
+///
+/// TODO
+///
+pub async fn set_height_of_indexed<D: AsRef<str>>(
+    domain: D,
+    iris_store: &IrisPgresStore,
+    new_height: &IrisSerialId,
+) -> Result<()> {
+    let mut tx = iris_store.tx().await?;
+    iris_store
+        // REVIEW(@bgillesp): is this how you intended the `domain` and `key` to be used?
+        .update_persistent_state(
+            &mut tx,
+            domain.as_ref(),
+            "height-of-graph-genesis-indexation",
+            new_height,
+        )
+        .await
 }
 
 /// Fetch a batch of iris data for indexation.

@@ -3,8 +3,6 @@ pub mod aws;
 #[cfg(feature = "helpers")]
 pub mod aws_sigv4;
 #[cfg(feature = "helpers")]
-pub mod fetch_index;
-#[cfg(feature = "helpers")]
 pub mod inmemory_store;
 #[cfg(feature = "helpers")]
 pub mod key_pair;

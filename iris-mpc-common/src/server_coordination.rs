@@ -111,7 +111,8 @@ pub async fn start_coordination_server(
                 .route(
                     "/height-of-graph-genesis-indexation",
                     get({
-                        let height = fetch_height_of_indexed().await;
+                        // REVIEW(@bgillesp): here
+                        let height: IrisSerialId = 42;
                         // We are only ready once this flag is set to true.
                         let is_ready_flag = Arc::clone(&is_ready_flag);
                         move || async move {
@@ -194,6 +195,11 @@ pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("All nodes are starting up.");
 
     Ok(())
+}
+
+pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
+    tracing::info!("⚓️ ANCHOR: Checking consensus on iris height");
+    todo!();
 }
 
 // /// Assumption This function assumes that each of the nodes have finished indexing the irises before it is called.

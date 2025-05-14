@@ -8,7 +8,6 @@ use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
-        fetch_index::{fetch_height_of_indexed, IrisSerialId, PREV_IRIS_INDEX_FILE},
         inmemory_store::InMemoryStore,
         shutdown_handler::ShutdownHandler,
         sync::{GenesisConfig, SyncResult, SyncState},
@@ -19,18 +18,21 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
-    genesis::{logger, BatchGenerator, BatchIterator, Handle as HawkHandle},
+    genesis::{
+        logger,
+        utils::fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+        BatchGenerator, BatchIterator, Handle as HawkHandle,
+    },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::{
     collections::HashSet,
-    path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::{fs, time::timeout};
+use tokio::time::timeout;
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -174,8 +176,8 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut prev_iris_index = fetch_height_of_indexed().await;
-        let prev_iris_index_path = Path::new(PREV_IRIS_INDEX_FILE);
+        let domain = config.party_id.to_string();
+        let mut prev_iris_index = fetch_height_of_indexed(&domain, iris_store).await;
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
@@ -228,11 +230,8 @@ async fn exec_main_loop(
             };
             let curr_iris_index: IrisSerialId = curr_iris_index_opt.unwrap();
 
-            let file_content = curr_iris_index.to_string();
-            fs::write(prev_iris_index_path, file_content)
-                .await
-                .inspect_err(|err| tracing::error!("{}", err))
-                .unwrap_or(());
+            let () = set_height_of_indexed(&domain, iris_store, &curr_iris_index).await?;
+
             prev_iris_index = curr_iris_index;
         }
 
