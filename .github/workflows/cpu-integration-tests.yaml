@@ -12,7 +12,7 @@ env:
 
 jobs:
   integration-tests:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04-16core
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
