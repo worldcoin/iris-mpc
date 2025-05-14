@@ -919,7 +919,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_genesis_config_all_none() {
+    fn test_check_genesis_config_one_none() {
         let genesis_config = Some(GenesisConfig {
             max_indexation_height: 100,
             last_indexation_height: 50,
@@ -956,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn test_check_genesis_config_one_none() {
+    fn test_check_genesis_config_all_none() {
         let states = vec![
             SyncState {
                 db_len: 10,
