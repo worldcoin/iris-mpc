@@ -15,8 +15,14 @@ const COMPONENT: &str = "Fetcher";
 ///
 /// Index of lastest iris.
 ///
-pub async fn fetch_height_of_indexed() -> IrisSerialId {
-    fetch_index::fetch_height_of_indexed().await
+pub async fn fetch_height_of_indexed<D: AsRef<str>>(
+    domain: D,
+    iris_store: &IrisPgresStore,
+) -> IrisSerialId {
+    iris_store
+        .get_persistent_state(domain, "height-of-graph-genesis-indexation")
+        .await
+        .unwrap_or(1.into())
 }
 
 /// Fetch a batch of iris data for indexation.
@@ -168,7 +174,7 @@ mod tests {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let height = fetch_height_of_indexed(&iris_store).await.unwrap();
+        let height = fetch_height_of_indexed("0", &iris_store).await;
         assert_eq!(height, 1);
 
         // Unset resources.
