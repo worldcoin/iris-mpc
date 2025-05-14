@@ -89,6 +89,9 @@ pub struct HawkArgs {
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
+    #[clap(short, long, default_value_t = 1)]
+    pub stream_parallelism: usize,
+
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
@@ -265,6 +268,7 @@ impl HawkActor {
         let grpc_config = GrpcConfig {
             timeout_duration: Duration::from_secs(10),
             connection_parallelism: args.connection_parallelism,
+            stream_parallelism: args.stream_parallelism,
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
@@ -775,6 +779,7 @@ impl HawkResult {
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Both,
+            intra_batch: true,
         });
 
         self.connect_plans.0[0]
@@ -812,6 +817,7 @@ impl HawkResult {
                         MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
+                    .unique()
                     .collect_vec()
             })
             .collect_vec()
@@ -827,6 +833,7 @@ impl HawkResult {
             .select(Filter {
                 eyes: Both,
                 orient: Both,
+                intra_batch: true,
             })
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
@@ -843,27 +850,32 @@ impl HawkResult {
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (full_face_mirror_match_ids, _) = self.select(Filter {
             eyes: Both,
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
             self.select(Filter {
                 eyes: Only(Left),
                 orient: Only(Mirror),
+                intra_batch: false,
             });
 
         let (
@@ -872,6 +884,7 @@ impl HawkResult {
         ) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
@@ -913,13 +926,14 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
-            successful_reauths: vec![false; n_requests], // TODO.
-            reauth_target_indices: Default::default(),   // TODO.
-            reauth_or_rule_used: Default::default(),     // TODO.
-            reset_update_indices: vec![],                // TODO.
-            reset_update_request_ids: vec![],            // TODO.
-            reset_update_shares: vec![],                 // TODO.
-
+            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
+            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
+            successful_reauths: vec![false; n_requests],                           // TODO.
+            reauth_target_indices: Default::default(),                             // TODO.
+            reauth_or_rule_used: Default::default(),                               // TODO.
+            reset_update_indices: vec![],                                          // TODO.
+            reset_update_request_ids: vec![],                                      // TODO.
+            reset_update_shares: vec![],                                           // TODO.
             modifications: batch.modifications,
 
             actor_data: self.connect_plans,
@@ -1119,7 +1133,7 @@ impl HawkHandle {
 
 #[derive(Default)]
 struct Consensus {
-    next_session_id: u64,
+    next_session_id: u32,
 }
 
 impl Consensus {
@@ -1226,24 +1240,44 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
+            .map(|iris| {
+                (
+                    GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone()),
+                    GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris),
+                )
+            })
             .collect_vec();
-        // Unzip: party -> iris_id -> share
+
+        // Unzip: party -> iris_id -> (share, share_mirrored)
         let irises = (0..n_parties)
             .map(|party_index| {
                 irises
                     .iter()
-                    .map(|iris| iris[party_index].clone())
+                    .map(|(iris, iris_mirrored)| {
+                        (
+                            iris[party_index].clone(),
+                            iris_mirrored[party_index].clone(),
+                        )
+                    })
                     .collect_vec()
             })
             .collect_vec();
 
         let all_results = izip!(irises, handles.clone())
-        .map(|(shares, mut handle)| async move {
+            .map(|(shares, mut handle)| async move {
                 // TODO: different test irises for each eye.
-                let shares_right = shares.clone();
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right);
+
+                let shares_right_cloned = shares.clone();
+                let shares_left_cloned = shares.clone();
+
+                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
 
                 let batch = BatchQuery {
                     // Iris shares.
@@ -1316,19 +1350,27 @@ mod tests {
     }
 
     /// Prepare shares in the same format as `receive_batch()`.
-    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 4] {
+    fn receive_batch_shares(
+        shares: Vec<GaloisRingSharedIris>,
+        mirrored_shares: Vec<GaloisRingSharedIris>,
+    ) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for share in shares {
-            let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
+        for (share, mirrored_share) in izip!(shares, mirrored_shares) {
+            let one = preprocess_iris_message_shares(
+                share.code,
+                share.mask,
+                mirrored_share.code,
+                mirrored_share.mask,
+            )
+            .unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);
             out[1].mask.extend(one.mask_rotated);
             out[2].code.extend(one.code_interpolated.clone());
             out[2].mask.extend(one.mask_interpolated.clone());
-            // TODO: mirrored.
-            out[3].code.extend(one.code_interpolated);
-            out[3].mask.extend(one.mask_interpolated);
+            out[3].code.extend(one.code_mirrored);
+            out[3].mask.extend(one.mask_mirrored);
         }
         out
     }
@@ -1451,6 +1493,7 @@ mod tests_db {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
+            stream_parallelism: 2,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,

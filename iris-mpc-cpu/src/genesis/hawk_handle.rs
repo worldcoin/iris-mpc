@@ -1,4 +1,7 @@
-use super::hawk_job::{Job, JobRequest, JobResult};
+use super::{
+    hawk_job::{Job, JobRequest, JobResult},
+    utils::logger,
+};
 use crate::execution::hawk_main::{BothEyes, HawkActor, HawkSession, HawkSessionRef, LEFT, RIGHT};
 use eyre::Result;
 use futures::try_join;
@@ -58,7 +61,9 @@ impl Handle {
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
                 if stop {
-                    tracing::error!("HawkActor is in an inconsistent state, therefore stopping.");
+                    Self::log_error(String::from(
+                        "HawkActor is in an inconsistent state, therefore stopping.",
+                    ));
                     break;
                 }
             }
@@ -96,10 +101,10 @@ impl Handle {
         _sessions: &BothEyes<Vec<HawkSessionRef>>,
         request: &JobRequest,
     ) -> Result<JobResult> {
-        tracing::info!(
+        Self::log_info(format!(
             "Genesis Hawk job processing ::{} elements within batch",
             request.identifiers.len()
-        );
+        ));
         let _ = Instant::now();
 
         // TODO implement business logic.
@@ -107,6 +112,16 @@ impl Handle {
         Ok(JobResult {
             results: Vec::new(),
         })
+    }
+
+    // Helper: component error logging.
+    fn log_error(msg: String) {
+        logger::log_error("Hawk Handle", msg);
+    }
+
+    // Helper: component logging.
+    fn log_info(msg: String) {
+        logger::log_info("Hawk Handle", msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns

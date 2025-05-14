@@ -178,6 +178,9 @@ pub struct Config {
     pub enable_sending_anonymized_stats_message: bool,
 
     #[serde(default)]
+    pub enable_sending_mirror_anonymized_stats_message: bool,
+
+    #[serde(default)]
     pub enable_reauth: bool,
 
     #[serde(default)]
@@ -185,6 +188,9 @@ pub struct Config {
 
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
+
+    #[serde(default = "default_hawk_stream_parallelism")]
+    pub hawk_stream_parallelism: usize,
 
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
@@ -253,6 +259,16 @@ impl Config {
             self.environment.clone(),
             self.party_id.clone()
         )
+    }
+
+    // Returns computed name of an S3 bucket for fetching iris deletions.
+    pub fn get_s3_bucket_for_iris_deletions(&self) -> String {
+        format!("wf-smpcv2-{}-sync-protocol", self.environment)
+    }
+
+    // Returns computed name of an S3 key for fetching iris deletions.
+    pub fn get_s3_key_for_iris_deletions(&self) -> String {
+        format!("{}_deleted_serial_ids.json", self.environment)
     }
 }
 
@@ -353,11 +369,15 @@ fn default_n_buckets() -> usize {
 }
 
 fn default_hawk_request_parallelism() -> usize {
-    10
+    1024
+}
+
+fn default_hawk_stream_parallelism() -> usize {
+    8
 }
 
 fn default_hawk_connection_parallelism() -> usize {
-    10
+    16
 }
 
 fn default_hawk_server_healthcheck_port() -> usize {
@@ -530,8 +550,11 @@ pub struct CommonConfig {
     match_distances_buffer_size_extra_percent: usize,
     n_buckets: usize,
     enable_sending_anonymized_stats_message: bool,
+    enable_sending_mirror_anonymized_stats_message: bool,
     enable_reauth: bool,
+    enable_reset: bool,
     hawk_request_parallelism: usize,
+    hawk_stream_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
@@ -548,7 +571,6 @@ pub struct CommonConfig {
     hawk_server_reauths_enabled: bool,
     app_name: String,
     cpu_disable_persistence: bool,
-    enable_reset: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
 }
@@ -602,8 +624,11 @@ impl From<Config> for CommonConfig {
             match_distances_buffer_size_extra_percent,
             n_buckets,
             enable_sending_anonymized_stats_message,
+            enable_sending_mirror_anonymized_stats_message,
             enable_reauth,
+            enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
@@ -621,7 +646,6 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             app_name,
             cpu_disable_persistence,
-            enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
             override_max_batch_size: _, // for testing purposes only
@@ -653,8 +677,11 @@ impl From<Config> for CommonConfig {
             match_distances_buffer_size_extra_percent,
             n_buckets,
             enable_sending_anonymized_stats_message,
+            enable_sending_mirror_anonymized_stats_message,
             enable_reauth,
+            enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
             hnsw_param_M,
@@ -671,7 +698,6 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             app_name,
             cpu_disable_persistence,
-            enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
         }
