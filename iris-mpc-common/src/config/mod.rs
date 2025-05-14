@@ -244,6 +244,9 @@ pub struct Config {
 
     #[serde(default = "default_batch_polling_timeout_secs")]
     pub batch_polling_timeout_secs: i32,
+
+    #[serde(default = "default_sqs_long_poll_wait_time")]
+    pub sqs_long_poll_wait_time: usize,
 }
 
 impl Config {
@@ -407,6 +410,10 @@ fn default_batch_polling_timeout_secs() -> i32 {
     10
 }
 
+fn default_sqs_long_poll_wait_time() -> usize {
+    20
+}
+
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
@@ -555,6 +562,7 @@ pub struct CommonConfig {
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
     batch_polling_timeout_secs: i32,
+    sqs_long_poll_wait_time: usize,
 }
 
 impl From<Config> for CommonConfig {
@@ -630,6 +638,7 @@ impl From<Config> for CommonConfig {
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
+            sqs_long_poll_wait_time,
         } = value;
 
         Self {
@@ -681,6 +690,7 @@ impl From<Config> for CommonConfig {
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
+            sqs_long_poll_wait_time,
         }
     }
 }
