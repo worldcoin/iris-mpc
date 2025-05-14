@@ -115,7 +115,8 @@ pub async fn start_coordination_server(
                     "/height-of-graph-genesis-indexation",
                     get({
                         let my_state = Arc::clone(&my_state);
-                        let b: u32 = (my_state.genesis_config.as_ref().map(
+                        // REVIEW: is it last or max?
+                        let height: IrisSerialId = (my_state.genesis_config.as_ref().map(
                             |GenesisConfig {
                                  max_indexation_height,
                                  last_indexation_height: _,
@@ -125,8 +126,6 @@ pub async fn start_coordination_server(
                         // We are only ready once this flag is set to true.
                         let is_ready_flag = Arc::clone(&is_ready_flag);
                         move || async move {
-                            // REVIEW: is it last or max?
-                            let height: IrisSerialId = b.clone();
                             if is_ready_flag.load(Ordering::SeqCst) {
                                 height.to_string().into_response()
                             } else {
