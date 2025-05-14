@@ -1,5 +1,10 @@
 name: Build and push image for iris-mpc-cpu
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   push:
     branches:
@@ -15,7 +20,7 @@ env:
 
 jobs:
   docker:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04
     permissions:
       packages: write
       contents: read

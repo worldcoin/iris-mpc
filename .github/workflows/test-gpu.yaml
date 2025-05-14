@@ -1,5 +1,10 @@
 name: Rust GPU Tests
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   pull_request:
 

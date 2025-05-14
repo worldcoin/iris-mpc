@@ -1,4 +1,8 @@
 name: Release Drafter
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
 
 on:
   push:
@@ -15,13 +19,10 @@ on:
       - '.github/**'
     types: [opened, reopened, synchronize]
 
-permissions:
-  contents: read
-
 jobs:
   update_release_draft:
     name: Update Release Draft
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04
 
     permissions:
       contents: write

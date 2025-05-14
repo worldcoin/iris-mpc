@@ -1,5 +1,10 @@
 name: Build and push base docker image for shares encoding binary [nocuda]
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   push:
     paths:
@@ -14,7 +19,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}-shares-encoding
 jobs:
   docker:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04
     permissions:
       packages: write
       contents: read

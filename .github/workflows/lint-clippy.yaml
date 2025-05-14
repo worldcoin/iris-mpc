@@ -1,5 +1,10 @@
 name: Lint Clippy
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   push:
 
@@ -7,17 +12,13 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
-permissions:
-  # Leaving clippy annotations on commits...
-  contents: write
-  # And on PRs
-  pull-requests: write
-  # Updating commit and PR statuses
-  checks: write
-
 jobs:
   lint-clippy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

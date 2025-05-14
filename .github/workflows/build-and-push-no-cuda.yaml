@@ -1,5 +1,10 @@
 name: Build and push image from a branch [nocuda]
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -19,7 +24,7 @@ env:
 
 jobs:
   docker:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04
     permissions:
       packages: write
       contents: read

@@ -1,5 +1,10 @@
 name: Build and push docker Debug image
 
+permissions:
+  contents: read
+  pull-requests: read
+  checks: read
+
 on:
   workflow_dispatch:
 
@@ -13,7 +18,7 @@ env:
 
 jobs:
   docker:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04
     permissions:
       packages: write
       contents: read
