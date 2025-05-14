@@ -35,8 +35,8 @@ fn decode_iris_message_shares(
     let mask_share: GaloisRingIrisCodeShare = GaloisRingIrisCodeShare::from_base64(&mask_share)
         .context("Failed to base64 parse iris mask")?;
 
-    let iris_share_mirrored = iris_share.mirrored();
-    let mask_share_mirrored = mask_share.mirrored();
+    let iris_share_mirrored = iris_share.mirrored_code();
+    let mask_share_mirrored = mask_share.mirrored_mask();
 
     Ok((
         iris_share,

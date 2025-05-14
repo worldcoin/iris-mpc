@@ -25,7 +25,10 @@ type InStreams = HashMap<Identity, InStream>;
 #[derive(Default, Clone, Debug)]
 pub struct GrpcConfig {
     pub timeout_duration: Duration,
+    // number of gRPC connections to create
     pub connection_parallelism: usize,
+    // number of application level sessions per gRPC stream.
+    pub stream_parallelism: usize,
 }
 
 #[cfg(test)]
@@ -35,7 +38,7 @@ mod tests {
         execution::{local::generate_local_identities, player::Role, session::SessionId},
         hawkers::aby3::{aby3_store::prepare_query, test_utils::shared_random_setup},
         hnsw::HnswSearcher,
-        network::Networking,
+        network::{NetworkType, Networking},
     };
     use aes_prng::AesRng;
     use futures::future::join_all;
@@ -72,7 +75,12 @@ mod tests {
     #[traced_test]
     async fn test_grpc_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
-        let players = setup_local_grpc_networking(identities.clone()).await?;
+        let players = setup_local_grpc_networking(
+            identities.clone(),
+            NetworkType::default_connection_parallelism(),
+            NetworkType::default_stream_parallelism(),
+        )
+        .await?;
 
         let mut jobs = JoinSet::new();
 
@@ -205,7 +213,12 @@ mod tests {
     async fn test_grpc_comms_fail() -> Result<()> {
         let parties = generate_local_identities();
 
-        let players = setup_local_grpc_networking(parties.clone()).await?;
+        let players = setup_local_grpc_networking(
+            parties.clone(),
+            NetworkType::default_connection_parallelism(),
+            NetworkType::default_stream_parallelism(),
+        )
+        .await?;
 
         let mut jobs = JoinSet::new();
 
@@ -221,7 +234,7 @@ mod tests {
                     .send(message.clone(), &Identity::from("eve"))
                     .await;
                 assert_eq!(
-                    "Outgoing stream for Identity(\"eve\") in session SessionId(0) not found",
+                    "Outgoing stream for Identity(\"eve\") in SessionId(0) not found",
                     res.unwrap_err().to_string()
                 );
             });
@@ -237,7 +250,7 @@ mod tests {
                 let res = sessions[0].receive(&Identity::from("eve")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Incoming stream for Identity(\"eve\") in session SessionId(1) not found"
+                    "Incoming stream for Identity(\"eve\") in SessionId(1) not found"
                 );
             });
         }
@@ -255,7 +268,7 @@ mod tests {
                     .await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Outgoing stream for Identity(\"alice\") in session SessionId(2) not found",
+                    "Outgoing stream for Identity(\"alice\") in SessionId(2) not found",
                 );
             });
         }
@@ -273,7 +286,7 @@ mod tests {
 
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Session SessionId(3) has already been created by player Identity(\"alice\")"
+                    "SessionId(3) has already been created by Identity(\"alice\")"
                 );
             });
         }
@@ -288,8 +301,8 @@ mod tests {
                 let res = sessions[0].receive(&Identity::from("bob")).await;
                 assert_eq!(
                     res.unwrap_err().to_string(),
-                    "Party Identity(\"alice\"): Timeout while waiting for message from \
-                     Identity(\"bob\") in session SessionId(4)"
+                    "Identity(\"alice\"): Timeout while waiting for message from \
+                     Identity(\"bob\") in SessionId(4)"
                 );
             });
         }
@@ -308,7 +321,7 @@ mod tests {
         let mut vectors_and_graphs = shared_random_setup(
             &mut rng,
             database_size,
-            crate::network::NetworkType::GrpcChannel,
+            crate::network::NetworkType::default_grpc(),
         )
         .await
         .unwrap();

@@ -1,8 +1,8 @@
 use crate::{
     execution::{local::get_free_local_addresses, player::Identity},
-    network::SessionId,
+    network::{SessionId, StreamId},
     proto_generated::party_node::{
-        party_node_client::PartyNodeClient, party_node_server::PartyNodeServer, SendRequest,
+        party_node_client::PartyNodeClient, party_node_server::PartyNodeServer, SendRequests,
     },
 };
 use backon::{ExponentialBuilder, Retryable};
@@ -10,18 +10,16 @@ use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
 use std::{
     collections::{HashMap, HashSet},
-    str::FromStr,
     time::Duration,
 };
-use tokio::sync::mpsc::{self, UnboundedReceiver};
-use tonic::{
-    metadata::AsciiMetadataValue,
-    transport::{Channel, Server},
-    Request, Status,
-};
+use tokio::sync::mpsc::UnboundedReceiver;
+use tonic::transport::{Channel, Server};
 
 use super::handle::GrpcHandle;
-use super::{GrpcConfig, InStreams, OutStreams};
+use super::{GrpcConfig, InStream, InStreams, OutStream, OutStreams};
+
+mod stream_manager;
+use stream_manager::StreamManager;
 
 // WARNING: this implementation assumes that messages for a specific player
 // within one session are sent in order and consecutively. Don't send messages
@@ -31,12 +29,14 @@ pub struct GrpcNetworking {
     // other party id -> client to call that party
     clients: HashMap<Identity, Vec<PartyNodeClient<Channel>>>,
     // session_id -> incoming streams
-    instreams: HashMap<SessionId, InStreams>,
+    inbound_sessions: HashMap<SessionId, InStreams>,
     // sessions in use
     // TODO: deletion logic
     active_sessions: HashSet<SessionId>,
+    // creates outbound gRPC streams and multiplexes sessions over them
+    sm: StreamManager,
 
-    pub config: GrpcConfig,
+    config: GrpcConfig,
 }
 
 impl GrpcNetworking {
@@ -44,8 +44,9 @@ impl GrpcNetworking {
         GrpcNetworking {
             party_id,
             clients: HashMap::new(),
-            instreams: HashMap::new(),
+            inbound_sessions: HashMap::new(),
             active_sessions: HashSet::new(),
+            sm: StreamManager::new(config.clone()),
             config,
         }
     }
@@ -70,7 +71,7 @@ impl GrpcNetworking {
     pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             bail!(
-                "Player {:?} has already connected to player {:?}",
+                "{:?} has already connected to {:?}",
                 self.party_id,
                 party_id
             );
@@ -88,7 +89,7 @@ impl GrpcNetworking {
             .into_iter()
             .collect::<Result<Result<Vec<PartyNodeClient<_>>, _>, _>>()??;
         tracing::trace!(
-            "Player {:?} connected to player {:?} at address {:?}",
+            "{:?} connected to {:?} at address {:?}",
             self.party_id,
             party_id,
             address
@@ -97,55 +98,14 @@ impl GrpcNetworking {
         Ok(())
     }
 
-    pub async fn create_outgoing_streams(&self, session_id: SessionId) -> Result<OutStreams> {
-        if self.active_sessions.contains(&session_id) {
-            bail!(
-                "Session {:?} has already been created by player {:?}",
-                session_id,
-                self.party_id
-            );
-        }
-        let mut out_streams = HashMap::new();
-        for (client_id, clients) in self.clients.iter() {
-            let (tx, rx) = mpsc::unbounded_channel();
-            tracing::trace!(
-                "Player {:?} is adding outgoing stream of session {:?} for player {:?}",
-                self.party_id,
-                session_id,
-                client_id
-            );
-            out_streams.insert(client_id.clone(), tx);
-            let receiving_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx);
-            let mut request = Request::new(receiving_stream);
-            request.metadata_mut().insert(
-                "sender_id",
-                AsciiMetadataValue::from_str(&self.party_id.0)
-                    .map_err(|e| eyre!("Failed to convert Sender ID to ASCII: {e}"))?,
-            );
-            request.metadata_mut().insert(
-                "session_id",
-                AsciiMetadataValue::from_str(&session_id.0.to_string())
-                    .map_err(|e| eyre!("Failed to convert Session ID to ASCII: {e}"))?,
-            );
-
-            let round_robin = (session_id.0 as usize) % clients.len();
-            let mut client = clients[round_robin].clone();
-            tokio::spawn(async move {
-                let _response = client.start_message_stream(request).await?;
-                Ok::<_, Status>(())
-            });
-            tracing::debug!(
-                "Player {:?} has created session {:?} with player {:?}",
-                self.party_id,
-                session_id,
-                client_id
-            );
-        }
-        Ok(out_streams)
+    // adds a session to a stream, and creates a new stream if needed
+    pub async fn create_outgoing_streams(&mut self, session_id: SessionId) -> Result<OutStreams> {
+        self.sm
+            .add_session(&self.party_id, &self.clients, session_id)
     }
 
     pub fn is_session_ready(&self, session_id: SessionId) -> bool {
-        let n_senders = match self.instreams.get(&session_id) {
+        let n_senders = match self.inbound_sessions.get(&session_id) {
             None => 0,
             Some(q) => q.len(),
         };
@@ -153,11 +113,13 @@ impl GrpcNetworking {
         n_senders == self.clients.len()
     }
 
-    pub async fn create_incoming_streams(&mut self, session_id: SessionId) -> Result<InStreams> {
+    pub async fn obtain_incoming_streams(&mut self, session_id: SessionId) -> Result<InStreams> {
         self.active_sessions.insert(session_id);
-        self.instreams.remove(&session_id).ok_or(eyre!(format!(
-            "Session {session_id:?} hasn't been added to message queues"
-        )))
+        self.inbound_sessions
+            .remove(&session_id)
+            .ok_or(eyre!(format!(
+                "{session_id:?} hasn't been added to message queues"
+            )))
     }
 }
 
@@ -166,45 +128,77 @@ impl GrpcNetworking {
     pub async fn start_message_stream(
         &mut self,
         sender_id: Identity,
-        session_id: SessionId,
-        stream: UnboundedReceiver<SendRequest>,
+        stream_id: StreamId,
+        mut stream: UnboundedReceiver<SendRequests>,
+        session_forwarder: HashMap<u32, OutStream>,
+        mut inbound_sessions: HashMap<SessionId, InStream>,
     ) -> Result<()> {
         if sender_id == self.party_id {
             bail!("Sender ID coincides with receiver ID: {:?}", sender_id);
         }
 
-        tracing::debug!(
-            "Player {:?} is adding incoming stream from player {:?} in session {:?}",
-            self.party_id,
-            sender_id,
-            session_id
-        );
-
-        let instreams = self.instreams.entry(session_id).or_default();
-
-        if instreams.contains_key(&sender_id) {
-            bail!(
-                "Incoming stream for player {:?} has been already created",
-                sender_id
-            );
+        for (session_id, stream) in inbound_sessions.drain() {
+            if self
+                .inbound_sessions
+                .entry(session_id)
+                .or_default()
+                .insert(sender_id.clone(), stream)
+                .is_some()
+            {
+                tracing::error!(
+                    "duplicate session id {} on stream {} from sender {:?}",
+                    session_id.0,
+                    stream_id.0,
+                    sender_id
+                );
+            }
         }
-        instreams.insert(sender_id.clone(), stream);
 
+        // logging here to avoid a clone.
         tracing::debug!(
-            "Player {:?} has added incoming stream from player {:?} in session {:?}",
+            "{:?} has added incoming stream  {:?} from {:?}",
             self.party_id,
-            sender_id,
-            session_id
+            stream_id,
+            sender_id
         );
+
+        tokio::spawn(async move {
+            while let Some(msg) = stream.recv().await {
+                for request in msg.requests {
+                    let session_id = request.session_id;
+                    if let Some(tx) = session_forwarder.get(&session_id) {
+                        if let Err(e) = tx.send(request) {
+                            tracing::error!(
+                                "Failed to forward message for session {:?}: {:?}",
+                                session_id,
+                                e
+                            );
+                        }
+                    } else {
+                        tracing::error!(
+                            "{:?} sent message with invalid session id {:?} on stream {:?}",
+                            sender_id,
+                            session_id,
+                            stream_id
+                        );
+                    }
+                }
+            }
+        });
 
         Ok(())
     }
 }
 
-pub async fn setup_local_grpc_networking(parties: Vec<Identity>) -> Result<Vec<GrpcHandle>> {
+pub async fn setup_local_grpc_networking(
+    parties: Vec<Identity>,
+    connection_parallelism: usize,
+    stream_parallelism: usize,
+) -> Result<Vec<GrpcHandle>> {
     let config = GrpcConfig {
         timeout_duration: Duration::from_secs(5),
-        connection_parallelism: 1,
+        connection_parallelism,
+        stream_parallelism,
     };
 
     let nets = parties

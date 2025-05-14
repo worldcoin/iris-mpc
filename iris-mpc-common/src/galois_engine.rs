@@ -374,14 +374,26 @@ pub mod degree4 {
             Ok(bincode::deserialize(&decoded_bytes)?)
         }
 
-        pub fn mirrored(&self) -> Self {
+        pub fn mirrored_code(&self) -> Self {
+            self.mirrored(true)
+        }
+
+        pub fn mirrored_mask(&self) -> Self {
+            self.mirrored(false)
+        }
+
+        fn mirrored(&self, flip_imaginary: bool) -> Self {
             // Flip the coefficients corresponding to the imaginary bits
-            let flipped = self.flipped_imaginary_coeffs();
+            let share = if flip_imaginary {
+                self.flipped_imaginary_coeffs()
+            } else {
+                self.clone()
+            };
 
             // Mirror the coefficients
-            let mut res = flipped.clone();
+            let mut res = share.clone();
             for i in 0..IRIS_CODE_LENGTH {
-                res.coefs[Self::remap_new_to_mirrored_index(i)] = flipped.coefs[i];
+                res.coefs[Self::remap_new_to_mirrored_index(i)] = share.coefs[i];
             }
 
             res
@@ -697,11 +709,11 @@ pub mod degree4 {
 
             let iris_code_shares_flipped = iris_code_shares_incoming
                 .iter()
-                .map(|share| share.mirrored())
+                .map(|share| share.mirrored_code())
                 .collect::<Vec<_>>();
             let mask_shares_flipped = mask_shares_incoming
                 .iter()
-                .map(|share| share.mirrored())
+                .map(|share| share.mirrored_mask())
                 .collect::<Vec<_>>();
 
             let distance = calculate_distance(
