@@ -9,14 +9,14 @@ on:
     paths-ignore:
       - 'adr/**'
       - 'deploy/**'
-      - '.github/**'
+      # - '.github/**'
     branches:
       - main
   pull_request:
     paths-ignore:
       - 'adr/**'
       - 'deploy/**'
-      - '.github/**'
+      # - '.github/**'
     types: [opened, reopened, synchronize]
 
 jobs:

@@ -9,7 +9,7 @@ on:
   push:
     paths:
       - Dockerfile.base
-      - .github/workflows/build-and-push-base.yaml
+      # - .github/workflows/build-and-push-base.yaml
 
   workflow_dispatch:
 
