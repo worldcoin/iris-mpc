@@ -1,9 +1,5 @@
 name: Branch - Build and push docker image
 
-permissions:
-  contents: read
-  pull-requests: read
-  checks: read
 
 on:
   push:

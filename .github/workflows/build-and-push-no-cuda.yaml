@@ -1,9 +1,5 @@
 name: Build and push image from a branch [nocuda]
 
-permissions:
-  contents: read
-  pull-requests: read
-  checks: read
 
 on:
   workflow_dispatch:
