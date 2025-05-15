@@ -23,10 +23,11 @@ ENV RUSTUP_HOME "/root/.rustup"
 ENV CARGO_HOME "/root/.cargo"
 
 COPY . .
-
+RUN du -sh *
 RUN rustup toolchain install 1.85.0
 RUN rustup default 1.85.0
 RUN rustup component add cargo
+RUN pwd
 RUN cargo install cargo-build-deps && cargo install cargo-edit
 
 RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates \
