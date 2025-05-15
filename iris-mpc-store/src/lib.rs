@@ -1378,7 +1378,7 @@ pub mod tests {
         let set_value = "bar".to_string();
         let mut tx = store.tx().await?;
         store
-            .update_persistent_state(&mut tx, &domain, &key, &set_value)
+            .set_persistent_state(&mut tx, &domain, &key, &set_value)
             .await?;
         tx.commit().await?;
 
@@ -1390,7 +1390,7 @@ pub mod tests {
         let new_set_value = "bear".to_string();
         let mut tx = store.tx().await?;
         store
-            .update_persistent_state(&mut tx, &domain, &key, &new_set_value)
+            .set_persistent_state(&mut tx, &domain, &key, &new_set_value)
             .await?;
         tx.commit().await?;
 
