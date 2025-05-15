@@ -4,7 +4,7 @@ use aws_sdk_sqs::Client;
 use eyre::Context;
 use eyre::Result;
 
-/// SQS messages contain a sequence number when they originate from SNS and raw message delivery is enabled.
+/// SQS messages contain a sequence number when they originate from SNS and raw message delivery is disabled.
 /// This function reads the top of the requests SQS queue and returns its sequence number.
 pub async fn get_next_sns_seq_num(config: &Config, sqs_client: &Client) -> Result<Option<u128>> {
     let sqs_snoop_response = sqs_client
@@ -41,7 +41,7 @@ pub async fn get_next_sns_seq_num(config: &Config, sqs_client: &Client) -> Resul
         }
     } else {
         tracing::info!("Timeout while waiting for a message in the queue. Queue is clean.");
-        Ok(None)
+        Ok(Some(0))
     }
 }
 
