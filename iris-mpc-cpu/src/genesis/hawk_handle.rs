@@ -122,8 +122,6 @@ impl Handle {
                 let searcher = actor.searcher();
                 let queries_with_ids =
                     izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
-                // let queries = queries_side.clone();
-                // let identifiers = request.identifiers.clone();
                 let sessions = sessions_side.clone();
 
                 // Per side do searches and insertions

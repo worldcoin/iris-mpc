@@ -37,6 +37,9 @@ pub async fn insert(
     Ok(connect_plans)
 }
 
+/// Insert a single `InsertPlan` into the vector store and graph of `session`.  If
+/// `insert_id` is `Some(id)`, then `id` is used as the identifier for the inserted
+/// query.  Otherwise, the query is inserted at the next unused serial id, as version 0.
 async fn insert_one(
     session: &mut HawkSession,
     searcher: &HnswSearcher,

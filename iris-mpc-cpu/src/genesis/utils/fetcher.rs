@@ -80,7 +80,6 @@ pub(crate) async fn fetch_iris_deletions(
     // Compose bucket and key based on environment
     let s3_bucket = config.get_s3_bucket_for_iris_deletions();
     let s3_key = config.get_s3_key_for_iris_deletions();
-
     logger::log_info(
         COMPONENT,
         format!(
