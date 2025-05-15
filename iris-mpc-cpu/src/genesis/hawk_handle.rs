@@ -1,11 +1,11 @@
 use super::{
+    batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
     utils::logger,
 };
 use crate::execution::hawk_main::{BothEyes, HawkActor, HawkSession, HawkSessionRef, LEFT, RIGHT};
 use eyre::Result;
 use futures::try_join;
-use iris_mpc_store::DbStoredIris;
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
@@ -133,8 +133,7 @@ impl Handle {
     ///
     /// # Arguments
     ///
-    /// * `batch_id` - Identifier of batch being processed.
-    /// * `batch` - A vector of `DbStoredIris` records to be processed.
+    /// * `batch` - A set of `DbStoredIris` records to be processed.
     ///
     /// # Returns
     ///
@@ -143,17 +142,13 @@ impl Handle {
     /// # Errors
     ///
     /// This method may return an error if the job queue channel is closed or if the job fails.
-    pub async fn submit_batch(
-        &mut self,
-        batch_id: usize,
-        batch: &[DbStoredIris],
-    ) -> impl Future<Output = Result<JobResult>> {
+    pub async fn submit_batch(&mut self, batch: Batch) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch_id, batch),
+            request: JobRequest::new(self.party_id, batch.id, &batch.data),
             return_channel: tx,
         };
 

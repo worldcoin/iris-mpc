@@ -156,11 +156,11 @@ async fn exec_main_loop(
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
         // Index until generator is exhausted.
-        while let Some((batch_id, batch)) = batch_generator.next_batch(iris_store).await? {
+        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             log_info(format!(
                 "Indexing new batch: batch-id={} :: batch-size={} :: time {:?}",
-                batch_id,
-                batch.len(),
+                batch.id,
+                batch.size(),
                 now.elapsed(),
             ));
 
@@ -171,7 +171,7 @@ async fn exec_main_loop(
             task_monitor.check_tasks();
 
             // Process batch with Hawk handle over hawk actor.
-            let result_future = hawk_handle.submit_batch(batch_id, &batch);
+            let result_future = hawk_handle.submit_batch(batch);
             timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|err| {
