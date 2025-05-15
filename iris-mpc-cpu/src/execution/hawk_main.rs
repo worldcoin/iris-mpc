@@ -62,13 +62,13 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+pub(crate) mod insert;
 mod intra_batch;
 mod is_match_batch;
 mod matching;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
-pub(crate) mod insert;
 pub mod state_check;
 use crate::protocol::ops::{
     compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,

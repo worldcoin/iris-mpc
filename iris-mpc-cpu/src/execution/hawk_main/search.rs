@@ -106,12 +106,7 @@ pub async fn search_single_query_no_match_count(
     let insertion_layer = searcher.select_layer(&mut session.shared_rng)?;
 
     let (links, set_ep) = searcher
-        .search_to_insert(
-            &mut session.aby3_store,
-            &graph,
-            &query,
-            insertion_layer,
-        )
+        .search_to_insert(&mut session.aby3_store, &graph, &query, insertion_layer)
         .await?;
 
     Ok(InsertPlan {

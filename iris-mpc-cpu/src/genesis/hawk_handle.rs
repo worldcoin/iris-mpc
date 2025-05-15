@@ -3,8 +3,8 @@ use super::{
     logger,
 };
 use crate::execution::hawk_main::{
-    insert::insert_with_ids, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
+    insert::insert_with_ids, scheduler::parallelize, search::search_single_query_no_match_count,
+    BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
 };
 use eyre::{OptionExt, Result};
 use futures::try_join;
@@ -120,7 +120,8 @@ impl Handle {
         let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
             .map(|(queries_side, sessions_side)| {
                 let searcher = actor.searcher();
-                let queries_with_ids = izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
+                let queries_with_ids =
+                    izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
                 // let queries = queries_side.clone();
                 // let identifiers = request.identifiers.clone();
                 let sessions = sessions_side.clone();
@@ -134,8 +135,8 @@ impl Handle {
 
                     // Process queries in a logical insertion batch for this side
                     for queries_batch in queries_with_ids.chunks(n_sessions) {
-                        let search_jobs =
-                            izip!(queries_batch.iter(), sessions.iter()).map(|((query, _id), session)| {
+                        let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
+                            |((query, _id), session)| {
                                 let query = query.clone();
                                 let searcher = searcher.clone();
                                 let session = session.clone();
@@ -143,7 +144,8 @@ impl Handle {
                                     search_single_query_no_match_count(session, query, &searcher)
                                         .await
                                 }
-                            });
+                            },
+                        );
 
                         let plans = parallelize(search_jobs)
                             .await?
@@ -151,10 +153,13 @@ impl Handle {
                             .map(Some)
                             .collect_vec();
 
-                        let batch_identifiers = queries_batch.iter().map(|(_query, id)| *id).collect_vec();
+                        let batch_identifiers =
+                            queries_batch.iter().map(|(_query, id)| *id).collect_vec();
 
                         // Insert into in-memory store, and return insertion plans for use by DB
-                        let plans = insert_with_ids(plans, batch_identifiers, &searcher, insert_session).await?;
+                        let plans =
+                            insert_with_ids(plans, batch_identifiers, &searcher, insert_session)
+                                .await?;
                         connect_plans.extend(plans);
                     }
 

@@ -38,11 +38,11 @@ async fn insert_one(
     update_id: Option<VectorId>,
 ) -> Result<ConnectPlan> {
     let inserted = {
-        let mut store = session.aby3_store.storage.write().await;
+        let storage = &mut session.aby3_store.storage;
 
         match update_id {
-            None => store.append(&insert_plan.query),
-            Some(id) => store.update(id, &insert_plan.query),
+            None => storage.append(&insert_plan.query).await,
+            Some(id) => storage.update(id, &insert_plan.query).await,
         }
     };
 
@@ -66,7 +66,7 @@ async fn insert_one(
 /// Insert a collection of `InsertPlan` structs into the graph and vector store represented
 /// by `session`, adjusting the insertion plans as needed to repair any conflict from
 /// parallel searches.
-/// 
+///
 /// The `identifiers` argument gives explicit `VectorId`s which will be used for the newly
 /// inserted entries, for use when the insertions need to match with a pre-existing database
 /// of iris codes with associated identifiers.
@@ -90,7 +90,7 @@ pub async fn insert_with_ids(
 }
 
 /// Insert a query into the `Aby3Store` and `GraphMem` associated with `session`.
-/// 
+///
 /// If `identifier` is `Some(id)`, then the node is inserted as this `VectorId`.
 async fn insert_one_with_id(
     insert_plan: InsertPlan,
@@ -98,7 +98,11 @@ async fn insert_one_with_id(
     session: &mut HawkSession,
     id: VectorId,
 ) -> Result<ConnectPlan> {
-    session.aby3_store.storage.insert_with_id(id, &insert_plan.query).await;
+    session
+        .aby3_store
+        .storage
+        .insert(id, &insert_plan.query)
+        .await;
 
     let mut graph_store = session.graph_store.write().await;
 
