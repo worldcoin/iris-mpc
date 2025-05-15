@@ -69,7 +69,7 @@ impl BatchGenerator {
             exclusions.len(),
         );
         tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
+            "HNSW GENESIS :: Batch Generator :: Range of iris-serial-id's to index = {}..{}",
             range.start,
             range.end
         );
@@ -95,7 +95,7 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
-                Self::log_info(format!("Excluding deletion :: serial-id={}", next_id));
+                Self::log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
             }
         }
 
@@ -107,7 +107,7 @@ impl BatchGenerator {
         }
 
         Self::log_info(format!(
-            "Constructed new batch for indexation: idx={} :: irises={}",
+            "Constructed new batch for indexation: batch-id={} :: batch-size={}",
             self.batch_count,
             batch.len()
         ));
@@ -144,12 +144,12 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
+    ) -> Result<Option<(usize, Vec<DbStoredIris>)>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-            Self::log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
+            Self::log_info(format!("Iris batch fetched: batch-id={}", self.batch_count,));
 
-            Ok(Some(batch))
+            Ok(Some((self.batch_count, batch)))
         } else {
             Ok(None)
         }

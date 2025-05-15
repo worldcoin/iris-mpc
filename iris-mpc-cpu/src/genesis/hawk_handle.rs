@@ -102,12 +102,16 @@ impl Handle {
         request: &JobRequest,
     ) -> Result<JobResult> {
         Self::log_info(format!(
-            "Genesis Hawk job processing ::{} elements within batch",
-            request.identifiers.len()
+            "Genesis Hawk Job :: processing batch-id={}; batch-size={}",
+            request.batch_id,
+            request.batch_size()
         ));
         let _ = Instant::now();
 
         // TODO implement business logic.
+        Self::log_info(
+            "Genesis Hawk Job :: TODO - implement indexation business logic".to_string(),
+        );
 
         Ok(JobResult {
             results: Vec::new(),
@@ -129,6 +133,7 @@ impl Handle {
     ///
     /// # Arguments
     ///
+    /// * `batch_id` - Identifier of batch being processed.
     /// * `batch` - A vector of `DbStoredIris` records to be processed.
     ///
     /// # Returns
@@ -140,14 +145,15 @@ impl Handle {
     /// This method may return an error if the job queue channel is closed or if the job fails.
     pub async fn submit_batch(
         &mut self,
+        batch_id: usize,
         batch: &[DbStoredIris],
-    ) -> impl Future<Output = Result<()>> {
+    ) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch),
+            request: JobRequest::new(self.party_id, batch_id, batch),
             return_channel: tx,
         };
 
@@ -158,10 +164,10 @@ impl Handle {
         async move {
             // In a second Future, wait for the result.
             sent?;
-            let _result = rx.await??;
+            let result = rx.await??;
 
             // TODO: Implement job result processing.
-            Ok(())
+            Ok(result)
         }
     }
 }
