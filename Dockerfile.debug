@@ -23,7 +23,7 @@ ENV RUSTUP_HOME "/root/.rustup"
 ENV CARGO_HOME "/root/.cargo"
 
 COPY . .
-RUN pwd
+RUN ls -la /app
 RUN rustup toolchain install 1.85.0
 RUN rustup default 1.85.0
 RUN rustup component add cargo
