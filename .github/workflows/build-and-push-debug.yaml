@@ -13,7 +13,7 @@ env:
 
 jobs:
   docker:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04-32core
     permissions:
       packages: write
       contents: read

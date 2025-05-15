@@ -12,7 +12,7 @@ env:
 
 jobs:
   integration-tests:
-    runs-on: ubuntu-22.04-8core
+    runs-on: ubuntu-22.04-32core
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -37,7 +37,7 @@ jobs:
 
       - name: Build Rust binary
         run: |
-          cargo build --release -- --test-threads=4
+          cargo build --release
 
       - name: Build and export to Docker
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
