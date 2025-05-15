@@ -36,7 +36,7 @@ env:
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "3"
+    value: "5"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
@@ -88,6 +88,15 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "540"
+
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "512"
+
+  - name: SMPC__HAWK_CONNECTION_PARALLELISM
+    value: "128"
+
+  - name: SMPC__HAWK_STREAM_PARALLELISM
+    value: "128"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
