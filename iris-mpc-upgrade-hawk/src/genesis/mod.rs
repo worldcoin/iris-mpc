@@ -198,7 +198,10 @@ async fn exec_main_loop(
                     )
                 })??;
 
+            // TODO write results to database
+
             // Process: increment count of pending batches.
+
             shutdown_handler.increment_batches_pending_completion()
         }
 

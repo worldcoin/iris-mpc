@@ -1,5 +1,5 @@
 use clap::Parser;
-use eyre::{bail, Result};
+use eyre::Result;
 use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
 use iris_mpc_cpu::genesis::logger;
 use iris_mpc_upgrade_hawk::genesis::exec_main;
