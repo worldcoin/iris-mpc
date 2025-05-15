@@ -25,6 +25,12 @@ pub struct BatchGenerator {
     range_iter: Peekable<Range<IrisSerialId>>,
 }
 
+// A batch for upstream indexation.
+pub struct Batch {
+    // Ordinal batch identifier scoped by processing context.
+    batch_id: usize,
+}
+
 // Constructor.
 impl BatchGenerator {
     pub fn new(
@@ -130,7 +136,7 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
+    ) -> impl Future<Output = Result<Option<(usize, Vec<DbStoredIris>)>, IndexationError>> + Send;
 }
 
 // Batch iterator implementation.
@@ -148,7 +154,6 @@ impl BatchIterator for BatchGenerator {
         if let Some(identifiers) = self.get_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
             Self::log_info(format!("Iris batch fetched: batch-id={}", self.batch_count,));
-
             Ok(Some((self.batch_count, batch)))
         } else {
             Ok(None)
@@ -228,7 +233,7 @@ mod tests {
 
         // Expecting 10 batches of 10 Iris's per batch.
         while let Some(batch) = instance.next_batch(&iris_store).await? {
-            assert_eq!(batch.len(), 10);
+            assert_eq!(batch.1.len(), 10);
         }
         assert_eq!(instance.batch_count, 10);
 
