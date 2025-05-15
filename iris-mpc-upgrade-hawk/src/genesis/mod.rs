@@ -179,9 +179,11 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let curr_iris_index_opt = batch
-                .last()
-                .map(|db_stored_iris| db_stored_iris.id().try_into().expect("todo"));
+            let curr_iris_index_opt = batch.last().map(|db_stored_iris| {
+                db_stored_iris.id().try_into().expect(
+                    "Converting DbStoredIris.id of type i64 to IrisSerialID alias for u32 failed.",
+                )
+            });
             match curr_iris_index_opt {
                 Some(index) if index <= prev_iris_index => {
                     tracing::info!(
@@ -218,8 +220,6 @@ async fn exec_main_loop(
                         e
                     )
                 })??;
-
-            // TODO write results to database
 
             // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion();
