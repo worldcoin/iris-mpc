@@ -16,27 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Cache Rust build
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
-        id: cache-rust
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            rust-build-${{ runner.os }}-
-
       - name: Log in to the Container registry
         uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Rust binary
-        run: cargo build --release
 
       - name: Build and export to Docker
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
