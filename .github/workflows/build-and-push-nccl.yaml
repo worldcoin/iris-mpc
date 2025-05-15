@@ -17,7 +17,7 @@ env:
 jobs:
   docker:
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: ubuntu-22.04-32core
     permissions:
       packages: write
       contents: read

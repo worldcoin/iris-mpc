@@ -14,7 +14,7 @@ concurrency:
 jobs:
   unit-tests:
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: ubuntu-22.04-32core
 
     services:
       postgres:
