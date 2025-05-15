@@ -23,7 +23,7 @@ ENV RUSTUP_HOME "/root/.rustup"
 ENV CARGO_HOME "/root/.cargo"
 
 COPY . .
-COPY ./target /app/target
+COPY /home/runner/target /app/target
 RUN pwd
 RUN ls -la /app/
 RUN rustup toolchain install 1.85.0
