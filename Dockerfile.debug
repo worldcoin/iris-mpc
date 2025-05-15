@@ -48,4 +48,3 @@ ENV PATH="/root/.cargo/bin:${PATH}" \
 
 # Copy application code
 COPY . .
-COPY ~/.cargo /root/.cargo
