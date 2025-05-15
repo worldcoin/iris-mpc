@@ -96,35 +96,50 @@ impl SharedIrises {
         }
     }
 
-    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        let was_there = self
+    /// Inserts the given iris into the database with the specified id.  If an
+    /// entry is already present with the given id, the iris is overwritten by `iris`.
+    ///
+    /// Updates the checksum hash to reflect the new or replaced entry for the
+    /// associated serial id, and updates the `next_id` field to be the next
+    /// value after the inserted serial id if this value is larger than the
+    /// current value of `next_id`.
+    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) -> VectorId {
+        let prev_entry = self
             .points
             .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
+
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
-        if let Some((previous_version, _)) = was_there {
-            self.set_hash
-                .remove(VectorId::new(vector_id.serial_id(), previous_version));
+        // If overwriting entry, remove previous vector id from set_hash
+        if let Some((version, _)) = prev_entry {
+            let prev_vector_id = VectorId::new(vector_id.serial_id(), version);
+            self.set_hash.remove(prev_vector_id);
         }
         self.set_hash.add_unordered(vector_id);
+
+        vector_id
     }
 
-    pub fn append(&mut self, query: &QueryRef) -> VectorId {
+    /// Insert the given iris at the next unused serial ID, with version
+    /// initialized to 0.
+    pub fn append(&mut self, iris: IrisRef) -> VectorId {
         let new_id = self.next_id();
-        self.insert(new_id, query.iris());
+        self.insert(new_id, iris);
         new_id
     }
 
-    pub fn update(&mut self, vector_id: VectorId, query: &QueryRef) -> VectorId {
-        let new_id = vector_id.next_version();
-        self.insert(new_id, query.iris());
+    /// Insert the given iris at ID given by `original_id.next_version()`, i.e.
+    /// with identical serial number, and one higher version number.
+    pub fn update(&mut self, original_id: VectorId, iris: IrisRef) -> VectorId {
+        let new_id = original_id.next_version();
+        self.insert(new_id, iris);
         new_id
     }
 
-    fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId::from_serial_id(self.next_id);
-        self.next_id += 1;
-        new_id
+    /// Return the next id for new insertions, which should have the serial id
+    /// following the largest previously inserted serial id, and version 0.
+    fn next_id(&self) -> VectorId {
+        VectorId::from_serial_id(self.next_id)
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -146,7 +161,7 @@ impl SharedIrises {
 
     pub fn to_arc(self) -> SharedIrisesRef {
         SharedIrisesRef {
-            body: Arc::new(RwLock::new(self)),
+            data: Arc::new(RwLock::new(self)),
         }
     }
 
@@ -180,7 +195,7 @@ impl SharedIrises {
 /// Reference to inserted irises.
 #[derive(Clone)]
 pub struct SharedIrisesRef {
-    body: Arc<RwLock<SharedIrises>>,
+    data: Arc<RwLock<SharedIrises>>,
 }
 
 /// Mutable reference to inserted irises.
@@ -195,34 +210,55 @@ impl std::fmt::Debug for SharedIrisesRef {
 // Getters, iterators and mutators of the iris storage.
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
-        self.body.write().await
+        self.data.write().await
     }
 
     pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
-        self.body.read().await
+        self.data.read().await
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
-        self.body.read().await.get_vector(vector)
+        self.data.read().await.get_vector(vector)
     }
 
     pub async fn iter_vectors(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
     ) -> Vec<IrisRef> {
-        let body = self.body.read().await;
+        let body = self.data.read().await;
         vector_ids
             .into_iter()
             .map(|v| body.get_vector(v))
             .collect_vec()
     }
 
-    async fn append(&mut self, query: &QueryRef) -> VectorId {
-        self.body.write().await.append(query)
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the specified `id`.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn insert(&mut self, id: VectorId, query: &QueryRef) -> VectorId {
+        self.data.write().await.insert(id, query.iris())
+    }
+
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the next unused `VectorId` serial number, with version 0.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn append(&mut self, query: &QueryRef) -> VectorId {
+        self.data.write().await.append(query.iris())
+    }
+
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the id `original_id.next_version()`, that is, the `VectorId`
+    /// with equal serial id and incremented version number.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn update(&mut self, original_id: VectorId, query: &QueryRef) -> VectorId {
+        self.data.write().await.update(original_id, query.iris())
     }
 
     pub async fn checksum(&self) -> u64 {
-        self.body.read().await.set_hash.checksum()
+        self.data.read().await.set_hash.checksum()
     }
 }
 
@@ -497,8 +533,8 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.body.read().await.points,
-                premade_v.storage.body.read().await.points
+                v_from_scratch.storage.data.read().await.points,
+                premade_v.storage.data.read().await.points
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
