@@ -175,8 +175,7 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let domain = config.party_id.to_string();
-        let mut prev_iris_index = fetch_height_of_indexed(&domain, iris_store).await;
+        let mut prev_iris_index = fetch_height_of_indexed(iris_store).await;
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
@@ -229,7 +228,7 @@ async fn exec_main_loop(
             };
             let curr_iris_index: IrisSerialId = curr_iris_index_opt.unwrap();
 
-            let () = set_height_of_indexed(&domain, iris_store, &curr_iris_index).await?;
+            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
 
             prev_iris_index = curr_iris_index;
         }

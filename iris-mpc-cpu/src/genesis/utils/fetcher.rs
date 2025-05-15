@@ -10,17 +10,19 @@ const COMPONENT: &str = "Fetcher";
 
 /// Fetch height of indexed from store.
 ///
+/// # Arguments
+///
+/// * `iris_store` - Iris PostgreSQL store provider.
+///
 /// # Returns
 ///
 /// Index of lastest iris.
 ///
-pub async fn fetch_height_of_indexed<D: AsRef<str>>(
-    domain: D,
-    iris_store: &IrisPgresStore,
-) -> IrisSerialId {
+pub async fn fetch_height_of_indexed(iris_store: &IrisPgresStore) -> IrisSerialId {
+    let domain = "genesis";
+    let key = "indexed_height";
     iris_store
-        // REVIEW(@bgillesp): is this how you intended the `domain` and `key` to be used?
-        .get_persistent_state(domain.as_ref(), "height-of-graph-genesis-indexation")
+        .get_persistent_state(domain, key)
         .await
         .unwrap_or(Some(1))
         .unwrap_or(1)
@@ -28,24 +30,24 @@ pub async fn fetch_height_of_indexed<D: AsRef<str>>(
 
 /// Set height of indexed from store.
 ///
+/// # Arguments
+///
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `new_height` - the height to be stored in the database.
+///
 /// # Returns
 ///
-/// TODO
+/// Result<()> on success
 ///
-pub async fn set_height_of_indexed<D: AsRef<str>>(
-    domain: D,
+pub async fn set_height_of_indexed(
     iris_store: &IrisPgresStore,
     new_height: &IrisSerialId,
 ) -> Result<()> {
+    let domain = "genesis";
+    let key = "indexed_height";
     let mut tx = iris_store.tx().await?;
     iris_store
-        // REVIEW(@bgillesp): is this how you intended the `domain` and `key` to be used?
-        .update_persistent_state(
-            &mut tx,
-            domain.as_ref(),
-            "height-of-graph-genesis-indexation",
-            new_height,
-        )
+        .update_persistent_state(&mut tx, domain, key, new_height)
         .await
 }
 
@@ -53,7 +55,7 @@ pub async fn set_height_of_indexed<D: AsRef<str>>(
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `identifiers` - Set of Iris serial identifiers within batch.
 ///
 /// # Returns
@@ -198,7 +200,7 @@ mod tests {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let height = fetch_height_of_indexed("0", &iris_store).await;
+        let height = fetch_height_of_indexed(&iris_store).await;
         assert_eq!(height, 1);
 
         // Unset resources.

@@ -57,8 +57,7 @@ impl BatchGenerator {
             .unwrap();
 
         let range_end = max_indexation_height + 1;
-        let range_start =
-            fetcher::fetch_height_of_indexed(config.party_id.to_string(), iris_store).await;
+        let range_start = fetcher::fetch_height_of_indexed(iris_store).await;
         let range = range_start..range_end + 1;
 
         tracing::info!(
