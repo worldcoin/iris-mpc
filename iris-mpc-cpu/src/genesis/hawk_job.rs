@@ -27,6 +27,9 @@ pub struct Job {
 /// An indexation job request.
 #[derive(Clone, Debug)]
 pub struct JobRequest {
+    // Incoming batch identifier.
+    pub batch_id: usize,
+
     // Incoming batch of iris identifiers for subsequent correlation.
     pub identifiers: Vec<IrisVectorId>,
 
@@ -36,8 +39,9 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: usize, data: &[DbStoredIris]) -> Self {
+    pub fn new(party_id: usize, batch_id: usize, data: &[DbStoredIris]) -> Self {
         Self {
+            batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
             queries: Arc::new([
                 data.iter()
@@ -66,6 +70,14 @@ impl JobRequest {
                     .collect(),
             ]),
         }
+    }
+}
+
+// Methods.
+impl JobRequest {
+    // Incoming batch size.
+    pub fn batch_size(&self) -> usize {
+        self.identifiers.len()
     }
 }
 

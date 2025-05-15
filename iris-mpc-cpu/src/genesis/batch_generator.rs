@@ -7,6 +7,29 @@ use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
 use std::{iter::Peekable, ops::Range};
 
+// A batch for upstream indexation.
+pub struct Batch {
+    // Array of stored Iris's to be indexed.
+    pub data: Vec<DbStoredIris>,
+
+    // Ordinal batch identifier scoped by processing context.
+    pub id: usize,
+}
+
+// Constructor.
+impl Batch {
+    pub fn new(batch_id: usize, data: Vec<DbStoredIris>) -> Self {
+        Self { data, id: batch_id }
+    }
+}
+
+// Accessors.
+impl Batch {
+    pub fn size(&self) -> usize {
+        self.data.len()
+    }
+}
+
 // Generates batches of Iris identifiers for processing.
 pub struct BatchGenerator {
     // Count of generated batches.
@@ -65,7 +88,7 @@ impl BatchGenerator {
             exclusions.len(),
         );
         tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
+            "HNSW GENESIS :: Batch Generator :: Range of iris-serial-id's to index = {}..{}",
             range.start,
             range.end
         );
@@ -91,7 +114,7 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
-                Self::log_info(format!("Excluding deletion :: serial-id={}", next_id));
+                Self::log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
             }
         }
 
@@ -103,7 +126,7 @@ impl BatchGenerator {
         }
 
         Self::log_info(format!(
-            "Constructed new batch for indexation: idx={} :: irises={}",
+            "Constructed new batch for indexation: batch-id={} :: batch-size={}",
             self.batch_count,
             batch.len()
         ));
@@ -126,7 +149,7 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> impl Future<Output = Result<Option<Vec<DbStoredIris>>, IndexationError>> + Send;
+    ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
 // Batch iterator implementation.
@@ -140,12 +163,11 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         iris_store: &IrisStore,
-    ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
+    ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-            Self::log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
-
-            Ok(Some(batch))
+            Self::log_info(format!("Iris batch fetched: batch-id={}", self.batch_count,));
+            Ok(Some(Batch::new(self.batch_count, batch)))
         } else {
             Ok(None)
         }
@@ -224,7 +246,7 @@ mod tests {
 
         // Expecting 10 batches of 10 Iris's per batch.
         while let Some(batch) = instance.next_batch(&iris_store).await? {
-            assert_eq!(batch.len(), 10);
+            assert_eq!(batch.size(), 10);
         }
         assert_eq!(instance.batch_count, 10);
 
