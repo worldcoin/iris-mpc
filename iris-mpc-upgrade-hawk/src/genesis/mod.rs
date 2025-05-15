@@ -179,23 +179,44 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let curr_iris_index_opt = batch.last().map(|db_stored_iris| {
-                db_stored_iris.id().try_into().expect(
-                    "Converting DbStoredIris.id of type i64 to IrisSerialID alias for u32 failed.",
-                )
-            });
-            match curr_iris_index_opt {
-                Some(index) if index <= prev_iris_index => {
-                    tracing::info!(
+            // Assumption: ids are monotonically increasing within a batch and between batches.
+            let curr_iris_db_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
+
+            match curr_iris_db_index_opt {
+                Some(index) if index <= prev_iris_index as i64 => {
+                    log_info(format!(
                 "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
                 batch_generator.batch_count(),
                 batch.len(),
                 now.elapsed(),
-            );
+            ));
+                    continue;
+                }
+                None => {
+                    log_info(format!(
+                        "HNSW GENESIS: Skipping empty batch: idx={} :: irises={} :: time {:?}",
+                        batch_generator.batch_count(),
+                        batch.len(),
+                        now.elapsed(),
+                    ));
                     continue;
                 }
                 _ => (),
             }
+
+            let curr_iris_db_index =
+                curr_iris_db_index_opt.expect("None case should be caught previously.");
+            let curr_iris_index_res = IrisSerialId::try_from(curr_iris_db_index);
+
+            let curr_iris_index = match curr_iris_index_res {
+                Ok(index) => index,
+                Err(_) => {
+                    log_error(
+                "Converting DbStoredIris.id of type i64 to IrisSerialID alias for u32 failed.  Skipping ..".to_string(),
+            );
+                    continue;
+                }
+            };
 
             log_info(format!(
                 "Indexing new batch: idx={} :: irises={} :: time {:?}",
@@ -221,16 +242,10 @@ async fn exec_main_loop(
                     )
                 })??;
 
+            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
+
             // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion();
-
-            if curr_iris_index_opt.is_none() {
-                tracing::warn!("batch at index {} was empty", batch_generator.batch_count());
-                continue;
-            };
-            let curr_iris_index: IrisSerialId = curr_iris_index_opt.unwrap();
-
-            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
 
             prev_iris_index = curr_iris_index;
         }
