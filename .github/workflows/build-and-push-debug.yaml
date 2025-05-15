@@ -13,7 +13,7 @@ env:
 
 jobs:
   docker:
-    runs-on: ubuntu-22.04-32core
+    runs-on: ubuntu-22.04-8core
     permissions:
       packages: write
       contents: read
@@ -32,6 +32,17 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache Rust build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
       - name: Build and Push
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4
         with:
