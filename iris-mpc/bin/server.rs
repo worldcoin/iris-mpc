@@ -6,7 +6,7 @@ use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
 use clap::Parser;
-use eyre::{eyre, Context, Report};
+use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
@@ -94,7 +94,7 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
+) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
     let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
@@ -112,7 +112,7 @@ fn preprocess_iris_message_shares(
     mask_share: GaloisRingTrimmedMaskCodeShare,
     code_share_mirrored: GaloisRingIrisCodeShare,
     mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
-) -> eyre::Result<GaloisShares> {
+) -> Result<GaloisShares> {
     let mut code_share = code_share;
     let mut mask_share = mask_share;
 
@@ -163,7 +163,7 @@ pub fn receive_batch_stream(
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
-) -> Receiver<eyre::Result<Option<BatchQuery>, ReceiveRequestError>> {
+) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
     tokio::spawn(async move {
@@ -219,7 +219,7 @@ async fn receive_batch(
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
-) -> eyre::Result<Option<BatchQuery>, ReceiveRequestError> {
+) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let max_batch_size = config.clone().max_batch_size;
     let queue_url = &config.clone().requests_queue_url;
     if shutdown_handler.is_shutting_down() {
@@ -963,9 +963,9 @@ fn get_iris_shares_parse_task(
             )?;
 
             let (left_code_mirrored, left_mask_mirrored) =
-                (left_code.mirrored(), left_mask.mirrored());
+                (left_code.mirrored_code(), left_mask.mirrored_mask());
             let (right_code_mirrored, right_mask_mirrored) =
-                (right_code.mirrored(), right_mask.mirrored());
+                (right_code.mirrored_code(), right_mask.mirrored_mask());
 
             let left_mask_trimmed = trim_mask(left_mask);
             let right_mask_trimmed = trim_mask(right_mask);
@@ -1008,7 +1008,7 @@ async fn send_last_modifications_to_sns(
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
     lookback: usize,
-) -> eyre::Result<()> {
+) -> Result<()> {
     // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
@@ -1101,7 +1101,7 @@ async fn send_last_modifications_to_sns(
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     println!("Init config");
@@ -1129,7 +1129,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
-async fn server_main(config: Config) -> eyre::Result<()> {
+async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -1280,6 +1280,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        genesis_config: None,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1389,7 +1390,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be unready.");
-            return Err(eyre!("Timeout waiting for all nodes to be unready."));
+            bail!("Timeout waiting for all nodes to be unready.");
         }
     };
     tracing::info!("All nodes are starting up.");
@@ -1574,11 +1575,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if db_len + max_rollback < store_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 store_len,
                 db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",
@@ -1800,6 +1801,8 @@ async fn server_main(config: Config) -> eyre::Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_mirror,
+            anonymized_bucket_statistics_right_mirror,
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
@@ -1898,7 +1901,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
 
                     serde_json::to_string(&result_event).wrap_err("failed to serialize result")
                 })
-                .collect::<eyre::Result<Vec<_>>>()?;
+                .collect::<Result<Vec<_>>>()?;
 
             // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -2055,11 +2058,11 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         memory_serial_ids,
                         db_serial_ids
                     );
-                    return Err(eyre!(
+                    bail!(
                         "Serial IDs do not match between memory and db: {:?} != {:?}",
                         memory_serial_ids,
                         db_serial_ids
-                    ));
+                    );
                 }
             }
 
@@ -2218,10 +2221,40 @@ async fn server_main(config: Config) -> eyre::Result<()> {
                         serde_json::to_string(anonymized_bucket_statistics)
                             .wrap_err("failed to serialize anonymized statistics result")
                     })
-                    .collect::<eyre::Result<Vec<_>>>()?;
+                    .collect::<Result<Vec<_>>>()?;
 
                 send_results_to_sns(
                     anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send mirror orientation statistics separately with their own flag
+            if (config_bg.enable_sending_mirror_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left_mirror.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_mirror.buckets.is_empty())
+            {
+                tracing::info!("Sending mirror orientation anonymized stats results");
+                let mirror_anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left_mirror,
+                    anonymized_bucket_statistics_right_mirror,
+                ];
+                // transform to vector of string
+                let mirror_anonymized_statistics_results = mirror_anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize mirror anonymized statistics result")
+                    })
+                    .collect::<eyre::Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    mirror_anonymized_statistics_results,
                     &metadata,
                     &sns_client_bg,
                     &config_bg,
@@ -2283,7 +2316,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         }
         Err(_) => {
             tracing::error!("Timeout waiting for all nodes to be ready.");
-            return Err(eyre!("Timeout waiting for all nodes to be ready."));
+            bail!("Timeout waiting for all nodes to be ready.");
         }
     }
     tracing::info!("All nodes are ready.");
@@ -2302,7 +2335,7 @@ async fn server_main(config: Config) -> eyre::Result<()> {
         create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let reset_update_error_result_attribute =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
-    let res: eyre::Result<()> = async {
+    let res: Result<()> = async {
         tracing::info!("Entering main loop");
         // **Tensor format of queries**
         //
@@ -2413,7 +2446,7 @@ async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
 ) {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
@@ -2471,7 +2504,7 @@ async fn load_db(
     s3_load_max_retries: usize,
     s3_load_initial_backoff_ms: u64,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 
@@ -2523,7 +2556,7 @@ async fn load_db(
 
             if index == 0 {
                 tracing::error!("Invalid iris index {}", index);
-                return Err(eyre!("Invalid iris index {}", index));
+                bail!("Invalid iris index {}", index);
             } else if index > store_len {
                 tracing::warn!(
                     "Skip loading rolled back item: index {} > store_len {}",
@@ -2594,10 +2627,7 @@ async fn load_db(
 
     if !all_serial_ids.is_empty() {
         tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        return Err(eyre!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        ));
+        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
     tracing::info!("Preprocessing db");

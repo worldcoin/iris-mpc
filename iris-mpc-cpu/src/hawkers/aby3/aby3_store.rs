@@ -45,6 +45,10 @@ impl Query {
             processed_query,
         })
     }
+
+    fn iris(&self) -> IrisRef {
+        Arc::new(self.query.clone())
+    }
 }
 
 /// Creates a new query from a secret shared iris.
@@ -92,21 +96,50 @@ impl SharedIrises {
         }
     }
 
-    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) {
-        let was_there = self
+    /// Inserts the given iris into the database with the specified id.  If an
+    /// entry is already present with the given id, the iris is overwritten by `iris`.
+    ///
+    /// Updates the checksum hash to reflect the new or replaced entry for the
+    /// associated serial id, and updates the `next_id` field to be the next
+    /// value after the inserted serial id if this value is larger than the
+    /// current value of `next_id`.
+    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) -> VectorId {
+        let prev_entry = self
             .points
             .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
+
         self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
-        if was_there.is_none() {
-            self.set_hash.add_unordered(vector_id);
+        // If overwriting entry, remove previous vector id from set_hash
+        if let Some((version, _)) = prev_entry {
+            let prev_vector_id = VectorId::new(vector_id.serial_id(), version);
+            self.set_hash.remove(prev_vector_id);
         }
+        self.set_hash.add_unordered(vector_id);
+
+        vector_id
     }
 
-    fn next_id(&mut self) -> VectorId {
-        let new_id = VectorId::from_serial_id(self.next_id);
-        self.next_id += 1;
+    /// Insert the given iris at the next unused serial ID, with version
+    /// initialized to 0.
+    pub fn append(&mut self, iris: IrisRef) -> VectorId {
+        let new_id = self.next_id();
+        self.insert(new_id, iris);
         new_id
+    }
+
+    /// Insert the given iris at ID given by `original_id.next_version()`, i.e.
+    /// with identical serial number, and one higher version number.
+    pub fn update(&mut self, original_id: VectorId, iris: IrisRef) -> VectorId {
+        let new_id = original_id.next_version();
+        self.insert(new_id, iris);
+        new_id
+    }
+
+    /// Return the next id for new insertions, which should have the serial id
+    /// following the largest previously inserted serial id, and version 0.
+    fn next_id(&self) -> VectorId {
+        VectorId::from_serial_id(self.next_id)
     }
 
     pub fn reserve(&mut self, additional: usize) {
@@ -128,7 +161,7 @@ impl SharedIrises {
 
     pub fn to_arc(self) -> SharedIrisesRef {
         SharedIrisesRef {
-            body: Arc::new(RwLock::new(self)),
+            data: Arc::new(RwLock::new(self)),
         }
     }
 
@@ -162,7 +195,7 @@ impl SharedIrises {
 /// Reference to inserted irises.
 #[derive(Clone)]
 pub struct SharedIrisesRef {
-    body: Arc<RwLock<SharedIrises>>,
+    data: Arc<RwLock<SharedIrises>>,
 }
 
 /// Mutable reference to inserted irises.
@@ -177,38 +210,55 @@ impl std::fmt::Debug for SharedIrisesRef {
 // Getters, iterators and mutators of the iris storage.
 impl SharedIrisesRef {
     pub async fn write(&self) -> SharedIrisesMut {
-        self.body.write().await
+        self.data.write().await
     }
 
     pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
-        self.body.read().await
+        self.data.read().await
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
-        self.body.read().await.get_vector(vector)
+        self.data.read().await.get_vector(vector)
     }
 
     pub async fn iter_vectors(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
     ) -> Vec<IrisRef> {
-        let body = self.body.read().await;
+        let body = self.data.read().await;
         vector_ids
             .into_iter()
             .map(|v| body.get_vector(v))
             .collect_vec()
     }
 
-    pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
-        let new_vector = Arc::new(query.query.clone());
-        let mut body = self.body.write().await;
-        let new_id = body.next_id();
-        body.insert(new_id, new_vector);
-        new_id
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the specified `id`.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn insert(&mut self, id: VectorId, query: &QueryRef) -> VectorId {
+        self.data.write().await.insert(id, query.iris())
+    }
+
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the next unused `VectorId` serial number, with version 0.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn append(&mut self, query: &QueryRef) -> VectorId {
+        self.data.write().await.append(query.iris())
+    }
+
+    /// Obtain a write lock for the underlying irises data, and insert the given
+    /// `query` iris at the id `original_id.next_version()`, that is, the `VectorId`
+    /// with equal serial id and incremented version number.
+    ///
+    /// Returns the `VectorId` at which the query is inserted.
+    pub async fn update(&mut self, original_id: VectorId, query: &QueryRef) -> VectorId {
+        self.data.write().await.update(original_id, query.iris())
     }
 
     pub async fn checksum(&self) -> u64 {
-        self.body.read().await.set_hash.checksum()
+        self.data.read().await.set_hash.checksum()
     }
 }
 
@@ -373,7 +423,7 @@ impl VectorStore for Aby3Store {
 
 impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.insert(query).await
+        self.storage.append(query).await
     }
 }
 
@@ -442,7 +492,7 @@ mod tests {
                     let query = store.storage.get_vector(&v).await;
                     let query = prepare_query((*query).clone());
                     let neighbors = db
-                        .search(&mut *store, &mut aby3_graph, &query, 1)
+                        .search(&mut *store, &aby3_graph, &query, 1)
                         .await
                         .unwrap();
                     tracing::debug!("Finished checking query");
@@ -483,8 +533,8 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.body.read().await.points,
-                premade_v.storage.body.read().await.points
+                v_from_scratch.storage.data.read().await.points,
+                premade_v.storage.data.read().await.points
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
@@ -493,7 +543,7 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let query = cleartext_data.0.points.get(i).unwrap().clone();
             let cleartext_neighbors = hawk_searcher
-                .search(&mut cleartext_data.0, &mut cleartext_data.1, &query, 1)
+                .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -505,16 +555,14 @@ mod tests {
             for (v, g) in vector_graph_stores.iter_mut() {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
-                let mut g = g.clone();
+                let g = g.clone();
                 let q = v_lock.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let secret_neighbors = hawk_searcher
-                        .search(&mut *v_lock, &mut g, &q, 1)
-                        .await
-                        .unwrap();
+                    let secret_neighbors =
+                        hawk_searcher.search(&mut *v_lock, &g, &q, 1).await.unwrap();
 
                     hawk_searcher
                         .is_match(&mut *v_lock, &[secret_neighbors])
@@ -527,13 +575,13 @@ mod tests {
             for (v, g) in secret_data.iter() {
                 let hawk_searcher = hawk_searcher.clone();
                 let v = v.clone();
-                let mut g = g.clone();
+                let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
                     let query = v_lock.storage.get_vector(&vector_id).await;
                     let query = prepare_query((*query).clone());
                     let secret_neighbors = hawk_searcher
-                        .search(&mut *v_lock, &mut g, &query, 1)
+                        .search(&mut *v_lock, &g, &query, 1)
                         .await
                         .unwrap();
 
@@ -605,7 +653,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.insert(p).await);
+                player_inserts.push(store_lock.storage.append(p).await);
             }
             aby3_inserts.push(player_inserts);
         }
@@ -674,14 +722,12 @@ mod tests {
             plaintext_inserts.push(plaintext_store.insert(p).await);
         }
 
-        let plaintext_queries: Vec<_> = plaintext_database.into_iter().map(Arc::new).collect();
-
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_queries[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -754,17 +800,15 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let mut jobs = JoinSet::new();
             for (store, graph) in vectors_and_graphs.iter_mut() {
-                let mut graph = graph.clone();
+                let graph = graph.clone();
                 let searcher = searcher.clone();
                 let q = store.lock().await.storage.get_vector(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;
-                    let secret_neighbors = searcher
-                        .search(&mut *store, &mut graph, &q, 1)
-                        .await
-                        .unwrap();
+                    let secret_neighbors =
+                        searcher.search(&mut *store, &graph, &q, 1).await.unwrap();
                     searcher
                         .is_match(&mut *store, &[secret_neighbors])
                         .await

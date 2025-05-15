@@ -13,7 +13,7 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -287,7 +287,7 @@ impl HnswSearcher {
     ) -> Result<()> {
         match ef {
             0 => {
-                return Err(eyre!("ef cannot be 0"));
+                bail!("ef cannot be 0");
             }
             1 => {
                 let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
@@ -779,7 +779,7 @@ impl HnswSearcher {
     pub async fn search<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V>,
+        graph: &GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {

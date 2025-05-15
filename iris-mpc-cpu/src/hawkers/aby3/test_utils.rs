@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
-use eyre::{eyre, Result};
+use eyre::{bail, Result};
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -46,7 +46,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 
     for (i, iris) in plain_store.points.iter().enumerate() {
         let vector_id = VectorId::from_0_index(i as u32);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -98,7 +98,7 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
         _ => {
-            return Err(eyre!("Invalid player index: {player_index}"));
+            bail!("Invalid player index: {player_index}");
         }
     };
     Ok(res)
@@ -215,7 +215,7 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
         plaingraph_file,
         rng,
         database_size,
-        NetworkType::GrpcChannel,
+        NetworkType::default_grpc(),
     )
     .await
 }
@@ -236,7 +236,7 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
 )> {
     let searcher = HnswSearcher::new_with_test_parameters();
 
-    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size).await;
+    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size);
     let plaintext_graph_store = plaintext_vector_store
         .generate_graph(rng, database_size, &searcher)
         .await?;
@@ -288,7 +288,7 @@ pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(rng, database_size, NetworkType::GrpcChannel).await
+    lazy_random_setup(rng, database_size, NetworkType::default_grpc()).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -360,5 +360,5 @@ pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
-    shared_random_setup(rng, database_size, NetworkType::GrpcChannel).await
+    shared_random_setup(rng, database_size, NetworkType::default_grpc()).await
 }

@@ -428,6 +428,7 @@ async fn build_sync_state(
         modifications,
         next_sns_sequence_num,
         common_config,
+        genesis_config: None,
     })
 }
 
@@ -467,11 +468,11 @@ async fn sync_dbs_rollback(
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
         if min_db_len + max_rollback(config) < my_db_len {
-            return Err(eyre!(
+            bail!(
                 "Refusing to rollback so much (from {} to {})",
                 my_db_len,
                 min_db_len,
-            ));
+            );
         }
         tracing::warn!(
             "Rolling back from database length {} to other nodes length {}",
@@ -503,6 +504,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        stream_parallelism: config.hawk_stream_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,

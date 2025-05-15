@@ -22,6 +22,7 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
+const HAWK_STREAM_PARALLELISM: usize = 1;
 const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
@@ -46,8 +47,12 @@ async fn create_graph_from_plain_dbs(
     params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let mut left_store = PlaintextStore::new_from_vec(left_db.db.clone()).await;
-    let mut right_store = PlaintextStore::new_from_vec(right_db.db.clone()).await;
+    let mut left_store = PlaintextStore {
+        points: left_db.db.clone(),
+    };
+    let mut right_store = PlaintextStore {
+        points: right_db.db.clone(),
+    };
     let searcher = HnswSearcher {
         params: params.clone(),
     };
@@ -66,12 +71,12 @@ async fn create_graph_from_plain_dbs(
 
     for (vector_id, iris) in left_store.points.iter().enumerate() {
         let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
     for (vector_id, iris) in right_store.points.iter().enumerate() {
         let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, (**iris).clone());
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
@@ -123,6 +128,7 @@ async fn e2e_test() -> Result<()> {
         party_index: 0,
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
+        stream_parallelism: HAWK_STREAM_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
         hnsw_param_M: HNSW_M,
@@ -154,12 +160,10 @@ async fn e2e_test() -> Result<()> {
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
 
-    test_case_generator.disable_test_case(TestCase::FullFaceMirrorAttack);
     test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::CloseToThreshold);
     test_case_generator.disable_test_case(TestCase::PreviouslyDeleted);
-    test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
     test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);

@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     std::fs::create_dir_all(format!("{crate_root}/data"))?;
     let mut rng = AesRng::seed_from_u64(0_u64);
     println!("Generating plaintext store with 100_000 irises");
-    let mut store = PlaintextStore::new_random(&mut rng, 100_000).await;
+    let mut store = PlaintextStore::new_random(&mut rng, 100_000);
     println!("Writing store to file");
     to_ndjson_file(&store, &format!("{crate_root}/data/store.ndjson"))?;
 

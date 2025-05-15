@@ -21,7 +21,7 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
 use rand::SeedableRng;
 use std::array;
@@ -47,7 +47,7 @@ pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed
     // deserializing received seed.
     let other_seed = match NetworkValue::from_network(serialized_other_seed) {
         Ok(NetworkValue::PrfKey(seed)) => seed,
-        _ => return Err(eyre!("Could not deserialize PrfKey")),
+        _ => bail!("Could not deserialize PrfKey"),
     };
     // creating the two PRFs
     Ok(Prf::new(my_seed, other_seed))
@@ -219,7 +219,7 @@ pub(crate) async fn cross_mul(
     let res_b = match NetworkValue::from_network(serialized_reply) {
         Ok(NetworkValue::RingElement32(element)) => vec![element],
         Ok(NetworkValue::VecRing32(elements)) => elements,
-        _ => return Err(eyre!("Could not deserialize RingElement32")),
+        _ => bail!("Could not deserialize RingElement32"),
     };
     Ok(izip!(res_a.into_iter(), res_b.into_iter())
         .map(|(a, b)| Share::new(a, b))
@@ -369,7 +369,7 @@ mod tests {
         let serialized_reply = network.receive_prev().await;
         let missing_share = match NetworkValue::from_network(serialized_reply) {
             Ok(NetworkValue::RingElement32(element)) => element,
-            _ => return Err(eyre!("Could not deserialize RingElement32")),
+            _ => bail!("Could not deserialize RingElement32"),
         };
         let (a, b) = x.get_ab();
         Ok(a + b + missing_share)
@@ -690,11 +690,11 @@ mod tests {
 
         let missing_share_0 = match NetworkValue::from_network(serialized_reply_0) {
             Ok(NetworkValue::VecRing16(element)) => element,
-            _ => return Err(eyre!("Could not deserialize VecRingElement16")),
+            _ => bail!("Could not deserialize VecRingElement16"),
         };
         let missing_share_1 = match NetworkValue::from_network(serialized_reply_1) {
             Ok(NetworkValue::VecRing16(element)) => element,
-            _ => return Err(eyre!("Could not deserialize VecRingElement16")),
+            _ => bail!("Could not deserialize VecRingElement16"),
         };
         let opened_value: Vec<u16> = x
             .iter()
