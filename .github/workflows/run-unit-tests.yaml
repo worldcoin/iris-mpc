@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-22.04-8core
+    runs-on: arc-test-amd64-runner
 
     services:
       postgres:
@@ -45,7 +45,9 @@ jobs:
         run: rustup default 1.85.0
 
       - name: Run Tests
-        run: cargo test --release
+        run: |
+          sleep 3600
+          cargo test --release
 
       - name: Run Tests with DB
         run: cargo test --release --features db_dependent
