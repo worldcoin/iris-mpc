@@ -21,7 +21,7 @@ permissions:
 jobs:
   update_release_draft:
     name: Update Release Draft
-    runs-on: ubuntu-22.04-16core
+    runs-on: ubuntu-22.04-8core
 
     permissions:
       contents: write
