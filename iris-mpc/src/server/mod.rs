@@ -428,6 +428,7 @@ async fn build_sync_state(
         modifications,
         next_sns_sequence_num,
         common_config,
+        genesis_config: None,
     })
 }
 
