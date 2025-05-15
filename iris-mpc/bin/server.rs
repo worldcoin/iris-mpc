@@ -963,9 +963,9 @@ fn get_iris_shares_parse_task(
             )?;
 
             let (left_code_mirrored, left_mask_mirrored) =
-                (left_code.mirrored(), left_mask.mirrored());
+                (left_code.mirrored_code(), left_mask.mirrored_mask());
             let (right_code_mirrored, right_mask_mirrored) =
-                (right_code.mirrored(), right_mask.mirrored());
+                (right_code.mirrored_code(), right_mask.mirrored_mask());
 
             let left_mask_trimmed = trim_mask(left_mask);
             let right_mask_trimmed = trim_mask(right_mask);
@@ -1280,6 +1280,7 @@ async fn server_main(config: Config) -> Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        genesis_config: None,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
