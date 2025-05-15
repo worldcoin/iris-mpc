@@ -181,8 +181,7 @@ async fn exec_main_loop(
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             // Assumption: ids are monotonically increasing within a batch and between batches.
             let curr_iris_db_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
-
-            match curr_iris_db_index_opt {
+            let curr_iris_db_index = match curr_iris_db_index_opt {
                 Some(index) if index <= prev_iris_index as i64 => {
                     log_info(format!(
                 "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
@@ -201,13 +200,10 @@ async fn exec_main_loop(
                     ));
                     continue;
                 }
-                _ => (),
-            }
+                Some(index) => index,
+            };
 
-            let curr_iris_db_index =
-                curr_iris_db_index_opt.expect("None case should be caught previously.");
             let curr_iris_index_res = IrisSerialId::try_from(curr_iris_db_index);
-
             let curr_iris_index = match curr_iris_index_res {
                 Ok(index) => index,
                 Err(_) => {
