@@ -44,23 +44,23 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// * `max_indexation_height` - Maximum height to which to index iris codes.
 ///
 pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> Result<()> {
-    // Bail if config is invalid.
+    // Process: bail if config is invalid.
     validate_config(&config);
 
-    // Set process shutdown handler.
+    // Process: set shutdown handler.
     let shutdown_handler = init_shutdown_handler(&config).await;
 
-    // Set coordinator task monitor.
+    // Coordinator: set task monitor.
     let mut background_tasks = coordinator::init_task_monitor();
 
-    // Set service clients.
+    // Process: set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
     // TODO: once https://github.com/worldcoin/iris-mpc/pull/1334/files is merged we can use the last_indexation_height
     // for now we just use 0
     let last_indexation_height = 0;
 
-    // Bail if stores are inconsistent.
+    // Process: bail if stores are inconsistent.
     validate_consistency_of_stores(
         &config,
         &iris_store,
@@ -68,7 +68,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         last_indexation_height,
     )
     .await?;
-    // Await coordination server to start.
+
+    // Coordinator: await server to start.
     let my_state = get_sync_state(
         &config,
         &iris_store,
@@ -85,14 +86,14 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     .await;
     background_tasks.check_tasks();
 
-    // Await coordinator to signal network state = unready.
+    // Coordinator: await network state = unready.
     coordinator::wait_for_others_unready(&config).await?;
 
-    // Await coordinator to signal network state = healthy.
+    // Coordinator: await network state = healthy.
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
 
-    // Await coordinator to signal network state = synchronized.
+    // Coordinator: await network state = synchronized.
     let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
@@ -100,25 +101,25 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // TODO: What should happen here - see Bryan.
     // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
 
-    // Escape if coordinator has signalled a shutdown.
+    // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
         log_warn("Shutting down has been triggered".to_string());
         return Ok(());
     }
 
-    // Set instance of hawk actor.
+    // Process: set instance of hawk actor.
     let mut hawk_actor = get_hawk_actor(&config).await?;
 
-    // Initialise HNSW graph from previously indexed.
+    // Process: initialise HNSW graph from previously indexed.
     init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
-    // Await coordinator to signal network state = ready.
+    // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
-    // Execute main loop.
+    // Process: execute main loop.
     log_info("Executing main loop".to_string());
     exec_main_loop(
         &config,
@@ -148,11 +149,11 @@ async fn exec_main_loop(
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
 ) -> Result<()> {
-    // Initialise Hawk handle.
+    // Process: initialise Hawk handle.
     let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
     log_info("Hawk handle initialised".to_string());
 
-    // Set batch generator.
+    // Process: set batch generator.
     let mut batch_generator = BatchGenerator::new_from_services(
         config,
         max_indexation_height,
@@ -163,7 +164,7 @@ async fn exec_main_loop(
     .await?;
     log_info("Batch generator initialised".to_string());
 
-    // Set main loop result.
+    // Process: set main loop result.
     let res: Result<()> = async {
         log_info("Entering main loop".to_string());
 
@@ -171,7 +172,7 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        // Index until generator is exhausted.
+        // Process: index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             log_info(format!(
                 "Indexing new batch: batch-id={} :: batch-size={} :: time {:?}",
@@ -180,13 +181,13 @@ async fn exec_main_loop(
                 now.elapsed(),
             ));
 
-            // Housekeeping: collate metrics.
+            // Process: collate metrics.
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
-            // Process batch with Hawk handle over hawk actor.
+            // Process: submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch);
             timeout(processing_timeout, result_future.await)
                 .await
@@ -197,7 +198,7 @@ async fn exec_main_loop(
                     )
                 })??;
 
-            // Housekeeping: increment count of pending batches.
+            // Process: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion()
         }
 
@@ -205,7 +206,7 @@ async fn exec_main_loop(
     }
     .await;
 
-    // Process main loop result.
+    // Process: parse main loop result.
     match res {
         Ok(_) => {
             log_info("Main loop exited normally. Waiting for last batch results to be processed before shutting down...".to_string());

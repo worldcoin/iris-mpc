@@ -9,23 +9,15 @@ use iris_mpc_upgrade_hawk::genesis::exec_main;
 #[derive(Debug)]
 struct Args {
     // Maximum height of indexation.
-    #[clap(long("max-height"))]
-    max_indexation_height: Option<String>,
+    #[clap(long("max-height"), default_value = "5000")]
+    max_indexation_height: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Set args.
     let args = Args::parse();
-
-    let max_indexation_height_arg = args.max_indexation_height;
-
-    if max_indexation_height_arg.is_none() {
-        eprintln!("Error: --max-height argument is required.");
-        bail!("--max-height argument is required.");
-    }
-    let max_indexation_height_arg = max_indexation_height_arg.unwrap();
-
-    let max_indexation_height: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
+    let max_indexation_height: IrisSerialId = args.max_indexation_height.parse().map_err(|_| {
         eprintln!("Error: --max-height argument must be a valid u32.");
         eyre::eyre!("--max-height argument must be a valid u32.")
     })?;
