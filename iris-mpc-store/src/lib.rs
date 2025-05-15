@@ -601,7 +601,7 @@ WHERE id = $1;
     ///
     /// If an entry already exists for this primary key, this overwrites the existing
     /// value with the value specified here.
-    pub async fn update_persistent_state<T: Serialize>(
+    pub async fn set_persistent_state<T: Serialize>(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         domain: &str,

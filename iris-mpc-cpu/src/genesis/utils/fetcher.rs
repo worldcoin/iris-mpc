@@ -47,7 +47,7 @@ pub async fn set_height_of_indexed(
     let key = "indexed_height";
     let mut tx = iris_store.tx().await?;
     iris_store
-        .update_persistent_state(&mut tx, domain, key, new_height)
+        .set_persistent_state(&mut tx, domain, key, new_height)
         .await
 }
 
