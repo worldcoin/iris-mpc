@@ -38,7 +38,6 @@ jobs:
 
       - name: Execute tests in the running services
         run: |
+          sleep 3600
           docker compose -f docker-compose.test.yaml exec iris_mpc_client "./run-client-docker.sh"
       
-      - name: Sleep for 1h
-        run: sleep 3600
