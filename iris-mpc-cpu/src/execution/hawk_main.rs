@@ -181,6 +181,8 @@ type VecBuckets = Vec<u32>;
 type VecEdges<T> = Vec<T>;
 /// MapEdges are maps from neighbor IDs to something.
 type MapEdges<T> = HashMap<VectorId, T>;
+/// If true, a match is `left OR right`, otherwise `left AND right`.
+type UseOrRule = bool;
 
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
@@ -734,14 +736,23 @@ impl HawkRequest {
         &self,
         iris_store: &SharedIrises,
         orient: Orientation,
-    ) -> VecRequests<Option<VectorId>> {
+    ) -> VecRequests<Option<(VectorId, UseOrRule)>> {
         izip!(&self.batch.request_types, &self.batch.request_ids)
             .map(|(request_type, request_id)| {
                 if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
+                    let or_rule = *self
+                        .batch
+                        .reauth_use_or_rule
+                        .get(request_id)
+                        .unwrap_or(&false);
+
                     self.batch
                         .reauth_target_indices
                         .get(request_id)
-                        .map(|&idx| iris_store.from_0_indices(&[idx])[0])
+                        .map(|&idx| {
+                            let target_id = iris_store.from_0_indices(&[idx])[0];
+                            (target_id, or_rule)
+                        })
                 } else {
                     None
                 }
