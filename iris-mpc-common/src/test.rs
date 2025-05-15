@@ -1,4 +1,5 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
+use crate::iris_db::get_dummy_shares_for_deletion;
 use crate::job::GaloisSharesBothSides;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -22,7 +23,7 @@ use rand::{
     seq::{IteratorRandom, SliceRandom},
     Rng, SeedableRng,
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
@@ -40,7 +41,7 @@ pub struct E2ETemplate {
     right: IrisCode,
 }
 impl E2ETemplate {
-    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> E2ESharedTemplate {
+    fn to_shared_template(&self, is_valid: bool, rng: &mut StdRng) -> Box<E2ESharedTemplate> {
         let (
             left_shared_code,
             left_shared_mask,
@@ -53,7 +54,7 @@ impl E2ETemplate {
             right_mirrored_shared_code,
             right_mirrored_shared_mask,
         ) = get_shared_template(is_valid, &self.right, rng);
-        E2ESharedTemplate {
+        Box::new(E2ESharedTemplate {
             left_shared_code,
             left_shared_mask,
             right_shared_code,
@@ -62,7 +63,7 @@ impl E2ETemplate {
             left_mirrored_shared_mask,
             right_mirrored_shared_code,
             right_mirrored_shared_mask,
-        }
+        })
     }
 }
 
@@ -326,7 +327,7 @@ pub struct TestCaseGenerator {
     /// enabled TestCases
     enabled_test_cases: Vec<TestCase>,
     /// initial state of the Iris Database
-    initial_db_state: TestDb,
+    db_state: TestDb,
     /// full_mask_range
     full_mask_range: Range<usize>,
     /// expected results for all of the queries we send
@@ -380,7 +381,7 @@ impl TestCaseGenerator {
         let db_len = db.len();
         Self {
             enabled_test_cases: TestCase::default_test_set(),
-            initial_db_state: db,
+            db_state: db,
             full_mask_range: 0..db_len / 10,
             expected_results: HashMap::new(),
             reauth_target_indices: HashMap::new(),
@@ -498,9 +499,7 @@ impl TestCaseGenerator {
         // for non-empty batches also add some deletions
         if max_deletions_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_deletions_per_batch) {
-                let idx = self
-                    .rng
-                    .gen_range(0..self.initial_db_state.initial_db_len());
+                let idx = self.rng.gen_range(0..self.db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
@@ -515,25 +514,40 @@ impl TestCaseGenerator {
                 batch0.deletion_requests_indices.push(idx as u32);
                 batch1.deletion_requests_indices.push(idx as u32);
                 batch2.deletion_requests_indices.push(idx as u32);
+
+                // delete shares also from the internal db
+                {
+                    self.db_state.shared_dbs[0]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                    self.db_state.shared_dbs[1]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                    self.db_state.shared_dbs[2]
+                        .lock()
+                        .unwrap()
+                        .delete_share(idx);
+                }
             }
         }
 
         // for non-empty batches also add some reset updates
         if max_reset_updates_per_batch > 0 {
             for _ in 0..self.rng.gen_range(0..max_reset_updates_per_batch) {
-                let idx = self
-                    .rng
-                    .gen_range(0..self.initial_db_state.initial_db_len());
+                let idx = self.rng.gen_range(0..self.db_state.initial_db_len());
                 if self.deleted_indices.contains(&(idx as u32))
                     || self.db_indices_used_in_current_batch.contains(&idx)
                     || self.disallowed_queries.contains(&(idx as u32))
                 {
                     continue;
                 }
-                let code = IrisCode::random_rng(&mut self.rng);
+                let code_left = IrisCode::random_rng(&mut self.rng);
+                let code_right = IrisCode::random_rng(&mut self.rng);
                 let template = E2ETemplate {
-                    left: code.clone(),
-                    right: code,
+                    left: code_left,
+                    right: code_right,
                 };
                 let shared_template = template.to_shared_template(true, &mut self.rng);
                 let shares0 = GaloisSharesBothSides {
@@ -573,9 +587,46 @@ impl TestCaseGenerator {
                 batch1.reset_update_indices.push(idx as u32);
                 batch2.reset_update_indices.push(idx as u32);
 
-                batch0.reset_update_shares.push(shares0);
-                batch1.reset_update_shares.push(shares1);
-                batch2.reset_update_shares.push(shares2);
+                batch0.reset_update_shares.push(shares0.clone());
+                batch1.reset_update_shares.push(shares1.clone());
+                batch2.reset_update_shares.push(shares2.clone());
+
+                // delete shares also from the internal db
+                {
+                    self.db_state.shared_dbs[0].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares0.code_left,
+                            mask: shares0.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares0.code_right,
+                            mask: shares0.mask_right,
+                        },
+                    );
+                    self.db_state.shared_dbs[1].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares1.code_left,
+                            mask: shares1.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares1.code_right,
+                            mask: shares1.mask_right,
+                        },
+                    );
+                    self.db_state.shared_dbs[2].lock().unwrap().reset_share(
+                        idx,
+                        FullGaloisRingIrisCodeShare {
+                            code: shares2.code_left,
+                            mask: shares2.mask_left,
+                        },
+                        FullGaloisRingIrisCodeShare {
+                            code: shares2.code_right,
+                            mask: shares2.mask_right,
+                        },
+                    );
+                }
             }
         }
 
@@ -589,7 +640,7 @@ impl TestCaseGenerator {
         let mut db_index = None;
         let range = match db_range {
             DatabaseRange::FullMaskOnly => self.full_mask_range.clone(),
-            DatabaseRange::Full => 0..self.initial_db_state.initial_db_len(),
+            DatabaseRange::Full => 0..self.db_state.initial_db_len(),
         };
         for _ in 0..100 {
             let potential_db_index = self.rng.gen_range(range.clone());
@@ -615,8 +666,8 @@ impl TestCaseGenerator {
         (
             db_index,
             [
-                self.initial_db_state.plain_dbs[LEFT].db[db_index].clone(),
-                self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone(),
+                self.db_state.plain_dbs[LEFT].db[db_index].clone(),
+                self.db_state.plain_dbs[RIGHT].db[db_index].clone(),
             ],
         )
     }
@@ -815,10 +866,8 @@ impl TestCaseGenerator {
                     self.expected_results
                         .insert(request_id.to_string(), ExpectedResult::builder().build());
                     E2ETemplate {
-                        left: self.initial_db_state.plain_dbs[LEFT].db[deleted_idx as usize]
-                            .clone(),
-                        right: self.initial_db_state.plain_dbs[RIGHT].db[deleted_idx as usize]
-                            .clone(),
+                        left: self.db_state.plain_dbs[LEFT].db[deleted_idx as usize].clone(),
+                        right: self.db_state.plain_dbs[RIGHT].db[deleted_idx as usize].clone(),
                     }
                 }
                 TestCase::WithOrRuleSet => {
@@ -1080,8 +1129,8 @@ impl TestCaseGenerator {
         will_match: bool,
         flip_right: Option<bool>,
     ) -> E2ETemplate {
-        let mut code_left = self.initial_db_state.plain_dbs[LEFT].db[db_index].clone();
-        let mut code_right = self.initial_db_state.plain_dbs[RIGHT].db[db_index].clone();
+        let mut code_left = self.db_state.plain_dbs[LEFT].db[db_index].clone();
+        let mut code_right = self.db_state.plain_dbs[RIGHT].db[db_index].clone();
 
         assert_eq!(code_left.mask, IrisCodeArray::ONES);
         assert_eq!(code_right.mask, IrisCodeArray::ONES);
@@ -1242,9 +1291,9 @@ impl TestCaseGenerator {
 
             // send batches to servers
             let (res0_fut, res1_fut, res2_fut) = tokio::join!(
-                handle0.submit_batch_query(batch0),
-                handle1.submit_batch_query(batch1),
-                handle2.submit_batch_query(batch2)
+                handle0.submit_batch_query(batch0.clone()),
+                handle1.submit_batch_query(batch1.clone()),
+                handle2.submit_batch_query(batch2.clone())
             );
 
             let res0 = res0_fut.await?;
@@ -1257,7 +1306,7 @@ impl TestCaseGenerator {
             }
 
             let results = [&res0, &res1, &res2];
-            for res in results.iter() {
+            for (party_id, res) in results.iter().enumerate() {
                 let ServerJobResult {
                     request_ids: thread_request_ids,
                     matches,
@@ -1345,6 +1394,57 @@ impl TestCaseGenerator {
                         was_reauth_success,
                         full_face_mirror_attack_detected,
                     );
+
+                    // persist the results to the current db state
+                    if !was_match && !was_skip_persistence_match {
+                        let batch = match party_id {
+                            0 => &batch0,
+                            1 => &batch1,
+                            2 => &batch2,
+                            _ => unreachable!(),
+                        };
+                        let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
+                        // insert the new shares into the db
+                        self.db_state.shared_dbs[party_id]
+                            .lock()
+                            .unwrap()
+                            .insert_new(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                    }
+                    // persist the reauth results to the current db state
+                    if was_match && was_reauth_success {
+                        let batch = match party_id {
+                            0 => &batch0,
+                            1 => &batch1,
+                            2 => &batch2,
+                            _ => unreachable!(),
+                        };
+                        let batch_idx = batch.request_ids.iter().position(|x| x == req_id).unwrap();
+                        // update the db with the new shares
+                        self.db_state.shared_dbs[party_id]
+                            .lock()
+                            .unwrap()
+                            .reset_share(
+                                idx as usize,
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.left_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.left_iris_requests.mask[batch_idx].clone(),
+                                },
+                                FullGaloisRingIrisCodeShare {
+                                    code: batch.right_iris_requests.code[batch_idx].clone(),
+                                    mask: batch.right_iris_requests.mask[batch_idx].clone(),
+                                },
+                            );
+                    }
                 }
 
                 for (req_id, idx) in izip!(reset_update_request_ids, reset_update_indices) {
@@ -1369,7 +1469,7 @@ fn prepare_batch(
     is_valid: bool,
     request_id: String,
     batch_idx: usize,
-    mut e2e_shared_template: E2ESharedTemplate,
+    mut e2e_shared_template: Box<E2ESharedTemplate>,
     or_rule_indices: Vec<u32>,
     maybe_reauth_target_index: Option<&u32>,
     skip_persistence: bool,
@@ -1521,21 +1621,68 @@ fn check_bucket_statistics(
 
 pub struct PartyDb {
     pub party_id: usize,
-    pub db_left: Vec<FullGaloisRingIrisCodeShare>,
-    pub db_right: Vec<FullGaloisRingIrisCodeShare>,
+    pub db_left: HashMap<usize, FullGaloisRingIrisCodeShare>,
+    pub db_right: HashMap<usize, FullGaloisRingIrisCodeShare>,
+}
+
+impl PartyDb {
+    fn delete_share(&mut self, db_index: usize) {
+        let (dummy_code, dummy_mask) = get_dummy_shares_for_deletion(self.party_id);
+        self.db_left
+            .insert(
+                db_index,
+                FullGaloisRingIrisCodeShare {
+                    code: dummy_code.clone(),
+                    mask: dummy_mask.clone(),
+                },
+            )
+            .expect("deleted existing code");
+        self.db_right
+            .insert(
+                db_index,
+                FullGaloisRingIrisCodeShare {
+                    code: dummy_code,
+                    mask: dummy_mask,
+                },
+            )
+            .expect("deleted existing code");
+    }
+    fn insert_new(
+        &mut self,
+        db_index: usize,
+        left: FullGaloisRingIrisCodeShare,
+        right: FullGaloisRingIrisCodeShare,
+    ) {
+        let res = self.db_left.insert(db_index, left);
+        assert!(res.is_none(), "no duplicate insertions");
+        let res = self.db_right.insert(db_index, right);
+        assert!(res.is_none(), "no duplicate insertions");
+    }
+
+    fn reset_share(
+        &mut self,
+        db_index: usize,
+        left: FullGaloisRingIrisCodeShare,
+        right: FullGaloisRingIrisCodeShare,
+    ) {
+        let res = self.db_left.insert(db_index, left);
+        assert!(res.is_some(), "resets are only for existing shares");
+        let res = self.db_right.insert(db_index, right);
+        assert!(res.is_some(), "resets are only for existing shares");
+    }
 }
 
 pub struct TestDb {
     /// A plain iris database for LEFT & RIGHT eyes
     plain_dbs: [IrisDB; 2],
     /// A shared iris database for each parties
-    shared_dbs: [Arc<PartyDb>; 3],
+    shared_dbs: [Arc<Mutex<PartyDb>>; 3],
     /// initial db len
     initial_db_len: usize,
 }
 
 impl TestDb {
-    pub fn party_db(&self, party_id: usize) -> Arc<PartyDb> {
+    pub fn party_db(&self, party_id: usize) -> Arc<Mutex<PartyDb>> {
         Arc::clone(&self.shared_dbs[party_id])
     }
     pub fn plain_dbs(&self, side: usize) -> &IrisDB {
@@ -1568,48 +1715,45 @@ pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
     let mut party_dbs = [
         PartyDb {
             party_id: 0,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
         PartyDb {
             party_id: 1,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
         PartyDb {
             party_id: 2,
-            db_left: Vec::with_capacity(db_size),
-            db_right: Vec::with_capacity(db_size),
+            db_left: HashMap::with_capacity(db_size),
+            db_right: HashMap::with_capacity(db_size),
         },
     ];
 
-    for (left_iris, right_iris) in db_left.db.iter().zip(db_right.db.iter()) {
+    for (idx, (left_iris, right_iris)) in db_left.db.iter().zip(db_right.db.iter()).enumerate() {
         let [left0, left1, left2] =
             FullGaloisRingIrisCodeShare::encode_iris_code(left_iris, &mut share_rng);
         let [right0, right1, right2] =
             FullGaloisRingIrisCodeShare::encode_iris_code(right_iris, &mut share_rng);
-        party_dbs[0].db_left.push(left0);
-        party_dbs[0].db_right.push(right0);
-        party_dbs[1].db_left.push(left1);
-        party_dbs[1].db_right.push(right1);
-        party_dbs[2].db_left.push(left2);
-        party_dbs[2].db_right.push(right2);
+        party_dbs[0].db_left.insert(idx, left0);
+        party_dbs[0].db_right.insert(idx, right0);
+        party_dbs[1].db_left.insert(idx, left1);
+        party_dbs[1].db_right.insert(idx, right1);
+        party_dbs[2].db_left.insert(idx, left2);
+        party_dbs[2].db_right.insert(idx, right2);
     }
 
     TestDb {
         plain_dbs: [db_left, db_right],
-        shared_dbs: party_dbs.map(Arc::new),
+        shared_dbs: party_dbs.map(Mutex::new).map(Arc::new),
         initial_db_len: db_size,
     }
 }
 
 pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
-    for (idx, (left, right)) in party_db
-        .db_left
-        .iter()
-        .zip(party_db.db_right.iter())
-        .enumerate()
-    {
+    for idx in 0..party_db.db_left.len() {
+        let left = &party_db.db_left[&idx];
+        let right = &party_db.db_right[&idx];
         loader.load_single_record_from_db(
             idx,
             VectorId::from_0_index(idx as u32),

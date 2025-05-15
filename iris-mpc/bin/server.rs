@@ -47,7 +47,7 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_gpu::server::{InMemoryStoreType, ServerActor};
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -1688,6 +1688,12 @@ async fn server_main(config: Config) -> Result<()> {
 
     let (tx, rx) = oneshot::channel();
     let config_clone = config.clone();
+    let inmemory_store_type = if config.load_only_full_scan_side_in_memory {
+        tracing::info!("Load only full scan side in memory is enabled");
+        InMemoryStoreType::Half(Arc::new(store.clone()))
+    } else {
+        InMemoryStoreType::Full
+    };
     background_tasks.spawn_blocking(move || {
         let config = config_clone;
         // --------------------------------------------------------------------------
@@ -1707,6 +1713,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
+            inmemory_store_type,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

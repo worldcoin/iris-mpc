@@ -462,6 +462,7 @@ pub mod degree4 {
         })
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
     pub struct FullGaloisRingIrisCodeShare {
         pub code: GaloisRingIrisCodeShare,
         pub mask: GaloisRingTrimmedMaskCodeShare,

@@ -26,6 +26,7 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+async-trait.workspace = true
 dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true
@@ -63,6 +64,7 @@ ring = "0.17.8"
 data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
+quick_cache = "0.6.13"
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 

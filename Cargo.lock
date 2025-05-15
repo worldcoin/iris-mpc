@@ -2307,6 +2307,7 @@ dependencies = [
 name = "iris-mpc-common"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "aws-config",
  "aws-credential-types",
  "aws-sdk-kms",
@@ -2333,6 +2334,7 @@ dependencies = [
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
  "percent-encoding",
+ "quick_cache",
  "rand",
  "rayon",
  "reqwest",
@@ -2407,6 +2409,7 @@ dependencies = [
 name = "iris-mpc-gpu"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "bincode",
@@ -2656,7 +2659,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
@@ -3612,6 +3615,18 @@ dependencies = [
  "wasi",
  "web-sys",
  "winapi",
+]
+
+[[package]]
+name = "quick_cache"
+version = "0.6.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "287e56aac5a2b4fb25a6fb050961d157635924c8696305a5c937a76f29841a0f"
+dependencies = [
+ "ahash",
+ "equivalent",
+ "hashbrown 0.15.0",
+ "parking_lot",
 ]
 
 [[package]]
