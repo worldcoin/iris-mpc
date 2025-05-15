@@ -45,13 +45,13 @@ jobs:
         run: rustup default 1.85.0
 
       - name: Run Tests
-        run: cargo test --release -- --test-threads=1
+        run: cargo test --release
 
       - name: Run Tests with DB
-        run: cargo test --release --features db_dependent -- --test-threads=1
+        run: cargo test --release --features db_dependent
 
       - name: Run CPU E2E tests
-        run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
+        run: cargo test --release -p iris-mpc-cpu -- e2e--include-ignored
         env:
           RUST_LOG: info
           RUST_BACKTRACE: 1

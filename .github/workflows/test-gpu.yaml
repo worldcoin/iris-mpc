@@ -72,7 +72,7 @@ jobs:
 
       - name: GPU Dependent Tests
         timeout-minutes: 15
-        run: cargo test -p iris-mpc-gpu --release --features gpu_dependent -- --test-threads=1
+        run: cargo test -p iris-mpc-gpu --release --features gpu_dependent
         shell: bash
         env:
           NCCL_P2P_LEVEL: LOC
