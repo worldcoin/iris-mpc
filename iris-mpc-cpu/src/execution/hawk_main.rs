@@ -37,7 +37,7 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use matching::{
-    Filter, MatchId,
+    Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
@@ -427,6 +427,7 @@ impl HawkActor {
         &mut self,
         sessions: &[HawkSessionRef],
         plans: VecRequests<Option<InsertPlan>>,
+        update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
         let insert_plans = join_plans(plans);
         let mut connect_plans = vec![None; insert_plans.len()];
@@ -434,9 +435,9 @@ impl HawkActor {
         // Parallel insertions are not supported, so only one session is needed.
         let mut session = sessions[0].write().await;
 
-        for (plan, cp) in izip!(insert_plans, &mut connect_plans) {
+        for (plan, update_id, cp) in izip!(insert_plans, update_ids, &mut connect_plans) {
             if let Some(plan) = plan {
-                *cp = Some(self.insert_one(&mut session, plan).await?);
+                *cp = Some(self.insert_one(&mut session, plan, *update_id).await?);
             }
         }
         Ok(connect_plans)
@@ -446,8 +447,17 @@ impl HawkActor {
         &mut self,
         session: &mut HawkSession,
         insert_plan: InsertPlan,
+        update_id: Option<VectorId>,
     ) -> Result<ConnectPlan> {
-        let inserted = session.aby3_store.storage.insert(&insert_plan.query).await;
+        let inserted = {
+            let mut store = session.aby3_store.storage.write().await;
+
+            match update_id {
+                None => store.append(&insert_plan.query),
+                Some(id) => store.update(id, &insert_plan.query),
+            }
+        };
+
         let mut graph_store = session.graph_store.write().await;
 
         let connect_plan = self
@@ -750,6 +760,25 @@ impl HawkRequest {
             })
             .collect_vec()
     }
+
+    fn reauth_id(
+        &self,
+        iris_store: &SharedIrises,
+        orient: Orientation,
+    ) -> VecRequests<Option<VectorId>> {
+        izip!(&self.batch.request_types, &self.batch.request_ids)
+            .map(|(request_type, request_id)| {
+                if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
+                    self.batch
+                        .reauth_target_indices
+                        .get(request_id)
+                        .map(|&idx| iris_store.from_0_indices(&[idx])[0])
+                } else {
+                    None
+                }
+            })
+            .collect_vec()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -805,6 +834,8 @@ impl HawkResult {
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
+        use MatchId::*;
+
         self.match_results
             .select(filter)
             .iter()
@@ -812,9 +843,8 @@ impl HawkResult {
                 matches
                     .iter()
                     .filter_map(|&m| match m {
-                        MatchId::Search(id) => Some(id),
-                        MatchId::Luc(id) => Some(id),
-                        MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
+                        Search(id) | Luc(id) | Reauth(id) => Some(id),
+                        IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
                     .unique()
@@ -841,11 +871,13 @@ impl HawkResult {
     }
 
     fn job_result(self) -> ServerJobResult {
+        use Decision::*;
         use Orientation::{Mirror, Normal};
         use StoreId::{Left, Right};
 
-        let matches = self.match_results.is_matches();
-        let n_requests = matches.len();
+        let decisions = self.match_results.decisions();
+
+        let matches = decisions.iter().map(Decision::is_match).collect_vec();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
@@ -897,7 +929,13 @@ impl HawkResult {
         let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
+        let successful_reauths = decisions
+            .iter()
+            .map(|&d| matches!(d, ReauthUpdate(_)))
+            .collect_vec();
+
         let batch = self.batch;
+
         ServerJobResult {
             merged_results,
             request_ids: batch.request_ids,
@@ -928,12 +966,15 @@ impl HawkResult {
             anonymized_bucket_statistics_right,
             anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
             anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
-            successful_reauths: vec![false; n_requests],                           // TODO.
-            reauth_target_indices: Default::default(),                             // TODO.
-            reauth_or_rule_used: Default::default(),                               // TODO.
-            reset_update_indices: vec![],                                          // TODO.
-            reset_update_request_ids: vec![],                                      // TODO.
-            reset_update_shares: vec![],                                           // TODO.
+
+            successful_reauths,
+            reauth_target_indices: batch.reauth_target_indices,
+            reauth_or_rule_used: batch.reauth_use_or_rule,
+
+            reset_update_indices: vec![],     // TODO.
+            reset_update_request_ids: vec![], // TODO.
+            reset_update_shares: vec![],      // TODO.
+
             modifications: batch.modifications,
 
             actor_data: self.connect_plans,
@@ -1035,10 +1076,12 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
-
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
+            let (luc_ids, reauth_ids) = {
+                let store = hawk_actor.iris_store[LEFT].read().await;
+                (request.luc_ids(&store), request.reauth_id(&store, orient))
+            };
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
@@ -1048,7 +1091,7 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids);
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, &reauth_ids);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(
@@ -1075,31 +1118,14 @@ impl HawkHandle {
             .update_anon_stats(&sessions[0][0], &search_results)
             .await?;
 
-        let is_matches = match_result.is_matches();
-
         // Insert into the in memory stores.
-        // For both eyes.
-        let mut connect_plans = HawkMutation([vec![], vec![]]);
-        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
-            // Focus on the insertions: skip matches, and keep only the centered irises.
-            let insert_plans = izip!(search_results, &is_matches)
-                .map(|(search_result, &is_match)| {
-                    if is_match {
-                        None
-                    } else {
-                        Some(search_result.into_center())
-                    }
-                })
-                .collect_vec();
-
-            // Insert in memory, and return the plans to update the persistent database.
-            connect_plans.0[*side as usize] = hawk_actor.insert(sessions, insert_plans).await?;
-        }
+        let mutations =
+            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result).await?;
 
         let results = HawkResult::new(
             request.batch,
             match_result,
-            connect_plans,
+            mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
 
@@ -1110,6 +1136,43 @@ impl HawkHandle {
         metrics::gauge!("search_queries_right").set(query_count as f64);
 
         Ok(results)
+    }
+
+    async fn handle_mutations(
+        hawk_actor: &mut HawkActor,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        match_result: &matching::BatchStep3,
+    ) -> Result<HawkMutation> {
+        use Decision::*;
+        let decisions = match_result.decisions();
+
+        let update_ids = decisions
+            .iter()
+            .map(|decision| match decision {
+                ReauthUpdate(update_id) => Some(*update_id),
+                _ => None,
+            })
+            .collect_vec();
+
+        let mut connect_plans = HawkMutation([vec![], vec![]]);
+
+        // For both eyes.
+        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+            // Focus on the insertions and keep only the centered irises.
+            let insert_plans = izip!(search_results, &decisions)
+                .map(|(search_result, &decision)| match decision {
+                    UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
+                    _ => None,
+                })
+                .collect_vec();
+
+            // Insert in memory, and return the plans to update the persistent database.
+            connect_plans.0[*side as usize] = hawk_actor
+                .insert(sessions, insert_plans, &update_ids)
+                .await?;
+        }
+        Ok(connect_plans)
     }
 
     async fn health_check(
