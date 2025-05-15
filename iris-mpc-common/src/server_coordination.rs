@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::helpers::shutdown_handler::ShutdownHandler;
-use crate::helpers::sync::{SyncResult, SyncState};
+use crate::helpers::sync::{GenesisConfig, SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
+use crate::IrisSerialId;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -49,7 +50,7 @@ pub async fn start_coordination_server(
     config: &Config,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    my_state: &SyncState,
+    my_state: Arc<SyncState>,
 ) -> Arc<AtomicBool> {
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
@@ -109,7 +110,32 @@ pub async fn start_coordination_server(
                 )
                 .route(
                     "/startup-sync",
-                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                    get({
+                        let my_state = Arc::clone(&my_state);
+                        move || async move { serde_json::to_string(&my_state).unwrap() }
+                    }),
+                )
+                .route(
+                    "/height-of-graph-genesis-indexation",
+                    get({
+                        let my_state = Arc::clone(&my_state);
+                        let height: IrisSerialId = (my_state.genesis_config.as_ref().map(
+                            |GenesisConfig {
+                                 max_indexation_height: _,
+                                 last_indexation_height,
+                             }| *last_indexation_height,
+                        ))
+                        .unwrap_or(1);
+                        // We are only ready once this flag is set to true.
+                        let is_ready_flag = Arc::clone(&is_ready_flag);
+                        move || async move {
+                            if is_ready_flag.load(Ordering::SeqCst) {
+                                height.to_string().into_response()
+                            } else {
+                                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -278,7 +304,10 @@ pub async fn init_heartbeat_task(
 /// Retrieves synchronization state of other MPC nodes.  This data is
 /// used to ensure that all nodes are in a consistent state prior
 /// to starting MPC operations.
-pub async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+pub async fn get_others_sync_state(
+    config: &Config,
+    my_state: Arc<SyncState>,
+) -> Result<SyncResult> {
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
     tracing::info!("Database store length is: {}", my_state.db_len);
@@ -293,7 +322,7 @@ pub async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Res
 
     all_sync_states.remove(config.party_id);
 
-    Ok(SyncResult::new(my_state.clone(), all_sync_states))
+    Ok(SyncResult::new((*my_state).clone(), all_sync_states))
 }
 
 /// Toggle `is_ready_flag` to `true` to signal to other nodes that this node

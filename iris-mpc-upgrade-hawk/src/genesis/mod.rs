@@ -18,7 +18,11 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
-    genesis::{logger, BatchGenerator, BatchIterator, Handle as HawkHandle},
+    genesis::{
+        logger,
+        utils::fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+        BatchGenerator, BatchIterator, Handle as HawkHandle,
+    },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
@@ -80,7 +84,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        &my_state,
+        Arc::clone(&my_state),
     )
     .await;
     background_tasks.check_tasks();
@@ -93,7 +97,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = synchronized.
-    let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
+    let sync_result = coordinator::get_others_sync_state(&config, Arc::clone(&my_state)).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -171,8 +175,45 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
+        let mut prev_iris_index = fetch_height_of_indexed(iris_store).await;
+
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            // Assumption: ids are monotonically increasing within a batch and between batches.
+            let curr_iris_db_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
+            let curr_iris_db_index = match curr_iris_db_index_opt {
+                Some(index) if index <= prev_iris_index as i64 => {
+                    log_info(format!(
+                "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
+                batch_generator.batch_count(),
+                batch.len(),
+                now.elapsed(),
+            ));
+                    continue;
+                }
+                None => {
+                    log_info(format!(
+                        "HNSW GENESIS: Skipping empty batch: idx={} :: irises={} :: time {:?}",
+                        batch_generator.batch_count(),
+                        batch.len(),
+                        now.elapsed(),
+                    ));
+                    continue;
+                }
+                Some(index) => index,
+            };
+
+            let curr_iris_index_res = IrisSerialId::try_from(curr_iris_db_index);
+            let curr_iris_index = match curr_iris_index_res {
+                Ok(index) => index,
+                Err(_) => {
+                    log_error(
+                "Converting DbStoredIris.id of type i64 to IrisSerialID alias for u32 failed.  Skipping ..".to_string(),
+            );
+                    continue;
+                }
+            };
+
             log_info(format!(
                 "Indexing new batch: idx={} :: irises={} :: time {:?}",
                 batch_generator.batch_count(),
@@ -197,10 +238,12 @@ async fn exec_main_loop(
                     )
                 })??;
 
-            // TODO write results to database
+            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
 
             // Housekeeping: increment count of pending batches.
-            shutdown_handler.increment_batches_pending_completion()
+            shutdown_handler.increment_batches_pending_completion();
+
+            prev_iris_index = curr_iris_index;
         }
 
         Ok(())
@@ -346,7 +389,7 @@ async fn get_sync_state(
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
-) -> Result<SyncState> {
+) -> Result<Arc<SyncState>> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
@@ -360,14 +403,14 @@ async fn get_sync_state(
         last_indexation_height,
     };
 
-    Ok(SyncState {
+    Ok(Arc::new(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
         genesis_config: Some(genesis_config),
-    })
+    }))
 }
 
 async fn init_graph_from_stores(

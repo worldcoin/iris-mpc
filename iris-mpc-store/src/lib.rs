@@ -18,7 +18,8 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use serde::{de::DeserializeOwned, Serialize};
+use sqlx::{types::Json, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// The unified type that can hold either DB or S3 variants.
@@ -560,6 +561,88 @@ WHERE id = $1;
             "#,
         )
         .bind(&ids)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Retrieve entry from `persistent_state` table with associated `domain` and `key` identifiers.
+    ///
+    /// Returns `Some(value)` if an entry exists for these identifiers and deserialization to generic
+    /// type `T` succeeds.  If no entry exists, then returns `None`.
+    pub async fn get_persistent_state<T: DeserializeOwned>(
+        &self,
+        domain: &str,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let row = sqlx::query(
+            r#"
+            SELECT "value"
+            FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let value = row.try_get("value")?;
+            let deserialized: T = serde_json::from_value(value)?;
+            Ok(Some(deserialized))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set the entry in the `persistent_state` table for primary key `(domain, key)`.
+    ///
+    /// If an entry already exists for this primary key, this overwrites the existing
+    /// value with the value specified here.
+    pub async fn set_persistent_state<T: Serialize>(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+        value: &T,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO persistent_state (domain, "key", "value")
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain, "key")
+            DO UPDATE SET "value" = EXCLUDED."value"
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .bind(Json(value))
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete an entry in the `persistent_state` table with primary key `(domain, key)`,
+    /// if it exists.
+    pub async fn delete_persistent_state(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+    ) -> Result<()> {
+        // let value_json = Json(value);
+
+        sqlx::query(
+            r#"
+            DELETE FROM persistent_state
+            WHERE domain = $1 AND "key" = $2;
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1273,6 +1356,71 @@ pub mod tests {
                 .all(|(i, row)| row.id == (i + 1) as i64),
             "IDs must be contiguous and in order"
         );
+    }
+
+    #[tokio::test]
+    async fn test_persistent_state() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let domain = "test_domain".to_string();
+        let key = "foo".to_string();
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Insert value at index
+        let set_value = "bar".to_string();
+        let mut tx = store.tx().await?;
+        store
+            .set_persistent_state(&mut tx, &domain, &key, &set_value)
+            .await?;
+        tx.commit().await?;
+
+        // Check value is set at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(set_value));
+
+        // Insert new value at index
+        let new_set_value = "bear".to_string();
+        let mut tx = store.tx().await?;
+        store
+            .set_persistent_state(&mut tx, &domain, &key, &new_set_value)
+            .await?;
+        tx.commit().await?;
+
+        // Check value is updated at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(new_set_value));
+
+        // Delete value at index
+        let mut tx = store.tx().await?;
+        store
+            .delete_persistent_state(&mut tx, &domain, &key)
+            .await?;
+        tx.commit().await?;
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Delete value at index again
+        let mut tx = store.tx().await?;
+        store
+            .delete_persistent_state(&mut tx, &domain, &key)
+            .await?;
+        tx.commit().await?;
+
+        // Check still no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        Ok(())
     }
 }
 
