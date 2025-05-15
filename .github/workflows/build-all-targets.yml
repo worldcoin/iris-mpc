@@ -21,11 +21,17 @@ jobs:
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
 
-      - name: Cache build products
-        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+      - name: Cache Rust build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        id: cache-rust
         with:
-          # Split the test and bench caches, the have different debug settings
-          key: "test"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
 
       - name: Install Rust
         run: rustup toolchain install 1.85.0
@@ -46,11 +52,17 @@ jobs:
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
 
-      - name: Cache build products
-        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+      - name: Cache Rust build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        id: cache-rust
         with:
-          # Split the test and bench caches, they have different debug settings
-          key: "bench"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
 
       - name: Install Rust
         run: rustup toolchain install 1.85.0

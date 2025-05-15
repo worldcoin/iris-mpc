@@ -32,11 +32,23 @@ jobs:
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
 
-      - name: Cache build products
-        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+      - name: Cache Rust build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        id: cache-rust
         with:
-          # Split the test and bench caches, the have different debug settings
-          key: "test"
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
+
+      - name: Show cached cargo files
+        run: du -sh ~/.cargo ~/.cargo/registry ~/.cargo/git target || true
+
+      - name: Show disk usage
+        run: df -h || true
 
       - name: Install Rust
         run: rustup toolchain install 1.85.0
@@ -45,15 +57,13 @@ jobs:
         run: rustup default 1.85.0
 
       - name: Run Tests
-        run: |
-          sleep 3600
-          cargo test --release
+        run: cargo test --release -- --test-threads=4
 
       - name: Run Tests with DB
-        run: cargo test --release --features db_dependent
+        run: cargo test --release --features db_dependent -- --test-threads=4
 
       - name: Run CPU E2E tests
-        run: cargo test --release -p iris-mpc-cpu -- e2e--include-ignored
+        run: cargo test --release -p iris-mpc-cpu -- e2e -- --test-threads=4 --include-ignored
         env:
           RUST_LOG: info
           RUST_BACKTRACE: 1
