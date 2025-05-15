@@ -337,37 +337,6 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Assumption This function assumes that each of the nodes have finished indexing the irises before it is called.
-pub async fn check_consensus_on_iris_height(config: &Config) -> Result<()> {
-    tracing::info!("⚓️ ANCHOR: Checking consensus on iris height");
-    // Check other nodes and wait until all nodes are ready.
-
-    let iris_heights =
-        try_get_endpoint_all_nodes(config, "height-of-graph-genesis-indexation").await?;
-
-    // REVIEW: Merge after height endpoint
-    // let height = fetch_height_of_indexed().await;
-    let height = 1;
-    let response_texts_futs: Vec<_> = iris_heights.into_iter().map(|resp| resp.text()).collect();
-    let response_texts = try_join_all(response_texts_futs).await?;
-    let response_parses: Result<Vec<_>> = response_texts
-        .into_iter()
-        .map(|b| b.parse::<i64>().wrap_err("Parse error"))
-        .collect();
-    let response_i64s = response_parses?;
-    let nodes_in_sync = response_i64s.iter().all(|&height_i| height_i == height);
-
-    ensure!(
-        nodes_in_sync,
-        "One or more nodes were not on the same iris height: {:?}",
-        response_i64s
-    );
-
-    tracing::info!("All nodes are on height {}", height);
-
-    Ok(())
-}
-
 const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
 
 pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Result<Vec<Response>> {
