@@ -49,7 +49,6 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -63,12 +62,13 @@ use tonic::transport::Server;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+pub(crate) mod insert;
 mod intra_batch;
 mod is_match_batch;
 mod matching;
 mod rot;
-mod scheduler;
-mod search;
+pub(crate) mod scheduler;
+pub(crate) mod search;
 pub mod state_check;
 use crate::protocol::ops::{
     compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,
@@ -339,6 +339,10 @@ impl HawkActor {
         })
     }
 
+    pub fn searcher(&self) -> Arc<HnswSearcher> {
+        self.searcher.clone()
+    }
+
     fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
@@ -429,51 +433,16 @@ impl HawkActor {
         plans: VecRequests<Option<InsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        let insert_plans = join_plans(plans);
-        let mut connect_plans = vec![None; insert_plans.len()];
+        // Plans are to be inserted at the next version of non-None entries in `update_ids`
+        let insertion_ids = update_ids
+            .iter()
+            .map(|id_option| id_option.map(|original_id| original_id.next_version()))
+            .collect_vec();
 
         // Parallel insertions are not supported, so only one session is needed.
-        let mut session = sessions[0].write().await;
+        let session = &sessions[0];
 
-        for (plan, update_id, cp) in izip!(insert_plans, update_ids, &mut connect_plans) {
-            if let Some(plan) = plan {
-                *cp = Some(self.insert_one(&mut session, plan, *update_id).await?);
-            }
-        }
-        Ok(connect_plans)
-    }
-
-    async fn insert_one(
-        &mut self,
-        session: &mut HawkSession,
-        insert_plan: InsertPlan,
-        update_id: Option<VectorId>,
-    ) -> Result<ConnectPlan> {
-        let inserted = {
-            let mut store = session.aby3_store.storage.write().await;
-
-            match update_id {
-                None => store.append(&insert_plan.query),
-                Some(id) => store.update(id, &insert_plan.query),
-            }
-        };
-
-        let mut graph_store = session.graph_store.write().await;
-
-        let connect_plan = self
-            .searcher
-            .insert_prepare(
-                &mut session.aby3_store,
-                graph_store.deref(),
-                inserted,
-                insert_plan.links,
-                insert_plan.set_ep,
-            )
-            .await?;
-
-        graph_store.insert_apply(connect_plan.clone()).await;
-
-        Ok(connect_plan)
+        insert::insert(session, &self.searcher, plans, &insertion_ids).await
     }
 
     async fn update_anon_stats(
@@ -985,7 +954,7 @@ impl HawkResult {
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(BothEyes<Vec<Option<ConnectPlan>>>);
+pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
 
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
@@ -1205,30 +1174,6 @@ impl Consensus {
         self.next_session_id += 1;
         id
     }
-}
-
-/// Combine insert plans from parallel searches, repairing any conflict.
-fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>> {
-    let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
-    if set_ep {
-        // There can be at most one new entry point.
-        let highest = plans
-            .iter()
-            .map(|plan| match plan {
-                Some(plan) => plan.links.len(),
-                None => 0,
-            })
-            .position_max()
-            .unwrap();
-
-        // Set the entry point to false for all but the highest.
-        for (i, plan) in plans.iter_mut().enumerate() {
-            if let Some(plan) = plan {
-                plan.set_ep = i == highest;
-            }
-        }
-    }
-    plans
 }
 
 fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
