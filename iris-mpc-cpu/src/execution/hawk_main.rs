@@ -433,7 +433,16 @@ impl HawkActor {
         plans: VecRequests<Option<InsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        insert::insert(sessions, &self.searcher, plans, update_ids).await
+        // Plans are to be inserted at the next version of non-None entries in `update_ids`
+        let insertion_ids = update_ids
+            .iter()
+            .map(|id_option| id_option.map(|original_id| original_id.next_version()))
+            .collect_vec();
+
+        // Parallel insertions are not supported, so only one session is needed.
+        let session = &sessions[0];
+
+        insert::insert(session, &self.searcher, plans, &insertion_ids).await
     }
 
     async fn update_anon_stats(

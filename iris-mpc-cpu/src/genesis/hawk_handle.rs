@@ -3,8 +3,8 @@ use super::{
     logger,
 };
 use crate::execution::hawk_main::{
-    insert::insert_with_ids, scheduler::parallelize, search::search_single_query_no_match_count,
-    BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
+    insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
 };
 use eyre::{OptionExt, Result};
 use futures::try_join;
@@ -153,13 +153,13 @@ impl Handle {
                             .map(Some)
                             .collect_vec();
 
-                        let batch_identifiers =
-                            queries_batch.iter().map(|(_query, id)| *id).collect_vec();
+                        let batch_ids = queries_batch
+                            .iter()
+                            .map(|(_query, id)| Some(*id))
+                            .collect_vec();
 
                         // Insert into in-memory store, and return insertion plans for use by DB
-                        let plans =
-                            insert_with_ids(plans, batch_identifiers, &searcher, insert_session)
-                                .await?;
+                        let plans = insert(insert_session, &searcher, plans, &batch_ids).await?;
                         connect_plans.extend(plans);
                     }
 
