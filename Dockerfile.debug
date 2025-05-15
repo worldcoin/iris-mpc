@@ -6,25 +6,30 @@ ENV DEBIAN_FRONTEND=noninteractive
 WORKDIR /app
 
 # Install dependencies and clean up
-RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
-    && dpkg -i cuda-keyring_1.1-1_all.deb \
-    && apt-get update \
+RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        cuda-toolkit-12-2 \
         curl \
         debhelper \
         devscripts \
         git \
         libcap2-bin \
-        libnccl-dev=2.22.3-1+cuda12.2 \
-        libnccl2=2.22.3-1+cuda12.2 \
         libssl-dev \
         pkg-config \
         protobuf-compiler \
         texinfo \
         wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* 
+
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
+    && dpkg -i cuda-keyring_1.1-1_all.deb \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        cuda-toolkit-12-2 \
+        libnccl-dev=2.22.3-1+cuda12.2 \
+        libnccl2=2.22.3-1+cuda12.2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && rm cuda-keyring_1.1-1_all.deb
