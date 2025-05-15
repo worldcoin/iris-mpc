@@ -23,8 +23,8 @@ use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
-    check_consensus_on_iris_height, get_others_sync_state, init_heartbeat_task, init_task_monitor,
-    set_node_ready, start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
+    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -75,7 +75,6 @@ pub async fn server_main(config: Config) -> Result<()> {
     background_tasks.check_tasks();
 
     wait_for_others_unready(&config).await?;
-    check_consensus_on_iris_height(&config).await?;
     init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
 
     background_tasks.check_tasks();
@@ -120,11 +119,6 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&config).await?;
-    if check_consensus_on_iris_height(&config).await.is_err() {
-        shutdown_handler.trigger_manual_shutdown();
-        tracing::warn!("Shutting down has been triggered");
-        return Ok(());
-    }
 
     background_tasks.check_tasks();
 

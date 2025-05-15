@@ -91,7 +91,6 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 
     // Await coordinator to signal network state = unready.
     coordinator::wait_for_others_unready(&config).await?;
-    coordinator::check_consensus_on_iris_height(&config).await?;
 
     // Await coordinator to signal network state = healthy.
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
