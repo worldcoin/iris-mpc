@@ -161,7 +161,7 @@ env:
     value: "true"
 
   - name: SMPC__LOAD_ONLY_FULL_SCAN_SIDE_IN_MEMORY
-    value: "true"
+    value: "false"
 
 initContainer:
   enabled: true
