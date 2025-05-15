@@ -12,7 +12,7 @@ env:
 
 jobs:
   integration-tests:
-    runs-on: arc-test-amd64-runner
+    runs-on: ubuntu-22.04-8core
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -22,6 +22,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache build products
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
 
       - name: Build and export to Docker
         uses: docker/build-push-action@471d1dc4e07e5cdedd4c2171150001c434f0b7a4

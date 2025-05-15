@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   unit-tests:
-    runs-on: arc-test-amd64-runner
+    runs-on: ubuntu-22.04-8core
 
     services:
       postgres:
@@ -31,6 +31,12 @@ jobs:
       # The following steps will only run if any of the src files have changed
       - name: Install Dependencies
         run: sudo apt install protobuf-compiler
+
+      - name: Cache build products
+        uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6
+        with:
+          # Split the test and bench caches, the have different debug settings
+          key: "test"
 
       - name: Install Rust
         run: rustup toolchain install 1.85.0
