@@ -37,7 +37,7 @@ use iris_mpc_common::{
 };
 use itertools::{izip, Itertools};
 use matching::{
-    Filter, MatchId,
+    Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
@@ -49,7 +49,6 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
-    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -89,6 +88,9 @@ pub struct HawkArgs {
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
+
+    #[clap(short, long, default_value_t = 1)]
+    pub stream_parallelism: usize,
 
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
@@ -266,6 +268,7 @@ impl HawkActor {
         let grpc_config = GrpcConfig {
             timeout_duration: Duration::from_secs(10),
             connection_parallelism: args.connection_parallelism,
+            stream_parallelism: args.stream_parallelism,
         };
 
         let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
@@ -428,8 +431,9 @@ impl HawkActor {
         &mut self,
         sessions: &[HawkSessionRef],
         plans: VecRequests<Option<InsertPlan>>,
+        update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
-        insert::insert(plans, &self.searcher, &sessions[0]).await
+        insert::insert(sessions, &self.searcher, plans, update_ids).await
     }
 
     async fn update_anon_stats(
@@ -716,6 +720,25 @@ impl HawkRequest {
             })
             .collect_vec()
     }
+
+    fn reauth_id(
+        &self,
+        iris_store: &SharedIrises,
+        orient: Orientation,
+    ) -> VecRequests<Option<VectorId>> {
+        izip!(&self.batch.request_types, &self.batch.request_ids)
+            .map(|(request_type, request_id)| {
+                if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
+                    self.batch
+                        .reauth_target_indices
+                        .get(request_id)
+                        .map(|&idx| iris_store.from_0_indices(&[idx])[0])
+                } else {
+                    None
+                }
+            })
+            .collect_vec()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -745,6 +768,7 @@ impl HawkResult {
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Both,
+            intra_batch: true,
         });
 
         self.connect_plans.0[0]
@@ -770,6 +794,8 @@ impl HawkResult {
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
+        use MatchId::*;
+
         self.match_results
             .select(filter)
             .iter()
@@ -777,11 +803,11 @@ impl HawkResult {
                 matches
                     .iter()
                     .filter_map(|&m| match m {
-                        MatchId::Search(id) => Some(id),
-                        MatchId::Luc(id) => Some(id),
-                        MatchId::IntraBatch(req_i) => self.inserted_id(req_i),
+                        Search(id) | Luc(id) | Reauth(id) => Some(id),
+                        IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
+                    .unique()
                     .collect_vec()
             })
             .collect_vec()
@@ -797,6 +823,7 @@ impl HawkResult {
             .select(Filter {
                 eyes: Both,
                 orient: Both,
+                intra_batch: true,
             })
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
@@ -804,36 +831,43 @@ impl HawkResult {
     }
 
     fn job_result(self) -> ServerJobResult {
+        use Decision::*;
         use Orientation::{Mirror, Normal};
         use StoreId::{Left, Right};
 
-        let matches = self.match_results.is_matches();
-        let n_requests = matches.len();
+        let decisions = self.match_results.decisions();
+
+        let matches = decisions.iter().map(Decision::is_match).collect_vec();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (partial_match_ids_right, partial_match_counters_right) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Normal),
+            intra_batch: false,
         });
 
         let (full_face_mirror_match_ids, _) = self.select(Filter {
             eyes: Both,
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
             self.select(Filter {
                 eyes: Only(Left),
                 orient: Only(Mirror),
+                intra_batch: false,
             });
 
         let (
@@ -842,6 +876,7 @@ impl HawkResult {
         ) = self.select(Filter {
             eyes: Only(Right),
             orient: Only(Mirror),
+            intra_batch: false,
         });
 
         let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
@@ -854,7 +889,13 @@ impl HawkResult {
         let anonymized_bucket_statistics_left = self.anonymized_bucket_statistics[LEFT].clone();
         let anonymized_bucket_statistics_right = self.anonymized_bucket_statistics[RIGHT].clone();
 
+        let successful_reauths = decisions
+            .iter()
+            .map(|&d| matches!(d, ReauthUpdate(_)))
+            .collect_vec();
+
         let batch = self.batch;
+
         ServerJobResult {
             merged_results,
             request_ids: batch.request_ids,
@@ -883,12 +924,16 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
-            successful_reauths: vec![false; n_requests], // TODO.
-            reauth_target_indices: Default::default(),   // TODO.
-            reauth_or_rule_used: Default::default(),     // TODO.
-            reset_update_indices: vec![],                // TODO.
-            reset_update_request_ids: vec![],            // TODO.
-            reset_update_shares: vec![],                 // TODO.
+            anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
+            anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
+
+            successful_reauths,
+            reauth_target_indices: batch.reauth_target_indices,
+            reauth_or_rule_used: batch.reauth_use_or_rule,
+
+            reset_update_indices: vec![],     // TODO.
+            reset_update_request_ids: vec![], // TODO.
+            reset_update_shares: vec![],      // TODO.
 
             modifications: batch.modifications,
 
@@ -991,10 +1036,12 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let luc_ids = request.luc_ids(hawk_actor.iris_store[LEFT].read().await.deref());
-
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
+            let (luc_ids, reauth_ids) = {
+                let store = hawk_actor.iris_store[LEFT].read().await;
+                (request.luc_ids(&store), request.reauth_id(&store, orient))
+            };
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
 
@@ -1004,7 +1051,7 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids);
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, &reauth_ids);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(
@@ -1031,31 +1078,14 @@ impl HawkHandle {
             .update_anon_stats(&sessions[0][0], &search_results)
             .await?;
 
-        let is_matches = match_result.is_matches();
-
         // Insert into the in memory stores.
-        // For both eyes.
-        let mut connect_plans = HawkMutation([vec![], vec![]]);
-        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
-            // Focus on the insertions: skip matches, and keep only the centered irises.
-            let insert_plans = izip!(search_results, &is_matches)
-                .map(|(search_result, &is_match)| {
-                    if is_match {
-                        None
-                    } else {
-                        Some(search_result.into_center())
-                    }
-                })
-                .collect_vec();
-
-            // Insert in memory, and return the plans to update the persistent database.
-            connect_plans.0[*side as usize] = hawk_actor.insert(sessions, insert_plans).await?;
-        }
+        let mutations =
+            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result).await?;
 
         let results = HawkResult::new(
             request.batch,
             match_result,
-            connect_plans,
+            mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
 
@@ -1066,6 +1096,43 @@ impl HawkHandle {
         metrics::gauge!("search_queries_right").set(query_count as f64);
 
         Ok(results)
+    }
+
+    async fn handle_mutations(
+        hawk_actor: &mut HawkActor,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        match_result: &matching::BatchStep3,
+    ) -> Result<HawkMutation> {
+        use Decision::*;
+        let decisions = match_result.decisions();
+
+        let update_ids = decisions
+            .iter()
+            .map(|decision| match decision {
+                ReauthUpdate(update_id) => Some(*update_id),
+                _ => None,
+            })
+            .collect_vec();
+
+        let mut connect_plans = HawkMutation([vec![], vec![]]);
+
+        // For both eyes.
+        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+            // Focus on the insertions and keep only the centered irises.
+            let insert_plans = izip!(search_results, &decisions)
+                .map(|(search_result, &decision)| match decision {
+                    UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
+                    _ => None,
+                })
+                .collect_vec();
+
+            // Insert in memory, and return the plans to update the persistent database.
+            connect_plans.0[*side as usize] = hawk_actor
+                .insert(sessions, insert_plans, &update_ids)
+                .await?;
+        }
+        Ok(connect_plans)
     }
 
     async fn health_check(
@@ -1089,7 +1156,7 @@ impl HawkHandle {
 
 #[derive(Default)]
 struct Consensus {
-    next_session_id: u64,
+    next_session_id: u32,
 }
 
 impl Consensus {
@@ -1172,24 +1239,44 @@ mod tests {
         let irises = IrisDB::new_random_rng(batch_size, iris_rng)
             .db
             .into_iter()
-            .map(|iris| GaloisRingSharedIris::generate_shares_locally(iris_rng, iris))
+            .map(|iris| {
+                (
+                    GaloisRingSharedIris::generate_shares_locally(iris_rng, iris.clone()),
+                    GaloisRingSharedIris::generate_mirrored_shares_locally(iris_rng, iris),
+                )
+            })
             .collect_vec();
-        // Unzip: party -> iris_id -> share
+
+        // Unzip: party -> iris_id -> (share, share_mirrored)
         let irises = (0..n_parties)
             .map(|party_index| {
                 irises
                     .iter()
-                    .map(|iris| iris[party_index].clone())
+                    .map(|(iris, iris_mirrored)| {
+                        (
+                            iris[party_index].clone(),
+                            iris_mirrored[party_index].clone(),
+                        )
+                    })
                     .collect_vec()
             })
             .collect_vec();
 
         let all_results = izip!(irises, handles.clone())
-        .map(|(shares, mut handle)| async move {
+            .map(|(shares, mut handle)| async move {
                 // TODO: different test irises for each eye.
-                let shares_right = shares.clone();
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right);
+
+                let shares_right_cloned = shares.clone();
+                let shares_left_cloned = shares.clone();
+
+                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
+                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
+
+                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
+                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
 
                 let batch = BatchQuery {
                     // Iris shares.
@@ -1262,19 +1349,27 @@ mod tests {
     }
 
     /// Prepare shares in the same format as `receive_batch()`.
-    fn receive_batch_shares(shares: Vec<GaloisRingSharedIris>) -> [IrisQueryBatchEntries; 4] {
+    fn receive_batch_shares(
+        shares: Vec<GaloisRingSharedIris>,
+        mirrored_shares: Vec<GaloisRingSharedIris>,
+    ) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for share in shares {
-            let one = preprocess_iris_message_shares(share.code, share.mask).unwrap();
+        for (share, mirrored_share) in izip!(shares, mirrored_shares) {
+            let one = preprocess_iris_message_shares(
+                share.code,
+                share.mask,
+                mirrored_share.code,
+                mirrored_share.mask,
+            )
+            .unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);
             out[1].mask.extend(one.mask_rotated);
             out[2].code.extend(one.code_interpolated.clone());
             out[2].mask.extend(one.mask_interpolated.clone());
-            // TODO: mirrored.
-            out[3].code.extend(one.code_interpolated);
-            out[3].mask.extend(one.mask_interpolated);
+            out[3].code.extend(one.code_mirrored);
+            out[3].mask.extend(one.mask_mirrored);
         }
         out
     }
@@ -1397,6 +1492,7 @@ mod tests_db {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
+            stream_parallelism: 2,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,

@@ -963,9 +963,9 @@ fn get_iris_shares_parse_task(
             )?;
 
             let (left_code_mirrored, left_mask_mirrored) =
-                (left_code.mirrored(), left_mask.mirrored());
+                (left_code.mirrored_code(), left_mask.mirrored_mask());
             let (right_code_mirrored, right_mask_mirrored) =
-                (right_code.mirrored(), right_mask.mirrored());
+                (right_code.mirrored_code(), right_mask.mirrored_mask());
 
             let left_mask_trimmed = trim_mask(left_mask);
             let right_mask_trimmed = trim_mask(right_mask);
@@ -1280,6 +1280,7 @@ async fn server_main(config: Config) -> Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        genesis_config: None,
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -1800,6 +1801,8 @@ async fn server_main(config: Config) -> Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_mirror,
+            anonymized_bucket_statistics_right_mirror,
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
@@ -2222,6 +2225,36 @@ async fn server_main(config: Config) -> Result<()> {
 
                 send_results_to_sns(
                     anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send mirror orientation statistics separately with their own flag
+            if (config_bg.enable_sending_mirror_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left_mirror.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_mirror.buckets.is_empty())
+            {
+                tracing::info!("Sending mirror orientation anonymized stats results");
+                let mirror_anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left_mirror,
+                    anonymized_bucket_statistics_right_mirror,
+                ];
+                // transform to vector of string
+                let mirror_anonymized_statistics_results = mirror_anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize mirror anonymized statistics result")
+                    })
+                    .collect::<eyre::Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    mirror_anonymized_statistics_results,
                     &metadata,
                     &sns_client_bg,
                     &config_bg,

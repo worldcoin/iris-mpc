@@ -45,6 +45,10 @@ impl Query {
             processed_query,
         })
     }
+
+    fn iris(&self) -> IrisRef {
+        Arc::new(self.query.clone())
+    }
 }
 
 /// Creates a new query from a secret shared iris.
@@ -92,7 +96,8 @@ impl SharedIrises {
         }
     }
 
-    /// Inserts the given iris into the database with the specified id.
+    /// Inserts the given iris into the database with the specified id.  If an
+    /// entry is already present with the given id, the iris is overwritten by `iris`.
     ///
     /// Updates the checksum hash to reflect the new or replaced entry for the
     /// associated serial id, and updates the `next_id` field to be the next
@@ -111,6 +116,18 @@ impl SharedIrises {
             self.set_hash.remove(prev_vector_id);
         }
         self.set_hash.add_unordered(vector_id);
+    }
+
+    pub fn append(&mut self, query: &QueryRef) -> VectorId {
+        let new_id = self.next_id();
+        self.insert(new_id, query.iris());
+        new_id
+    }
+
+    pub fn update(&mut self, vector_id: VectorId, query: &QueryRef) -> VectorId {
+        let new_id = vector_id.next_version();
+        self.insert(new_id, query.iris());
+        new_id
     }
 
     /// Return the next id for new insertions, which should have the serial id
@@ -209,18 +226,13 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
-    pub async fn insert(&mut self, query: &QueryRef) -> VectorId {
-        let new_vector = Arc::new(query.query.clone());
-        let mut store = self.body.write().await;
-        let new_id = store.next_id();
-        store.insert(new_id, new_vector);
-        new_id
+
+    pub async fn append(&mut self, query: &QueryRef) -> VectorId {
+        self.body.write().await.append(query)
     }
 
     pub async fn insert_with_id(&mut self, id: VectorId, query: &QueryRef) {
-        let new_vector = Arc::new(query.query.clone());
-        let mut body = self.body.write().await;
-        body.insert(id, new_vector);
+        self.body.write().await.insert(id, query.iris());
     }
 
     pub async fn checksum(&self) -> u64 {
@@ -389,7 +401,7 @@ impl VectorStore for Aby3Store {
 
 impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.insert(query).await
+        self.storage.append(query).await
     }
 }
 
@@ -619,7 +631,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.insert(p).await);
+                player_inserts.push(store_lock.storage.append(p).await);
             }
             aby3_inserts.push(player_inserts);
         }

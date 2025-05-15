@@ -1,7 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
+// An Iris pair serial identifier.
 pub type SerialId = u32;
+
+// An Iris pair version identifier.
 pub type VersionId = i16;
 
 /// Unique identifier for an immutable pair of iris codes.
@@ -79,6 +82,14 @@ impl VectorId {
     /// Whether the version of this vector ID matches the other vector ID.
     pub fn version_matches(&self, other_version: VersionId) -> bool {
         self.version == other_version
+    }
+
+    /// Return the next version of this vector ID.
+    pub fn next_version(self) -> Self {
+        VectorId {
+            id: self.id,
+            version: self.version + 1,
+        }
     }
 }
 

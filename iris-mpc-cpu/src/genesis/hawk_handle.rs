@@ -1,20 +1,17 @@
-use super::hawk_job::{Job, JobRequest, JobResult};
-use crate::{
-    execution::hawk_main::{
-        insert::{insert, insert_with_ids}, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, InsertPlan, LEFT, RIGHT
-    },
-    genesis::utils::types::IrisIdentifier,
-    hawkers::aby3::aby3_store::QueryRef as Aby3QueryRef,
-    hnsw::HnswSearcher,
+use super::{
+    hawk_job::{Job, JobRequest, JobResult},
+    logger,
 };
-use eyre::{ContextCompat, OptionExt, Result};
+use crate::execution::hawk_main::{
+    insert::insert_with_ids, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
+};
+use eyre::{OptionExt, Result};
 use futures::try_join;
 use iris_mpc_store::DbStoredIris;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
-use tokio::{
-    sync::{mpsc, oneshot},
-};
+use tokio::sync::{mpsc, oneshot};
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
@@ -68,7 +65,9 @@ impl Handle {
                 let stop = health.is_err();
                 let _ = job.return_channel.send(health.and(job_result));
                 if stop {
-                    tracing::error!("HawkActor is in an inconsistent state, therefore stopping.");
+                    Self::log_error(String::from(
+                        "HawkActor is in an inconsistent state, therefore stopping.",
+                    ));
                     break;
                 }
             }
@@ -106,10 +105,10 @@ impl Handle {
         sessions: &BothEyes<Vec<HawkSessionRef>>,
         request: &JobRequest,
     ) -> Result<JobResult> {
-        tracing::info!(
+        Self::log_info(format!(
             "Genesis Hawk job processing ::{} elements within batch",
             request.identifiers.len()
-        );
+        ));
         let _ = Instant::now();
 
         // Use all sessions per iris side to search for insertion indices per
@@ -121,25 +120,28 @@ impl Handle {
         let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
             .map(|(queries_side, sessions_side)| {
                 let searcher = actor.searcher();
-                let queries = queries_side.clone();
-                let identifiers = request.identifiers.clone();
+                let queries_with_ids = izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
+                // let queries = queries_side.clone();
+                // let identifiers = request.identifiers.clone();
                 let sessions = sessions_side.clone();
 
                 // Per side do searches and insertions
                 async move {
                     let n_sessions = sessions.len();
-                    let insert_session = sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                    let insert_session =
+                        sessions.first().ok_or_eyre("Sessions for side are empty")?;
                     let mut connect_plans = Vec::new();
 
                     // Process queries in a logical insertion batch for this side
-                    for queries_batch in queries.chunks(n_sessions) {
+                    for queries_batch in queries_with_ids.chunks(n_sessions) {
                         let search_jobs =
-                            izip!(queries_batch.iter(), sessions.iter()).map(|(query, session)| {
+                            izip!(queries_batch.iter(), sessions.iter()).map(|((query, _id), session)| {
                                 let query = query.clone();
                                 let searcher = searcher.clone();
                                 let session = session.clone();
                                 async move {
-                                    search_single_query_no_match_count(session, query, &searcher).await
+                                    search_single_query_no_match_count(session, query, &searcher)
+                                        .await
                                 }
                             });
 
@@ -149,8 +151,10 @@ impl Handle {
                             .map(Some)
                             .collect_vec();
 
+                        let batch_identifiers = queries_batch.iter().map(|(_query, id)| *id).collect_vec();
+
                         // Insert into in-memory store, and return insertion plans for use by DB
-                        let plans = insert(plans, &searcher, insert_session).await?;
+                        let plans = insert_with_ids(plans, batch_identifiers, &searcher, insert_session).await?;
                         connect_plans.extend(plans);
                     }
 
@@ -166,6 +170,16 @@ impl Handle {
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
+    }
+
+    // Helper: component error logging.
+    fn log_error(msg: String) {
+        logger::log_error("Hawk Handle", msg);
+    }
+
+    // Helper: component logging.
+    fn log_info(msg: String) {
+        logger::log_info("Hawk Handle", msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns

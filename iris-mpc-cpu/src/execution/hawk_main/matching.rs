@@ -27,11 +27,12 @@ impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
+        reauth_ids: &VecRequests<Option<VectorId>>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
-            izip!(&plans[LEFT], &plans[RIGHT], luc_ids)
-                .map(|(left, right, luc)| Step1::new([left, right], luc.clone()))
+            izip!(&plans[LEFT], &plans[RIGHT], luc_ids, reauth_ids)
+                .map(|(left, right, luc, rea)| Step1::new([left, right], luc.clone(), *rea))
                 .collect_vec(),
         )
     }
@@ -72,10 +73,15 @@ struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
     luc_ids: Vec<VectorId>,
+    reauth_id: Option<VectorId>,
 }
 
 impl Step1 {
-    fn new(search_results: BothEyes<&VecRots<InsertPlan>>, luc_ids: Vec<VectorId>) -> Step1 {
+    fn new(
+        search_results: BothEyes<&VecRots<InsertPlan>>,
+        luc_ids: Vec<VectorId>,
+        reauth_id: Option<VectorId>,
+    ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
@@ -89,6 +95,7 @@ impl Step1 {
 
         let mut step1 = Step1::with_capacity(full_join.len());
         step1.luc_ids = luc_ids;
+        step1.reauth_id = reauth_id;
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
@@ -110,6 +117,7 @@ impl Step1 {
                 Vec::with_capacity(capacity / 2),
             ],
             luc_ids: Vec::new(),
+            reauth_id: None,
         }
     }
 
@@ -117,7 +125,7 @@ impl Step1 {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
 
-        chain!(anti_join, &self.luc_ids)
+        chain!(anti_join, &self.luc_ids, &self.reauth_id)
             .cloned()
             .unique()
             .collect_vec()
@@ -138,9 +146,16 @@ impl Step1 {
             })
             .collect_vec();
 
+        let reauth_result = self.reauth_id.map(|id| {
+            let is_match =
+                [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
+            (id, is_match)
+        });
+
         let mut step2 = Step2 {
             full_join: self.inner_join,
             luc_results,
+            reauth_result,
             intra_matches,
         };
 
@@ -175,12 +190,81 @@ impl BatchStep2 {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Decision {
+    UniqueInsert,
+    UniqueReject,
+    ReauthUpdate(VectorId),
+    ReauthReject,
+}
+use Decision::*;
+
+impl Decision {
+    pub fn is_match(&self) -> bool {
+        match self {
+            UniqueReject | ReauthUpdate(_) => true,
+            UniqueInsert | ReauthReject => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep3(VecRequests<Step3>);
 
 impl BatchStep3 {
-    pub fn is_matches(&self) -> VecRequests<bool> {
-        self.0.iter().map(Step3::is_match).collect_vec()
+    /// The final decision of what to do with a request.
+    ///
+    /// Emulate the behavior of inserting entries one by one. Intra-batch matches
+    /// only count if they are being inserted themselves.
+    pub fn decisions(&self) -> VecRequests<Decision> {
+        use Decision::*;
+
+        let filter = Filter {
+            eyes: Both,
+            orient: Both,
+            intra_batch: true,
+        };
+
+        let mut decisions = Vec::with_capacity(self.0.len());
+
+        for request in &self.0 {
+            let decision = match request.normal.reauth_result {
+                // Uniqueness request.
+                None => {
+                    let is_match = request.select(filter).any(|id| match id {
+                        Search(_) | Luc(_) | Reauth(_) => true,
+                        IntraBatch(request_i) => {
+                            match decisions.get(request_i) {
+                                // The request we matched with will be inserted, so we are blocked by this intra-batch match.
+                                Some(UniqueInsert) | Some(ReauthUpdate(_)) => true,
+                                // The request we matched with is rejected, so we are not blocked by this intra-batch match.
+                                Some(UniqueReject) | Some(ReauthReject) => false,
+                                // The request we matched with is after us in the batch, so we are not blocked by it.
+                                None => false,
+                            }
+                        }
+                    });
+                    if is_match {
+                        UniqueReject
+                    } else {
+                        UniqueInsert
+                    }
+                }
+
+                // Reauth request.
+                Some((reauth_id, [match_left, match_right])) => {
+                    let is_match = filter.reauth_rule(match_left, match_right);
+                    if is_match {
+                        ReauthUpdate(reauth_id)
+                    } else {
+                        ReauthReject
+                    }
+                }
+            };
+
+            decisions.push(decision);
+        }
+        decisions
     }
 
     /// The IDs of the vectors that matched at least partially.
@@ -197,6 +281,7 @@ impl BatchStep3 {
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
+    reauth_result: Option<(VectorId, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
 }
 
@@ -215,13 +300,18 @@ impl Step2 {
             .filter(move |(_, [l, r])| filter.luc_rule(*l, *r))
             .map(|(id, _)| MatchId::Luc(*id));
 
+        let reauth = self
+            .reauth_result
+            .filter(move |(_, [l, r])| filter.reauth_rule(*l, *r))
+            .map(|(id, _)| MatchId::Reauth(id));
+
         let intra = self
             .intra_matches
             .iter()
             .filter(move |m| filter.intra_rule(m.is_match[LEFT], m.is_match[RIGHT]))
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
-        chain!(search, luc, intra)
+        chain!(search, luc, reauth, intra)
     }
 }
 
@@ -229,8 +319,10 @@ impl Step2 {
 pub enum MatchId {
     Search(VectorId),
     Luc(VectorId),
+    Reauth(VectorId),
     IntraBatch(usize),
 }
+use MatchId::*;
 
 /// Combines the results from mirrored checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,16 +332,6 @@ struct Step3 {
 }
 
 impl Step3 {
-    /// It is a match if either normal or mirrored iris matches.
-    fn is_match(&self) -> bool {
-        self.select(Filter {
-            eyes: Both,
-            orient: Both,
-        })
-        .next()
-        .is_some()
-    }
-
     /// The IDs of the vectors that matched at least partially.
     fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
         chain!(
@@ -273,6 +355,7 @@ impl Step3 {
 pub struct Filter {
     pub eyes: OnlyOrBoth<StoreId>,
     pub orient: OnlyOrBoth<Orientation>,
+    pub intra_batch: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -302,7 +385,11 @@ impl Filter {
         }
     }
 
+    fn reauth_rule(&self, left: bool, right: bool) -> bool {
+        self.search_rule(left, right)
+    }
+
     fn intra_rule(&self, left: bool, right: bool) -> bool {
-        self.luc_rule(left, right)
+        self.intra_batch && self.luc_rule(left, right)
     }
 }
