@@ -96,7 +96,7 @@ env:
     value: "200"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "128"
+    value: "200"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
