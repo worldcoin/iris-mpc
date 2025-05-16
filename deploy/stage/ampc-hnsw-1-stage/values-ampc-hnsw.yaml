@@ -35,9 +35,6 @@ env:
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
-  - name: SMPC__MAX_BATCH_SIZE
-    value: "5"
-
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
 
@@ -86,6 +83,9 @@ env:
         key: KMS_KEYS
         name: application
 
+  - name: SMPC__MAX_BATCH_SIZE
+    value: "5"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "540"
 
@@ -93,10 +93,10 @@ env:
     value: "512"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "100"
+    value: "32"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "200"
+    value: "64"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
