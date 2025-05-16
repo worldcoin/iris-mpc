@@ -84,7 +84,7 @@ env:
         name: application
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "10"
+    value: "5"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1040"
