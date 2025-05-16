@@ -15,6 +15,7 @@ env:
 
 jobs:
   docker:
+    timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-64core
     permissions:
