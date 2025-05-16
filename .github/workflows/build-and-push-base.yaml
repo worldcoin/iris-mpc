@@ -15,7 +15,7 @@ env:
   NCCL_VERSION: 2_22_3_1
 jobs:
   docker:
-    timeout-minutes: 20
+    timeout-minutes: 40
     runs-on:
       labels: ubuntu-22.04-64core
     permissions:

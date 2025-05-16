@@ -38,7 +38,7 @@ jobs:
         run: cargo build --release --all-features --tests
 
   build-bins:
-    timeout-minutes: 20
+    timeout-minutes: 40
     runs-on:
       labels: ubuntu-22.04-64core
     steps:
