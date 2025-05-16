@@ -86,14 +86,14 @@ env:
         key: KMS_KEYS
         name: application
 
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "540"
+
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "2048"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "100"
-
-  - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "200"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "200"
