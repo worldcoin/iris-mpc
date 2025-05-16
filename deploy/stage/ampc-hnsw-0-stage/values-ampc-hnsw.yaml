@@ -36,7 +36,7 @@ env:
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "10"
+    value: "5"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
