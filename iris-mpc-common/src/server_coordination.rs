@@ -1,12 +1,17 @@
 use crate::config::Config;
 use crate::helpers::shutdown_handler::ShutdownHandler;
-use crate::helpers::sync::{SyncResult, SyncState};
+use crate::helpers::sync::{GenesisConfig, SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
+use crate::IrisSerialId;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use eyre::{bail, Error, Result, WrapErr};
+use eyre::{ensure, Error, OptionExt as _, Result, WrapErr};
+use futures::future::try_join_all;
+use futures::FutureExt as _;
+use itertools::Itertools as _;
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -45,7 +50,7 @@ pub async fn start_coordination_server(
     config: &Config,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    my_state: &SyncState,
+    my_state: Arc<SyncState>,
 ) -> Arc<AtomicBool> {
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
@@ -105,7 +110,32 @@ pub async fn start_coordination_server(
                 )
                 .route(
                     "/startup-sync",
-                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                    get({
+                        let my_state = Arc::clone(&my_state);
+                        move || async move { serde_json::to_string(&my_state).unwrap() }
+                    }),
+                )
+                .route(
+                    "/height-of-graph-genesis-indexation",
+                    get({
+                        let my_state = Arc::clone(&my_state);
+                        let height: IrisSerialId = (my_state.genesis_config.as_ref().map(
+                            |GenesisConfig {
+                                 max_indexation_height: _,
+                                 last_indexation_height,
+                             }| *last_indexation_height,
+                        ))
+                        .unwrap_or(1);
+                        // We are only ready once this flag is set to true.
+                        let is_ready_flag = Arc::clone(&is_ready_flag);
+                        move || async move {
+                            if is_ready_flag.load(Ordering::SeqCst) {
+                                height.to_string().into_response()
+                            } else {
+                                StatusCode::SERVICE_UNAVAILABLE.into_response()
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -132,49 +162,16 @@ pub async fn start_coordination_server(
 /// Note: The response to this query is expected initially to be `503 Service Unavailable`.
 pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
-    // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "ready");
 
-    let party_id = config.party_id;
+    // Check other nodes and wait until all nodes are unready.
+    let connected_but_unready = try_get_endpoint_all_nodes(config, "ready").await?;
 
-    let unready_check = tokio::spawn(async move {
-        let next_node = &all_readiness_addresses[(party_id + 1) % 3];
-        let prev_node = &all_readiness_addresses[(party_id + 2) % 3];
-        let mut connected_but_unready = [false, false];
+    let all_unready = connected_but_unready
+        .iter()
+        .all(|resp| resp.status() == StatusCode::SERVICE_UNAVAILABLE);
 
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host.as_str()).await;
+    ensure!(all_unready, "One or more nodes were not unready.");
 
-                if res.is_ok() && res.unwrap().status() == StatusCode::SERVICE_UNAVAILABLE {
-                    connected_but_unready[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected_but_unready.iter().all(|&c| c) {
-                        return;
-                    }
-                }
-            }
-
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
-
-    tracing::info!("Waiting for all nodes to be unready...");
-    match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
-        unready_check,
-    )
-    .await
-    {
-        Ok(res) => {
-            res?;
-        }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be unready.");
-            bail!("Timeout waiting for all nodes to be unready.");
-        }
-    };
     tracing::info!("All nodes are starting up.");
 
     Ok(())
@@ -307,46 +304,25 @@ pub async fn init_heartbeat_task(
 /// Retrieves synchronization state of other MPC nodes.  This data is
 /// used to ensure that all nodes are in a consistent state prior
 /// to starting MPC operations.
-pub async fn get_others_sync_state(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+pub async fn get_others_sync_state(
+    config: &Config,
+    my_state: Arc<SyncState>,
+) -> Result<SyncResult> {
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
-    let all_startup_sync_addresses = get_check_addresses(
-        &config.node_hostnames,
-        &config.healthcheck_ports,
-        "startup-sync",
-    );
-
-    let next_node = &all_startup_sync_addresses[(config.party_id + 1) % 3];
-    let prev_node = &all_startup_sync_addresses[(config.party_id + 2) % 3];
-
     tracing::info!("Database store length is: {}", my_state.db_len);
-    let mut states = vec![my_state.clone()];
-    for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(host.as_str()).await;
-        match res {
-            Ok(res) => {
-                let state: SyncState = match res.json().await {
-                    Ok(state) => state,
-                    Err(e) => {
-                        tracing::error!("Failed to parse sync state from party {}: {:?}", host, e);
-                        panic!(
-                            "could not get sync state from party {}, trying to restart",
-                            host
-                        );
-                    }
-                };
-                states.push(state);
-            }
-            Err(e) => {
-                tracing::error!("Failed to fetch sync state from party {}: {:?}", host, e);
-                panic!(
-                    "could not get sync state from party {}, trying to restart",
-                    host
-                );
-            }
-        }
-    }
-    Ok(SyncResult::new(my_state.clone(), states))
+
+    let connected_and_ready = try_get_endpoint_all_nodes(config, "startup-sync").await?;
+
+    let response_texts_futs: Vec<_> = connected_and_ready
+        .into_iter()
+        .map(|resp| resp.json())
+        .collect();
+    let mut all_sync_states: Vec<SyncState> = try_join_all(response_texts_futs).await?;
+
+    all_sync_states.remove(config.party_id);
+
+    Ok(SyncResult::new((*my_state).clone(), all_sync_states))
 }
 
 /// Toggle `is_ready_flag` to `true` to signal to other nodes that this node
@@ -361,49 +337,79 @@ pub fn set_node_ready(is_ready_flag: Arc<AtomicBool>) {
 /// Awaits until other MPC nodes respond to "ready" queries
 /// indicating readiness to execute the main server loop.
 pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
+    tracing::info!("⚓️ ANCHOR: Waiting for other servers to be ready");
+
     // Check other nodes and wait until all nodes are ready.
-    let all_readiness_addresses =
-        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, "ready");
+    'outer: loop {
+        'retry: {
+            let connected_and_ready_res = try_get_endpoint_all_nodes(config, "ready").await;
 
-    let party_id = config.party_id;
-    let ready_check = tokio::spawn(async move {
-        let next_node = &all_readiness_addresses[(party_id + 1) % 3];
-        let prev_node = &all_readiness_addresses[(party_id + 2) % 3];
-        let mut connected = [false, false];
-
-        loop {
-            for (i, host) in [next_node, prev_node].iter().enumerate() {
-                let res = reqwest::get(host.as_str()).await;
-
-                if res.is_ok() && res.as_ref().unwrap().status().is_success() {
-                    connected[i] = true;
-                    // If all nodes are connected, notify the main thread.
-                    if connected.iter().all(|&c| c) {
-                        return;
-                    }
-                }
+            if connected_and_ready_res.is_err() {
+                break 'retry;
             }
 
-            tokio::time::sleep(Duration::from_secs(1)).await;
-        }
-    });
+            let connected_and_ready = connected_and_ready_res.unwrap();
 
-    tracing::info!("Waiting for all nodes to be ready...");
-    match tokio::time::timeout(
-        Duration::from_secs(config.startup_sync_timeout_secs),
-        ready_check,
-    )
-    .await
-    {
-        Ok(res) => {
-            res?;
+            let all_ready = connected_and_ready
+                .iter()
+                .all(|resp| resp.status().is_success());
+
+            if all_ready {
+                break 'outer;
+            }
         }
-        Err(_) => {
-            tracing::error!("Timeout waiting for all nodes to be ready.");
-            bail!("Timeout waiting for all nodes to be ready.");
-        }
+        tracing::debug!("One or more nodes were not ready.  Retrying ..");
     }
+
     tracing::info!("All nodes are ready.");
 
     Ok(())
+}
+
+const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
+
+pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Result<Vec<Response>> {
+    const NODE_COUNT: usize = 3;
+    let full_urls =
+        get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, endpoint);
+    let node_urls = (0..NODE_COUNT)
+        .map(|j| (config.party_id + j) % NODE_COUNT)
+        .map(|i| (i, full_urls[i].to_owned()))
+        .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
+        .map(|(_i, full_url)| full_url);
+
+    let mut handles = Vec::with_capacity(NODE_COUNT);
+    let mut rxs = Vec::with_capacity(NODE_COUNT);
+
+    for node_url in node_urls {
+        let (tx, rx) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            loop {
+                if let Ok(resp) = reqwest::get(&node_url).await {
+                    let _ = tx.send(resp);
+                    return;
+                }
+                tokio::time::sleep(TIME_BETWEEN_RETRIES).await;
+            }
+        });
+        handles.push(handle);
+        rxs.push(rx);
+    }
+
+    // Wait until timeout
+    let all_handles = try_join_all(handles);
+    let _all_handles_with_timeout = tokio::time::timeout(
+        Duration::from_secs(config.startup_sync_timeout_secs),
+        all_handles,
+    )
+    .await;
+
+    let msg = "Error occured reading response channels";
+    try_join_all(rxs)
+        .now_or_never()
+        .ok_or_eyre(msg)?
+        .inspect_err(|err| {
+            tracing::error!("{}: {}", msg, err);
+        })
+        .wrap_err(msg)
 }
