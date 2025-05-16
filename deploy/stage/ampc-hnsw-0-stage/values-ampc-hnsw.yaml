@@ -34,7 +34,7 @@ env:
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
-  
+
   - name: SMPC__MAX_BATCH_SIZE
     value: "25"
 
@@ -93,10 +93,10 @@ env:
     value: "512"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "128"
+    value: "64"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "128"
+    value: "64"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
