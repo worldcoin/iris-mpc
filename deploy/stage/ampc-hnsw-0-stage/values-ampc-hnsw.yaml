@@ -87,7 +87,7 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "540"
+    value: "240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "2048"
