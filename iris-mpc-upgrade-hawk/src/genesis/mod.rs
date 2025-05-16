@@ -20,7 +20,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         logger,
-        utils::fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+        utils::fetcher::{get_last_indexed, set_last_indexed},
         BatchGenerator, BatchIterator, Handle as HawkHandle,
     },
     hawkers::aby3::aby3_store::Aby3Store,
@@ -60,7 +60,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    let last_indexation_height = fetch_height_of_indexed(&iris_store).await;
+    let last_indexation_height = get_last_indexed(&iris_store).await?;
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
@@ -237,7 +237,9 @@ async fn exec_main_loop(
                     )
                 })??;
 
-            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
+            let mut tx = iris_store.tx().await?;
+            set_last_indexed(&mut tx, &curr_iris_index).await?;
+            tx.commit().await?;
 
             // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion();

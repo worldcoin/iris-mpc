@@ -155,6 +155,7 @@ impl BatchIterator for BatchGenerator {
 // ------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use super::*;
     use eyre::Result;
