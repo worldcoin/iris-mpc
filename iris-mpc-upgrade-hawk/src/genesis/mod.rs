@@ -60,9 +60,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    // TODO: once https://github.com/worldcoin/iris-mpc/pull/1334/files is merged we can use the last_indexation_height
-    // for now we just use 0
-    let last_indexation_height = 0;
+    let last_indexation_height = fetch_height_of_indexed(&iris_store).await;
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
@@ -126,6 +124,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     log_info("Executing main loop".to_string());
     exec_main_loop(
         &config,
+        last_indexation_height,
         max_indexation_height,
         &iris_store,
         &graph_store,
@@ -143,9 +142,10 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
+    last_indexation_height: IrisSerialId,
     max_indexation_height: IrisSerialId,
     iris_store: &IrisStore,
-    graph_store: &GraphPg<Aby3Store>,
+    _graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
     _sync_result: &SyncResult,
     mut task_monitor: TaskMonitor,
@@ -159,9 +159,8 @@ async fn exec_main_loop(
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new_from_services(
         config,
+        last_indexation_height,
         max_indexation_height,
-        iris_store,
-        graph_store,
         s3_client,
     )
     .await?;
@@ -175,7 +174,7 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut prev_iris_index = fetch_height_of_indexed(iris_store).await;
+        let mut prev_iris_index = last_indexation_height;
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {

@@ -1,5 +1,4 @@
 use super::utils::{errors::IndexationError, fetcher, logger};
-use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
@@ -46,9 +45,8 @@ impl BatchGenerator {
 impl BatchGenerator {
     pub async fn new_from_services(
         config: &Config,
+        last_indexation_height: IrisSerialId,
         max_indexation_height: IrisSerialId,
-        iris_store: &IrisStore,
-        _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
     ) -> Result<Self, IndexationError> {
         // Set exclusions, i.e. identifiers marked as deleted.
@@ -57,7 +55,7 @@ impl BatchGenerator {
             .unwrap();
 
         let range_end = max_indexation_height + 1;
-        let range_start = fetcher::fetch_height_of_indexed(iris_store).await;
+        let range_start = last_indexation_height;
         let range = range_start..range_end + 1;
 
         tracing::info!(

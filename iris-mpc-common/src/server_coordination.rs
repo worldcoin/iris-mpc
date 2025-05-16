@@ -1,8 +1,7 @@
 use crate::config::Config;
 use crate::helpers::shutdown_handler::ShutdownHandler;
-use crate::helpers::sync::{GenesisConfig, SyncResult, SyncState};
+use crate::helpers::sync::{SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
-use crate::IrisSerialId;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -113,28 +112,6 @@ pub async fn start_coordination_server(
                     get({
                         let my_state = Arc::clone(&my_state);
                         move || async move { serde_json::to_string(&my_state).unwrap() }
-                    }),
-                )
-                .route(
-                    "/height-of-graph-genesis-indexation",
-                    get({
-                        let my_state = Arc::clone(&my_state);
-                        let height: IrisSerialId = (my_state.genesis_config.as_ref().map(
-                            |GenesisConfig {
-                                 max_indexation_height: _,
-                                 last_indexation_height,
-                             }| *last_indexation_height,
-                        ))
-                        .unwrap_or(1);
-                        // We are only ready once this flag is set to true.
-                        let is_ready_flag = Arc::clone(&is_ready_flag);
-                        move || async move {
-                            if is_ready_flag.load(Ordering::SeqCst) {
-                                height.to_string().into_response()
-                            } else {
-                                StatusCode::SERVICE_UNAVAILABLE.into_response()
-                            }
-                        }
                     }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
