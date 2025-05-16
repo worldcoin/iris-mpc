@@ -90,13 +90,13 @@ env:
     value: "540"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "512"
+    value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "512"
+    value: "128"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "512"
+    value: "128"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
