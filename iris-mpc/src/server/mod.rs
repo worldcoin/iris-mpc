@@ -68,7 +68,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        Arc::clone(&my_state),
+        my_state.clone(),
     )
     .await;
 
@@ -79,7 +79,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let sync_result = get_others_sync_state(&config, Arc::clone(&my_state)).await?;
+    let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
     maybe_sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
@@ -417,7 +417,7 @@ async fn build_sync_state(
     config: &Config,
     aws_clients: &AwsClients,
     store: &Store,
-) -> Result<Arc<SyncState>> {
+) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let deleted_request_ids = store
         .last_deleted_requests(max_sync_lookback(config))
@@ -426,14 +426,21 @@ async fn build_sync_state(
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
-    Ok(Arc::new(SyncState {
+    tracing::info!("Database store length is: {}", db_len);
+
+    Ok(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
-        genesis_config: None,
-    }))
+    })
+}
+
+async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+    let others_state = get_others_sync_state(config).await?;
+    let sync_result = SyncResult::new(my_state.clone(), others_state);
+    Ok(sync_result)
 }
 
 /// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete stale
@@ -468,6 +475,8 @@ async fn sync_dbs_rollback(
     iris_store: &Store,
 ) -> Result<()> {
     let my_db_len = iris_store.count_irises().await?;
+
+    tracing::info!("Database store length is: {}", my_db_len);
 
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);

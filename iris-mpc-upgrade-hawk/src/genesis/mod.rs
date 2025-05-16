@@ -8,10 +8,7 @@ use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
-        inmemory_store::InMemoryStore,
-        shutdown_handler::ShutdownHandler,
-        sync::{GenesisConfig, SyncResult, SyncState},
-        task_monitor::TaskMonitor,
+        inmemory_store::InMemoryStore, shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor,
     },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
@@ -20,6 +17,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         logger,
+        sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
         utils::fetcher::{get_last_indexed, set_last_indexed},
         BatchGenerator, BatchIterator, Handle as HawkHandle,
     },
@@ -82,7 +80,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        Arc::clone(&my_state),
+        my_state.clone(),
     )
     .await;
     background_tasks.check_tasks();
@@ -95,7 +93,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = synchronized.
-    let sync_result = coordinator::get_others_sync_state(&config, Arc::clone(&my_state)).await?;
+    let others_state = coordinator::get_others_sync_state(&config).await?;
+    let sync_result = GenesisSyncResult::new(my_state.clone(), others_state);
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -147,7 +146,7 @@ async fn exec_main_loop(
     iris_store: &IrisStore,
     _graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
-    _sync_result: &SyncResult,
+    _sync_result: &GenesisSyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
@@ -384,34 +383,26 @@ async fn get_service_clients(
 /// Build this node's synchronization state, which is compared against the
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
-/// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
 async fn get_sync_state(
     config: &Config,
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
-) -> Result<Arc<SyncState>> {
+) -> Result<GenesisSyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
-
-    let deleted_request_ids = Vec::new();
-    let modifications = Vec::new();
-
-    let next_sns_sequence_num = None;
 
     let genesis_config = GenesisConfig {
         max_indexation_height,
         last_indexation_height,
     };
 
-    Ok(Arc::new(SyncState {
+    Ok(GenesisSyncState {
         db_len,
-        deleted_request_ids,
-        modifications,
-        next_sns_sequence_num,
         common_config,
-        genesis_config: Some(genesis_config),
-    }))
+        deleted_iris_ids: vec![], // TODO
+        genesis_config,
+    })
 }
 
 async fn init_graph_from_stores(
@@ -565,7 +556,7 @@ fn log_warn(msg: String) {
 #[allow(dead_code)]
 async fn sync_dbs_genesis(
     _config: &Config,
-    _sync_result: &SyncResult,
+    _sync_result: &GenesisSyncResult,
     _iris_store: &IrisStore,
 ) -> Result<()> {
     todo!("If network state decoheres then re-synchronize");
