@@ -82,7 +82,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        my_state.clone(),
+        &my_state,
     )
     .await;
     background_tasks.check_tasks();
@@ -399,12 +399,12 @@ async fn get_sync_state(
     let genesis_config = GenesisConfig {
         max_indexation_height,
         last_indexation_height,
+        excluded_serial_ids,
     };
 
     Ok(GenesisSyncState {
         db_len,
         common_config,
-        excluded_serial_ids,
         genesis_config,
     })
 }

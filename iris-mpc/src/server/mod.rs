@@ -68,7 +68,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        my_state.clone(),
+        &my_state,
     )
     .await;
 
