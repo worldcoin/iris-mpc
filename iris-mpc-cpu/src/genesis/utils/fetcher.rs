@@ -37,7 +37,7 @@ pub async fn get_last_indexed(iris_store: &Store) -> Result<IrisSerialId> {
 ///
 /// # Arguments
 ///
-/// * `tx` - Iris PostgreSQL store provider.
+/// * `tx` - PostgreSQL Transaction to use for the operation.
 /// * `new_height` - the height to be stored in the database.
 ///
 /// # Returns
