@@ -95,8 +95,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = synchronized.
-    let others_state = coordinator::get_others_sync_state(&config).await?;
-    let sync_result = GenesisSyncResult::new(my_state.clone(), others_state);
+    let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -408,6 +407,16 @@ async fn get_sync_state(
         excluded_serial_ids,
         genesis_config,
     })
+}
+
+async fn get_sync_result(
+    config: &Config,
+    my_state: &GenesisSyncState,
+) -> Result<GenesisSyncResult> {
+    let mut all_states = vec![my_state.clone()];
+    all_states.extend(coordinator::get_others_sync_state(config).await?);
+    let sync_result = GenesisSyncResult::new(my_state.clone(), all_states);
+    Ok(sync_result)
 }
 
 async fn init_graph_from_stores(

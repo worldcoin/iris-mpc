@@ -438,8 +438,9 @@ async fn build_sync_state(
 }
 
 async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
-    let others_state = get_others_sync_state(config).await?;
-    let sync_result = SyncResult::new(my_state.clone(), others_state);
+    let mut all_states = vec![my_state.clone()];
+    all_states.extend(get_others_sync_state(config).await?);
+    let sync_result = SyncResult::new(my_state.clone(), all_states);
     Ok(sync_result)
 }
 

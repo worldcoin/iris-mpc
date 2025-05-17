@@ -17,7 +17,7 @@ pub struct SyncState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResult {
     pub my_state: SyncState,
-    pub others_state: Vec<SyncState>,
+    pub all_states: Vec<SyncState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,10 +96,10 @@ impl Modification {
 }
 
 impl SyncResult {
-    pub fn new(my_state: SyncState, others_state: Vec<SyncState>) -> Self {
+    pub fn new(my_state: SyncState, all_states: Vec<SyncState>) -> Self {
         Self {
             my_state,
-            others_state,
+            all_states,
         }
     }
 
@@ -108,8 +108,8 @@ impl SyncResult {
     /// indicating that other databases probably should be rolled back to this
     /// smallest size.
     pub fn must_rollback_storage(&self) -> Option<usize> {
-        let smallest_len = self.others_state.iter().map(|s| s.db_len).min()?;
-        let all_equal = self.others_state.iter().all(|s| s.db_len == smallest_len);
+        let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
+        let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
         if all_equal {
             None
         } else {
@@ -123,7 +123,7 @@ impl SyncResult {
         for SyncState {
             common_config: other_config,
             ..
-        } in self.others_state.iter()
+        } in self.all_states.iter()
         {
             ensure!(
                 my_config == other_config,
@@ -137,7 +137,7 @@ impl SyncResult {
 
     pub fn deleted_request_ids(&self) -> Vec<String> {
         // Merge request IDs.
-        self.others_state
+        self.all_states
             .iter()
             .flat_map(|s| s.deleted_request_ids.clone())
             .sorted()
@@ -146,7 +146,7 @@ impl SyncResult {
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {
-        self.others_state
+        self.all_states
             .iter()
             .map(|s| s.next_sns_sequence_num)
             .max()
@@ -163,11 +163,7 @@ impl SyncResult {
     pub fn compare_modifications(&self) -> (Vec<Modification>, Vec<Modification>) {
         // 1. Group all modifications by id => Vec<Modification> (from different nodes)
         let mut grouped: HashMap<i64, Vec<Modification>> = HashMap::new();
-        for m in self
-            .others_state
-            .iter()
-            .flat_map(|s| s.modifications.clone())
-        {
+        for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
             grouped.entry(m.id).or_default().push(m);
         }
 
@@ -277,7 +273,7 @@ mod tests {
     fn test_compare_states_sync() {
         let sync_res = SyncResult {
             my_state: some_state(),
-            others_state: vec![some_state(), some_state(), some_state()],
+            all_states: vec![some_state(), some_state(), some_state()],
         };
         assert_eq!(sync_res.must_rollback_storage(), None);
     }
@@ -316,7 +312,7 @@ mod tests {
 
         let sync_res = SyncResult {
             my_state: states[0].clone(),
-            others_state: states.clone(),
+            all_states: states.clone(),
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
         assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
@@ -437,7 +433,7 @@ mod tests {
 
         let sync_result = SyncResult {
             my_state,
-            others_state: all_states,
+            all_states,
         };
 
         let (to_update, to_delete) = sync_result.compare_modifications();
@@ -538,7 +534,7 @@ mod tests {
 
         let sync_result = SyncResult {
             my_state,
-            others_state: all_states,
+            all_states,
         };
 
         // Compare modifications across nodes.
@@ -596,7 +592,7 @@ mod tests {
         let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
         let sync_result = SyncResult {
             my_state,
-            others_state: all_states,
+            all_states,
         };
 
         // Compare modifications across nodes.
@@ -655,7 +651,7 @@ mod tests {
 
         let sync_result = SyncResult {
             my_state,
-            others_state: all_states,
+            all_states,
         };
 
         // Compare modifications across nodes.

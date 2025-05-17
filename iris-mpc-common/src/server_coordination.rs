@@ -379,7 +379,7 @@ pub async fn try_get_endpoint_other_nodes(
     )
     .await;
 
-    let msg = "Error occured reading response channels";
+    let msg = "Error occurred reading response channels";
     try_join_all(rxs)
         .now_or_never()
         .ok_or_eyre(msg)?

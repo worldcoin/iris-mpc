@@ -18,21 +18,21 @@ pub struct GenesisSyncState {
 
 pub struct GenesisSyncResult {
     pub my_state: GenesisSyncState,
-    pub others_state: Vec<GenesisSyncState>,
+    pub all_states: Vec<GenesisSyncState>,
 }
 
 impl GenesisSyncResult {
-    pub fn new(my_state: GenesisSyncState, others_state: Vec<GenesisSyncState>) -> Self {
+    pub fn new(my_state: GenesisSyncState, all_states: Vec<GenesisSyncState>) -> Self {
         Self {
             my_state,
-            others_state,
+            all_states,
         }
     }
 
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_genesis_config(&self) -> Result<()> {
         let genesis_config = self.my_state.genesis_config.clone();
-        for state in &self.others_state {
+        for state in &self.all_states {
             ensure!(
                 state.genesis_config == genesis_config,
                 "Inconsistent genesis config"
@@ -47,7 +47,7 @@ impl GenesisSyncResult {
         for GenesisSyncState {
             common_config: other_config,
             ..
-        } in self.others_state.iter()
+        } in self.all_states.iter()
         {
             ensure!(
                 my_config == other_config,
