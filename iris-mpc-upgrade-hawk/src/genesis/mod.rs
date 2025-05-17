@@ -160,7 +160,7 @@ async fn exec_main_loop(
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
-        last_indexation_height,
+        last_indexation_height + 1,
         max_indexation_height,
         config.max_batch_size,
         excluded_serial_ids,

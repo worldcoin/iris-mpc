@@ -3,7 +3,8 @@ use eyre::Result;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
-use std::{iter::Peekable, ops::Range};
+use std::iter::Peekable;
+use std::ops::RangeInclusive;
 
 // Generates batches of Iris identifiers for processing.
 pub struct BatchGenerator {
@@ -17,29 +18,27 @@ pub struct BatchGenerator {
     exclusions: Vec<IrisSerialId>,
 
     // Range of Iris serial identifiers to be indexed.
-    range: Range<IrisSerialId>,
+    range: RangeInclusive<IrisSerialId>,
 
     // Iterator over range of Iris serial identifiers to be indexed.
-    range_iter: Peekable<Range<IrisSerialId>>,
+    range_iter: Peekable<RangeInclusive<IrisSerialId>>,
 }
 
 // Constructor.
 impl BatchGenerator {
     /// Create a new `BatchGenerator` with the following properties:
     ///
-    /// - Range of iris serial ids to be produced is those between `last_indexation_height`
-    ///   and `max_indexation_height + 1`, inclusive.
-    /// - Batches produced are of size `batch_size` until a final batch which may be smaller.
+    /// - Range of iris serial ids to be produced is those between `start_id` and `end_id`,
+    ///   inclusive.
+    /// - Batches produced are of size `batch_size` until the last batch, which may be smaller.
     /// - Any serial ids contained in `exclusions` are skipped, and not included in batches.
     pub fn new(
-        last_indexation_height: IrisSerialId,
-        max_indexation_height: IrisSerialId,
+        start_id: IrisSerialId,
+        end_id: IrisSerialId,
         batch_size: usize,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
-        let range_start = last_indexation_height;
-        let range_end = max_indexation_height + 1;
-        let range = range_start..(range_end + 1);
+        let range = start_id..=end_id;
 
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
@@ -47,8 +46,8 @@ impl BatchGenerator {
         );
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
-            range.start,
-            range.end
+            range.start(),
+            range.end()
         );
 
         Self {
@@ -64,7 +63,7 @@ impl BatchGenerator {
 // Methods.
 impl BatchGenerator {
     /// Returns next batch of Iris serial identifiers to be indexed.
-    fn get_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
+    pub fn next_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
 
@@ -72,9 +71,6 @@ impl BatchGenerator {
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
-            if next_id > self.range.end {
-                break;
-            }
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
@@ -96,6 +92,14 @@ impl BatchGenerator {
         ));
 
         Some(batch)
+    }
+
+    pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
+        self.range.clone()
+    }
+
+    pub fn get_exclusions(&self) -> Vec<IrisSerialId> {
+        self.exclusions.clone()
     }
 
     // Helper: component logging.
@@ -128,7 +132,7 @@ impl BatchIterator for BatchGenerator {
         &mut self,
         iris_store: &IrisStore,
     ) -> Result<Option<Vec<DbStoredIris>>, IndexationError> {
-        if let Some(identifiers) = self.get_identifiers() {
+        if let Some(identifiers) = self.next_identifiers() {
             let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
             Self::log_info(format!("Iris batch fetched: idx={}", self.batch_count,));
 
@@ -166,7 +170,7 @@ mod tests {
         // Set store.
         let iris_store = IrisStore::new(&pg_client).await?;
 
-        // Set dB with 100 Iris's.
+        // Set dB with 100 irises.
         iris_store
             .init_db_with_random_shares(
                 DEFAULT_RNG_SEED,
@@ -187,11 +191,11 @@ mod tests {
 
         let instance = BatchGenerator::new(
             1,
-            (iris_store.count_irises().await.unwrap() as IrisSerialId) - 1,
+            iris_store.count_irises().await.unwrap() as IrisSerialId,
             10,
             Vec::new(),
         );
-        assert_eq!(instance.range.end, 100);
+        assert_eq!(*instance.range.end(), 100);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
@@ -220,6 +224,26 @@ mod tests {
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exclusions() -> Result<()> {
+        let mut instance = BatchGenerator::new(1, 30, 10, vec![3, 7, 12, 15, 22, 30, 70]);
+
+        let mut batches = Vec::new();
+        while let Some(batch) = instance.next_identifiers() {
+            batches.push(batch);
+        }
+        assert_eq!(
+            batches,
+            vec![
+                vec![1, 2, 4, 5, 6, 8, 9, 10, 11, 13],
+                vec![14, 16, 17, 18, 19, 20, 21, 23, 24, 25],
+                vec![26, 27, 28, 29],
+            ]
+        );
 
         Ok(())
     }
