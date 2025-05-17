@@ -341,11 +341,11 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
 
 const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
 
-const NODE_COUNT: usize = 3;
 pub async fn try_get_endpoint_other_nodes(
     config: &Config,
     endpoint: &str,
 ) -> Result<Vec<Response>> {
+    const NODE_COUNT: usize = 3;
     let full_urls =
         get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, endpoint);
     let node_urls = (1..NODE_COUNT)
