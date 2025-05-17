@@ -109,31 +109,23 @@ impl PostgresClient {
                 tracing::info!("Already applied migration {}: {}", version, description);
                 continue;
             }
-            match version {
-                MIGRATION_GRAPH_SWAP_COLUMNS => {
-                    tracing::info!(
-                        "Running converter for migration {}: {}",
-                        version,
-                        description
-                    );
-                    custom::graph::links_to_bytea(&self.pool)
-                        .await
-                        .expect("failed to convert graph links");
-                    custom::graph::entry_points_to_bytea(&self.pool)
-                        .await
-                        .expect("failed to convert graph entry points");
-                }
-                _ => {}
+            if version == MIGRATION_GRAPH_SWAP_COLUMNS {
+                tracing::info!(
+                    "Running converter for migration {}: {}",
+                    version,
+                    description
+                );
+                custom::graph::links_to_bytea(&self.pool)
+                    .await
+                    .expect("failed to convert graph links");
+                custom::graph::entry_points_to_bytea(&self.pool)
+                    .await
+                    .expect("failed to convert graph entry points");
             }
             tracing::info!("Applying migration {}: {}", version, description);
-            conn.apply(&migration)
+            conn.apply(migration)
                 .await
                 .expect("failed to apply migration");
-
-            if final_migration.map(|x| x == version).unwrap_or_default() {
-                tracing::info!("terminating migrations early due to user's request");
-                break;
-            }
         }
         conn.unlock()
             .await
