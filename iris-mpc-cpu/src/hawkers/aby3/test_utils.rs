@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use aes_prng::AesRng;
 use eyre::{bail, Result};
 use futures::future::join_all;
-use iris_mpc_common::iris_db::db::IrisDB;
+use iris_mpc_common::{iris_db::db::IrisDB, SortedEdgeIds};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -13,10 +13,7 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{
-        graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
-        GraphMem, HnswSearcher, VectorStore,
-    },
+    hnsw::{graph::layered_graph::Layer, GraphMem, HnswSearcher, VectorStore},
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{io::read_bin, plaintext_store::from_ndjson_file},

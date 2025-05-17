@@ -9,11 +9,9 @@ use super::{
     sorting::{binary_search::BinarySearch, swap_network::apply_swap_network, tree_min::tree_min},
     vector_store::VectorStoreMut,
 };
-use crate::hnsw::{
-    graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
-    SortedNeighborhood, VectorStore,
-};
+use crate::hnsw::{metrics::ops_counter::Operation, GraphMem, SortedNeighborhood, VectorStore};
 use eyre::{bail, eyre, Result};
+use iris_mpc_common::SortedEdgeIds;
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};

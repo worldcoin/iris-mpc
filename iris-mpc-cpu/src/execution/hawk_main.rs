@@ -1463,12 +1463,12 @@ mod tests_db {
     use crate::{
         hawkers::aby3::aby3_store::VectorId,
         hnsw::{
-            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-            searcher::ConnectPlanLayerV,
+            graph::graph_store::test_utils::TestGraphPg, searcher::ConnectPlanLayerV,
             SortedNeighborhood,
         },
         shares::share::DistanceShare,
     };
+    use iris_mpc_common::SortedEdgeIds;
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     #[tokio::test]

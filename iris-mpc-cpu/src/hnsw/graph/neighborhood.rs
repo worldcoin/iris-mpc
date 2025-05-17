@@ -11,43 +11,10 @@ use crate::hnsw::{
     VectorStore,
 };
 use eyre::{eyre, Result};
+use iris_mpc_common::SortedEdgeIds;
 use serde::{Deserialize, Serialize};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use tracing::{debug, instrument};
-
-/// A sorted list of edge IDs (without distances).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct SortedEdgeIds<V>(pub Vec<V>);
-
-impl<V> SortedEdgeIds<V> {
-    pub fn from_ascending_vec(edges: Vec<V>) -> Self {
-        SortedEdgeIds(edges)
-    }
-
-    pub fn trim_to_k_nearest(&mut self, k: usize) {
-        self.0.truncate(k);
-    }
-}
-
-impl<V> Default for SortedEdgeIds<V> {
-    fn default() -> Self {
-        SortedEdgeIds(vec![])
-    }
-}
-
-impl<V> Deref for SortedEdgeIds<V> {
-    type Target = Vec<V>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<V> DerefMut for SortedEdgeIds<V> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
