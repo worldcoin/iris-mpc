@@ -1,7 +1,6 @@
 use super::utils::{errors::IndexationError, fetcher, logger};
-use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
-use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::future::Future;
 use std::{iter::Peekable, ops::Range};
@@ -26,37 +25,21 @@ pub struct BatchGenerator {
 
 // Constructor.
 impl BatchGenerator {
+    /// Create a new `BatchGenerator` with the following properties:
+    ///
+    /// - Range of iris serial ids to be produced is those between `last_indexation_height`
+    ///   and `max_indexation_height + 1`, inclusive.
+    /// - Batches produced are of size `batch_size` until a final batch which may be smaller.
+    /// - Any serial ids contained in `exclusions` are skipped, and not included in batches.
     pub fn new(
-        batch_size: usize,
-        range: Range<IrisSerialId>,
-        exclusions: Vec<IrisSerialId>,
-    ) -> Self {
-        Self {
-            batch_size,
-            exclusions,
-            batch_count: 0,
-            range: range.clone(),
-            range_iter: range.peekable(),
-        }
-    }
-}
-
-// Constructor.
-impl BatchGenerator {
-    pub async fn new_from_services(
-        config: &Config,
         last_indexation_height: IrisSerialId,
         max_indexation_height: IrisSerialId,
-        s3_client: &S3Client,
-    ) -> Result<Self, IndexationError> {
-        // Set exclusions, i.e. identifiers marked as deleted.
-        let exclusions = fetcher::fetch_iris_deletions(config, s3_client)
-            .await
-            .unwrap();
-
-        let range_end = max_indexation_height + 1;
+        batch_size: usize,
+        exclusions: Vec<IrisSerialId>,
+    ) -> Self {
         let range_start = last_indexation_height;
-        let range = range_start..range_end + 1;
+        let range_end = max_indexation_height + 1;
+        let range = range_start..(range_end + 1);
 
         tracing::info!(
             "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
@@ -68,13 +51,19 @@ impl BatchGenerator {
             range.end
         );
 
-        Ok(Self::new(config.max_batch_size, range, exclusions))
+        Self {
+            batch_size,
+            exclusions,
+            batch_count: 0,
+            range: range.clone(),
+            range_iter: range.peekable(),
+        }
     }
 }
 
 // Methods.
 impl BatchGenerator {
-    // Returns next batch of Iris serial identifiers to be indexed.
+    /// Returns next batch of Iris serial identifiers to be indexed.
     fn get_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
@@ -115,7 +104,7 @@ impl BatchGenerator {
     }
 }
 
-// Batch iterator interface.
+/// Batch iterator interface.
 pub trait BatchIterator {
     // Count of generated batches.
     fn batch_count(&self) -> usize;
@@ -197,8 +186,9 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let instance = BatchGenerator::new(
+            1,
+            (iris_store.count_irises().await.unwrap() as IrisSerialId) - 1,
             10,
-            1..(iris_store.count_irises().await.unwrap() as u32),
             Vec::new(),
         );
         assert_eq!(instance.range.end, 100);
@@ -216,8 +206,9 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let mut instance = BatchGenerator::new(
+            1,
+            iris_store.count_irises().await.unwrap() as IrisSerialId,
             10,
-            1..(iris_store.count_irises().await.unwrap() as u32 + 1),
             Vec::new(),
         );
 

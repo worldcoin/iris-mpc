@@ -62,7 +62,7 @@ pub async fn set_last_indexed(
 ///
 /// Iris data for indexation.
 ///
-pub(crate) async fn fetch_iris_batch(
+pub async fn fetch_iris_batch(
     iris_store: &Store,
     identifiers: Vec<IrisSerialId>,
 ) -> Result<Vec<DbStoredIris>, IndexationError> {
@@ -94,7 +94,7 @@ pub(crate) async fn fetch_iris_batch(
 /// A set of Iris serial identifiers marked as deleted.
 ///
 #[allow(dead_code)]
-pub(crate) async fn fetch_iris_deletions(
+pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {

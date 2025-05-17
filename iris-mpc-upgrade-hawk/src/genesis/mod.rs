@@ -18,7 +18,7 @@ use iris_mpc_cpu::{
     genesis::{
         logger,
         sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
-        utils::fetcher::{get_last_indexed, set_last_indexed},
+        utils::fetcher::{self, get_last_indexed, set_last_indexed},
         BatchGenerator, BatchIterator, Handle as HawkHandle,
     },
     hawkers::aby3::aby3_store::Aby3Store,
@@ -59,6 +59,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
     let last_indexation_height = get_last_indexed(&iris_store).await?;
+    let excluded_serial_ids = fetcher::fetch_iris_deletions(&config, &aws_s3_client).await?;
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
@@ -74,6 +75,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &iris_store,
         max_indexation_height,
         last_indexation_height,
+        &excluded_serial_ids,
     )
     .await?;
     let is_ready_flag = coordinator::start_coordination_server(
@@ -125,6 +127,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         last_indexation_height,
         max_indexation_height,
+        excluded_serial_ids,
         &iris_store,
         &graph_store,
         &aws_s3_client,
@@ -143,9 +146,10 @@ async fn exec_main_loop(
     config: &Config,
     last_indexation_height: IrisSerialId,
     max_indexation_height: IrisSerialId,
+    excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
     _graph_store: &GraphPg<Aby3Store>,
-    s3_client: &S3Client,
+    _s3_client: &S3Client,
     _sync_result: &GenesisSyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -156,13 +160,12 @@ async fn exec_main_loop(
     log_info("Hawk handle initialised".to_string());
 
     // Set batch generator.
-    let mut batch_generator = BatchGenerator::new_from_services(
-        config,
+    let mut batch_generator = BatchGenerator::new(
         last_indexation_height,
         max_indexation_height,
-        s3_client,
-    )
-    .await?;
+        config.max_batch_size,
+        excluded_serial_ids,
+    );
     log_info("Batch generator initialised".to_string());
 
     // Set main loop result.
@@ -388,9 +391,11 @@ async fn get_sync_state(
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
+    excluded_serial_ids: &[IrisSerialId],
 ) -> Result<GenesisSyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
+    let excluded_serial_ids = excluded_serial_ids.to_vec();
 
     let genesis_config = GenesisConfig {
         max_indexation_height,
@@ -400,7 +405,7 @@ async fn get_sync_state(
     Ok(GenesisSyncState {
         db_len,
         common_config,
-        deleted_iris_ids: vec![], // TODO
+        excluded_serial_ids,
         genesis_config,
     })
 }

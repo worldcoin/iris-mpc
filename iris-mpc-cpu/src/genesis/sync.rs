@@ -11,7 +11,7 @@ pub struct GenesisConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisSyncState {
     pub db_len: u64,
-    pub deleted_iris_ids: Vec<u32>,
+    pub excluded_serial_ids: Vec<IrisSerialId>,
     pub common_config: CommonConfig,
     pub genesis_config: GenesisConfig,
 }
@@ -74,19 +74,19 @@ mod tests {
         let states = vec![
             GenesisSyncState {
                 db_len: 10,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![3, 5],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config.clone(),
             },
             GenesisSyncState {
                 db_len: 20,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![3, 5, 6],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config.clone(),
             },
             GenesisSyncState {
                 db_len: 30,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![3, 5],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config.clone(),
             },
@@ -110,19 +110,19 @@ mod tests {
         let states = vec![
             GenesisSyncState {
                 db_len: 10,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config_1.clone(),
             },
             GenesisSyncState {
                 db_len: 20,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config_2.clone(),
             },
             GenesisSyncState {
                 db_len: 30,
-                deleted_iris_ids: vec![],
+                excluded_serial_ids: vec![],
                 common_config: CommonConfig::default(),
                 genesis_config: genesis_config_1.clone(),
             },
