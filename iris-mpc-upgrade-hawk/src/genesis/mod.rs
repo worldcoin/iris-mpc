@@ -43,9 +43,9 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `max_indexation_height` - Maximum height to which to index iris codes.
+/// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> Result<()> {
+pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Result<()> {
     // Bail if config is invalid.
     validate_config(&config);
 
@@ -58,23 +58,18 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    let last_indexation_height = get_last_indexed(&iris_store).await?;
+    let last_indexed_id = get_last_indexed(&iris_store).await?;
     let excluded_serial_ids = fetcher::fetch_iris_deletions(&config, &aws_s3_client).await?;
 
     // Bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        &config,
-        &iris_store,
-        max_indexation_height,
-        last_indexation_height,
-    )
-    .await?;
+    validate_consistency_of_stores(&config, &iris_store, max_indexation_id, last_indexed_id)
+        .await?;
     // Await coordination server to start.
     let my_state = get_sync_state(
         &config,
         &iris_store,
-        max_indexation_height,
-        last_indexation_height,
+        max_indexation_id,
+        last_indexed_id,
         &excluded_serial_ids,
     )
     .await?;
@@ -124,8 +119,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     log_info("Executing main loop".to_string());
     exec_main_loop(
         &config,
-        last_indexation_height,
-        max_indexation_height,
+        last_indexed_id,
+        max_indexation_id,
         excluded_serial_ids,
         &iris_store,
         &graph_store,
@@ -143,8 +138,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    last_indexation_height: IrisSerialId,
-    max_indexation_height: IrisSerialId,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
     excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
     _graph_store: &GraphPg<Aby3Store>,
@@ -160,8 +155,8 @@ async fn exec_main_loop(
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
-        last_indexation_height + 1,
-        max_indexation_height,
+        last_indexed_id + 1,
+        max_indexation_id,
         config.max_batch_size,
         excluded_serial_ids,
     );
@@ -175,7 +170,7 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut prev_iris_index = last_indexation_height;
+        let mut prev_iris_index = last_indexed_id;
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
@@ -388,8 +383,8 @@ async fn get_service_clients(
 async fn get_sync_state(
     config: &Config,
     store: &IrisStore,
-    max_indexation_height: IrisSerialId,
-    last_indexation_height: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+    last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
 ) -> Result<GenesisSyncState> {
     let db_len = store.count_irises().await? as u64;
@@ -397,8 +392,8 @@ async fn get_sync_state(
     let excluded_serial_ids = excluded_serial_ids.to_vec();
 
     let genesis_config = GenesisConfig {
-        max_indexation_height,
-        last_indexation_height,
+        max_indexation_id,
+        last_indexed_id,
         excluded_serial_ids,
     };
 
@@ -605,8 +600,8 @@ fn validate_config(config: &Config) {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    max_indexation_height: IrisSerialId,
-    last_indexation_height: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+    last_indexed_id: IrisSerialId,
 ) -> Result<()> {
     // Bail if current Iris store length exceeds maximum constraint - should never occur.
     let store_len = iris_store.count_irises().await?;
@@ -623,31 +618,31 @@ async fn validate_consistency_of_stores(
     }
     log_info(format!("Size of the database after init: {}", store_len));
 
-    // Bail if max indexation height exceeds length of the database
+    // Bail if max indexation id exceeds length of the database
     let store_len_u32: u32 = store_len
         .try_into()
         .unwrap_or_else(|_| panic!("Value too large for u32"));
-    if max_indexation_height > store_len_u32 {
+    if max_indexation_id > store_len_u32 {
         log_error(format!(
-            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
-            max_indexation_height, store_len_u32
+            "HNSW GENESIS :: Server :: Max indexation id {} exceeds database size {}",
+            max_indexation_id, store_len_u32
         ));
         bail!(
-            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
-            max_indexation_height,
+            "HNSW GENESIS :: Server :: Max indexation id {} exceeds database size {}",
+            max_indexation_id,
             store_len_u32
         );
     }
 
-    if last_indexation_height > max_indexation_height {
+    if last_indexed_id > max_indexation_id {
         log_error(format!(
-            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
-            last_indexation_height, max_indexation_height
+            "HNSW GENESIS :: Server :: Last indexed id {} exceeds max indexation id {}",
+            last_indexed_id, max_indexation_id
         ));
         bail!(
-            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
-            last_indexation_height,
-            max_indexation_height
+            "HNSW GENESIS :: Server :: Last indexed id {} exceeds max indexation id {}",
+            last_indexed_id,
+            max_indexation_id
         );
     }
 

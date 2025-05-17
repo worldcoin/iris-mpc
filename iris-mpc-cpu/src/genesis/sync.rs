@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisConfig {
-    pub max_indexation_height: IrisSerialId,
-    pub last_indexation_height: IrisSerialId,
+    pub max_indexation_id: IrisSerialId,
+    pub last_indexed_id: IrisSerialId,
     pub excluded_serial_ids: Vec<IrisSerialId>,
 }
 
@@ -67,8 +67,8 @@ mod tests {
     #[test]
     fn test_check_genesis_config_all_equal() {
         let genesis_config = GenesisConfig {
-            max_indexation_height: 100,
-            last_indexation_height: 50,
+            max_indexation_id: 100,
+            last_indexed_id: 50,
             excluded_serial_ids: vec![3, 5],
         };
 
@@ -97,13 +97,13 @@ mod tests {
     #[test]
     fn test_check_genesis_config_not_equal() {
         let genesis_config_1 = GenesisConfig {
-            max_indexation_height: 100,
-            last_indexation_height: 50,
+            max_indexation_id: 100,
+            last_indexed_id: 50,
             excluded_serial_ids: vec![3, 5],
         };
         let genesis_config_2 = GenesisConfig {
-            max_indexation_height: 200,
-            last_indexation_height: 150,
+            max_indexation_id: 200,
+            last_indexed_id: 150,
             excluded_serial_ids: vec![3, 5, 6],
         };
 
