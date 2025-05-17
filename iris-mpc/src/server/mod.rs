@@ -64,13 +64,9 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut background_tasks = init_task_monitor();
 
-    let is_ready_flag = start_coordination_server(
-        &config,
-        &mut background_tasks,
-        &shutdown_handler,
-        &my_state,
-    )
-    .await;
+    let is_ready_flag =
+        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
+            .await;
 
     background_tasks.check_tasks();
 

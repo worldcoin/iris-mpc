@@ -339,8 +339,10 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     Ok(())
 }
 
-const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
-
+/// Retrieve outputs from a healthcheck endpoint from all other server nodes.
+///
+/// Upon failure, retrues with wait duration `config.http_query_retry_delay_ms`
+/// between atttempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
 pub async fn try_get_endpoint_other_nodes(
     config: &Config,
     endpoint: &str,
@@ -354,9 +356,10 @@ pub async fn try_get_endpoint_other_nodes(
         .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
         .map(|(_i, full_url)| full_url);
 
-    let mut handles = Vec::with_capacity(NODE_COUNT);
-    let mut rxs = Vec::with_capacity(NODE_COUNT);
+    let mut handles = Vec::with_capacity(NODE_COUNT - 1);
+    let mut rxs = Vec::with_capacity(NODE_COUNT - 1);
 
+    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
     for node_url in node_urls {
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -365,7 +368,7 @@ pub async fn try_get_endpoint_other_nodes(
                     let _ = tx.send(resp);
                     return;
                 }
-                tokio::time::sleep(TIME_BETWEEN_RETRIES).await;
+                tokio::time::sleep(retry_duration).await;
             }
         });
         handles.push(handle);
