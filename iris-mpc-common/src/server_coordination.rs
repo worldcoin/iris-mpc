@@ -49,7 +49,7 @@ pub async fn start_coordination_server<T>(
     config: &Config,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    my_state: T,
+    my_state: &T,
 ) -> Arc<AtomicBool>
 where
     T: Serialize + DeserializeOwned + Clone + Send + 'static,
@@ -79,6 +79,7 @@ where
         let serialized_response_shutdown = serde_json::to_string(&ready_probe_response_shutdown)
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
+        let my_state = my_state.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
