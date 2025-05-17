@@ -111,6 +111,9 @@ pub struct Config {
     )]
     pub healthcheck_ports: Vec<String>,
 
+    #[serde(default = "default_http_query_retry_delay_ms")]
+    pub http_query_retry_delay_ms: u64,
+
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
 
@@ -405,6 +408,10 @@ fn default_healthcheck_ports() -> Vec<String> {
     vec!["3000".to_string(); 3]
 }
 
+fn default_http_query_retry_delay_ms() -> u64 {
+    1000
+}
+
 fn default_max_deletions_per_batch() -> usize {
     100
 }
@@ -603,9 +610,10 @@ impl From<Config> for CommonConfig {
             return_partial_results,
             disable_persistence,
             enable_debug_timing: _,
-            node_hostnames: _,    // Could be different for each server
-            service_ports: _,     // Could be different for each server
-            healthcheck_ports: _, // Could be different for each server
+            node_hostnames: _,            // Could be different for each server
+            service_ports: _,             // Could be different for each server
+            healthcheck_ports: _,         // Could be different for each server
+            http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
             image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers

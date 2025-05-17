@@ -8,10 +8,7 @@ use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
-        inmemory_store::InMemoryStore,
-        shutdown_handler::ShutdownHandler,
-        sync::{GenesisConfig, SyncResult, SyncState},
-        task_monitor::TaskMonitor,
+        inmemory_store::InMemoryStore, shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor,
     },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
@@ -20,7 +17,8 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         logger,
-        utils::fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+        sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
+        utils::fetcher::{self, get_last_indexed, set_last_indexed},
         BatchGenerator, BatchIterator, Handle as HawkHandle,
     },
     hawkers::aby3::aby3_store::Aby3Store,
@@ -60,7 +58,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    let last_indexation_height = fetch_height_of_indexed(&iris_store).await;
+    let last_indexation_height = get_last_indexed(&iris_store).await?;
+    let excluded_serial_ids = fetcher::fetch_iris_deletions(&config, &aws_s3_client).await?;
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(
@@ -76,13 +75,14 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &iris_store,
         max_indexation_height,
         last_indexation_height,
+        &excluded_serial_ids,
     )
     .await?;
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        Arc::clone(&my_state),
+        &my_state,
     )
     .await;
     background_tasks.check_tasks();
@@ -95,7 +95,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Await coordinator to signal network state = synchronized.
-    let sync_result = coordinator::get_others_sync_state(&config, Arc::clone(&my_state)).await?;
+    let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -126,6 +126,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         last_indexation_height,
         max_indexation_height,
+        excluded_serial_ids,
         &iris_store,
         &graph_store,
         &aws_s3_client,
@@ -144,10 +145,11 @@ async fn exec_main_loop(
     config: &Config,
     last_indexation_height: IrisSerialId,
     max_indexation_height: IrisSerialId,
+    excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
     _graph_store: &GraphPg<Aby3Store>,
-    s3_client: &S3Client,
-    _sync_result: &SyncResult,
+    _s3_client: &S3Client,
+    _sync_result: &GenesisSyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
@@ -157,13 +159,12 @@ async fn exec_main_loop(
     log_info("Hawk handle initialised".to_string());
 
     // Set batch generator.
-    let mut batch_generator = BatchGenerator::new_from_services(
-        config,
-        last_indexation_height,
+    let mut batch_generator = BatchGenerator::new(
+        last_indexation_height + 1,
         max_indexation_height,
-        s3_client,
-    )
-    .await?;
+        config.max_batch_size,
+        excluded_serial_ids,
+    );
     log_info("Batch generator initialised".to_string());
 
     // Set main loop result.
@@ -237,7 +238,9 @@ async fn exec_main_loop(
                     )
                 })??;
 
-            let () = set_height_of_indexed(iris_store, &curr_iris_index).await?;
+            let mut tx = iris_store.tx().await?;
+            set_last_indexed(&mut tx, &curr_iris_index).await?;
+            tx.commit().await?;
 
             // Housekeeping: increment count of pending batches.
             shutdown_handler.increment_batches_pending_completion();
@@ -382,34 +385,38 @@ async fn get_service_clients(
 /// Build this node's synchronization state, which is compared against the
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
-/// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
 async fn get_sync_state(
     config: &Config,
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
-) -> Result<Arc<SyncState>> {
+    excluded_serial_ids: &[IrisSerialId],
+) -> Result<GenesisSyncState> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
-
-    let deleted_request_ids = Vec::new();
-    let modifications = Vec::new();
-
-    let next_sns_sequence_num = None;
+    let excluded_serial_ids = excluded_serial_ids.to_vec();
 
     let genesis_config = GenesisConfig {
         max_indexation_height,
         last_indexation_height,
+        excluded_serial_ids,
     };
 
-    Ok(Arc::new(SyncState {
+    Ok(GenesisSyncState {
         db_len,
-        deleted_request_ids,
-        modifications,
-        next_sns_sequence_num,
         common_config,
-        genesis_config: Some(genesis_config),
-    }))
+        genesis_config,
+    })
+}
+
+async fn get_sync_result(
+    config: &Config,
+    my_state: &GenesisSyncState,
+) -> Result<GenesisSyncResult> {
+    let mut all_states = vec![my_state.clone()];
+    all_states.extend(coordinator::get_others_sync_state(config).await?);
+    let sync_result = GenesisSyncResult::new(my_state.clone(), all_states);
+    Ok(sync_result)
 }
 
 async fn init_graph_from_stores(
@@ -563,7 +570,7 @@ fn log_warn(msg: String) {
 #[allow(dead_code)]
 async fn sync_dbs_genesis(
     _config: &Config,
-    _sync_result: &SyncResult,
+    _sync_result: &GenesisSyncResult,
     _iris_store: &IrisStore,
 ) -> Result<()> {
     todo!("If network state decoheres then re-synchronize");
