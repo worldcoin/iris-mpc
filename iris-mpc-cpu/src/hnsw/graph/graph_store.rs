@@ -1,4 +1,4 @@
-use super::{layered_graph::EntryPoint, neighborhood::SortedEdgeIds};
+use super::layered_graph::EntryPoint;
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
@@ -8,8 +8,8 @@ use crate::{
 };
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::serialization::{ReadPacked, WritePacked};
+use iris_mpc_common::{postgres::PostgresClient, SortedEdgeIds};
 use itertools::izip;
 use sqlx::{error::BoxDynError, types::Text, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};

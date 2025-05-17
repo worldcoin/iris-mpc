@@ -70,8 +70,7 @@ impl HawkSession {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::hnsw::graph::neighborhood::SortedEdgeIds;
-    use iris_mpc_common::vector_id::VectorId;
+    use iris_mpc_common::{vector_id::VectorId, SortedEdgeIds};
     use itertools::Itertools;
 
     #[test]

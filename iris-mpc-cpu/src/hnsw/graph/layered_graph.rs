@@ -3,7 +3,6 @@
 //!
 //! (<https://github.com/Inversed-Tech/hawk-pack/>)
 
-use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
     hnsw::{
@@ -12,7 +11,10 @@ use crate::{
     },
 };
 use eyre::Result;
-use iris_mpc_common::serialization::{ReadPacked, WritePacked};
+use iris_mpc_common::{
+    serialization::{ReadPacked, WritePacked},
+    SortedEdgeIds,
+};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{

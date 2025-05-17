@@ -74,6 +74,14 @@ impl WritePacked for VectorId {
 }
 
 impl VectorId {
+    pub fn to_packed(self) -> Result<Vec<u8>> {
+        let mut ret = vec![];
+        self.write_packed(&mut ret)?;
+        Ok(ret)
+    }
+}
+
+impl VectorId {
     pub fn new(serial_id: SerialId, version: VersionId) -> Self {
         VectorId {
             id: serial_id,
