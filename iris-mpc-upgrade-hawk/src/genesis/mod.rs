@@ -19,7 +19,7 @@ use iris_mpc_cpu::{
         logger,
         sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
         utils::fetcher::{self, get_last_indexed, set_last_indexed},
-        BatchGenerator, BatchIterator, Handle as HawkHandle,
+        BatchGenerator, BatchIterator, Handle as HawkHandle, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -30,7 +30,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::time::timeout;
+use tokio::{
+    sync::mpsc::{self, Sender},
+    time::timeout,
+};
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -110,6 +113,12 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
+    // Start thread for persisting indexing results to DB.
+    let tx_results =
+        start_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
+
+    background_tasks.check_tasks();
+
     // Await coordinator to signal network state = ready.
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
@@ -123,12 +132,11 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
         max_indexation_id,
         excluded_serial_ids,
         &iris_store,
-        &graph_store,
-        &aws_s3_client,
         &sync_result,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
+        tx_results,
     )
     .await?;
 
@@ -142,12 +150,11 @@ async fn exec_main_loop(
     max_indexation_id: IrisSerialId,
     excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
-    _graph_store: &GraphPg<Aby3Store>,
-    _s3_client: &S3Client,
     _sync_result: &GenesisSyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
+    tx_results: Sender<JobResult>,
 ) -> Result<()> {
     // Initialise Hawk handle.
     let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
@@ -170,49 +177,42 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        let mut prev_iris_index = last_indexed_id;
-
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            let batch_count = batch_generator.batch_count();
+            let batch_len = batch.len();
+
             // Assumption: ids are monotonically increasing within a batch and between batches.
-            let curr_iris_db_index_opt = batch.last().map(|db_stored_iris| db_stored_iris.id());
-            let curr_iris_db_index = match curr_iris_db_index_opt {
-                Some(index) if index <= prev_iris_index as i64 => {
-                    log_info(format!(
-                "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
-                batch_generator.batch_count(),
-                batch.len(),
-                now.elapsed(),
-            ));
-                    continue;
-                }
+
+            // Check for conditions to skip batch
+            match batch.last() {
+                // skip batch if empty
                 None => {
                     log_info(format!(
                         "HNSW GENESIS: Skipping empty batch: idx={} :: irises={} :: time {:?}",
-                        batch_generator.batch_count(),
-                        batch.len(),
+                        batch_count,
+                        batch_len,
                         now.elapsed(),
                     ));
                     continue;
                 }
-                Some(index) => index,
-            };
-
-            let curr_iris_index_res = IrisSerialId::try_from(curr_iris_db_index);
-            let curr_iris_index = match curr_iris_index_res {
-                Ok(index) => index,
-                Err(_) => {
-                    log_error(
-                "Converting DbStoredIris.id of type i64 to IrisSerialID alias for u32 failed.  Skipping ..".to_string(),
-            );
+                // skip batch if last id is less than or equal to the last previously indexed id
+                Some(db_iris) if db_iris.id() <= (last_indexed_id as i64) => {
+                    log_info(format!(
+                        "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
+                        batch_count,
+                        batch_len,
+                        now.elapsed(),
+                    ));
                     continue;
                 }
+                _ => ()
             };
 
             log_info(format!(
                 "Indexing new batch: idx={} :: irises={} :: time {:?}",
-                batch_generator.batch_count(),
-                batch.len(),
+                batch_count,
+                batch_len,
                 now.elapsed(),
             ));
 
@@ -222,25 +222,19 @@ async fn exec_main_loop(
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
-            // Process batch with Hawk handle over hawk actor.
-            let result_future = hawk_handle.submit_batch(&batch);
-            timeout(processing_timeout, result_future.await)
+            // Process batch with genesis Handle over hawk actor.
+            let result_future = hawk_handle.submit_batch(&batch, batch_count).await;
+            let result = timeout(processing_timeout, result_future)
                 .await
-                .map_err(|e| {
+                .map_err(|err| {
                     eyre!(
                         "HNSW GENESIS :: Server :: HawkActor processing timeout: {:?}",
-                        e
+                        err
                     )
                 })??;
 
-            let mut tx = iris_store.tx().await?;
-            set_last_indexed(&mut tx, &curr_iris_index).await?;
-            tx.commit().await?;
-
-            // Housekeeping: increment count of pending batches.
+            tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-
-            prev_iris_index = curr_iris_index;
         }
 
         Ok(())
@@ -446,6 +440,50 @@ async fn init_graph_from_stores(
     graph_loader.load_graph_store(graph_store).await?;
 
     Ok(())
+}
+
+/// Spawns thread responsible for persisting results from batch query processing to database.
+async fn start_results_thread(
+    graph_store: GraphPg<Aby3Store>,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<Sender<JobResult>> {
+    let (tx, mut rx) = mpsc::channel(32); // TODO: pick some buffer value
+    let shutdown_handler_bg = Arc::clone(shutdown_handler);
+    let _result_sender_abort = task_monitor.spawn(async move {
+        while let Some(JobResult {
+            job_id,
+            identifiers,
+            connect_plans,
+        }) = rx.recv().await
+        {
+            if let (Some(first_id), Some(last_id)) = (identifiers.first(), identifiers.last()) {
+                let mut graph_tx = graph_store.tx().await?;
+                connect_plans.persist(&mut graph_tx).await?;
+                let mut db_tx = graph_tx.tx;
+                set_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
+                db_tx.commit().await?;
+
+                log_info(format!(
+                    "Persisted results to database for job {}; serial ids between {} and {}",
+                    job_id,
+                    first_id.serial_id(),
+                    last_id.serial_id(),
+                ))
+            } else {
+                log_warn(format!(
+                    "Received empty job result for job {} in genesis indexer results thread",
+                    job_id
+                ));
+            }
+
+            shutdown_handler_bg.decrement_batches_pending_completion();
+        }
+
+        Ok(())
+    });
+
+    Ok(tx)
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function

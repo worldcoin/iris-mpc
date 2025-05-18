@@ -170,6 +170,7 @@ impl Handle {
         let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
+            job_id: request.job_id,
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
@@ -202,13 +203,14 @@ impl Handle {
     pub async fn submit_batch(
         &mut self,
         batch: &[DbStoredIris],
-    ) -> impl Future<Output = Result<()>> {
+        batch_count: usize,
+    ) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch),
+            request: JobRequest::new(batch_count, self.party_id, batch),
             return_channel: tx,
         };
 
@@ -219,10 +221,9 @@ impl Handle {
         async move {
             // In a second Future, wait for the result.
             sent?;
-            let _result = rx.await??;
+            let result = rx.await??;
 
-            // TODO: Implement job result processing.
-            Ok(())
+            Ok(result)
         }
     }
 }

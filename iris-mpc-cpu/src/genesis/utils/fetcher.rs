@@ -46,9 +46,9 @@ pub async fn get_last_indexed(iris_store: &Store) -> Result<IrisSerialId> {
 ///
 pub async fn set_last_indexed(
     tx: &mut Transaction<'_, Postgres>,
-    new_height: &IrisSerialId,
+    new_id: &IrisSerialId,
 ) -> Result<()> {
-    Store::set_persistent_state(tx, LAST_INDEXED_DOMAIN, LAST_INDEXED_KEY, new_height).await
+    Store::set_persistent_state(tx, LAST_INDEXED_DOMAIN, LAST_INDEXED_KEY, new_id).await
 }
 
 /// Fetch a batch of iris data for indexation.
