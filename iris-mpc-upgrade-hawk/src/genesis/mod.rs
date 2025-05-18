@@ -182,32 +182,28 @@ async fn exec_main_loop(
             let batch_count = batch_generator.batch_count();
             let batch_len = batch.len();
 
-            // Assumption: ids are monotonically increasing within a batch and between batches.
+            // Filter out any ids which have already been indexed -- there should be none
+            let batch: Vec<_> = batch.into_iter().filter(|db_iris| db_iris.id() > (last_indexed_id as i64)).collect();
+            if batch.len() < batch_len {
+                log_warn(format!(
+                    "HNSW GENESIS: Filtered out previously indexed batch elements: idx={} :: irises={} :: filtered={} :: time {:?}",
+                    batch_count,
+                    batch_len,
+                    batch_len - batch.len(),
+                    now.elapsed(),
+                ));
+            }
 
-            // Check for conditions to skip batch
-            match batch.last() {
-                // skip batch if empty
-                None => {
-                    log_info(format!(
-                        "HNSW GENESIS: Skipping empty batch: idx={} :: irises={} :: time {:?}",
-                        batch_count,
-                        batch_len,
-                        now.elapsed(),
-                    ));
-                    continue;
-                }
-                // skip batch if last id is less than or equal to the last previously indexed id
-                Some(db_iris) if db_iris.id() <= (last_indexed_id as i64) => {
-                    log_info(format!(
-                        "HNSW GENESIS: Skipping previously indexed batch: idx={} :: irises={} :: time {:?}",
-                        batch_count,
-                        batch_len,
-                        now.elapsed(),
-                    ));
-                    continue;
-                }
-                _ => ()
-            };
+            // Filter out empty batches -- this should not occur
+            if batch.is_empty() {
+                log_warn(format!(
+                    "HNSW GENESIS: Skipping empty batch: idx={} :: irises={} :: time {:?}",
+                    batch_count,
+                    batch_len,
+                    now.elapsed(),
+                ));
+                continue;
+            }
 
             log_info(format!(
                 "Indexing new batch: idx={} :: irises={} :: time {:?}",
@@ -233,6 +229,7 @@ async fn exec_main_loop(
                     )
                 })??;
 
+            // Send results to processing thread to persist to database.
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
         }
