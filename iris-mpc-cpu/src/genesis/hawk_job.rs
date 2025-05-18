@@ -30,10 +30,10 @@ pub struct JobRequest {
     /// Unique sequential identifier for the job
     pub job_id: usize,
 
-    // Incoming batch of iris identifiers for subsequent correlation.
+    /// Incoming batch of iris identifiers for subsequent correlation.
     pub identifiers: Vec<IrisVectorId>,
 
-    // HNSW indexation queries over both eyes.
+    /// HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
 }
 
