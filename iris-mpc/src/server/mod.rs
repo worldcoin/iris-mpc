@@ -33,7 +33,6 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::{S3Store, Store};
 use std::collections::HashMap;
-use std::mem;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -127,7 +126,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &iris_store,
         &aws_clients,
         shares_encryption_key_pair,
-        &sync_result,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
@@ -419,16 +417,12 @@ async fn build_sync_state(
     store: &Store,
 ) -> Result<Arc<SyncState>> {
     let db_len = store.count_irises().await? as u64;
-    let deleted_request_ids = store
-        .last_deleted_requests(max_sync_lookback(config))
-        .await?;
     let modifications = store.last_modifications(max_sync_lookback(config)).await?;
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
     Ok(Arc::new(SyncState {
         db_len,
-        deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
@@ -646,7 +640,6 @@ async fn run_main_server_loop(
     iris_store: &Store,
     aws_clients: &AwsClients,
     shares_encryption_key_pair: SharesEncryptionKeyPairs,
-    sync_result: &SyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
@@ -659,8 +652,6 @@ async fn run_main_server_loop(
 
     let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
-
     let party_id = config.party_id;
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
@@ -669,9 +660,6 @@ async fn run_main_server_loop(
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let res: Result<()> = async {
         tracing::info!("Entering main loop");
-
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
@@ -682,8 +670,6 @@ async fn run_main_server_loop(
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
-            iris_store.clone(),
-            skip_request_ids,
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute.clone(),

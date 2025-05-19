@@ -392,7 +392,6 @@ async fn get_sync_state(
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
-    let deleted_request_ids = Vec::new();
     let modifications = Vec::new();
 
     let next_sns_sequence_num = None;
@@ -404,7 +403,6 @@ async fn get_sync_state(
 
     Ok(Arc::new(SyncState {
         db_len,
-        deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
