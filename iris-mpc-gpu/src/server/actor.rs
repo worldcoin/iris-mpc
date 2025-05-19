@@ -166,8 +166,8 @@ pub struct ServerActor {
     match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
     match_distances_counter_left: Vec<CudaSlice<u32>>,
     match_distances_counter_right: Vec<CudaSlice<u32>>,
-    match_distances_indices_left: Vec<CudaSlice<u32>>,
-    match_distances_indices_right: Vec<CudaSlice<u32>>,
+    match_distances_indices_left: Vec<CudaSlice<u64>>,
+    match_distances_indices_right: Vec<CudaSlice<u64>>,
     // Mirror orientation buffers
     match_distances_buffer_codes_left_mirror: Vec<ChunkShare<u16>>,
     match_distances_buffer_codes_right_mirror: Vec<ChunkShare<u16>>,
@@ -175,8 +175,8 @@ pub struct ServerActor {
     match_distances_buffer_masks_right_mirror: Vec<ChunkShare<u16>>,
     match_distances_counter_left_mirror: Vec<CudaSlice<u32>>,
     match_distances_counter_right_mirror: Vec<CudaSlice<u32>>,
-    match_distances_indices_left_mirror: Vec<CudaSlice<u32>>,
-    match_distances_indices_right_mirror: Vec<CudaSlice<u32>>,
+    match_distances_indices_left_mirror: Vec<CudaSlice<u64>>,
+    match_distances_indices_right_mirror: Vec<CudaSlice<u64>>,
     buckets: ChunkShare<u32>,
     anonymized_bucket_statistics_left: BucketStatistics,
     anonymized_bucket_statistics_right: BucketStatistics,
@@ -1838,7 +1838,7 @@ impl ServerActor {
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],
-                 indices: &[CudaSlice<u32>],
+                 indices: &[CudaSlice<u64>],
                  codes: &[ChunkShare<u16>],
                  masks: &[ChunkShare<u16>]| {
                     reset_slice(self.device_manager.devices(), counter, 0, streams);
@@ -2713,7 +2713,7 @@ fn open(
     match_distances_buffers_codes: &[ChunkShare<u16>],
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
-    match_distances_indices: &[CudaSlice<u32>],
+    match_distances_indices: &[CudaSlice<u64>],
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,

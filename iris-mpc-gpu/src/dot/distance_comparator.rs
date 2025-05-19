@@ -177,7 +177,7 @@ impl DistanceComparator {
         match_distances_buffers_codes: &[ChunkShare<u16>],
         match_distances_buffers_masks: &[ChunkShare<u16>],
         match_distances_counters: &[CudaSlice<u32>],
-        match_distances_indices: &[CudaSlice<u32>],
+        match_distances_indices: &[CudaSlice<u64>],
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
@@ -705,7 +705,7 @@ impl DistanceComparator {
             .collect::<Vec<_>>()
     }
 
-    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u32>> {
+    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u64>> {
         (0..self.device_manager.device_count())
             .map(|i| {
                 let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
