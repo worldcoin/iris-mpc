@@ -1087,6 +1087,7 @@ impl HawkHandle {
             .update_anon_stats(&sessions[0][0], &search_results)
             .await?;
 
+        tracing::info!("Updated anonymized statistics.");
         // Insert into the in memory stores.
         let mutations =
             Self::handle_mutations(hawk_actor, sessions, search_results, &match_result).await?;
@@ -1103,7 +1104,7 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-
+        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
@@ -1127,7 +1128,9 @@ impl HawkHandle {
         let mut connect_plans = HawkMutation([vec![], vec![]]);
 
         // For both eyes.
-        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+        for (idx, (side, sessions, search_results)) in
+            izip!(&STORE_IDS, sessions, search_results).enumerate()
+        {
             // Focus on the insertions and keep only the centered irises.
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| match decision {
@@ -1136,6 +1139,13 @@ impl HawkHandle {
                 })
                 .collect_vec();
 
+            tracing::info!(
+                "Inserting {} new irises for eye {}. {}/{} ",
+                insert_plans.len(),
+                side,
+                idx,
+                sessions.len()
+            );
             // Insert in memory, and return the plans to update the persistent database.
             connect_plans.0[*side as usize] = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
