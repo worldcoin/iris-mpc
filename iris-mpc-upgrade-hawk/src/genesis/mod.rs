@@ -377,8 +377,10 @@ async fn get_service_clients(
 ///
 /// * `config` - Application configuration instance.
 /// * `store` - Iris PostgreSQL store provider.
-/// * `height_max` - Maximum Iris serial id to which to index.
-/// * `height_last` - Last Iris serial id to have been indexed.
+/// * `max_indexation_height` - Maximum Iris serial id to which to index.
+/// * `last_indexation_height` - Last Iris serial id to have been indexed.
+/// * `excluded_serial_ids` - List of serial ids to be excluded from indexation.
+///
 async fn get_sync_state(
     config: &Config,
     store: &IrisStore,
@@ -417,8 +419,8 @@ async fn get_sync_result(
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration instance.
 /// * `iris_store` - Iris PostgreSQL store provider.
+/// * `config` - Application configuration instance.
 /// * `graph_store` - Graph PostgreSQL store provider.
 /// * `hawk_actor` - Hawk actor managing graph access & indexation.
 ///
@@ -478,7 +480,7 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 /// # Arguments
 ///
 /// * `actor` - Hawk actor Iris loader.
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `store` - Iris PostgreSQL store provider.
 /// * `store_len` - Count of Iris serial identifiers.
 /// * `store_load_parallelism` - Number of parallel threads to utilise when loading.
 ///
