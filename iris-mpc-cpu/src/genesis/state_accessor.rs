@@ -1,4 +1,4 @@
-use super::{errors::IndexationError, logger};
+use super::utils::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
@@ -6,7 +6,7 @@ use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
 // Component name for logging purposes.
-const COMPONENT: &str = "Fetcher";
+const COMPONENT: &str = "State-Accessor";
 
 /// Fetch height of indexed from store.
 ///

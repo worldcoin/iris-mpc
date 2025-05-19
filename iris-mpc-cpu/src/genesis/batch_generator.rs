@@ -1,4 +1,7 @@
-use super::utils::{errors::IndexationError, fetcher, logger};
+use super::{
+    state_accessor as fetcher,
+    utils::{errors::IndexationError, logger},
+};
 use eyre::Result;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
