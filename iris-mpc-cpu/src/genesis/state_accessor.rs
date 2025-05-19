@@ -1,4 +1,4 @@
-use super::{errors::IndexationError, logger};
+use super::utils::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
@@ -6,7 +6,7 @@ use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
 
 // Component name for logging purposes.
-const COMPONENT: &str = "Fetcher";
+const COMPONENT: &str = "State-Accessor";
 
 /// Fetch height of indexed from store.
 ///
@@ -41,14 +41,30 @@ pub async fn fetch_height_of_indexed(iris_store: &IrisPgresStore) -> IrisSerialI
 ///
 pub async fn set_height_of_indexed(
     iris_store: &IrisPgresStore,
-    new_height: &IrisSerialId,
-) -> Result<()> {
+    new_height: IrisSerialId,
+) -> Result<(), IndexationError> {
     let domain = "genesis";
     let key = "indexed_height";
-    let mut tx = iris_store.tx().await?;
-    iris_store
-        .set_persistent_state(&mut tx, domain, key, new_height)
+
+    // Set Pgres transaction.
+    let mut tx = iris_store
+        .tx()
         .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))
+        .unwrap();
+
+    // Write to dB.
+    iris_store
+        .set_persistent_state(&mut tx, domain, key, &new_height)
+        .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))?;
+
+    // Commit to dB.
+    tx.commit()
+        .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))?;
+
+    Ok(())
 }
 
 /// Fetch a batch of iris data for indexation.
@@ -69,8 +85,8 @@ pub(crate) async fn fetch_iris_batch(
     logger::log_info(
         COMPONENT,
         format!(
-            "Fetching Iris batch for indexation: irises={:?}",
-            identifiers
+            "Fetching Iris batch for indexation: batch-size={}",
+            identifiers.len()
         ),
     );
 
@@ -94,7 +110,7 @@ pub(crate) async fn fetch_iris_batch(
 /// A set of Iris serial identifiers marked as deleted.
 ///
 #[allow(dead_code)]
-pub(crate) async fn fetch_iris_deletions(
+pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
