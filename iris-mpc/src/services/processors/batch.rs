@@ -21,12 +21,10 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
-    ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+    SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
 use iris_mpc_common::job::{BatchMetadata, BatchQuery};
-use iris_mpc_store::Store;
 use std::collections::HashMap;
-use std::mem;
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
@@ -39,8 +37,6 @@ pub fn receive_batch_stream(
     sns_client: SNSClient,
     s3_client: S3Client,
     config: Config,
-    store: Store,
-    mut skip_request_ids: Vec<String>,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
@@ -55,17 +51,12 @@ pub fn receive_batch_stream(
                 Err(_) => break,
             };
 
-            // Skip requests based on the startup sync, only in the first iteration.
-            let skip_request_ids = mem::take(&mut skip_request_ids);
-
             let batch = receive_batch(
                 party_id,
                 &client,
                 &sns_client,
                 &s3_client,
                 &config,
-                &store,
-                &skip_request_ids,
                 shares_encryption_key_pairs.clone(),
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
@@ -93,8 +84,6 @@ async fn receive_batch(
     sns_client: &SNSClient,
     s3_client: &S3Client,
     config: &Config,
-    store: &Store,
-    skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
@@ -106,8 +95,6 @@ async fn receive_batch(
         sns_client,
         s3_client,
         config,
-        store,
-        skip_request_ids,
         shares_encryption_key_pairs,
         shutdown_handler,
         uniqueness_error_result_attributes,
@@ -123,8 +110,6 @@ pub struct BatchProcessor<'a> {
     sns_client: &'a SNSClient,
     s3_client: &'a S3Client,
     config: &'a Config,
-    store: &'a Store,
-    skip_request_ids: &'a [String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &'a ShutdownHandler,
     uniqueness_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
@@ -143,8 +128,6 @@ impl<'a> BatchProcessor<'a> {
         sns_client: &'a SNSClient,
         s3_client: &'a S3Client,
         config: &'a Config,
-        store: &'a Store,
-        skip_request_ids: &'a [String],
         shares_encryption_key_pairs: SharesEncryptionKeyPairs,
         shutdown_handler: &'a ShutdownHandler,
         uniqueness_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
@@ -156,8 +139,6 @@ impl<'a> BatchProcessor<'a> {
             sns_client,
             s3_client,
             config,
-            store,
-            skip_request_ids,
             shares_encryption_key_pairs,
             shutdown_handler,
             uniqueness_error_result_attributes,
@@ -304,47 +285,7 @@ impl<'a> BatchProcessor<'a> {
 
         metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
 
-        self.store
-            .mark_requests_deleted(&[uniqueness_request.signup_id.clone()])
-            .await
-            .map_err(ReceiveRequestError::FailedToMarkRequestAsDeleted)?;
-
         self.delete_message(sqs_message).await?;
-
-        if self
-            .skip_request_ids
-            .contains(&uniqueness_request.signup_id)
-        {
-            self.msg_counter -= 1;
-            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
-
-            tracing::warn!(
-                "Skipping request due to synced deleted id: {}",
-                uniqueness_request.signup_id
-            );
-
-            let message = UniquenessResult::new_error_result(
-                self.config.party_id,
-                uniqueness_request.signup_id,
-                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-            );
-
-            send_error_results_to_sns(
-                serde_json::to_string(&message).unwrap(),
-                &batch_metadata,
-                self.sns_client,
-                self.config,
-                self.uniqueness_error_result_attributes,
-                UNIQUENESS_MESSAGE_TYPE,
-            )
-            .await?;
-            if self.config.enable_sync_queues_on_sns_sequence_number {
-                tracing::error!(
-                    "Skip requests were used while SQS sync is enabled. This should not happen."
-                );
-            }
-            return Ok(());
-        }
 
         self.update_batch_size_if_needed(&uniqueness_request);
         self.update_luc_config_if_needed(&uniqueness_request);

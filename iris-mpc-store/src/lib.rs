@@ -102,11 +102,6 @@ impl From<&DbStoredIris> for VectorId {
 }
 
 #[derive(sqlx::FromRow, Debug, Default)]
-struct StoredState {
-    request_id: String,
-}
-
-#[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredModification {
     pub id: i64,
     pub serial_id: i64,
@@ -411,27 +406,6 @@ WHERE id = $1;
                 .await?;
         result_events.reverse();
         Ok(result_events)
-    }
-
-    pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
-        if request_ids.is_empty() {
-            return Ok(());
-        }
-        // Insert request_ids that are deleted from the queue.
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
-        query.push_values(request_ids, |mut query, request_id| {
-            query.push_bind(request_id);
-        });
-        query.build().execute(&self.pool).await?;
-        Ok(())
-    }
-
-    pub async fn last_deleted_requests(&self, count: usize) -> Result<Vec<String>> {
-        let rows = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT $1")
-            .bind(count as i64)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
     }
 
     pub async fn insert_modification(
@@ -839,7 +813,6 @@ pub mod tests {
         store.insert_results(&mut tx, &[]).await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
-        store.mark_requests_deleted(&[]).await?;
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
@@ -983,30 +956,6 @@ pub mod tests {
 
         let got = store.last_results(2).await?;
         assert_eq!(got, vec!["event1", "event2"]);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_mark_requests_deleted() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
-
-        for i in 0..2 {
-            let request_ids = (0..2)
-                .map(|j| format!("test_{}_{}", i, j))
-                .collect::<Vec<_>>();
-            store.mark_requests_deleted(&request_ids).await?;
-
-            let got = store.last_deleted_requests(2).await?;
-            assert_eq!(got, request_ids);
-        }
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

@@ -1,5 +1,4 @@
 use eyre::{ensure, Result};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
@@ -8,7 +7,6 @@ use crate::config::CommonConfig;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
     pub db_len: u64,
-    pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
     pub common_config: CommonConfig,
@@ -133,16 +131,6 @@ impl SyncResult {
             );
         }
         Ok(())
-    }
-
-    pub fn deleted_request_ids(&self) -> Vec<String> {
-        // Merge request IDs.
-        self.all_states
-            .iter()
-            .flat_map(|s| s.deleted_request_ids.clone())
-            .sorted()
-            .dedup()
-            .collect()
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {
@@ -283,31 +271,22 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 123,
-                deleted_request_ids: vec!["most late".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 456,
-                deleted_request_ids: vec!["x".to_string(), "y".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 789,
-                deleted_request_ids: vec!["most ahead".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
             },
-        ];
-        let deleted_request_ids = vec![
-            "most ahead".to_string(),
-            "most late".to_string(),
-            "x".to_string(),
-            "y".to_string(),
         ];
 
         let sync_res = SyncResult {
@@ -315,7 +294,6 @@ mod tests {
             all_states: states.clone(),
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
-        assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
     }
 
     // Helper function to create a Modification.
@@ -342,7 +320,6 @@ mod tests {
     fn create_sync_state(modifications: Vec<Modification>) -> SyncState {
         SyncState {
             db_len: modifications.len() as u64,
-            deleted_request_ids: vec![],
             modifications,
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
@@ -674,21 +651,18 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 10,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
                 common_config: CommonConfig::default(),
             },
             SyncState {
                 db_len: 30,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
@@ -701,7 +675,6 @@ mod tests {
         // 2. Test with all None sequence values
         let state_with_none_sequence_num = SyncState {
             db_len: 10,
-            deleted_request_ids: vec![],
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
@@ -811,7 +784,6 @@ mod tests {
     fn some_state() -> SyncState {
         SyncState {
             db_len: 123,
-            deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
@@ -832,21 +804,18 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config1),
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config2),
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config3),

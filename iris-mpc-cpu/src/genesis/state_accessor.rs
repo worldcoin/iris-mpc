@@ -1,4 +1,4 @@
-use super::{errors::IndexationError, logger};
+use super::utils::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
 // Component name for logging purposes.
-const COMPONENT: &str = "Fetcher";
+const COMPONENT: &str = "State-Accessor";
 
 /// Domain for persistent state store entry for last indexed id
 const LAST_INDEXED_DOMAIN: &str = "genesis";
@@ -69,8 +69,8 @@ pub async fn fetch_iris_batch(
     logger::log_info(
         COMPONENT,
         format!(
-            "Fetching Iris batch for indexation: irises={:?}",
-            identifiers
+            "Fetching Iris batch for indexation: batch-size={}",
+            identifiers.len()
         ),
     );
 
@@ -145,6 +145,12 @@ pub async fn fetch_iris_deletions(
         );
         IndexationError::AwsS3ObjectDeserialize
     })?;
+
+    let n_exclusions = s3_object.deleted_serial_ids.len();
+    logger::log_info(
+        COMPONENT,
+        format!("Deletions for exclusion count = {}", n_exclusions,),
+    );
 
     Ok(s3_object.deleted_serial_ids)
 }
