@@ -75,6 +75,8 @@ impl BatchGenerator {
             "Indexation height exceeds maximum allowed"
         );
 
+        println!("height_last: {} :: height_max: {}", height_last, height_max);
+
         // Set indexation range.
         let range = height_last..(height_max + 1);
         Self::log_info(format!(
@@ -185,6 +187,8 @@ mod tests {
     const DEFAULT_RNG_SEED: u64 = 0;
     const DEFAULT_PARTY_ID: usize = 0;
     const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
+    const DEFAULT_SIZE_OF_BATCH: usize = 10;
+    const DEFAULT_COUNT_OF_BATCHES: usize = 10;
 
     // Returns a set of test resources.
     async fn get_resources() -> Result<(IrisStore, PostgresClient, String)> {
@@ -216,12 +220,12 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let instance = BatchGenerator::new(
-            10,
+            DEFAULT_SIZE_OF_BATCH,
             1,
             iris_store.count_irises().await.unwrap() as u32,
             Vec::new(),
         );
-        assert_eq!(instance.range.end, 100);
+        assert_eq!(instance.range.end as usize, DEFAULT_SIZE_OF_IRIS_DB + 1);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
@@ -236,17 +240,17 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let mut instance = BatchGenerator::new(
-            10,
+            DEFAULT_SIZE_OF_BATCH,
             1,
-            iris_store.count_irises().await.unwrap() as u32 + 1,
+            iris_store.count_irises().await.unwrap() as u32,
             Vec::new(),
         );
 
-        // Expecting 10 batches of 10 Iris's per batch.
+        // Expecting M batches of N Iris's per batch.
         while let Some(batch) = instance.next_batch(&iris_store).await? {
-            assert_eq!(batch.size(), 10);
+            assert_eq!(batch.size(), DEFAULT_SIZE_OF_BATCH);
         }
-        assert_eq!(instance.batch_count, 10);
+        assert_eq!(instance.batch_count, DEFAULT_COUNT_OF_BATCHES);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
