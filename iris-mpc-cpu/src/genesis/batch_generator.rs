@@ -25,7 +25,7 @@ impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn height_end(&self) -> IrisSerialId {
         self.data
-            .first()
+            .last()
             .map(|value| value.id() as IrisSerialId)
             .unwrap()
     }
@@ -33,7 +33,7 @@ impl Batch {
     // Returns Iris serial id of batch's first element.
     pub fn height_start(&self) -> IrisSerialId {
         self.data
-            .last()
+            .first()
             .map(|value| value.id() as IrisSerialId)
             .unwrap()
     }

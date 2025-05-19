@@ -6,7 +6,7 @@
 /// * `msg` - An error message.
 ///
 pub fn log_error(component: &str, msg: String) -> String {
-    let msg = format!("HNSW GENESIS :: {} :: {}", component, msg);
+    let msg = format!("HNSW-GENESIS :: {} :: {}", component, msg);
 
     // In testing print to stdout.
     #[cfg(test)]
@@ -28,10 +28,10 @@ pub fn log_error(component: &str, msg: String) -> String {
 pub fn log_info(component: &str, msg: String) {
     // In testing print to stdout.
     #[cfg(test)]
-    println!("HNSW GENESIS :: {} :: {}", component, msg);
+    println!("HNSW-GENESIS :: {} :: {}", component, msg);
 
     // Trace as normal.
-    tracing::info!("HNSW GENESIS :: {} :: {}", component, msg);
+    tracing::info!("HNSW-GENESIS :: {} :: {}", component, msg);
 }
 
 /// Logs component warning messages.
@@ -44,8 +44,8 @@ pub fn log_info(component: &str, msg: String) {
 pub fn log_warn(component: &str, msg: String) {
     // In testing print to stdout.
     #[cfg(test)]
-    println!("WARN :: HNSW GENESIS :: {} :: {}", component, msg);
+    println!("WARN :: HNSW-GENESIS :: {} :: {}", component, msg);
 
     // Trace as normal.
-    tracing::warn!("HNSW GENESIS :: {} :: {}", component, msg);
+    tracing::warn!("HNSW-GENESIS :: {} :: {}", component, msg);
 }

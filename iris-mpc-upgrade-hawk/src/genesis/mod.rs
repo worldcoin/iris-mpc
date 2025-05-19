@@ -171,7 +171,7 @@ async fn exec_main_loop(
     let res: Result<()> = async {
         log_info("Entering main loop".to_string());
 
-        // Housekeeping: set processing timer info.
+        // Housekeeping.
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
@@ -187,13 +187,13 @@ async fn exec_main_loop(
                 now.elapsed(),
             ));
 
-            // Process: collate metrics.
+            // Collate metrics.
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
-            // Process: submit batch to Hawk handle for indexation.
+            // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch);
             timeout(processing_timeout, result_future.await)
                 .await

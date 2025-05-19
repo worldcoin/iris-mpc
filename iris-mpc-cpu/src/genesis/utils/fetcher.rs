@@ -42,13 +42,29 @@ pub async fn fetch_height_of_indexed(iris_store: &IrisPgresStore) -> IrisSerialI
 pub async fn set_height_of_indexed(
     iris_store: &IrisPgresStore,
     new_height: IrisSerialId,
-) -> Result<()> {
+) -> Result<(), IndexationError> {
     let domain = "genesis";
     let key = "indexed_height";
-    let mut tx = iris_store.tx().await?;
+
+    // Set Pgres transaction.
+    let mut tx = iris_store
+        .tx()
+        .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))
+        .unwrap();
+
+    // Write to dB.
     iris_store
         .set_persistent_state(&mut tx, domain, key, &new_height)
         .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))?;
+
+    // Commit to dB.
+    tx.commit()
+        .await
+        .map_err(|err| IndexationError::PostgresPersistIndexationState(err.to_string()))?;
+
+    Ok(())
 }
 
 /// Fetch a batch of iris data for indexation.

@@ -19,6 +19,9 @@ pub enum IndexationError {
 
     #[error("Failed to fetch Iris data from PostgreSQL dB")]
     PostgresFetchIrisById,
+
+    #[error("Failed to persist genesis Graph indexation state to PostgreSQL dB: {0}")]
+    PostgresPersistIndexationState(String),
 }
 
 // Helper: handles error.
