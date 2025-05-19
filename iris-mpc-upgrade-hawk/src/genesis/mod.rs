@@ -97,7 +97,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
 
-    // Await coordinator to signal network state = synchronized.
+    // Coordinator: await network state = synchronized.
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
