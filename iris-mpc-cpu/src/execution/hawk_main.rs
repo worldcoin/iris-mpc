@@ -26,7 +26,7 @@ use eyre::Result;
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE},
+    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     statistics::BucketStatistics,
 };
 use iris_mpc_common::job::Eye;
@@ -1073,6 +1073,13 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
+        let is_uniqueness = request
+            .batch
+            .request_types
+            .iter()
+            .map(|request_type| request_type == UNIQUENESS_MESSAGE_TYPE)
+            .collect_vec();
+
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, reauth_ids) = {
@@ -1108,7 +1115,10 @@ impl HawkHandle {
             let (search_normal, matches_normal) = do_search(Orientation::Normal).await?;
             let (_, matches_mirror) = do_search(Orientation::Mirror).await?;
 
-            (search_normal, matches_normal.step3(matches_mirror))
+            (
+                search_normal,
+                matches_normal.step3(matches_mirror, &is_uniqueness),
+            )
         };
 
         hawk_actor

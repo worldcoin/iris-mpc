@@ -181,11 +181,16 @@ impl Step1 {
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
-    pub fn step3(self, mirror: Self) -> BatchStep3 {
+    pub fn step3(self, mirror: Self, is_uniqueness: &VecRequests<bool>) -> BatchStep3 {
         assert_eq!(self.0.len(), mirror.0.len());
+        assert_eq!(self.0.len(), is_uniqueness.len());
         BatchStep3(
-            izip!(self.0, mirror.0)
-                .map(|(normal, mirror)| Step3 { normal, mirror })
+            izip!(self.0, mirror.0, is_uniqueness)
+                .map(|(normal, mirror, &is_uniqueness)| Step3 {
+                    normal,
+                    mirror,
+                    is_uniqueness,
+                })
                 .collect_vec(),
         )
     }
@@ -197,8 +202,7 @@ pub enum Decision {
     UniqueReject,
     ReauthUpdate(VectorId),
     ReauthReject,
-    ResetCheckNonMatch,
-    ResetCheckMatch,
+    ResetCheck,
 }
 use Decision::*;
 
@@ -206,7 +210,7 @@ impl Decision {
     pub fn is_mutation(&self) -> bool {
         match self {
             UniqueInsert | ReauthUpdate(_) => true,
-            UniqueReject | ReauthReject | ResetCheckNonMatch | ResetCheckMatch => false,
+            UniqueReject | ReauthReject | ResetCheck => false,
         }
     }
 }
@@ -232,7 +236,6 @@ impl BatchStep3 {
 
         for request in &self.0 {
             let decision = match request.normal.reauth_result {
-                // Uniqueness request.
                 None => {
                     let is_match = request.select(filter).any(|id| match id {
                         Search(_) | Luc(_) | Reauth(_) => true,
@@ -246,10 +249,16 @@ impl BatchStep3 {
                             }
                         }
                     });
-                    if is_match {
-                        UniqueReject
+                    if request.is_uniqueness {
+                        // Uniqueness request.
+                        if is_match {
+                            UniqueReject
+                        } else {
+                            UniqueInsert
+                        }
                     } else {
-                        UniqueInsert
+                        // Reset Check request.
+                        ResetCheck
                     }
                 }
 
@@ -331,6 +340,7 @@ use MatchId::*;
 struct Step3 {
     normal: Step2,
     mirror: Step2,
+    is_uniqueness: bool,
 }
 
 impl Step3 {
