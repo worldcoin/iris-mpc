@@ -576,7 +576,6 @@ WHERE id = $1;
     /// If an entry already exists for this primary key, this overwrites the existing
     /// value with the value specified here.
     pub async fn set_persistent_state<T: Serialize>(
-        &self,
         tx: &mut Transaction<'_, Postgres>,
         domain: &str,
         key: &str,
@@ -602,7 +601,6 @@ WHERE id = $1;
     /// Delete an entry in the `persistent_state` table with primary key `(domain, key)`,
     /// if it exists.
     pub async fn delete_persistent_state(
-        &self,
         tx: &mut Transaction<'_, Postgres>,
         domain: &str,
         key: &str,
@@ -721,7 +719,9 @@ pub mod tests {
         postgres::AccessMode,
     };
 
-    const MAX_CONNECTIONS: u32 = 100;
+    // Max connections default to 100 for Postgres, but can't test at quite this level when running
+    // multiple DB-related tests in parallel.
+    const MAX_CONNECTIONS: u32 = 80;
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
@@ -1326,9 +1326,7 @@ pub mod tests {
         // Insert value at index
         let set_value = "bar".to_string();
         let mut tx = store.tx().await?;
-        store
-            .set_persistent_state(&mut tx, &domain, &key, &set_value)
-            .await?;
+        Store::set_persistent_state(&mut tx, &domain, &key, &set_value).await?;
         tx.commit().await?;
 
         // Check value is set at index
@@ -1338,9 +1336,7 @@ pub mod tests {
         // Insert new value at index
         let new_set_value = "bear".to_string();
         let mut tx = store.tx().await?;
-        store
-            .set_persistent_state(&mut tx, &domain, &key, &new_set_value)
-            .await?;
+        Store::set_persistent_state(&mut tx, &domain, &key, &new_set_value).await?;
         tx.commit().await?;
 
         // Check value is updated at index
@@ -1349,9 +1345,7 @@ pub mod tests {
 
         // Delete value at index
         let mut tx = store.tx().await?;
-        store
-            .delete_persistent_state(&mut tx, &domain, &key)
-            .await?;
+        Store::delete_persistent_state(&mut tx, &domain, &key).await?;
         tx.commit().await?;
 
         // Check no value at index
@@ -1360,9 +1354,7 @@ pub mod tests {
 
         // Delete value at index again
         let mut tx = store.tx().await?;
-        store
-            .delete_persistent_state(&mut tx, &domain, &key)
-            .await?;
+        Store::delete_persistent_state(&mut tx, &domain, &key).await?;
         tx.commit().await?;
 
         // Check still no value at index

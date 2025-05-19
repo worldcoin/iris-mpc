@@ -5,7 +5,7 @@ use super::{
 use eyre::Result;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
-use std::{future::Future, iter::Peekable, ops::Range};
+use std::{future::Future, iter::Peekable, ops::RangeInclusive};
 
 // A batch for upstream indexation.
 pub struct Batch {
@@ -59,33 +59,37 @@ pub struct BatchGenerator {
     exclusions: Vec<IrisSerialId>,
 
     // Range of Iris serial identifiers to be indexed.
-    range: Range<IrisSerialId>,
+    range: RangeInclusive<IrisSerialId>,
 
     // Iterator over range of Iris serial identifiers to be indexed.
-    range_iter: Peekable<Range<IrisSerialId>>,
+    range_iter: Peekable<RangeInclusive<IrisSerialId>>,
 }
 
 // Constructor.
 impl BatchGenerator {
+    /// Create a new `BatchGenerator` with the following properties:
+    ///
+    /// - Range of iris serial ids to be produced is those between `start_id` and `end_id`,
+    ///   inclusive.
+    /// - Batches produced are of size `batch_size` until the last batch, which may be smaller.
+    /// - Any serial ids contained in `exclusions` are skipped, and not included in batches.
     pub fn new(
+        start_id: IrisSerialId,
+        end_id: IrisSerialId,
         batch_size: usize,
-        height_last: IrisSerialId,
-        height_max: IrisSerialId,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
-        assert!(
-            height_last < height_max,
-            "Indexation height exceeds maximum allowed"
+        let range = start_id..=end_id;
+
+        tracing::info!(
+            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
+            exclusions.len(),
         );
-
-        println!("height_last: {} :: height_max: {}", height_last, height_max);
-
-        // Set indexation range.
-        let range = height_last..(height_max + 1);
-        Self::log_info(format!(
-            "Range of iris-serial-id's to index = {}..{}",
-            range.start, range.end
-        ));
+        tracing::info!(
+            "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
+            range.start(),
+            range.end()
+        );
 
         Self {
             batch_size,
@@ -99,8 +103,8 @@ impl BatchGenerator {
 
 // Methods.
 impl BatchGenerator {
-    // Returns next batch of Iris serial identifiers to be indexed.
-    fn get_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
+    /// Returns next batch of Iris serial identifiers to be indexed.
+    pub fn next_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
 
@@ -108,9 +112,6 @@ impl BatchGenerator {
         let mut batch = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
-            if next_id > self.range.end {
-                break;
-            }
             if !self.exclusions.contains(&next_id) {
                 batch.push(next_id);
             } else {
@@ -134,13 +135,21 @@ impl BatchGenerator {
         Some(batch)
     }
 
+    pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
+        self.range.clone()
+    }
+
+    pub fn get_exclusions(&self) -> Vec<IrisSerialId> {
+        self.exclusions.clone()
+    }
+
     // Helper: component logging.
     fn log_info(msg: String) {
         logger::log_info("Batch Generator", msg);
     }
 }
 
-// Batch iterator interface.
+/// Batch iterator interface.
 pub trait BatchIterator {
     // Count of generated batches.
     fn batch_count(&self) -> usize;
@@ -164,7 +173,7 @@ impl BatchIterator for BatchGenerator {
         &mut self,
         iris_store: &IrisStore,
     ) -> Result<Option<Batch>, IndexationError> {
-        if let Some(identifiers) = self.get_identifiers() {
+        if let Some(identifiers) = self.next_identifiers() {
             let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
             let batch = Batch::new(self.batch_count, data);
             Self::log_info(format!("Iris batch fetched: batch-id={}", batch.id,));
@@ -180,6 +189,7 @@ impl BatchIterator for BatchGenerator {
 // ------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use super::*;
     use eyre::Result;
@@ -203,7 +213,7 @@ mod tests {
         // Set store.
         let iris_store = IrisStore::new(&pg_client).await?;
 
-        // Set dB with 100 Iris's.
+        // Set dB with 100 irises.
         iris_store
             .init_db_with_random_shares(
                 DEFAULT_RNG_SEED,
@@ -223,12 +233,12 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let instance = BatchGenerator::new(
-            DEFAULT_SIZE_OF_BATCH,
             1,
-            iris_store.count_irises().await.unwrap() as u32,
+            iris_store.count_irises().await.unwrap() as IrisSerialId,
+            DEFAULT_SIZE_OF_BATCH,
             Vec::new(),
         );
-        assert_eq!(instance.range.end as usize, DEFAULT_SIZE_OF_IRIS_DB + 1);
+        assert_eq!(*instance.range.end() as usize, DEFAULT_SIZE_OF_IRIS_DB);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
@@ -243,9 +253,9 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let mut instance = BatchGenerator::new(
-            DEFAULT_SIZE_OF_BATCH,
             1,
-            iris_store.count_irises().await.unwrap() as u32,
+            iris_store.count_irises().await.unwrap() as IrisSerialId,
+            DEFAULT_SIZE_OF_BATCH,
             Vec::new(),
         );
 
@@ -257,6 +267,26 @@ mod tests {
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exclusions() -> Result<()> {
+        let mut instance = BatchGenerator::new(1, 30, 10, vec![3, 7, 12, 15, 22, 30, 70]);
+
+        let mut batches = Vec::new();
+        while let Some(batch) = instance.next_identifiers() {
+            batches.push(batch);
+        }
+        assert_eq!(
+            batches,
+            vec![
+                vec![1, 2, 4, 5, 6, 8, 9, 10, 11, 13],
+                vec![14, 16, 17, 18, 19, 20, 21, 23, 24, 25],
+                vec![26, 27, 28, 29],
+            ]
+        );
 
         Ok(())
     }

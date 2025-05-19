@@ -63,13 +63,9 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut background_tasks = init_task_monitor();
 
-    let is_ready_flag = start_coordination_server(
-        &config,
-        &mut background_tasks,
-        &shutdown_handler,
-        Arc::clone(&my_state),
-    )
-    .await;
+    let is_ready_flag =
+        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
+            .await;
 
     background_tasks.check_tasks();
 
@@ -78,7 +74,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let sync_result = get_others_sync_state(&config, Arc::clone(&my_state)).await?;
+    let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
@@ -415,19 +411,27 @@ async fn build_sync_state(
     config: &Config,
     aws_clients: &AwsClients,
     store: &Store,
-) -> Result<Arc<SyncState>> {
+) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let modifications = store.last_modifications(max_sync_lookback(config)).await?;
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
-    Ok(Arc::new(SyncState {
+    tracing::info!("Database store length is: {}", db_len);
+
+    Ok(SyncState {
         db_len,
         modifications,
         next_sns_sequence_num,
         common_config,
-        genesis_config: None,
-    }))
+    })
+}
+
+async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+    let mut all_states = vec![my_state.clone()];
+    all_states.extend(get_others_sync_state(config).await?);
+    let sync_result = SyncResult::new(my_state.clone(), all_states);
+    Ok(sync_result)
 }
 
 /// Delete stale SQS messages in requests queue with sequence number older than the most recent
@@ -459,6 +463,8 @@ async fn sync_dbs_rollback(
     iris_store: &Store,
 ) -> Result<()> {
     let my_db_len = iris_store.count_irises().await?;
+
+    tracing::info!("Database store length is: {}", my_db_len);
 
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
