@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "POP-2269/add-pushing-branches-for-cpu"
+      - "test/custom-config-test-add-logs"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -45,3 +45,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          file: Dockerfile.hawk
