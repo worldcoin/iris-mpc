@@ -69,8 +69,8 @@ pub(crate) async fn fetch_iris_batch(
     logger::log_info(
         COMPONENT,
         format!(
-            "Fetching Iris batch for indexation: irises={:?}",
-            identifiers
+            "Fetching Iris batch for indexation: batch-size={}",
+            identifiers.len()
         ),
     );
 

@@ -177,9 +177,10 @@ impl BatchIterator for BatchGenerator {
         iris_store: &IrisStore,
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.get_identifiers() {
-            let batch = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
-            Self::log_info(format!("Iris batch fetched: batch-id={}", self.batch_count,));
-            Ok(Some(Batch::new(self.batch_count, batch)))
+            let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
+            let batch = Batch::new(self.batch_count, data);
+            Self::log_info(format!("Iris batch fetched: batch-id={}", batch.id,));
+            Ok(Some(batch))
         } else {
             Ok(None)
         }
