@@ -178,6 +178,7 @@ impl DistanceComparator {
         match_distances_buffers_masks: &[ChunkShare<u16>],
         match_distances_counters: &[CudaSlice<u32>],
         match_distances_indices: &[CudaSlice<u64>],
+        batch_id: u64,
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
@@ -227,6 +228,8 @@ impl DistanceComparator {
                             &mask_dots[i].a,
                             &mask_dots[i].b,
                             max_bucket_distances,
+                            batch_id,
+                            self.query_length,
                         ),
                     )
                     .unwrap();

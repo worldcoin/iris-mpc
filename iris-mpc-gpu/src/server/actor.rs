@@ -159,6 +159,9 @@ pub struct ServerActor {
     mask_chunk_buffers: Vec<DBChunkBuffers>,
     phase1_events: Vec<Vec<CUevent>>,
     phase2_events: Vec<Vec<CUevent>>,
+    // counter that has number of queries that have been processed
+    // this is used to determine the "global" query id for the current query for bucket statistics
+    internal_batch_counter: u64,
     // Normal orientation buffers
     match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
     match_distances_buffer_codes_right: Vec<ChunkShare<u16>>,
@@ -562,6 +565,7 @@ impl ServerActor {
             mask_chunk_buffers,
             phase1_events,
             phase2_events,
+            internal_batch_counter: 0,
             match_distances_buffer_codes_left,
             match_distances_buffer_codes_right,
             match_distances_buffer_masks_left,
@@ -802,6 +806,7 @@ impl ServerActor {
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
+        self.internal_batch_counter += 1;
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -2463,6 +2468,7 @@ impl ServerActor {
                             match_distances_buffers_masks,
                             match_distances_counters,
                             match_distances_indices,
+                            self.internal_batch_counter,
                             &code_dots,
                             &mask_dots,
                             batch_size,
@@ -2714,6 +2720,7 @@ fn open(
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
     match_distances_indices: &[CudaSlice<u64>],
+    batch_id: u64,
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
@@ -2758,6 +2765,7 @@ fn open(
         match_distances_buffers_masks,
         match_distances_counters,
         match_distances_indices,
+        batch_id,
         code_dots,
         mask_dots,
         batch_size,
