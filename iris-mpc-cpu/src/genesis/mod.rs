@@ -6,4 +6,9 @@ mod utils;
 pub use batch_generator::{BatchGenerator, BatchIterator};
 pub use hawk_handle::Handle;
 pub use hawk_job::{Job, JobRequest, JobResult};
-pub use utils::logger;
+use utils::logger;
+pub use utils::{
+    errors::{handle_error, IndexationError},
+    fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+    logger::{log_error, log_info, log_warn},
+};

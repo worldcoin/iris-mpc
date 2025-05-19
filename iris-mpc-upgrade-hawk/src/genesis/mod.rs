@@ -18,7 +18,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
-    genesis::{logger, BatchGenerator, BatchIterator, Handle as HawkHandle},
+    genesis::{self, BatchIterator},
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
@@ -56,11 +56,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Process: set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    // TODO: once https://github.com/worldcoin/iris-mpc/pull/1334/files is merged we can use the last_indexation_height
-    // for now we just use 0
-    let last_indexation_height = 0;
-
     // Process: bail if stores are inconsistent.
+    let last_indexation_height = genesis::fetch_height_of_indexed(&iris_store).await;
     validate_consistency_of_stores(
         &config,
         &iris_store,
@@ -81,7 +78,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         &config,
         &mut background_tasks,
         &shutdown_handler,
-        &my_state,
+        Arc::clone(&my_state),
     )
     .await;
     background_tasks.check_tasks();
@@ -94,7 +91,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     background_tasks.check_tasks();
 
     // Coordinator: await network state = synchronized.
-    let sync_result = coordinator::get_others_sync_state(&config, &my_state).await?;
+    let sync_result = coordinator::get_others_sync_state(&config, Arc::clone(&my_state)).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
 
@@ -107,10 +104,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
         return Ok(());
     }
 
-    // Process: set instance of hawk actor.
-    let mut hawk_actor = get_hawk_actor(&config).await?;
-
     // Process: initialise HNSW graph from previously indexed.
+    let mut hawk_actor = get_hawk_actor(&config).await?;
     init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
@@ -123,6 +118,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     log_info("Executing main loop".to_string());
     exec_main_loop(
         &config,
+        last_indexation_height,
         max_indexation_height,
         &iris_store,
         &graph_store,
@@ -140,31 +136,27 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    max_indexation_height: IrisSerialId,
+    _height_start: IrisSerialId,
+    height_max: IrisSerialId,
     iris_store: &IrisStore,
-    graph_store: &GraphPg<Aby3Store>,
+    _graph_store: &GraphPg<Aby3Store>,
     s3_client: &S3Client,
     _sync_result: &SyncResult,
     mut task_monitor: TaskMonitor,
-    shutdown_handler: &Arc<ShutdownHandler>,
+    _shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
 ) -> Result<()> {
-    // Process: initialise Hawk handle.
-    let mut hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
+    // Set Hawk handle.
+    let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info("Hawk handle initialised".to_string());
 
-    // Process: set batch generator.
-    let mut batch_generator = BatchGenerator::new_from_services(
-        config,
-        max_indexation_height,
-        iris_store,
-        graph_store,
-        s3_client,
-    )
-    .await?;
+    // Set batch generator.
+    let mut batch_generator =
+        genesis::BatchGenerator::new_from_services(config, height_max, iris_store, s3_client)
+            .await?;
     log_info("Batch generator initialised".to_string());
 
-    // Process: set main loop result.
+    // Set main loop result.
     let res: Result<()> = async {
         log_info("Entering main loop".to_string());
 
@@ -172,12 +164,16 @@ async fn exec_main_loop(
         let now = Instant::now();
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
-        // Process: index until generator is exhausted.
+        // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            let height_start = batch.height_start().unwrap();
+            let height_end = batch.height_end().unwrap();
             log_info(format!(
-                "Indexing new batch: batch-id={} :: batch-size={} :: time {:?}",
+                "Indexing new batch: batch-id={} :: batch-size={} :: batch-range={}..{} :: time {:?}",
                 batch.id,
                 batch.size(),
+                height_start,
+                height_end,
                 now.elapsed(),
             ));
 
@@ -198,35 +194,29 @@ async fn exec_main_loop(
                     )
                 })??;
 
-            // TODO write results to database
-
-            // Process: increment count of pending batches.
-
-            shutdown_handler.increment_batches_pending_completion()
+            // Persist new indexation height.
+            genesis::set_height_of_indexed(iris_store, height_end).await?;
         }
 
         Ok(())
     }
     .await;
 
-    // Process: parse main loop result.
+    // Process main loop result:
     match res {
+        // Success.
         Ok(_) => {
-            log_info("Main loop exited normally. Waiting for last batch results to be processed before shutting down...".to_string());
-            shutdown_handler.wait_for_pending_batches_completion().await;
+            log_info("Main loop exited normally".to_string());
         }
+        // Error.
         Err(err) => {
-            logger::log_error("Server", format!("HawkActor processing error: {:?}", err));
+            log_error(format!("HawkActor processing error: {:?}", err));
+
+            // Clean up & shutdown.
             log_info("Initiating shutdown".to_string());
-
-            // Ensure hawk handle is dropped so as to initiate shutdown.
             drop(hawk_handle);
-
-            // Clean up server tasks, then wait for them to finish
             task_monitor.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
-
-            // Check for background task hangs and shutdown panics
             task_monitor.check_tasks_finished();
         }
     }
@@ -348,7 +338,7 @@ async fn get_sync_state(
     store: &IrisStore,
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
-) -> Result<SyncState> {
+) -> Result<Arc<SyncState>> {
     let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
@@ -362,14 +352,14 @@ async fn get_sync_state(
         last_indexation_height,
     };
 
-    Ok(SyncState {
+    Ok(Arc::new(SyncState {
         db_len,
         deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
         genesis_config: Some(genesis_config),
-    })
+    }))
 }
 
 async fn init_graph_from_stores(
@@ -435,14 +425,11 @@ async fn load_db(
     load_db_records(actor, &mut all_serial_ids, stream_db).await;
 
     if !all_serial_ids.is_empty() {
-        log_error(format!(
+        let msg = log_error(format!(
             "Not all serial_ids were loaded: {:?}",
             all_serial_ids
         ));
-        bail!(
-            "HNSW GENESIS :: Server :: Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        );
+        bail!(msg);
     }
 
     log_info("Preprocessing db".to_string());
@@ -505,18 +492,18 @@ async fn load_db_records<'a>(
 }
 
 // Helper: process error logging.
-fn log_error(msg: String) {
-    logger::log_error("Server", msg);
+fn log_error(msg: String) -> String {
+    genesis::log_error("Server", msg)
 }
 
 // Helper: process logging.
 fn log_info(msg: String) {
-    logger::log_info("Server", msg);
+    genesis::log_info("Server", msg);
 }
 
 // Helper: process warning logging.
 fn log_warn(msg: String) {
-    logger::log_warn("Server", msg);
+    genesis::log_warn("Server", msg);
 }
 
 // TODO : implement db sync genesis
@@ -561,18 +548,23 @@ async fn validate_consistency_of_stores(
     max_indexation_height: IrisSerialId,
     last_indexation_height: IrisSerialId,
 ) -> Result<()> {
+    // Bail if last indexation height exceeds max indexation height
+    if last_indexation_height > max_indexation_height {
+        let msg = log_error(format!(
+            "Last indexation height {} exceeds max indexation height {}",
+            last_indexation_height, max_indexation_height
+        ));
+        bail!(msg);
+    }
+
     // Bail if current Iris store length exceeds maximum constraint - should never occur.
     let store_len = iris_store.count_irises().await?;
     if store_len > config.max_db_size {
-        log_error(format!(
-            "HNSW GENESIS :: Server :: Database size {} exceeds maximum allowed {}",
+        let msg = log_error(format!(
+            "Database size {} exceeds maximum allowed {}",
             store_len, config.max_db_size
         ));
-        bail!(
-            "HNSW GENESIS :: Server :: Database size {} exceeds maximum allowed {}",
-            store_len,
-            config.max_db_size
-        );
+        bail!(msg);
     }
     log_info(format!("Size of the database after init: {}", store_len));
 
@@ -581,27 +573,11 @@ async fn validate_consistency_of_stores(
         .try_into()
         .unwrap_or_else(|_| panic!("Value too large for u32"));
     if max_indexation_height > store_len_u32 {
-        log_error(format!(
-            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
+        let msg = log_error(format!(
+            "Max indexation height {} exceeds database size {}",
             max_indexation_height, store_len_u32
         ));
-        bail!(
-            "HNSW GENESIS :: Server :: Max indexation height {} exceeds database size {}",
-            max_indexation_height,
-            store_len_u32
-        );
-    }
-
-    if last_indexation_height > max_indexation_height {
-        log_error(format!(
-            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
-            last_indexation_height, max_indexation_height
-        ));
-        bail!(
-            "HNSW GENESIS :: Server :: Last indexation height {} exceeds max indexation height {}",
-            last_indexation_height,
-            max_indexation_height
-        );
+        bail!(msg);
     }
 
     Ok(())

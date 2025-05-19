@@ -1,5 +1,6 @@
 use super::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
+use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
 use serde::{Deserialize, Serialize};
@@ -7,28 +8,54 @@ use serde::{Deserialize, Serialize};
 // Component name for logging purposes.
 const COMPONENT: &str = "Fetcher";
 
-/// Fetches height of indexed from store.
+/// Fetch height of indexed from store.
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 ///
 /// # Returns
 ///
-/// Height of indexed Iris's.
+/// Index of lastest iris.
 ///
-pub(crate) async fn fetch_height_of_indexed(
-    _: &IrisPgresStore,
-) -> Result<IrisSerialId, IndexationError> {
-    // TODO: fetch from store.
-    Ok(1)
+pub async fn fetch_height_of_indexed(iris_store: &IrisPgresStore) -> IrisSerialId {
+    let domain = "genesis";
+    let key = "indexed_height";
+    iris_store
+        .get_persistent_state(domain, key)
+        .await
+        .unwrap_or(Some(1))
+        .unwrap_or(1)
+}
+
+/// Set height of indexed from store.
+///
+/// # Arguments
+///
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `new_height` - the height to be stored in the database.
+///
+/// # Returns
+///
+/// Result<()> on success
+///
+pub async fn set_height_of_indexed(
+    iris_store: &IrisPgresStore,
+    new_height: IrisSerialId,
+) -> Result<()> {
+    let domain = "genesis";
+    let key = "indexed_height";
+    let mut tx = iris_store.tx().await?;
+    iris_store
+        .set_persistent_state(&mut tx, domain, key, &new_height)
+        .await
 }
 
 /// Fetch a batch of iris data for indexation.
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `identifiers` - Set of Iris serial identifiers within batch.
 ///
 /// # Returns
@@ -173,7 +200,7 @@ mod tests {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let height = fetch_height_of_indexed(&iris_store).await.unwrap();
+        let height = fetch_height_of_indexed(&iris_store).await;
         assert_eq!(height, 1);
 
         // Unset resources.

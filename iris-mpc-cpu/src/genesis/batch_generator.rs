@@ -1,11 +1,9 @@
 use super::utils::{errors::IndexationError, fetcher, logger};
-use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
-use std::future::Future;
-use std::{iter::Peekable, ops::Range};
+use std::{future::Future, iter::Peekable, ops::Range};
 
 // A batch for upstream indexation.
 pub struct Batch {
@@ -23,8 +21,19 @@ impl Batch {
     }
 }
 
-// Accessors.
+// Methods.
 impl Batch {
+    // Returns Iris serial id of batch's last element.
+    pub fn height_end(&self) -> Option<IrisSerialId> {
+        self.data.first().map(|value| value.id() as IrisSerialId)
+    }
+
+    // Returns Iris serial id of batch's first element.
+    pub fn height_start(&self) -> Option<IrisSerialId> {
+        self.data.last().map(|value| value.id() as IrisSerialId)
+    }
+
+    // Returns batch size.
     pub fn size(&self) -> usize {
         self.data.len()
     }
@@ -69,29 +78,32 @@ impl BatchGenerator {
 impl BatchGenerator {
     pub async fn new_from_services(
         config: &Config,
-        max_indexation_height: IrisSerialId,
+        height_max: IrisSerialId,
         iris_store: &IrisStore,
-        _graph_store: &GraphPg<Aby3Store>,
         s3_client: &S3Client,
     ) -> Result<Self, IndexationError> {
-        // Set exclusions, i.e. identifiers marked as deleted.
+        // Set indexation height ... error if greater than max. height.
+        let height_start = fetcher::fetch_height_of_indexed(iris_store).await;
+        assert!(
+            height_start < height_max,
+            "Indexation height exceeds maximum allowed"
+        );
+
+        // Set indexation range.
+        let range = height_start..(height_max + 1);
+        Self::log_info(format!(
+            "Range of iris-serial-id's to index = {}..{}",
+            range.start, range.end
+        ));
+
+        // Set indexation exclusions, i.e. identifiers marked as deleted.
         let exclusions = fetcher::fetch_iris_deletions(config, s3_client)
             .await
             .unwrap();
-
-        let range_end = max_indexation_height + 1;
-        let range_start = fetcher::fetch_height_of_indexed(iris_store).await?;
-        let range = range_start..range_end + 1;
-
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
+        Self::log_info(format!(
+            "Deletions for exclusion count = {}",
             exclusions.len(),
-        );
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Range of iris-serial-id's to index = {}..{}",
-            range.start,
-            range.end
-        );
+        ));
 
         Ok(Self::new(config.max_batch_size, range, exclusions))
     }

@@ -5,13 +5,17 @@
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An error message.
 ///
-pub fn log_error(component: &str, msg: String) {
+pub fn log_error(component: &str, msg: String) -> String {
+    let msg = format!("HNSW GENESIS :: {} :: {}", component, msg);
+
     // In testing print to stdout.
     #[cfg(test)]
-    println!("ERROR :: HNSW GENESIS :: {} :: {}", component, msg);
+    println!("ERROR :: {}", msg);
 
     // Trace as normal.
-    tracing::error!("HNSW GENESIS :: {} :: {}", component, msg);
+    tracing::error!(msg);
+
+    msg
 }
 
 /// Logs component information messages.
