@@ -39,6 +39,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
+    UniquenessRequest,
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -876,6 +877,11 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert).not())
             .collect_vec();
 
+        let matches_with_skip_persistence = decisions
+            .iter()
+            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
+            .collect_vec();
+
         let match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Normal),
@@ -938,7 +944,7 @@ impl HawkResult {
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
-            matches_with_skip_persistence: matches.clone(), // TODO
+            matches_with_skip_persistence,
             matches,
 
             match_ids,
@@ -1073,11 +1079,16 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let is_uniqueness = request
+        let request_types = request
             .batch
             .request_types
             .iter()
-            .map(|request_type| request_type == UNIQUENESS_MESSAGE_TYPE)
+            .enumerate()
+            .map(|(i, request_type)| {
+                (request_type == UNIQUENESS_MESSAGE_TYPE).then_some(UniquenessRequest {
+                    skip_persistence: request.batch.skip_persistence[i],
+                })
+            })
             .collect_vec();
 
         let do_search = async |orient| -> Result<_> {
@@ -1117,7 +1128,7 @@ impl HawkHandle {
 
             (
                 search_normal,
-                matches_normal.step3(matches_mirror, &is_uniqueness),
+                matches_normal.step3(matches_mirror, &request_types),
             )
         };
 

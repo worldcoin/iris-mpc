@@ -181,15 +181,15 @@ impl Step1 {
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
-    pub fn step3(self, mirror: Self, is_uniqueness: &VecRequests<bool>) -> BatchStep3 {
+    pub fn step3(self, mirror: Self, request_types: &VecRequests<RequestType>) -> BatchStep3 {
         assert_eq!(self.0.len(), mirror.0.len());
-        assert_eq!(self.0.len(), is_uniqueness.len());
+        assert_eq!(self.0.len(), request_types.len());
         BatchStep3(
-            izip!(self.0, mirror.0, is_uniqueness)
-                .map(|(normal, mirror, &is_uniqueness)| Step3 {
+            izip!(self.0, mirror.0, request_types)
+                .map(|(normal, mirror, &request_type)| Step3 {
                     normal,
                     mirror,
-                    is_uniqueness,
+                    request_type,
                 })
                 .collect_vec(),
         )
@@ -199,10 +199,9 @@ impl BatchStep2 {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
     UniqueInsert,
-    UniqueReject,
+    UniqueInsertSkipped,
     ReauthUpdate(VectorId),
-    ReauthReject,
-    ResetCheck,
+    NoMutation,
 }
 use Decision::*;
 
@@ -210,7 +209,7 @@ impl Decision {
     pub fn is_mutation(&self) -> bool {
         match self {
             UniqueInsert | ReauthUpdate(_) => true,
-            UniqueReject | ReauthReject | ResetCheck => false,
+            UniqueInsertSkipped | NoMutation => false,
         }
     }
 }
@@ -249,16 +248,18 @@ impl BatchStep3 {
                             }
                         }
                     });
-                    if request.is_uniqueness {
-                        // Uniqueness request.
-                        if is_match {
-                            UniqueReject
-                        } else {
-                            UniqueInsert
+                    match request.request_type {
+                        Some(UniquenessRequest { skip_persistence }) => {
+                            if is_match {
+                                NoMutation
+                            } else if skip_persistence {
+                                UniqueInsertSkipped
+                            } else {
+                                UniqueInsert
+                            }
                         }
-                    } else {
-                        // Reset Check request.
-                        ResetCheck
+                        // Reset Check request. Nothing to do.
+                        None => NoMutation,
                     }
                 }
 
@@ -268,7 +269,7 @@ impl BatchStep3 {
                     if is_match {
                         ReauthUpdate(reauth_id)
                     } else {
-                        ReauthReject
+                        NoMutation
                     }
                 }
             };
@@ -335,12 +336,19 @@ pub enum MatchId {
 }
 use MatchId::*;
 
+pub type RequestType = Option<UniquenessRequest>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct UniquenessRequest {
+    pub skip_persistence: bool,
+}
+
 /// Combines the results from mirrored checks.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Step3 {
     normal: Step2,
     mirror: Step2,
-    is_uniqueness: bool,
+    request_type: RequestType,
 }
 
 impl Step3 {
