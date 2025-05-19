@@ -157,7 +157,6 @@ pub fn receive_batch_stream(
     s3_client: S3Client,
     config: Config,
     store: Store,
-    mut skip_request_ids: Vec<String>,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
@@ -173,9 +172,6 @@ pub fn receive_batch_stream(
                 Err(_) => break,
             };
 
-            // Skip requests based on the startup sync, only in the first iteration.
-            let skip_request_ids = mem::take(&mut skip_request_ids);
-
             let batch = receive_batch(
                 party_id,
                 &client,
@@ -183,7 +179,6 @@ pub fn receive_batch_stream(
                 &s3_client,
                 &config,
                 &store,
-                &skip_request_ids,
                 shares_encryption_key_pairs.clone(),
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
@@ -213,7 +208,6 @@ async fn receive_batch(
     s3_client: &S3Client,
     config: &Config,
     store: &Store,
-    skip_request_ids: &[String],
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
@@ -325,10 +319,6 @@ async fn receive_batch(
                             })?;
                         metrics::counter!("request.received", "type" => "uniqueness_verification")
                             .increment(1);
-                        store
-                            .mark_requests_deleted(&[uniqueness_request.signup_id.clone()])
-                            .await
-                            .map_err(ReceiveRequestError::FailedToMarkRequestAsDeleted)?;
 
                         client
                             .delete_message()
@@ -337,36 +327,6 @@ async fn receive_batch(
                             .send()
                             .await
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
-
-                        if skip_request_ids.contains(&uniqueness_request.signup_id) {
-                            // Some party (maybe us) already meant to delete this request, so we
-                            // skip it. Ignore this message when calculating the batch size.
-                            msg_counter -= 1;
-                            metrics::counter!("skip.request.deleted.sqs.request").increment(1);
-                            tracing::warn!(
-                                "Skipping request due to it being from synced deleted ids: {}",
-                                uniqueness_request.signup_id
-                            );
-                            let message = UniquenessResult::new_error_result(
-                                config.party_id,
-                                uniqueness_request.signup_id,
-                                ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-                            );
-                            // shares
-                            send_error_results_to_sns(
-                                serde_json::to_string(&message).unwrap(),
-                                &batch_metadata,
-                                sns_client,
-                                config,
-                                uniqueness_error_result_attributes,
-                                UNIQUENESS_MESSAGE_TYPE,
-                            )
-                            .await?;
-                            if config.enable_sync_queues_on_sns_sequence_number {
-                                tracing::error!("Skip requests were used while SQS sync is enabled. This should not happen.");
-                            }
-                            continue;
-                        }
 
                         if let Some(batch_size) = uniqueness_request.batch_size {
                             // Updating the batch size instantly makes it a bit unpredictable, since
@@ -1276,7 +1236,6 @@ async fn server_main(config: Config) -> Result<()> {
 
     let my_state = SyncState {
         db_len: store_len as u64,
-        deleted_request_ids: store.last_deleted_requests(max_sync_lookback).await?,
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
@@ -1561,16 +1520,14 @@ async fn server_main(config: Config) -> Result<()> {
     sync_result.check_common_config()?;
 
     // sync the queues
-    if config.enable_sync_queues_on_sns_sequence_number {
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            &config,
-            &aws_clients.sqs_client,
-            my_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-        )
-        .await?;
-    }
+    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+    delete_messages_until_sequence_num(
+        &config,
+        &aws_clients.sqs_client,
+        my_state.next_sns_sequence_num,
+        max_sqs_sequence_num,
+    )
+    .await?;
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -1766,8 +1723,6 @@ async fn server_main(config: Config) -> Result<()> {
     });
 
     let (mut handle, store) = rx.await??;
-
-    let skip_request_ids = sync_result.deleted_request_ids();
 
     background_tasks.check_tasks();
 
@@ -2359,7 +2314,6 @@ async fn server_main(config: Config) -> Result<()> {
             aws_clients.s3_client.clone(),
             config.clone(),
             store.clone(),
-            skip_request_ids,
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute,
