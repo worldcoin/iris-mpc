@@ -197,14 +197,16 @@ pub enum Decision {
     UniqueReject,
     ReauthUpdate(VectorId),
     ReauthReject,
+    ResetCheckNonMatch,
+    ResetCheckMatch,
 }
 use Decision::*;
 
 impl Decision {
-    pub fn is_match(&self) -> bool {
+    pub fn is_mutation(&self) -> bool {
         match self {
-            UniqueReject | ReauthUpdate(_) => true,
-            UniqueInsert | ReauthReject => false,
+            UniqueInsert | ReauthUpdate(_) => true,
+            UniqueReject | ReauthReject | ResetCheckNonMatch | ResetCheckMatch => false,
         }
     }
 }
@@ -226,7 +228,7 @@ impl BatchStep3 {
             intra_batch: true,
         };
 
-        let mut decisions = Vec::with_capacity(self.0.len());
+        let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
         for request in &self.0 {
             let decision = match request.normal.reauth_result {
@@ -236,10 +238,9 @@ impl BatchStep3 {
                         Search(_) | Luc(_) | Reauth(_) => true,
                         IntraBatch(request_i) => {
                             match decisions.get(request_i) {
-                                // The request we matched with will be inserted, so we are blocked by this intra-batch match.
-                                Some(UniqueInsert) | Some(ReauthUpdate(_)) => true,
-                                // The request we matched with is rejected, so we are not blocked by this intra-batch match.
-                                Some(UniqueReject) | Some(ReauthReject) => false,
+                                // If the request we matched with will be inserted or updated,
+                                // then we are blocked by this intra-batch match.
+                                Some(decision) => decision.is_mutation(),
                                 // The request we matched with is after us in the batch, so we are not blocked by it.
                                 None => false,
                             }

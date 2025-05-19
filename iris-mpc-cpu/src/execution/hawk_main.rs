@@ -49,6 +49,7 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Not,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -158,6 +159,10 @@ pub enum Orientation {
     Normal,
     Mirror,
 }
+
+// TODO: Merge with the same in iris-mpc-gpu.
+/// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
+const NON_MATCH_ID: u32 = u32::MAX;
 
 impl std::fmt::Display for StoreId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -784,21 +789,30 @@ impl HawkResult {
         }
     }
 
+    /// For successful uniqueness insertions, return the inserted index.
+    /// For successful reauths, return the index of the updated target.
+    /// Otherwise, return the index of some match.
+    /// In cases with neither insertions nor matches, return the special u32::MAX.
     fn merged_results(&self) -> Vec<u32> {
-        let match_ids = self.select_indices(Filter {
+        let match_indices = self.select_indices(Filter {
             eyes: Both,
             orient: Both,
             intra_batch: true,
         });
 
-        self.connect_plans.0[0]
-            .iter()
+        match_indices
+            .into_iter()
             .enumerate()
-            .map(|(idx, plan)| match plan {
-                Some(plan) => plan.inserted_vector.index(),
-                None => match_ids[idx][0],
+            .map(|(request_i, match_indices)| {
+                if let Some(inserted_id) = self.inserted_id(request_i) {
+                    inserted_id.index()
+                } else if let Some(&match_index) = match_indices.first() {
+                    match_index
+                } else {
+                    NON_MATCH_ID
+                }
             })
-            .collect()
+            .collect_vec()
     }
 
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
@@ -857,7 +871,10 @@ impl HawkResult {
 
         let decisions = self.match_results.decisions();
 
-        let matches = decisions.iter().map(Decision::is_match).collect_vec();
+        let matches = decisions
+            .iter()
+            .map(|&d| matches!(d, UniqueInsert).not())
+            .collect_vec();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
@@ -1141,9 +1158,8 @@ impl HawkHandle {
         for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
             // Focus on the insertions and keep only the centered irises.
             let insert_plans = izip!(search_results, &decisions)
-                .map(|(search_result, &decision)| match decision {
-                    UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
-                    _ => None,
+                .map(|(search_result, &decision)| {
+                    decision.is_mutation().then(|| search_result.into_center())
                 })
                 .collect_vec();
 
