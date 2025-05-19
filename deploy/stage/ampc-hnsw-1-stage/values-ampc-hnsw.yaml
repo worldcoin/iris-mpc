@@ -93,10 +93,10 @@ env:
     value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "1"
+    value: "8"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "1"
+    value: "16"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
