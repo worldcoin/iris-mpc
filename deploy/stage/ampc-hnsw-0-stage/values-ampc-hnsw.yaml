@@ -84,13 +84,13 @@ env:
         name: application
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "6"
+    value: "64"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "1024"
+    value: "2048"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "1"
