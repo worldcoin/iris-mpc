@@ -82,6 +82,16 @@ pub async fn fetch_iris_batch(
     Ok(data)
 }
 
+// Returns computed name of an S3 bucket for fetching iris deletions.
+pub fn get_s3_bucket_for_iris_deletions(environment: String) -> String {
+    format!("wf-smpcv2-{}-sync-protocol", environment)
+}
+
+// Returns computed name of an S3 key for fetching iris deletions.
+pub fn get_s3_key_for_iris_deletions(environment: String) -> String {
+    format!("{}_deleted_serial_ids.json", environment)
+}
+
 /// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
@@ -93,7 +103,6 @@ pub async fn fetch_iris_batch(
 ///
 /// A set of Iris serial identifiers marked as deleted.
 ///
-#[allow(dead_code)]
 pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
@@ -105,8 +114,8 @@ pub async fn fetch_iris_deletions(
     }
 
     // Compose bucket and key based on environment
-    let s3_bucket = config.get_s3_bucket_for_iris_deletions();
-    let s3_key = config.get_s3_key_for_iris_deletions();
+    let s3_bucket = get_s3_bucket_for_iris_deletions(config.environment.clone());
+    let s3_key = get_s3_key_for_iris_deletions(config.environment.clone());
     logger::log_info(
         COMPONENT,
         format!(
