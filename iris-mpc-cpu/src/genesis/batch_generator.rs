@@ -1,7 +1,6 @@
 use super::utils::{errors::IndexationError, fetcher, logger};
-use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
-use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::{future::Future, iter::Peekable, ops::Range};
 
@@ -24,13 +23,19 @@ impl Batch {
 // Methods.
 impl Batch {
     // Returns Iris serial id of batch's last element.
-    pub fn height_end(&self) -> Option<IrisSerialId> {
-        self.data.first().map(|value| value.id() as IrisSerialId)
+    pub fn height_end(&self) -> IrisSerialId {
+        self.data
+            .first()
+            .map(|value| value.id() as IrisSerialId)
+            .unwrap()
     }
 
     // Returns Iris serial id of batch's first element.
-    pub fn height_start(&self) -> Option<IrisSerialId> {
-        self.data.last().map(|value| value.id() as IrisSerialId)
+    pub fn height_start(&self) -> IrisSerialId {
+        self.data
+            .last()
+            .map(|value| value.id() as IrisSerialId)
+            .unwrap()
     }
 
     // Returns batch size.
@@ -61,9 +66,22 @@ pub struct BatchGenerator {
 impl BatchGenerator {
     pub fn new(
         batch_size: usize,
-        range: Range<IrisSerialId>,
+        height_last: IrisSerialId,
+        height_max: IrisSerialId,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
+        assert!(
+            height_last < height_max,
+            "Indexation height exceeds maximum allowed"
+        );
+
+        // Set indexation range.
+        let range = height_last..(height_max + 1);
+        Self::log_info(format!(
+            "Range of iris-serial-id's to index = {}..{}",
+            range.start, range.end
+        ));
+
         Self {
             batch_size,
             exclusions,
@@ -71,41 +89,6 @@ impl BatchGenerator {
             range: range.clone(),
             range_iter: range.peekable(),
         }
-    }
-}
-
-// Constructor.
-impl BatchGenerator {
-    pub async fn new_from_services(
-        config: &Config,
-        height_max: IrisSerialId,
-        iris_store: &IrisStore,
-        s3_client: &S3Client,
-    ) -> Result<Self, IndexationError> {
-        // Set indexation height ... error if greater than max. height.
-        let height_start = fetcher::fetch_height_of_indexed(iris_store).await;
-        assert!(
-            height_start < height_max,
-            "Indexation height exceeds maximum allowed"
-        );
-
-        // Set indexation range.
-        let range = height_start..(height_max + 1);
-        Self::log_info(format!(
-            "Range of iris-serial-id's to index = {}..{}",
-            range.start, range.end
-        ));
-
-        // Set indexation exclusions, i.e. identifiers marked as deleted.
-        let exclusions = fetcher::fetch_iris_deletions(config, s3_client)
-            .await
-            .unwrap();
-        Self::log_info(format!(
-            "Deletions for exclusion count = {}",
-            exclusions.len(),
-        ));
-
-        Ok(Self::new(config.max_batch_size, range, exclusions))
     }
 }
 
@@ -234,7 +217,8 @@ mod tests {
 
         let instance = BatchGenerator::new(
             10,
-            1..(iris_store.count_irises().await.unwrap() as u32),
+            1,
+            iris_store.count_irises().await.unwrap() as u32,
             Vec::new(),
         );
         assert_eq!(instance.range.end, 100);
@@ -253,7 +237,8 @@ mod tests {
 
         let mut instance = BatchGenerator::new(
             10,
-            1..(iris_store.count_irises().await.unwrap() as u32 + 1),
+            1,
+            iris_store.count_irises().await.unwrap() as u32 + 1,
             Vec::new(),
         );
 

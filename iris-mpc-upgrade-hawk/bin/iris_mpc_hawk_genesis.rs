@@ -17,7 +17,7 @@ struct Args {
 async fn main() -> Result<()> {
     // Set args.
     let args = Args::parse();
-    let max_indexation_height: IrisSerialId = args.max_indexation_height.parse().map_err(|_| {
+    let height_max: IrisSerialId = args.max_indexation_height.parse().map_err(|_| {
         eprintln!("Error: --max-height argument must be a valid u32.");
         eyre::eyre!("--max-height argument must be a valid u32.")
     })?;
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, max_indexation_height).await {
+    match exec_main(config, height_max).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }

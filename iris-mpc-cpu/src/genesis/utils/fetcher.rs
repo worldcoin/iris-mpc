@@ -94,7 +94,7 @@ pub(crate) async fn fetch_iris_batch(
 /// A set of Iris serial identifiers marked as deleted.
 ///
 #[allow(dead_code)]
-pub(crate) async fn fetch_iris_deletions(
+pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {

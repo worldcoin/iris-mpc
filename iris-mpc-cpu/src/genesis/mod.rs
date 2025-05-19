@@ -9,6 +9,6 @@ pub use hawk_job::{Job, JobRequest, JobResult};
 use utils::logger;
 pub use utils::{
     errors::{handle_error, IndexationError},
-    fetcher::{fetch_height_of_indexed, set_height_of_indexed},
+    fetcher::{fetch_height_of_indexed, fetch_iris_deletions, set_height_of_indexed},
     logger::{log_error, log_info, log_warn},
 };

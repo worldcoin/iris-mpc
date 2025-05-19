@@ -41,9 +41,9 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `max_indexation_height` - Maximum height to which to index iris codes.
+/// * `height_max` - Maximum height to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> Result<()> {
+pub async fn exec_main(config: Config, height_max: IrisSerialId) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
 
@@ -57,23 +57,11 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
     // Process: bail if stores are inconsistent.
-    let last_indexation_height = genesis::fetch_height_of_indexed(&iris_store).await;
-    validate_consistency_of_stores(
-        &config,
-        &iris_store,
-        max_indexation_height,
-        last_indexation_height,
-    )
-    .await?;
+    let height_last = genesis::fetch_height_of_indexed(&iris_store).await;
+    validate_consistency_of_stores(&config, &iris_store, height_max, height_last).await?;
 
     // Coordinator: await server to start.
-    let my_state = get_sync_state(
-        &config,
-        &iris_store,
-        max_indexation_height,
-        last_indexation_height,
-    )
-    .await?;
+    let my_state = get_sync_state(&config, &iris_store, height_max, height_last).await?;
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
         &mut background_tasks,
@@ -118,8 +106,8 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     log_info("Executing main loop".to_string());
     exec_main_loop(
         &config,
-        last_indexation_height,
-        max_indexation_height,
+        height_last,
+        height_max,
         &iris_store,
         &graph_store,
         &aws_s3_client,
@@ -136,7 +124,7 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    _height_start: IrisSerialId,
+    height_last: IrisSerialId,
     height_max: IrisSerialId,
     iris_store: &IrisStore,
     _graph_store: &GraphPg<Aby3Store>,
@@ -150,10 +138,18 @@ async fn exec_main_loop(
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info("Hawk handle initialised".to_string());
 
+    // Set indexation exclusions, i.e. identifiers marked as deleted.
+    let exclusions = genesis::fetch_iris_deletions(config, s3_client)
+        .await
+        .unwrap();
+    log_info(format!(
+        "Deletions for exclusion count = {}",
+        exclusions.len(),
+    ));
+
     // Set batch generator.
     let mut batch_generator =
-        genesis::BatchGenerator::new_from_services(config, height_max, iris_store, s3_client)
-            .await?;
+        genesis::BatchGenerator::new(config.max_batch_size, height_last, height_max, exclusions);
     log_info("Batch generator initialised".to_string());
 
     // Set main loop result.
@@ -166,14 +162,13 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let height_start = batch.height_start().unwrap();
-            let height_end = batch.height_end().unwrap();
+            let height_end = batch.height_end();
             log_info(format!(
                 "Indexing new batch: batch-id={} :: batch-size={} :: batch-range={}..{} :: time {:?}",
                 batch.id,
                 batch.size(),
-                height_start,
-                height_end,
+                batch.height_start(),
+                batch.height_end(),
                 now.elapsed(),
             ));
 
@@ -545,14 +540,14 @@ fn validate_config(config: &Config) {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    max_indexation_height: IrisSerialId,
-    last_indexation_height: IrisSerialId,
+    height_max: IrisSerialId,
+    height_last: IrisSerialId,
 ) -> Result<()> {
     // Bail if last indexation height exceeds max indexation height
-    if last_indexation_height > max_indexation_height {
+    if height_last > height_max {
         let msg = log_error(format!(
             "Last indexation height {} exceeds max indexation height {}",
-            last_indexation_height, max_indexation_height
+            height_last, height_max
         ));
         bail!(msg);
     }
@@ -572,10 +567,10 @@ async fn validate_consistency_of_stores(
     let store_len_u32: u32 = store_len
         .try_into()
         .unwrap_or_else(|_| panic!("Value too large for u32"));
-    if max_indexation_height > store_len_u32 {
+    if height_max > store_len_u32 {
         let msg = log_error(format!(
             "Max indexation height {} exceeds database size {}",
-            max_indexation_height, store_len_u32
+            height_max, store_len_u32
         ));
         bail!(msg);
     }
