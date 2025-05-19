@@ -1,4 +1,4 @@
-use crate::services::aws::s3::{create_db_chunks_s3_client, create_s3_client};
+use crate::services::aws::s3::{create_s3_client};
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
@@ -12,7 +12,6 @@ pub struct AwsClients {
     pub sqs_client: SQSClient,
     pub sns_client: SNSClient,
     pub s3_client: S3Client,
-    pub db_chunks_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }
 
@@ -33,14 +32,12 @@ impl AwsClients {
         let force_path_style = config.environment != "prod" && config.environment != "stage";
 
         let s3_client = create_s3_client(&shared_config, force_path_style);
-        let db_chunks_s3_client = create_db_chunks_s3_client(&shared_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
 
         Ok(Self {
             sqs_client,
             sns_client,
             s3_client,
-            db_chunks_s3_client,
             secrets_manager_client,
         })
     }

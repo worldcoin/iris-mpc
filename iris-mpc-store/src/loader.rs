@@ -5,14 +5,15 @@ use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
-use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
-    S3StoredIris, Store,
-};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use aws_config::Region;
 use tokio::sync::mpsc;
+use crate::{fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store, S3StoredIris, Store};
+use crate::s3_importer::create_db_chunks_s3_client;
+
+const DEFAULT_REGION: &str = "eu-north-1";
 
 // Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -63,24 +64,12 @@ async fn load_db_records<'a>(
     );
 }
 
-/// Parameters used to specify behavior of S3 database importer
-pub struct S3LoaderParams<T: ObjectStore> {
-    pub db_chunks_s3_store: T,
-    pub db_chunks_s3_client: S3Client,
-    pub s3_chunks_folder_name: String,
-    pub s3_chunks_bucket_name: String,
-    pub s3_load_parallelism: usize,
-    pub s3_load_max_retries: usize,
-    pub s3_load_initial_backoff_ms: u64,
-}
-
 pub async fn load_db<T: ObjectStore>(
     actor: &mut impl InMemoryStore,
     store: &Store,
     store_len: usize,
     store_load_parallelism: usize,
     config: &Config,
-    s3_loader_params: Option<S3LoaderParams<T>>,
     download_shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
     let total_load_time = Instant::now();
@@ -90,48 +79,54 @@ pub async fn load_db<T: ObjectStore>(
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
     actor.reserve(store_len);
 
-    if config.enable_s3_importer && s3_loader_params.is_some() {
+    if config.enable_s3_importer {
         tracing::info!("S3 importer enabled. Fetching from s3 + db");
+        let region = config
+            .clone()
+            .aws
+            .and_then(|aws| aws.region)
+            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
 
-        let S3LoaderParams {
-            db_chunks_s3_store,
-            db_chunks_s3_client,
-            s3_chunks_folder_name,
-            s3_chunks_bucket_name,
-            s3_load_parallelism,
-            s3_load_max_retries,
-            s3_load_initial_backoff_ms,
-        } = s3_loader_params.unwrap();
+        // Get s3 loading parameters from config
+        let s3_load_parallelism = config.load_chunks_parallelism.clone();
+        let s3_load_max_retries = config.load_chunks_max_retries;
+        let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
+        let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
+        let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
+        let s3_load_safety_overlap_seconds = config.db_load_safety_overlap_seconds;
+        
+        // Construct s3 client and store
+        let region_provider = Region::new(region);
+        let shared_config = aws_config::from_env().region(region_provider).load().await;
+        let s3_client = create_db_chunks_s3_client(&shared_config, true);
+        let s3_store = S3Store::new(s3_client, s3_chunks_bucket_name.clone());
+        let s3_arc = Arc::new(s3_store);
 
         // First fetch last snapshot from S3
         let last_snapshot_details =
-            last_snapshot_timestamp(&db_chunks_s3_store, s3_chunks_folder_name.clone()).await?;
+            last_snapshot_timestamp(s3_arc.as_ref(), s3_chunks_folder_name.clone()).await?;
 
         let min_last_modified_at =
-            last_snapshot_details.timestamp - config.db_load_safety_overlap_seconds;
+            last_snapshot_details.timestamp - s3_load_safety_overlap_seconds;
         tracing::info!(
             "Last snapshot timestamp: {}, min_last_modified_at: {}",
             last_snapshot_details.timestamp,
             min_last_modified_at
         );
 
-        let s3_store = S3Store::new(db_chunks_s3_client, s3_chunks_bucket_name);
-        let s3_arc = Arc::new(s3_store);
-
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
-
         tokio::spawn(async move {
             fetch_and_parse_chunks(
                 s3_arc,
-                s3_load_parallelism,
-                s3_chunks_folder_name,
+                s3_load_parallelism.clone(),
+                s3_chunks_folder_name.clone(),
                 last_snapshot_details,
                 tx.clone(),
                 s3_load_max_retries,
                 s3_load_initial_backoff_ms,
             )
-            .await
-            .expect("Couldn't fetch and parse chunks from s3");
+                .await
+                .expect("Couldn't fetch and parse chunks from s3");
         });
 
         let mut time_waiting_for_stream = Duration::from_secs(0);

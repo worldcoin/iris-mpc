@@ -3,7 +3,6 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
-use crate::services::store::{load_db, S3LoaderParams};
 use aws_sdk_sns::types::MessageAttributeValue;
 
 use eyre::{bail, eyre, Report, Result};
@@ -38,6 +37,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
+use iris_mpc_store::loader::{load_db, S3LoaderParams};
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -582,26 +582,12 @@ async fn load_database(
 
     let store_len = iris_store.count_irises().await?;
 
-    let s3_loader_params = S3LoaderParams {
-        db_chunks_s3_store: S3Store::new(
-            aws_clients.db_chunks_s3_client.clone(),
-            config.db_chunks_bucket_name.clone(),
-        ),
-        db_chunks_s3_client: aws_clients.db_chunks_s3_client.clone(),
-        s3_chunks_folder_name: config.db_chunks_folder_name.clone(),
-        s3_chunks_bucket_name: config.db_chunks_bucket_name.clone(),
-        s3_load_parallelism: config.load_chunks_parallelism,
-        s3_load_max_retries: config.load_chunks_max_retries,
-        s3_load_initial_backoff_ms: config.load_chunks_initial_backoff_ms,
-    };
-
     load_db(
         &mut iris_loader,
         iris_store,
         store_len,
         parallelism,
         config,
-        Some(s3_loader_params),
         download_shutdown_handler,
     )
     .await

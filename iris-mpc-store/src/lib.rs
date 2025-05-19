@@ -1,4 +1,5 @@
 mod s3_importer;
+pub mod loader;
 
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};

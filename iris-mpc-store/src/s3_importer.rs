@@ -3,11 +3,18 @@ use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
+use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
+use aws_sdk_s3::{
+    config::{Builder as S3ConfigBuilder},
+    Client as S3Client,
+};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
-    + mem::size_of::<u32>(); // 75 KB
+    + mem::size_of::<u32>()
+    + mem::size_of::<u16>(); // 75 KB
 
 const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
 
@@ -22,6 +29,7 @@ pub struct S3StoredIris {
     right_code_odd: Vec<u8>,
     right_mask_even: Vec<u8>,
     right_mask_odd: Vec<u8>,
+    version_id: i16,
 }
 
 impl S3StoredIris {
@@ -56,7 +64,15 @@ impl S3StoredIris {
         let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
         let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
         let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
-
+        
+        // Parse `version_id` (i16)
+        let version_id_bytes = extract_slice(bytes, &mut cursor, 2)?;
+        let version_id = u16::from_be_bytes(
+            version_id_bytes
+                .try_into()
+                .map_err(|_| eyre!("Failed to convert version id bytes to i16"))?,
+        ) as i16;
+        
         Ok(S3StoredIris {
             id,
             left_code_even,
@@ -67,6 +83,7 @@ impl S3StoredIris {
             right_code_odd,
             right_mask_even,
             right_mask_odd,
+            version_id,
         })
     }
 
@@ -74,6 +91,10 @@ impl S3StoredIris {
         self.id as usize
     }
 
+    pub fn version_id(&self) -> i16 {
+        self.version_id
+    }
+    
     pub fn vector_id(&self) -> VectorId {
         // TODO: Distinguish vector_id from serial_id.
         VectorId::from_serial_id(self.id as u32)
@@ -114,6 +135,30 @@ impl S3StoredIris {
     pub fn id(&self) -> i64 {
         self.id
     }
+}
+
+/// Creates an S3 client specifically for database chunks with additional
+/// configuration
+pub fn create_db_chunks_s3_client(
+    shared_config: &aws_config::SdkConfig,
+    force_path_style: bool,
+) -> S3Client {
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+    // Increase S3 connect timeouts to 10s
+    let timeout_config = TimeoutConfig::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build();
+
+    let db_chunks_s3_config = S3ConfigBuilder::from(shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+        .retry_config(retry_config)
+        .timeout_config(timeout_config)
+        .force_path_style(force_path_style)
+        .build();
+
+    S3Client::from_conf(db_chunks_s3_config)
 }
 
 #[async_trait]
@@ -388,6 +433,7 @@ mod tests {
                 result.extend_from_slice(&record.left_mask);
                 result.extend_from_slice(&record.right_code);
                 result.extend_from_slice(&record.right_mask);
+                result.extend_from_slice(&(record.version_id as u16).to_be_bytes());
             }
             self.objects.insert(key.to_string(), result);
         }
