@@ -87,10 +87,10 @@ env:
     value: "6"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "1040"
+    value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "6"
+    value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "1"
