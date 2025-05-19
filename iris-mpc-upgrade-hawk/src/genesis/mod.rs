@@ -121,6 +121,21 @@ pub async fn exec_main(config: Config, height_max: IrisSerialId) -> Result<()> {
     Ok(())
 }
 
+/// Main inner loop that performs actual indexation.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `height_max` - Maximum Iris serial id to which to index.
+/// * `height_last` - Last Iris serial id to have been indexed.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
+/// * `s3_client` - AWS S3 client.
+/// * `sync_result` - Result of previous network synchronization check.
+/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
+/// * `shutdown_handler` - Handler coordinating process shutdown.
+/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
+///
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
@@ -219,8 +234,12 @@ async fn exec_main_loop(
     Ok(())
 }
 
-/// Initialize main Hawk actor process for handling query batches using HNSW
-/// approximate k-nearest neighbors graph search.
+/// Factory function to return a configured Hawk actor that manages HNSW graph construction & search.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+///
 async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
     let node_addresses: Vec<String> = config
         .node_hostnames
@@ -252,6 +271,12 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
     HawkActor::from_cli(&hawk_args).await
 }
 
+/// Returns service clients used downstream.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+///
 async fn get_service_clients(
     config: &Config,
 ) -> Result<(S3Client, IrisStore, GraphPg<Aby3Store>), Report> {
@@ -328,13 +353,21 @@ async fn get_service_clients(
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
 /// We leave deleted_request_ids and modifications empty for now, as the genesis protocol can have iris-mpc running at the same time
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `height_max` - Maximum Iris serial id to which to index.
+/// * `height_last` - Last Iris serial id to have been indexed.
+///
 async fn get_sync_state(
     config: &Config,
-    store: &IrisStore,
-    max_indexation_height: IrisSerialId,
-    last_indexation_height: IrisSerialId,
+    iris_store: &IrisStore,
+    height_max: IrisSerialId,
+    height_last: IrisSerialId,
 ) -> Result<Arc<SyncState>> {
-    let db_len = store.count_irises().await? as u64;
+    let db_len = iris_store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
 
     let deleted_request_ids = Vec::new();
@@ -343,8 +376,8 @@ async fn get_sync_state(
     let next_sns_sequence_num = None;
 
     let genesis_config = GenesisConfig {
-        max_indexation_height,
-        last_indexation_height,
+        max_indexation_height: height_max,
+        last_indexation_height: height_last,
     };
 
     Ok(Arc::new(SyncState {
@@ -357,6 +390,15 @@ async fn get_sync_state(
     }))
 }
 
+/// Initializes HNSW graph from data previously persisted to a store.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
+/// * `hawk_actor` - Hawk actor managing graph access & indexation.
+///
 async fn init_graph_from_stores(
     config: &Config,
     iris_store: &IrisStore,
@@ -394,6 +436,11 @@ async fn init_graph_from_stores(
 /// Initializes shutdown handler, which waits for shutdown signals or function
 /// calls and provides a light mechanism for gracefully finishing ongoing query
 /// batches before exiting.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+///
 async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
@@ -403,6 +450,15 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler
 }
 
+/// Loads Aurora db records from the stream into memory
+///
+/// # Arguments
+///
+/// * `actor` - Hawk actor Iris loader.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `store_len` - Count of Iris serial identifiers.
+/// * `store_load_parallelism` - Number of parallel threads to utilise when loading.
+///
 async fn load_db(
     actor: &mut impl InMemoryStore,
     store: &IrisStore,
@@ -439,7 +495,14 @@ async fn load_db(
     eyre::Ok(())
 }
 
-// Helper function to load Aurora db records from the stream into memory
+/// Loads Aurora db records from the stream into memory
+///
+/// # Arguments
+///
+/// * `actor` - Hawk actor Iris loader.
+/// * `all_serial_ids` - Set of Iris serial identifiers.
+/// * `stream_db` - Db stream for pulling data.
+///
 #[allow(clippy::needless_lifetimes)]
 async fn load_db_records<'a>(
     actor: &mut impl InMemoryStore,
@@ -486,17 +549,17 @@ async fn load_db_records<'a>(
     ));
 }
 
-// Helper: process error logging.
+/// Helper: process error logging.
 fn log_error(msg: String) -> String {
     genesis::log_error("Server", msg)
 }
 
-// Helper: process logging.
+/// Helper: process logging.
 fn log_info(msg: String) {
     genesis::log_info("Server", msg);
 }
 
-// Helper: process warning logging.
+/// Helper: process warning logging.
 fn log_warn(msg: String) {
     genesis::log_warn("Server", msg);
 }
@@ -537,6 +600,14 @@ fn validate_config(config: &Config) {
 }
 
 /// Validates consistency of PostGres stores.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `height_max` - Maximum Iris serial id to which to index.
+/// * `height_last` - Last Iris serial id to have been indexed.
+///
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
@@ -564,25 +635,13 @@ async fn validate_consistency_of_stores(
     log_info(format!("Size of the database after init: {}", store_len));
 
     // Bail if max indexation height exceeds length of the database
-    let store_len_u32: u32 = store_len
-        .try_into()
-        .unwrap_or_else(|_| panic!("Value too large for u32"));
-    if height_max > store_len_u32 {
+    if height_max as usize > store_len {
         let msg = log_error(format!(
             "Max indexation height {} exceeds database size {}",
-            height_max, store_len_u32
+            height_max, store_len
         ));
         bail!(msg);
     }
 
     Ok(())
 }
-
-// TODO genesis "num_processed" state flag
-
-// TODO genesis results produced in large batches, update written to temporary
-// table, then update applied to graph
-
-// DB sync possibly should support limited rollback?
-
-// DB loading should use num_processed value to choose number of entries to load
