@@ -227,9 +227,6 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
-    #[serde(default)]
-    pub enable_sync_queues_on_sns_sequence_number: bool,
-
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
@@ -565,7 +562,6 @@ pub struct CommonConfig {
     mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
-    enable_sync_queues_on_sns_sequence_number: bool,
     sqs_sync_long_poll_seconds: i32,
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
@@ -640,7 +636,6 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
@@ -692,7 +687,6 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,

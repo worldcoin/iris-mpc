@@ -81,7 +81,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_others_sync_state(&config, Arc::clone(&my_state)).await?;
     sync_result.check_common_config()?;
 
-    maybe_sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
     sync_dbs_rollback(&config, &sync_result, &iris_store).await?;
 
     if shutdown_handler.is_shutting_down() {
@@ -430,24 +430,21 @@ async fn build_sync_state(
     }))
 }
 
-/// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete stale
-/// SQS messages in requests queue with sequence number older than the most
-/// recent sequence number seen by any MPC party.
-async fn maybe_sync_sqs_queues(
+/// Delete stale SQS messages in requests queue with sequence number older than the most recent
+/// sequence number seen by any MPC party.
+async fn sync_sqs_queues(
     config: &Config,
     sync_result: &SyncResult,
     aws_clients: &AwsClients,
 ) -> Result<()> {
-    if config.enable_sync_queues_on_sns_sequence_number {
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            config,
-            &aws_clients.sqs_client,
-            sync_result.my_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-        )
-        .await?;
-    }
+    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+    delete_messages_until_sequence_num(
+        config,
+        &aws_clients.sqs_client,
+        sync_result.my_state.next_sns_sequence_num,
+        max_sqs_sequence_num,
+    )
+    .await?;
 
     Ok(())
 }

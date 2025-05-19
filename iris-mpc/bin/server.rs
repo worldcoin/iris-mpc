@@ -1520,16 +1520,14 @@ async fn server_main(config: Config) -> Result<()> {
     sync_result.check_common_config()?;
 
     // sync the queues
-    if config.enable_sync_queues_on_sns_sequence_number {
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            &config,
-            &aws_clients.sqs_client,
-            my_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-        )
-        .await?;
-    }
+    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+    delete_messages_until_sequence_num(
+        &config,
+        &aws_clients.sqs_client,
+        my_state.next_sns_sequence_num,
+        max_sqs_sequence_num,
+    )
+    .await?;
 
     if let Some(db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
