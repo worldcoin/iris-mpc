@@ -2,10 +2,7 @@ use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 
 use aes_prng::AesRng;
 use clap::Parser;
-use iris_mpc_common::{
-    iris_db::iris::IrisCode,
-    postgres::{AccessMode, PostgresClient},
-};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     execution::{
         hawk_main::{session_seeded_rng, StoreId, STORE_IDS},
@@ -13,9 +10,8 @@ use iris_mpc_cpu::{
     },
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
-        graph::{graph_store::GraphPg, layered_graph::EntryPoint},
-        vector_store::VectorStoreMut,
-        GraphMem, HnswParams, HnswSearcher,
+        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
+        HnswSearcher,
     },
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{
@@ -24,7 +20,6 @@ use iris_mpc_cpu::{
         plaintext_store::Base64IrisCode,
     },
 };
-use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use rand_chacha::ChaCha8Rng;
 
@@ -42,9 +37,6 @@ const DEFAULT_PARTY_IDX: usize = 0;
 
 /// Number of iris code pairs to generate secret shares for at a time.
 const SECRET_SHARING_BATCH_SIZE: usize = 5000;
-
-/// Number of secret-shared iris code pairs to persist to Postgres per transaction.
-const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
 /// Build an HNSW graph from plaintext NDJSON encoded iris codes, and persist to
 /// Postgres databases. This binary iteratively builds up a graph in stages
@@ -444,100 +436,10 @@ async fn main() -> Result<()> {
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
     let mut dbs = Vec::new();
-
     for (url, schema) in izip!(args.db_urls().iter(), args.db_schemas().iter()).take(N_PARTIES) {
-        let client = PostgresClient::new(url, schema, AccessMode::ReadWrite)
-            .await
-            .unwrap();
-        let store = Store::new(&client).await.unwrap();
-        let graph_pg = GraphPg::new(&client).await.unwrap();
-        dbs.push(DbContext { store, graph_pg });
+        dbs.push(DbContext::new(url, schema).await);
     }
-
     dbs
-}
-
-struct DbContext {
-    /// Postgres store to persist data against
-    store: Store,
-    graph_pg: GraphPg<PlaintextStore>,
-}
-
-impl DbContext {
-    async fn persist_graph_db(&self, graph: GraphMem<PlaintextStore>, side: StoreId) -> Result<()> {
-        let mut graph_tx = self.graph_pg.tx().await.unwrap();
-
-        let GraphMem {
-            entry_point,
-            layers,
-        } = graph;
-
-        if let Some(EntryPoint { point, layer }) = entry_point {
-            let mut graph_ops = graph_tx.with_graph(side);
-            graph_ops.set_entry_point(point, layer).await?;
-        }
-
-        for (lc, layer) in layers.into_iter().enumerate() {
-            for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
-                {
-                    let mut graph_ops = graph_tx.with_graph(side);
-                    graph_ops.set_links(pt, links, lc).await?;
-                }
-
-                if (idx % 1000) == 999 {
-                    graph_tx.tx.commit().await?;
-                    graph_tx = self.graph_pg.tx().await.unwrap();
-                }
-            }
-        }
-
-        graph_tx.tx.commit().await?;
-
-        Ok(())
-    }
-
-    /// Extends iris shares table by inserting irises following the current
-    /// maximum serial id.
-    ///
-    /// Returns tuple `(start, end)` giving the first and last serial ids
-    /// assigned to the inserted shares.
-    async fn persist_vector_shares(
-        &self,
-        shares: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
-    ) -> Result<(usize, usize)> {
-        let mut tx = self.store.tx().await?;
-
-        let start_serial_id = self.store.get_max_serial_id().await.unwrap_or(0) + 1;
-        let end_serial_id = start_serial_id + shares.len() - 1;
-
-        for batch in &shares.iter().enumerate().chunks(SECRET_SHARING_PG_TX_SIZE) {
-            let iris_refs: Vec<_> = batch
-                .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
-                    id: (start_serial_id + idx) as i64,
-                    left_code: &iris_l.code.coefs,
-                    left_mask: &iris_l.mask.coefs,
-                    right_code: &iris_r.code.coefs,
-                    right_mask: &iris_r.mask.coefs,
-                })
-                .collect();
-
-            self.store.insert_irises(&mut tx, &iris_refs).await?;
-            tx.commit().await?;
-            tx = self.store.tx().await?;
-        }
-
-        Ok((start_serial_id, end_serial_id))
-    }
-
-    async fn load_graph_to_mem(
-        &self,
-        side: StoreId,
-    ) -> Result<GraphMem<PlaintextStore>, eyre::Report> {
-        let mut graph_tx = self.graph_pg.tx().await.unwrap();
-        let mut graph_ops = graph_tx.with_graph(side);
-
-        graph_ops.load_to_mem().await
-    }
 }
 
 fn get_max_serial_id(graph: &GraphMem<PlaintextStore>) -> Option<u32> {
