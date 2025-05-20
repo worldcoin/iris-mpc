@@ -41,7 +41,7 @@ impl Batch {
             .unwrap()
     }
 
-    // Return the size of this the batch.
+    /// Return the size of this the batch.
     pub fn size(&self) -> usize {
         self.data.len()
     }
