@@ -1,15 +1,24 @@
 //! this file is used by test utilities
 
+use std::sync::Arc;
+
 use super::{graph_store::GraphPg, layered_graph::EntryPoint};
+use crate::hnsw::{
+    vector_store::{VectorStore, VectorStoreMut},
+    SortedNeighborhood,
+};
 use crate::{
     execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
     protocol::shared_iris::GaloisRingSharedIris,
 };
+use aes_prng::AesRng;
 use bincode;
 use eyre::Result;
+use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
+use rand::SeedableRng;
 use serde::{Deserialize, Serialize};
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
@@ -23,7 +32,7 @@ pub struct DbContext {
     graph_pg: GraphPg<PlaintextStore>,
 }
 
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct BothSides {
     left: GraphMem<PlaintextStore>,
     right: GraphMem<PlaintextStore>,
@@ -119,10 +128,14 @@ impl DbContext {
     }
 
     // loads the graph from the database to memory and then writes it to a file
-    pub async fn write_graph_to_file(&self, path: &std::path::Path) -> Result<()> {
+    pub async fn write_graph_to_file(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
         let left = self.load_graph_to_mem(StoreId::Left).await?;
         let right = self.load_graph_to_mem(StoreId::Right).await?;
         let graph = BothSides { left, right };
+        if dbg {
+            println!("storing graph:");
+            println!("{:#?}", graph);
+        }
         let serialized = bincode::serialize(&graph)?;
         let mut file = File::create(path).await?;
         file.write_all(&serialized).await?;
@@ -131,18 +144,26 @@ impl DbContext {
     }
 
     // loads a graph to memory from a file and then persists it to the database
-    pub async fn load_graph_from_file(&self, path: &std::path::Path) -> Result<()> {
+    pub async fn load_graph_from_file(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
         let data = tokio::fs::read(path).await?;
         let graph: BothSides = bincode::deserialize(&data)?;
+        if dbg {
+            println!("loaded graph:");
+            println!("{:#?}", graph);
+        }
         self.persist_graph_db(graph.left, StoreId::Left).await?;
         self.persist_graph_db(graph.right, StoreId::Right).await?;
         Ok(())
     }
 
-    pub async fn test_load_store(&self, path: &std::path::Path) -> Result<()> {
+    pub async fn test_load_store(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
         let left = self.load_graph_to_mem(StoreId::Left).await?;
         let right = self.load_graph_to_mem(StoreId::Right).await?;
         let stored_graph = BothSides { left, right };
+        if dbg {
+            println!("storing graph:");
+            println!("{:#?}", stored_graph);
+        }
         let serialized = bincode::serialize(&stored_graph)?;
         let mut file = File::create(path).await?;
         file.write_all(&serialized).await?;
@@ -150,9 +171,77 @@ impl DbContext {
 
         let data = tokio::fs::read(path).await?;
         let loaded_graph: BothSides = bincode::deserialize(&data)?;
+        if dbg {
+            println!("loaded graph:");
+            println!("{:#?}", loaded_graph);
+        }
         if stored_graph != loaded_graph {
             return Err(eyre::eyre!("Loaded graph does not match stored graph"));
         }
+        Ok(())
+    }
+
+    // this function was stolen from other test code.
+    pub async fn gen_random(&mut self) -> Result<()> {
+        let rng = &mut AesRng::seed_from_u64(0_u64);
+        let mut vector_store = PlaintextStore::new();
+
+        let vectors = {
+            let mut v = vec![];
+            for raw_query in IrisDB::new_random_rng(10, rng).db {
+                let q = Arc::new(raw_query);
+                v.push(vector_store.insert(&q).await);
+            }
+            v
+        };
+
+        let distances = {
+            let mut d = vec![];
+            let q = vector_store.points[0].clone();
+            for v in vectors.iter() {
+                d.push(vector_store.eval_distance(&q, v).await?);
+            }
+            d
+        };
+
+        let mut tx = self.graph_pg.tx().await.unwrap();
+        let mut graph_ops = tx.with_graph(StoreId::Left);
+
+        let ep = graph_ops.get_entry_point().await?;
+        assert!(ep.is_none());
+
+        let ep2 = EntryPoint {
+            point: vectors[0],
+            layer: ep.map(|e| e.1).unwrap_or_default() + 1,
+        };
+
+        graph_ops.set_entry_point(ep2.point, ep2.layer).await?;
+
+        let (point3, layer3) = graph_ops.get_entry_point().await?.unwrap();
+        let ep3 = EntryPoint {
+            point: point3,
+            layer: layer3,
+        };
+
+        assert_eq!(ep2, ep3);
+
+        for i in 1..4 {
+            let mut links = SortedNeighborhood::new();
+
+            for j in 4..7 {
+                links
+                    .insert(&mut vector_store, vectors[j], distances[j])
+                    .await?;
+            }
+            let links = links.edge_ids();
+
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+
+            let links2 = graph_ops.get_links(&vectors[i], 0).await?;
+            assert_eq!(*links, *links2);
+        }
+
+        tx.tx.commit().await.unwrap();
         Ok(())
     }
 }
