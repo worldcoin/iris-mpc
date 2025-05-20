@@ -93,7 +93,6 @@ pub async fn fetch_iris_batch(
 ///
 /// A set of Iris serial identifiers marked as deleted.
 ///
-#[allow(dead_code)]
 pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,

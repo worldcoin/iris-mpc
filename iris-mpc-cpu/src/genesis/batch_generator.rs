@@ -7,6 +7,9 @@ use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
 use std::{future::Future, iter::Peekable, ops::RangeInclusive};
 
+// Component name for logging purposes.
+const COMPONENT: &str = "Batch-Generator";
+
 // A batch for upstream indexation.
 pub struct Batch {
     // Array of stored Iris's to be indexed.
@@ -81,15 +84,15 @@ impl BatchGenerator {
     ) -> Self {
         let range = start_id..=end_id;
 
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Deletions for exclusion count = {}",
+        Self::log_info(format!(
+            "Deletions for exclusion count = {}",
             exclusions.len(),
-        );
-        tracing::info!(
-            "HNSW GENESIS :: Batch Generator :: Range of serial-id's to index = {}..{}",
+        ));
+        Self::log_info(format!(
+            "Range of serial-id's to index = {}..{}",
             range.start(),
             range.end()
-        );
+        ));
 
         Self {
             batch_size,
@@ -98,6 +101,17 @@ impl BatchGenerator {
             range: range.clone(),
             range_iter: range.peekable(),
         }
+    }
+}
+
+// Accessors.
+impl BatchGenerator {
+    pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
+        self.range.clone()
+    }
+
+    pub fn get_exclusions(&self) -> Vec<IrisSerialId> {
+        self.exclusions.clone()
     }
 }
 
@@ -135,17 +149,9 @@ impl BatchGenerator {
         Some(batch)
     }
 
-    pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
-        self.range.clone()
-    }
-
-    pub fn get_exclusions(&self) -> Vec<IrisSerialId> {
-        self.exclusions.clone()
-    }
-
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info("Batch Generator", msg);
+        logger::log_info(COMPONENT, msg);
     }
 }
 

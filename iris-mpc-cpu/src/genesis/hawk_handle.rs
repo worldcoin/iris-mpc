@@ -13,6 +13,9 @@ use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
 
+// Component name for logging purposes.
+const COMPONENT: &str = "Hawk-Handle";
+
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
 pub struct Handle {
@@ -106,7 +109,7 @@ impl Handle {
         request: &JobRequest,
     ) -> Result<JobResult> {
         Self::log_info(format!(
-            "Genesis Hawk Job :: processing batch-id={}; batch-size={}",
+            "Hawk Job :: processing batch-id={}; batch-size={}",
             request.batch_id,
             request.batch_size()
         ));
@@ -178,12 +181,12 @@ impl Handle {
 
     // Helper: component error logging.
     fn log_error(msg: String) {
-        logger::log_error("Hawk Handle", msg);
+        logger::log_error(COMPONENT, msg);
     }
 
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info("Hawk Handle", msg);
+        logger::log_info(COMPONENT, msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
