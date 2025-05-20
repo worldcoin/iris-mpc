@@ -713,7 +713,11 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
-    fn request_types(&self) -> VecRequests<RequestType> {
+    fn request_types(
+        &self,
+        iris_store: &SharedIrises,
+        orient: Orientation,
+    ) -> VecRequests<RequestType> {
         use RequestType::*;
 
         self.batch
@@ -724,7 +728,25 @@ impl HawkRequest {
                 UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
                     skip_persistence: self.batch.skip_persistence[i],
                 }),
-                REAUTH_MESSAGE_TYPE => Reauth,
+                REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
+                    let request_id = &self.batch.request_ids[i];
+
+                    let or_rule = *self
+                        .batch
+                        .reauth_use_or_rule
+                        .get(request_id)
+                        .unwrap_or(&false);
+
+                    self.batch
+                        .reauth_target_indices
+                        .get(request_id)
+                        .map(|&idx| {
+                            let target_id = iris_store.from_0_indices(&[idx])[0];
+                            (target_id, or_rule)
+                        })
+                } else {
+                    None
+                }),
                 RESET_CHECK_MESSAGE_TYPE => ResetCheck,
                 _ => Unsupported,
             })
@@ -752,34 +774,6 @@ impl HawkRequest {
                 };
 
                 or_rule_ids
-            })
-            .collect_vec()
-    }
-
-    fn reauth_id(
-        &self,
-        iris_store: &SharedIrises,
-        orient: Orientation,
-    ) -> VecRequests<Option<(VectorId, UseOrRule)>> {
-        izip!(&self.batch.request_types, &self.batch.request_ids)
-            .map(|(request_type, request_id)| {
-                if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
-                    let or_rule = *self
-                        .batch
-                        .reauth_use_or_rule
-                        .get(request_id)
-                        .unwrap_or(&false);
-
-                    self.batch
-                        .reauth_target_indices
-                        .get(request_id)
-                        .map(|&idx| {
-                            let target_id = iris_store.from_0_indices(&[idx])[0];
-                            (target_id, or_rule)
-                        })
-                } else {
-                    None
-                }
             })
             .collect_vec()
     }
@@ -1099,9 +1093,12 @@ impl HawkHandle {
 
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
-            let (luc_ids, reauth_ids) = {
+            let (luc_ids, request_types) = {
                 let store = hawk_actor.iris_store[LEFT].read().await;
-                (request.luc_ids(&store), request.reauth_id(&store, orient))
+                (
+                    request.luc_ids(&store),
+                    request.request_types(&store, orient),
+                )
             };
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
@@ -1112,12 +1109,7 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(
-                    &search_results,
-                    &luc_ids,
-                    &reauth_ids,
-                    request.request_types(),
-                );
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(
@@ -1371,6 +1363,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
+                    skip_persistence: vec![false; batch_size],
 
                     ..BatchQuery::default()
                 };

@@ -27,20 +27,13 @@ impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
-        reauth_ids: &VecRequests<Option<(VectorId, UseOrRule)>>,
         request_types: VecRequests<RequestType>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
-            izip!(
-                &plans[LEFT],
-                &plans[RIGHT],
-                luc_ids,
-                reauth_ids,
-                request_types
-            )
-            .map(|(left, right, luc, rea, rt)| Step1::new([left, right], luc.clone(), *rea, rt))
-            .collect_vec(),
+            izip!(&plans[LEFT], &plans[RIGHT], luc_ids, request_types)
+                .map(|(left, right, luc, rt)| Step1::new([left, right], luc.clone(), rt))
+                .collect_vec(),
         )
     }
 
@@ -80,7 +73,6 @@ struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
     luc_ids: Vec<VectorId>,
-    reauth_id: Option<(VectorId, UseOrRule)>,
     request_type: RequestType,
 }
 
@@ -88,7 +80,6 @@ impl Step1 {
     fn new(
         search_results: BothEyes<&VecRots<InsertPlan>>,
         luc_ids: Vec<VectorId>,
-        reauth_id: Option<(VectorId, UseOrRule)>,
         request_type: RequestType,
     ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
@@ -104,7 +95,6 @@ impl Step1 {
 
         let mut step1 = Step1::with_capacity(full_join.len());
         step1.luc_ids = luc_ids;
-        step1.reauth_id = reauth_id;
         step1.request_type = request_type;
 
         for (vector_id, is_match_lr) in full_join {
@@ -127,15 +117,21 @@ impl Step1 {
                 Vec::with_capacity(capacity / 2),
             ],
             luc_ids: Vec::new(),
-            reauth_id: None,
             request_type: RequestType::Unsupported,
+        }
+    }
+
+    fn reauth_id(&self) -> Option<(VectorId, UseOrRule)> {
+        match self.request_type {
+            RequestType::Reauth(r) => r,
+            _ => None,
         }
     }
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
-        let reauth_id = self.reauth_id.map(|(id, _)| id);
+        let reauth_id = self.reauth_id().map(|(id, _)| id);
 
         chain!(anti_join, &self.luc_ids, &reauth_id)
             .cloned()
@@ -158,7 +154,7 @@ impl Step1 {
             })
             .collect_vec();
 
-        let reauth_result = self.reauth_id.map(|(id, or_rule)| {
+        let reauth_result = self.reauth_id().map(|(id, or_rule)| {
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
             (id, or_rule, is_match)
@@ -241,8 +237,8 @@ impl BatchStep3 {
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
         for request in &self.0 {
-            let decision = match request.normal.reauth_result {
-                None => {
+            let decision = match request.normal.request_type {
+                RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
                     let is_match = request.select(filter).any(|id| match id {
                         Search(_) | Luc(_) | Reauth(_) => true,
                         IntraBatch(request_i) => {
@@ -255,35 +251,25 @@ impl BatchStep3 {
                             }
                         }
                     });
-
-                    match request.normal.request_type {
-                        RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
-                            if is_match {
-                                NoMutation
-                            } else if skip_persistence {
-                                UniqueInsertSkipped
-                            } else {
-                                UniqueInsert
-                            }
-                        }
-                        // Reset Check request. Nothing to do.
-                        RequestType::ResetCheck => NoMutation,
-                        // Reauth request. Nothing to do.
-                        RequestType::Reauth => todo!("Reauth request"),
-                        // Unsupported request. Nothing to do.
-                        RequestType::Unsupported => NoMutation,
-                    }
-                }
-
-                // Reauth request.
-                Some((reauth_id, or_rule, matches)) => {
-                    let is_match = filter.reauth_rule(or_rule, matches);
                     if is_match {
-                        ReauthUpdate(reauth_id)
-                    } else {
                         NoMutation
+                    } else if skip_persistence {
+                        UniqueInsertSkipped
+                    } else {
+                        UniqueInsert
                     }
                 }
+                // Reset Check request. Nothing to do.
+                RequestType::ResetCheck => NoMutation,
+                // Reauth request.
+                RequestType::Reauth(_) => match request.normal.reauth_result {
+                    Some((id, or_rule, matches)) if filter.reauth_rule(or_rule, matches) => {
+                        ReauthUpdate(id)
+                    }
+                    _ => NoMutation,
+                },
+                // Unsupported request. Nothing to do.
+                RequestType::Unsupported => NoMutation,
             };
 
             decisions.push(decision);
@@ -357,7 +343,7 @@ pub enum RequestType {
     /// A request to check if a vector is unique without inserting it.
     ResetCheck,
     /// A request to check if a vector matches a target and replace it.
-    Reauth, //(VectorId, UseOrRule),
+    Reauth(Option<(VectorId, UseOrRule)>),
     /// Other features.
     Unsupported,
 }
