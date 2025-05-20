@@ -93,8 +93,7 @@ impl S3StoredIris {
     }
 
     pub fn vector_id(&self) -> VectorId {
-        // TODO: Distinguish vector_id from serial_id.
-        VectorId::from_serial_id(self.id as u32)
+        VectorId::new(self.id as u32, self.version_id)
     }
 
     pub fn left_code_odd(&self) -> &Vec<u8> {
