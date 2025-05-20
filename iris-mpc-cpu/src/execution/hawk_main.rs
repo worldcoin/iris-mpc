@@ -43,6 +43,7 @@ use matching::{
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use reset::{handle_reset_updates, ResetUpdateRequest};
 use scheduler::parallelize;
 use siphasher::sip::SipHasher13;
 use std::{
@@ -68,6 +69,7 @@ pub(crate) mod insert;
 mod intra_batch;
 mod is_match_batch;
 mod matching;
+mod reset;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
@@ -777,6 +779,18 @@ impl HawkRequest {
             })
             .collect_vec()
     }
+
+    fn reset_updates(&self, iris_store: &SharedIrises) -> Vec<ResetUpdateRequest> {
+        izip!(
+            &self.batch.reset_update_indices,
+            &self.batch.reset_update_shares
+        )
+        .map(|(&idx, irises)| ResetUpdateRequest {
+            vector_id: iris_store.from_0_indices(&[idx])[0],
+            irises: GaloisRingSharedIris::from_both_sides(irises),
+        })
+        .collect_vec()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -986,9 +1000,9 @@ impl HawkResult {
             reauth_target_indices: batch.reauth_target_indices,
             reauth_or_rule_used: batch.reauth_use_or_rule,
 
-            reset_update_indices: vec![],     // TODO.
-            reset_update_request_ids: vec![], // TODO.
-            reset_update_shares: vec![],      // TODO.
+            reset_update_indices: batch.reset_update_indices,
+            reset_update_request_ids: batch.reset_update_request_ids,
+            reset_update_shares: batch.reset_update_shares,
 
             modifications: batch.modifications,
 
@@ -1090,6 +1104,8 @@ impl HawkHandle {
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+
+        handle_reset_updates(hawk_actor, &request).await?;
 
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
