@@ -5,9 +5,10 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+use super::Batch;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
@@ -33,13 +34,13 @@ pub struct JobRequest {
     // Incoming batch of iris identifiers for subsequent correlation.
     pub identifiers: Vec<IrisVectorId>,
 
-    // HNSW indexation queries over both eyes.
+    /// HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
 }
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: usize, batch_id: usize, data: &[DbStoredIris]) -> Self {
+    pub fn new(party_id: usize, Batch { data, id: batch_id }: Batch) -> Self {
         Self {
             batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
@@ -84,6 +85,9 @@ impl JobRequest {
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
+    /// Unique sequential identifier for the job
+    pub batch_id: usize,
+
     /// Which identifiers inserted in the job
     pub identifiers: Vec<IrisVectorId>,
 

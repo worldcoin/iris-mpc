@@ -171,6 +171,7 @@ impl Handle {
         let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
+            batch_id: request.batch_id,
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
@@ -206,7 +207,7 @@ impl Handle {
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch.id, &batch.data),
+            request: JobRequest::new(self.party_id, batch),
             return_channel: tx,
         };
 
@@ -219,7 +220,6 @@ impl Handle {
             sent?;
             let result = rx.await??;
 
-            // TODO: Implement job result processing.
             Ok(result)
         }
     }
