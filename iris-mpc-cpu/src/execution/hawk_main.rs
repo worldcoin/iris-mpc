@@ -481,7 +481,11 @@ impl HawkActor {
                         .map(|(_, distance)| distance.clone())
                 })
             });
-
+        tracing::info!(
+            "Keeping {} distances for eye {side} out of {} search results.",
+            distances.clone().count(),
+            search_results.len()
+        );
         self.distances_cache[side].extend(distances);
     }
 
