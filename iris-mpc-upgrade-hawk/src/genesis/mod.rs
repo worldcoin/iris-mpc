@@ -342,6 +342,15 @@ async fn get_service_clients(
 
     /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
     async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+        let iris_schema_name = format!(
+            "{}_{}_{}",
+            config.schema_name, config.environment, config.party_id
+        );
+
+        let hawk_schema_name = format!(
+            "{}{}_{}_{}",
+            config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
+        );
         // Set config.
         let db_config_iris = config
             .database
@@ -355,13 +364,13 @@ async fn get_service_clients(
         // Set postgres clients.
         let pg_client_iris = PostgresClient::new(
             &db_config_iris.url,
-            &config.get_database_schema_name(),
+            iris_schema_name.as_str(),
             AccessMode::ReadOnly,
         )
         .await?;
         let pg_client_graph = PostgresClient::new(
             &db_config_graph.url,
-            &config.get_database_schema_name(),
+            hawk_schema_name.as_str(),
             AccessMode::ReadWrite,
         )
         .await?;
