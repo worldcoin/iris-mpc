@@ -124,13 +124,13 @@ pub async fn compare_threshold_buckets(
         })
         .collect_vec();
 
-    tracing::info!("compare_threshold_buckets diffs: {}", diffs.len());
+    tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
     let msbs = extract_msb_u32_batch(session, &diffs).await?;
     let msbs = VecShare::new_vec(msbs);
-
+    tracing::info!("msbs extracted, now bit_injecting");
     // bit_inject all MSBs into u32 to be able to add them up
     let sums = bit_inject_ot_2round(session, msbs).await?;
-    tracing::info!("bit_inject_ot_2round");
+    tracing::info!("bit_inject done, now summing");
     // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
     let buckets = sums
         .into_iter()

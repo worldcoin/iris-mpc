@@ -473,9 +473,14 @@ impl HawkActor {
         let distances = search_results
             .iter() // All requests.
             .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| plan.links.first()) // Bottom layer.
-            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
-            .map(|(_, distance)| distance.clone());
+            .flat_map(|plan| {
+                plan.links.first().into_iter().flat_map(move |neighbors| {
+                    neighbors
+                        .iter()
+                        .take(plan.match_count)
+                        .map(|(_, distance)| distance.clone())
+                })
+            });
 
         self.distances_cache[side].extend(distances);
     }
@@ -1550,6 +1555,3 @@ mod tests_db {
         Ok(())
     }
 }
-
-// { environment: "dev", results_topic_arn: "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo", processing_timeout_secs: 60, startup_sync_timeout_secs: 300, public_key_base_url: "", shares_bucket_name: "wf-smpcv2-dev-sns-requests", clear_db_before_init: false, init_db_size: 0, max_db_size: 10000, max_batch_size: 15, heartbeat_interval_secs: 2, heartbeat_initial_retries: 10, fake_db_size: 0, return_partial_results: false, disable_persistence: false, shutdown_last_results_sync_timeout_secs: 10, image_name: "", fixed_shared_secrets: false, luc_enabled: false, luc_lookback_records: 0, luc_serial_ids_from_smpc_request: false, match_distances_buffer_size: 128, match_distances_buffer_size_extra_percent: 20, n_buckets: 10, enable_sending_anonymized_stats_message: false, enable_sending_mirror_anonymized_stats_message: false, enable_reauth: false, enable_reset: false, hawk_request_parallelism: 10, hawk_stream_parallelism: 8, hawk_connection_parallelism: 16, hnsw_param_ef_constr: 320, hnsw_param_M: 256, hnsw_param_ef_search: 256, hawk_prng_seed: None, max_deletions_per_batch: 100, mode_of_compute: Cpu, mode_of_deployment: Standard, enable_modifications_sync: false, enable_modifications_replay: false, sqs_sync_long_poll_seconds: 10, hawk_server_deletions_enabled: false, hawk_server_reauths_enabled: false, app_name: "SMPC", cpu_disable_persistence: false, hawk_server_resets_enabled: false, full_scan_side: Left }
-// { environment: "dev", results_topic_arn: "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo", processing_timeout_secs: 60, startup_sync_timeout_secs: 300, public_key_base_url: "", shares_bucket_name: "wf-smpcv2-dev-sns-requests", clear_db_before_init: false, init_db_size: 0, max_db_size: 10000, max_batch_size: 64, heartbeat_interval_secs: 2, heartbeat_initial_retries: 10, fake_db_size: 0, return_partial_results: false, disable_persistence: false, shutdown_last_results_sync_timeout_secs: 10, image_name: "", fixed_shared_secrets: false, luc_enabled: false, luc_lookback_records: 0, luc_serial_ids_from_smpc_request: false, match_distances_buffer_size: 64, match_distances_buffer_size_extra_percent: 20, n_buckets: 10, enable_sending_anonymized_stats_message: false, enable_sending_mirror_anonymized_stats_message: false, enable_reauth: false, enable_reset: false, hawk_request_parallelism: 10, hawk_stream_parallelism: 8, hawk_connection_parallelism: 16, hnsw_param_ef_constr: 320, hnsw_param_M: 256, hnsw_param_ef_search: 256, hawk_prng_seed: None, max_deletions_per_batch: 100, mode_of_compute: Cpu, mode_of_deployment: Standard, enable_modifications_sync: false, enable_modifications_replay: false, sqs_sync_long_poll_seconds: 10, hawk_server_deletions_enabled: false, hawk_server_reauths_enabled: false, app_name: "SMPC", cpu_disable_persistence: false, hawk_server_resets_enabled: false, full_scan_side: Left }
