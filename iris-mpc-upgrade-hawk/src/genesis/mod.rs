@@ -16,7 +16,10 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
-        self, state_accessor::{fetch_iris_deletions, get_last_indexed, set_last_indexed}, sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState}, Batch, BatchGenerator, BatchIterator, JobResult
+        self,
+        state_accessor::{fetch_iris_deletions, get_last_indexed, set_last_indexed},
+        sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
+        Batch, BatchGenerator, BatchIterator, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,

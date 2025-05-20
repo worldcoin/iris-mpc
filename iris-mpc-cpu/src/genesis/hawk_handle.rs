@@ -207,7 +207,7 @@ impl Handle {
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch.id, &batch.data),
+            request: JobRequest::new(self.party_id, batch),
             return_channel: tx,
         };
 

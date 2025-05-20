@@ -5,9 +5,10 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+use super::Batch;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
@@ -39,8 +40,7 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    // TODO convert input to plain Batch type
-    pub fn new(party_id: usize, batch_id: usize, data: &[DbStoredIris]) -> Self {
+    pub fn new(party_id: usize, Batch { data, id: batch_id }: Batch) -> Self {
         Self {
             batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
