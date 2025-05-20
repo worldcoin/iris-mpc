@@ -4,7 +4,6 @@ use aws_sdk_s3::{
     Client as S3Client,
 };
 use eyre::{bail, eyre, Report, Result};
-use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
     helpers::{
@@ -26,9 +25,9 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{DbStoredIris, S3Store, Store as IrisStore};
+use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::Store as IrisStore;
 use std::{
-    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -486,9 +485,16 @@ async fn init_graph_from_stores(
     //       to read into memory
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
-    load_db(&mut iris_loader, iris_store, store_len, parallelism, config, shutdown_handler)
-        .await
-        .expect("Failed to load DB");
+    load_iris_db(
+        &mut iris_loader,
+        iris_store,
+        store_len,
+        parallelism,
+        config,
+        shutdown_handler,
+    )
+    .await
+    .expect("Failed to load DB");
 
     graph_loader.load_graph_store(graph_store).await?;
 

@@ -1,15 +1,12 @@
 use async_trait::async_trait;
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
+use aws_sdk_s3::config::StalledStreamProtectionConfig;
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
-use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder},
-    Client as S3Client,
-};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -64,7 +61,7 @@ impl S3StoredIris {
         let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
         let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
         let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
-        
+
         // Parse `version_id` (i16)
         let version_id_bytes = extract_slice(bytes, &mut cursor, 2)?;
         let version_id = u16::from_be_bytes(
@@ -72,7 +69,7 @@ impl S3StoredIris {
                 .try_into()
                 .map_err(|_| eyre!("Failed to convert version id bytes to i16"))?,
         ) as i16;
-        
+
         Ok(S3StoredIris {
             id,
             left_code_even,
@@ -94,7 +91,7 @@ impl S3StoredIris {
     pub fn version_id(&self) -> i16 {
         self.version_id
     }
-    
+
     pub fn vector_id(&self) -> VectorId {
         // TODO: Distinguish vector_id from serial_id.
         VectorId::from_serial_id(self.id as u32)

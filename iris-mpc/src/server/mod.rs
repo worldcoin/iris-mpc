@@ -30,14 +30,14 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::{S3Store, Store};
+use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::time::timeout;
-use iris_mpc_store::loader::{load_db, S3LoaderParams};
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -91,7 +91,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config,
         &iris_store,
         &graph_store,
-        &aws_clients,
         &shutdown_handler,
         &mut hawk_actor,
     )
@@ -554,7 +553,6 @@ async fn load_database(
     config: &Config,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store>,
-    aws_clients: &AwsClients,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
@@ -582,7 +580,7 @@ async fn load_database(
 
     let store_len = iris_store.count_irises().await?;
 
-    load_db(
+    load_iris_db(
         &mut iris_loader,
         iris_store,
         store_len,

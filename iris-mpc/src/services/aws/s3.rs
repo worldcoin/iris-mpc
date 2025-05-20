@@ -1,9 +1,5 @@
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, StalledStreamProtectionConfig},
-    Client as S3Client,
-};
-use std::time::Duration;
+use aws_config::retry::RetryConfig;
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 
 /// Creates an S3 client with retry configuration
 pub fn create_s3_client(shared_config: &aws_config::SdkConfig, force_path_style: bool) -> S3Client {

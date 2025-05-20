@@ -48,6 +48,7 @@ use iris_mpc_common::{
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
 use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
@@ -72,7 +73,6 @@ use tokio::{
     task::{spawn_blocking, JoinHandle},
     time::timeout,
 };
-use iris_mpc_store::loader::{load_db};
 
 const RNG_SEED_INIT_DB: u64 = 42;
 const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -1677,9 +1677,9 @@ async fn server_main(config: Config) -> Result<()> {
                         parallelism
                     );
                     let download_shutdown_handler = Arc::clone(&download_shutdown_handler);
-                    
+
                     tokio::runtime::Handle::current().block_on(async {
-                        load_db(
+                        load_iris_db(
                             &mut actor,
                             &store,
                             store_len,

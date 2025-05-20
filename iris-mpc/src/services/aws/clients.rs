@@ -1,4 +1,4 @@
-use crate::services::aws::s3::{create_s3_client};
+use crate::services::aws::s3::create_s3_client;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
