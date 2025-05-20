@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 /// Encpasulates common Genesis specific configuration information.  This is a network level type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    pub max_indexation_height: IrisSerialId,
-    pub last_indexation_height: IrisSerialId,
+    pub max_indexation_id: IrisSerialId,
+    pub last_indexed_id: IrisSerialId,
     pub excluded_serial_ids: Vec<IrisSerialId>,
 }
 
@@ -74,16 +74,16 @@ mod tests {
     impl Config {
         pub(crate) fn new_1() -> Self {
             Self {
-                max_indexation_height: 100,
-                last_indexation_height: 50,
+                max_indexation_id: 100,
+                last_indexed_id: 50,
                 excluded_serial_ids: vec![3, 5],
             }
         }
 
         pub(crate) fn new_2() -> Self {
             Self {
-                max_indexation_height: 200,
-                last_indexation_height: 150,
+                max_indexation_id: 200,
+                last_indexed_id: 150,
                 excluded_serial_ids: vec![3, 5, 6],
             }
         }

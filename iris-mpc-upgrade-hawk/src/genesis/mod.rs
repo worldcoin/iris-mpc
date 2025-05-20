@@ -421,8 +421,8 @@ async fn get_sync_state(
     let excluded_serial_ids = excluded_serial_ids.to_vec();
 
     let genesis_config = GenesisConfig {
-        max_indexation_height: max_indexation_id,
-        last_indexation_height: last_indexed_id,
+        max_indexation_id,
+        last_indexed_id,
         excluded_serial_ids,
     };
 
