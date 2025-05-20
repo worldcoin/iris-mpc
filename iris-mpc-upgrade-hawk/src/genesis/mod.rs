@@ -210,7 +210,7 @@ async fn exec_main_loop(
                 log_warn(format!(
                     "HNSW GENESIS: Skipping empty batch: id={} :: irises={} :: time {:?}",
                     batch_id,
-                    data_len,
+                    data.len(),
                     now.elapsed(),
                 ));
                 continue;
