@@ -3,7 +3,7 @@ name: Branch - Hawk Upgrade Build and push docker image
 on:
   push:
     branches:
-      - "POP-2509/create-a-config-for-a-new-schema-for-sync-protocol"
+      - "explicit-ordering-session-checks"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
