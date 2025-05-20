@@ -27,10 +27,10 @@ pub struct Job {
 /// An indexation job request.
 #[derive(Clone, Debug)]
 pub struct JobRequest {
-    /// Unique sequential identifier for the job
-    pub job_id: usize,
+    // Incoming batch identifier.
+    pub batch_id: usize,
 
-    /// Incoming batch of iris identifiers for subsequent correlation.
+    // Incoming batch of iris identifiers for subsequent correlation.
     pub identifiers: Vec<IrisVectorId>,
 
     /// HNSW indexation queries over both eyes.
@@ -39,9 +39,10 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(job_id: usize, party_id: usize, data: &[DbStoredIris]) -> Self {
+    // TODO convert input to plain Batch type
+    pub fn new(party_id: usize, batch_id: usize, data: &[DbStoredIris]) -> Self {
         Self {
-            job_id,
+            batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
             queries: Arc::new([
                 data.iter()
@@ -73,11 +74,19 @@ impl JobRequest {
     }
 }
 
+// Methods.
+impl JobRequest {
+    // Incoming batch size.
+    pub fn batch_size(&self) -> usize {
+        self.identifiers.len()
+    }
+}
+
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
     /// Unique sequential identifier for the job
-    pub job_id: usize,
+    pub batch_id: usize,
 
     /// Which identifiers inserted in the job
     pub identifiers: Vec<IrisVectorId>,

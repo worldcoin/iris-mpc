@@ -170,9 +170,6 @@ env:
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
 
-  - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
-    value: "true"
-
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"
 

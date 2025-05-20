@@ -1,4 +1,5 @@
 use super::{
+    batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
     logger,
 };
@@ -8,7 +9,6 @@ use crate::execution::hawk_main::{
 };
 use eyre::{OptionExt, Result};
 use futures::try_join;
-use iris_mpc_store::DbStoredIris;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -106,8 +106,9 @@ impl Handle {
         request: &JobRequest,
     ) -> Result<JobResult> {
         Self::log_info(format!(
-            "Genesis Hawk job processing ::{} elements within batch",
-            request.identifiers.len()
+            "Genesis Hawk Job :: processing batch-id={}; batch-size={}",
+            request.batch_id,
+            request.batch_size()
         ));
         let _ = Instant::now();
 
@@ -170,7 +171,7 @@ impl Handle {
         let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
-            job_id: request.job_id,
+            batch_id: request.batch_id,
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
@@ -191,7 +192,7 @@ impl Handle {
     ///
     /// # Arguments
     ///
-    /// * `batch` - A vector of `DbStoredIris` records to be processed.
+    /// * `batch` - A set of `DbStoredIris` records to be processed.
     ///
     /// # Returns
     ///
@@ -200,17 +201,13 @@ impl Handle {
     /// # Errors
     ///
     /// This method may return an error if the job queue channel is closed or if the job fails.
-    pub async fn submit_batch(
-        &mut self,
-        batch: &[DbStoredIris],
-        batch_count: usize,
-    ) -> impl Future<Output = Result<JobResult>> {
+    pub async fn submit_batch(&mut self, batch: Batch) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(batch_count, self.party_id, batch),
+            request: JobRequest::new(self.party_id, batch.id, &batch.data),
             return_channel: tx,
         };
 
