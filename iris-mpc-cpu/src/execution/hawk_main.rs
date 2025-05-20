@@ -39,7 +39,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
-    UniquenessRequest,
+    RequestType, UniquenessRequest,
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -713,6 +713,24 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    fn request_types(&self) -> VecRequests<RequestType> {
+        use RequestType::*;
+
+        self.batch
+            .request_types
+            .iter()
+            .enumerate()
+            .map(|(i, request_type)| match request_type.as_str() {
+                UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
+                    skip_persistence: self.batch.skip_persistence[i],
+                }),
+                REAUTH_MESSAGE_TYPE => Reauth,
+                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                _ => Unsupported,
+            })
+            .collect_vec()
+    }
+
     fn queries(&self, orient: Orientation) -> Arc<BothEyes<VecRequests<VecRots<QueryRef>>>> {
         match orient {
             Orientation::Normal => self.queries.clone(),
@@ -1079,18 +1097,6 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        let request_types = request
-            .batch
-            .request_types
-            .iter()
-            .enumerate()
-            .map(|(i, request_type)| {
-                (request_type == UNIQUENESS_MESSAGE_TYPE).then_some(UniquenessRequest {
-                    skip_persistence: request.batch.skip_persistence[i],
-                })
-            })
-            .collect_vec();
-
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, reauth_ids) = {
@@ -1106,7 +1112,12 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, &reauth_ids);
+                let step1 = matching::BatchStep1::new(
+                    &search_results,
+                    &luc_ids,
+                    &reauth_ids,
+                    request.request_types(),
+                );
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(
@@ -1126,10 +1137,7 @@ impl HawkHandle {
             let (search_normal, matches_normal) = do_search(Orientation::Normal).await?;
             let (_, matches_mirror) = do_search(Orientation::Mirror).await?;
 
-            (
-                search_normal,
-                matches_normal.step3(matches_mirror, &request_types),
-            )
+            (search_normal, matches_normal.step3(matches_mirror))
         };
 
         hawk_actor

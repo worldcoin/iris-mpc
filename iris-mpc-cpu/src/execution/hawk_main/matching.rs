@@ -28,12 +28,19 @@ impl BatchStep1 {
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
         reauth_ids: &VecRequests<Option<(VectorId, UseOrRule)>>,
+        request_types: VecRequests<RequestType>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
-            izip!(&plans[LEFT], &plans[RIGHT], luc_ids, reauth_ids)
-                .map(|(left, right, luc, rea)| Step1::new([left, right], luc.clone(), *rea))
-                .collect_vec(),
+            izip!(
+                &plans[LEFT],
+                &plans[RIGHT],
+                luc_ids,
+                reauth_ids,
+                request_types
+            )
+            .map(|(left, right, luc, rea, rt)| Step1::new([left, right], luc.clone(), *rea, rt))
+            .collect_vec(),
         )
     }
 
@@ -74,6 +81,7 @@ struct Step1 {
     anti_join: BothEyes<VecEdges<VectorId>>,
     luc_ids: Vec<VectorId>,
     reauth_id: Option<(VectorId, UseOrRule)>,
+    request_type: RequestType,
 }
 
 impl Step1 {
@@ -81,6 +89,7 @@ impl Step1 {
         search_results: BothEyes<&VecRots<InsertPlan>>,
         luc_ids: Vec<VectorId>,
         reauth_id: Option<(VectorId, UseOrRule)>,
+        request_type: RequestType,
     ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
@@ -96,6 +105,7 @@ impl Step1 {
         let mut step1 = Step1::with_capacity(full_join.len());
         step1.luc_ids = luc_ids;
         step1.reauth_id = reauth_id;
+        step1.request_type = request_type;
 
         for (vector_id, is_match_lr) in full_join {
             match is_match_lr {
@@ -118,6 +128,7 @@ impl Step1 {
             ],
             luc_ids: Vec::new(),
             reauth_id: None,
+            request_type: RequestType::Unsupported,
         }
     }
 
@@ -158,6 +169,7 @@ impl Step1 {
             luc_results,
             reauth_result,
             intra_matches,
+            request_type: self.request_type,
         };
 
         for id in &self.anti_join[LEFT] {
@@ -181,16 +193,11 @@ impl Step1 {
 pub struct BatchStep2(VecRequests<Step2>);
 
 impl BatchStep2 {
-    pub fn step3(self, mirror: Self, request_types: &VecRequests<RequestType>) -> BatchStep3 {
+    pub fn step3(self, mirror: Self) -> BatchStep3 {
         assert_eq!(self.0.len(), mirror.0.len());
-        assert_eq!(self.0.len(), request_types.len());
         BatchStep3(
-            izip!(self.0, mirror.0, request_types)
-                .map(|(normal, mirror, &request_type)| Step3 {
-                    normal,
-                    mirror,
-                    request_type,
-                })
+            izip!(self.0, mirror.0)
+                .map(|(normal, mirror)| Step3 { normal, mirror })
                 .collect_vec(),
         )
     }
@@ -248,8 +255,9 @@ impl BatchStep3 {
                             }
                         }
                     });
-                    match request.request_type {
-                        Some(UniquenessRequest { skip_persistence }) => {
+
+                    match request.normal.request_type {
+                        RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
                             if is_match {
                                 NoMutation
                             } else if skip_persistence {
@@ -259,7 +267,11 @@ impl BatchStep3 {
                             }
                         }
                         // Reset Check request. Nothing to do.
-                        None => NoMutation,
+                        RequestType::ResetCheck => NoMutation,
+                        // Reauth request. Nothing to do.
+                        RequestType::Reauth => todo!("Reauth request"),
+                        // Unsupported request. Nothing to do.
+                        RequestType::Unsupported => NoMutation,
                     }
                 }
 
@@ -295,6 +307,7 @@ struct Step2 {
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
     reauth_result: Option<(VectorId, UseOrRule, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
+    request_type: RequestType,
 }
 
 impl Step2 {
@@ -336,7 +349,18 @@ pub enum MatchId {
 }
 use MatchId::*;
 
-pub type RequestType = Option<UniquenessRequest>;
+// TODO: This could move to `BatchQuery` and maybe use the original types in `smpc_request.rs`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RequestType {
+    /// A request to check if a vector is unique.
+    Uniqueness(UniquenessRequest),
+    /// A request to check if a vector is unique without inserting it.
+    ResetCheck,
+    /// A request to check if a vector matches a target and replace it.
+    Reauth, //(VectorId, UseOrRule),
+    /// Other features.
+    Unsupported,
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct UniquenessRequest {
@@ -348,7 +372,6 @@ pub struct UniquenessRequest {
 struct Step3 {
     normal: Step2,
     mirror: Step2,
-    request_type: RequestType,
 }
 
 impl Step3 {
