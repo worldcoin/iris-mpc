@@ -1367,12 +1367,12 @@ pub mod tests {
 
 pub mod test_utils {
     use super::*;
-    const APP_NAME: &str = "SMPC";
+    const SCHEMA_NAME: &str = "SMPC";
     const DOTENV_TEST: &str = ".env.test";
 
     pub fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(Config::load_config(APP_NAME)?
+        Ok(Config::load_config(SCHEMA_NAME)?
             .database
             .ok_or(eyre!("Missing database config"))?
             .url)

@@ -1117,7 +1117,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     let schema_name = format!(
         "{}_{}_{}",
-        config.app_name, config.environment, config.party_id
+        config.schema_name, config.environment, config.party_id
     );
     let db_config = config
         .database

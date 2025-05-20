@@ -8,7 +8,6 @@ use crate::execution::hawk_main::{
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
 };
 use eyre::{OptionExt, Result};
-use futures::try_join;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -43,20 +42,18 @@ impl Handle {
             }
 
             // Validate the common state after processing the requests.
-            try_join!(
-                HawkSession::state_check(&sessions[LEFT][0]),
-                HawkSession::state_check(&sessions[RIGHT][0]),
-            )?;
+            HawkSession::state_check(&sessions[LEFT][0]).await?;
+            HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
             Ok(())
         }
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
+        Self::log_info("Starting State check left".to_string());
+        HawkSession::state_check(&sessions[LEFT][0]).await?;
+        Self::log_info("Starting State check right".to_string());
+        HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
         // Process jobs until health check fails or channel closes.
         let (tx, mut rx) = mpsc::channel::<Job>(1);
@@ -174,6 +171,7 @@ impl Handle {
         let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
+            batch_id: request.batch_id,
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
@@ -209,7 +207,7 @@ impl Handle {
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch.id, &batch.data),
+            request: JobRequest::new(self.party_id, batch),
             return_channel: tx,
         };
 
@@ -222,7 +220,6 @@ impl Handle {
             sent?;
             let result = rx.await??;
 
-            // TODO: Implement job result processing.
             Ok(result)
         }
     }

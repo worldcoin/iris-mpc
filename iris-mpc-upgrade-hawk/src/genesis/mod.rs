@@ -21,7 +21,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator,
+        Batch, BatchGenerator, BatchIterator, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -32,7 +32,10 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::time::timeout;
+use tokio::{
+    sync::mpsc::{self, Sender},
+    time::timeout,
+};
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -45,9 +48,9 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `height_max` - Maximum height to which to index iris codes.
+/// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> Result<()> {
+pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
 
@@ -60,24 +63,18 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     // Process: set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
 
-    let last_indexation_height = get_last_indexed(&iris_store).await?;
+    let last_indexed_id = get_last_indexed(&iris_store).await?;
     let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client).await?;
 
-    // Process: bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        &config,
-        &iris_store,
-        max_indexation_height,
-        last_indexation_height,
-    )
-    .await?;
-
-    // Process: generate my synchronization state for inter-node startup validation
+    // Bail if stores are inconsistent.
+    validate_consistency_of_stores(&config, &iris_store, max_indexation_id, last_indexed_id)
+        .await?;
+    // Await coordination server to start.
     let my_state = get_sync_state(
         &config,
         &iris_store,
-        max_indexation_height,
-        last_indexation_height,
+        max_indexation_id,
+        last_indexed_id,
         &excluded_serial_ids,
     )
     .await?;
@@ -118,6 +115,12 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
 
+    // Start thread for persisting indexing results to DB.
+    let tx_results =
+        start_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
+
+    background_tasks.check_tasks();
+
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
@@ -127,16 +130,14 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
     log_info(String::from("Executing main loop"));
     exec_main_loop(
         &config,
-        last_indexation_height,
-        max_indexation_height,
+        last_indexed_id,
+        max_indexation_id,
         excluded_serial_ids,
         &iris_store,
-        &graph_store,
-        &aws_s3_client,
-        &sync_result,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
+        tx_results,
     )
     .await?;
 
@@ -148,29 +149,26 @@ pub async fn exec_main(config: Config, max_indexation_height: IrisSerialId) -> R
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `height_max` - Maximum Iris serial id to which to index.
-/// * `height_last` - Last Iris serial id to have been indexed.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
 /// * `iris_store` - Iris PostgreSQL store provider.
-/// * `graph_store` - Graph PostgreSQL store provider.
-/// * `s3_client` - AWS S3 client.
-/// * `sync_result` - Result of previous network synchronization check.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
+/// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_loop(
     config: &Config,
-    last_indexation_height: IrisSerialId,
-    max_indexation_height: IrisSerialId,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
     excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
-    _graph_store: &GraphPg<Aby3Store>,
-    _s3_client: &S3Client,
-    _sync_result: &GenesisSyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
+    tx_results: Sender<JobResult>,
 ) -> Result<()> {
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
@@ -178,8 +176,8 @@ async fn exec_main_loop(
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
-        last_indexation_height + 1,
-        max_indexation_height,
+        last_indexed_id + 1,
+        max_indexation_id,
         config.max_batch_size,
         excluded_serial_ids,
     );
@@ -194,16 +192,31 @@ async fn exec_main_loop(
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
         // Index until generator is exhausted.
-        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
-            let height_end = batch.height_end();
-            log_info(format!(
-                "Indexing new batch: batch-id={} :: batch-size={} :: batch-range={}..{} :: time {:?}",
-                batch.id,
-                batch.size(),
-                batch.height_start(),
-                batch.height_end(),
-                now.elapsed(),
-            ));
+        while let Some(Batch { data, id: batch_id }) = batch_generator.next_batch(iris_store).await? {
+            let data_len = data.len();
+
+            // Filter out any ids which have already been indexed -- there should be none
+            let data: Vec<_> = data.into_iter().filter(|db_iris| db_iris.id() > (last_indexed_id as i64)).collect();
+            if data.len() < data_len {
+                log_warn(format!(
+                    "HNSW GENESIS: Filtered out previously indexed batch elements: id={} :: irises={} :: filtered={} :: time {:?}",
+                    batch_id,
+                    data_len,
+                    data_len - data.len(),
+                    now.elapsed(),
+                ));
+            }
+
+            // Filter out empty batches -- this should not occur
+            if data.is_empty() {
+                log_warn(format!(
+                    "HNSW GENESIS: Skipping empty batch: id={} :: irises={} :: time {:?}",
+                    batch_id,
+                    data.len(),
+                    now.elapsed(),
+                ));
+                continue;
+            }
 
             // Collate metrics.
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
@@ -211,19 +224,26 @@ async fn exec_main_loop(
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
+            let batch = Batch::new(batch_id, data);
+            log_info(format!(
+                "Indexing new batch: id={} :: batch-size={} :: batch-range=({}..={}) :: time {:?}",
+                batch.id,
+                batch.size(),
+                batch.id_start(),
+                batch.id_end(),
+                now.elapsed(),
+            ));
+
             // Submit batch to Hawk handle for indexation.
-            let result_future = hawk_handle.submit_batch(batch);
-            timeout(processing_timeout, result_future.await)
+            let result_future = hawk_handle.submit_batch(batch).await;
+            let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
                     eyre!(log_error(format!("HawkActor processing timeout: {:?}", err)))
                 })??;
 
-            let mut tx = iris_store.tx().await?;
-            set_last_indexed(&mut tx, &height_end).await?;
-            tx.commit().await?;
-
-            // Housekeeping: increment count of pending batches.
+            // Send results to processing thread to persist to database.
+            tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
         }
 
@@ -321,6 +341,15 @@ async fn get_service_clients(
 
     /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
     async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
+        let iris_schema_name = format!(
+            "{}_{}_{}",
+            config.schema_name, config.environment, config.party_id
+        );
+
+        let hawk_schema_name = format!(
+            "{}{}_{}_{}",
+            config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
+        );
         // Set config.
         let db_config_iris = config
             .database
@@ -334,13 +363,13 @@ async fn get_service_clients(
         // Set postgres clients.
         let pg_client_iris = PostgresClient::new(
             &db_config_iris.url,
-            &config.get_database_schema_name(),
+            iris_schema_name.as_str(),
             AccessMode::ReadOnly,
         )
         .await?;
         let pg_client_graph = PostgresClient::new(
             &db_config_graph.url,
-            &config.get_database_schema_name(),
+            hawk_schema_name.as_str(),
             AccessMode::ReadWrite,
         )
         .await?;
@@ -376,15 +405,15 @@ async fn get_service_clients(
 ///
 /// * `config` - Application configuration instance.
 /// * `store` - Iris PostgreSQL store provider.
-/// * `max_indexation_height` - Maximum Iris serial id to which to index.
-/// * `last_indexation_height` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexation.
 ///
 async fn get_sync_state(
     config: &Config,
     store: &IrisStore,
-    max_indexation_height: IrisSerialId,
-    last_indexation_height: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+    last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
 ) -> Result<GenesisSyncState> {
     let db_len = store.count_irises().await? as u64;
@@ -392,8 +421,8 @@ async fn get_sync_state(
     let excluded_serial_ids = excluded_serial_ids.to_vec();
 
     let genesis_config = GenesisConfig {
-        max_indexation_height,
-        last_indexation_height,
+        max_indexation_height: max_indexation_id,
+        last_indexation_height: last_indexed_id,
         excluded_serial_ids,
     };
 
@@ -463,6 +492,50 @@ async fn init_graph_from_stores(
     graph_loader.load_graph_store(graph_store).await?;
 
     Ok(())
+}
+
+/// Spawns thread responsible for persisting results from batch query processing to database.
+async fn start_results_thread(
+    graph_store: GraphPg<Aby3Store>,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<Sender<JobResult>> {
+    let (tx, mut rx) = mpsc::channel(32); // TODO: pick some buffer value
+    let shutdown_handler_bg = Arc::clone(shutdown_handler);
+    let _result_sender_abort = task_monitor.spawn(async move {
+        while let Some(JobResult {
+            batch_id,
+            identifiers,
+            connect_plans,
+        }) = rx.recv().await
+        {
+            if let (Some(first_id), Some(last_id)) = (identifiers.first(), identifiers.last()) {
+                let mut graph_tx = graph_store.tx().await?;
+                connect_plans.persist(&mut graph_tx).await?;
+                let mut db_tx = graph_tx.tx;
+                set_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
+                db_tx.commit().await?;
+
+                log_info(format!(
+                    "Persisted results to database for batch {}; serial ids between {} and {}",
+                    batch_id,
+                    first_id.serial_id(),
+                    last_id.serial_id(),
+                ));
+            } else {
+                log_warn(format!(
+                    "Received empty job result for batch {} in genesis indexer results thread",
+                    batch_id
+                ));
+            }
+
+            shutdown_handler_bg.decrement_batches_pending_completion();
+        }
+
+        Ok(())
+    });
+
+    Ok(tx)
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function
@@ -644,20 +717,20 @@ fn validate_config(config: &Config) {
 ///
 /// * `config` - Application configuration instance.
 /// * `iris_store` - Iris PostgreSQL store provider.
-/// * `height_max` - Maximum Iris serial id to which to index.
-/// * `height_last` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
 ///
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    height_max: IrisSerialId,
-    height_last: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+    last_indexed_id: IrisSerialId,
 ) -> Result<()> {
-    // Bail if last indexation height exceeds max indexation height
-    if height_last > height_max {
+    // Bail if last indexed id exceeds max indexation id
+    if last_indexed_id > max_indexation_id {
         let msg = log_error(format!(
-            "Last indexation height {} exceeds max indexation height {}",
-            height_last, height_max
+            "Last indexed id {} exceeds max indexation id {}",
+            last_indexed_id, max_indexation_id
         ));
         bail!(msg);
     }
@@ -673,11 +746,12 @@ async fn validate_consistency_of_stores(
     }
     log_info(format!("Size of the database after init: {}", store_len));
 
-    // Bail if max indexation height exceeds length of the database
-    if height_max as usize > store_len {
+    // Bail if max indexation id exceeds max id in the database
+    let max_db_id = iris_store.get_max_serial_id().await?;
+    if max_indexation_id as usize > max_db_id {
         let msg = log_error(format!(
-            "Max indexation height {} exceeds database size {}",
-            height_max, store_len
+            "Max indexation id {} exceeds max database id {}",
+            max_indexation_id, max_db_id
         ));
         bail!(msg);
     }
