@@ -638,7 +638,6 @@ impl ServerActor {
 
             metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
         }
-        self.full_scan_side = self.full_scan_side.other();
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
 
