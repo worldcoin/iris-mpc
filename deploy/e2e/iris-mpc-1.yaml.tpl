@@ -255,9 +255,6 @@ iris-mpc-1:
     - name: SMPC__HEARTBEAT_INITIAL_RETRIES
       value: "1000"
 
-    - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
-      value: "true"
-
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"
 

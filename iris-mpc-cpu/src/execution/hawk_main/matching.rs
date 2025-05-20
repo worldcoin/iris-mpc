@@ -1,6 +1,6 @@
 use super::{
     intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, StoreId,
-    VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    UseOrRule, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
@@ -27,7 +27,7 @@ impl BatchStep1 {
     pub fn new(
         plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
-        reauth_ids: &VecRequests<Option<VectorId>>,
+        reauth_ids: &VecRequests<Option<(VectorId, UseOrRule)>>,
     ) -> Self {
         // Join the results of both eyes into results per eye pair.
         Self(
@@ -73,14 +73,14 @@ struct Step1 {
     inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
     anti_join: BothEyes<VecEdges<VectorId>>,
     luc_ids: Vec<VectorId>,
-    reauth_id: Option<VectorId>,
+    reauth_id: Option<(VectorId, UseOrRule)>,
 }
 
 impl Step1 {
     fn new(
         search_results: BothEyes<&VecRots<InsertPlan>>,
         luc_ids: Vec<VectorId>,
-        reauth_id: Option<VectorId>,
+        reauth_id: Option<(VectorId, UseOrRule)>,
     ) -> Step1 {
         let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
 
@@ -124,8 +124,9 @@ impl Step1 {
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
+        let reauth_id = self.reauth_id.map(|(id, _)| id);
 
-        chain!(anti_join, &self.luc_ids, &self.reauth_id)
+        chain!(anti_join, &self.luc_ids, &reauth_id)
             .cloned()
             .unique()
             .collect_vec()
@@ -146,10 +147,10 @@ impl Step1 {
             })
             .collect_vec();
 
-        let reauth_result = self.reauth_id.map(|id| {
+        let reauth_result = self.reauth_id.map(|(id, or_rule)| {
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
-            (id, is_match)
+            (id, or_rule, is_match)
         });
 
         let mut step2 = Step2 {
@@ -252,8 +253,8 @@ impl BatchStep3 {
                 }
 
                 // Reauth request.
-                Some((reauth_id, [match_left, match_right])) => {
-                    let is_match = filter.reauth_rule(match_left, match_right);
+                Some((reauth_id, or_rule, matches)) => {
+                    let is_match = filter.reauth_rule(or_rule, matches);
                     if is_match {
                         ReauthUpdate(reauth_id)
                     } else {
@@ -281,7 +282,7 @@ impl BatchStep3 {
 struct Step2 {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
-    reauth_result: Option<(VectorId, BothEyes<bool>)>,
+    reauth_result: Option<(VectorId, UseOrRule, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
 }
 
@@ -302,8 +303,8 @@ impl Step2 {
 
         let reauth = self
             .reauth_result
-            .filter(move |(_, [l, r])| filter.reauth_rule(*l, *r))
-            .map(|(id, _)| MatchId::Reauth(id));
+            .filter(move |(_, or_rule, matches)| filter.reauth_rule(*or_rule, *matches))
+            .map(|(id, _, _)| MatchId::Reauth(id));
 
         let intra = self
             .intra_matches
@@ -385,8 +386,15 @@ impl Filter {
         }
     }
 
-    fn reauth_rule(&self, left: bool, right: bool) -> bool {
-        self.search_rule(left, right)
+    /// Decide if this is a successful reauth based on left and right matches.
+    /// Use the OR or AND rule as specified in the reauth request.
+    fn reauth_rule(&self, or_rule: UseOrRule, [left, right]: BothEyes<bool>) -> bool {
+        match self.eyes {
+            Only(Left) => left,
+            Only(Right) => right,
+            Both if or_rule => left || right,
+            Both => left && right,
+        }
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {

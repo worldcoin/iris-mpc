@@ -111,6 +111,9 @@ pub struct Config {
     )]
     pub healthcheck_ports: Vec<String>,
 
+    #[serde(default = "default_http_query_retry_delay_ms")]
+    pub http_query_retry_delay_ms: u64,
+
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
 
@@ -226,9 +229,6 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_modifications_replay: bool,
-
-    #[serde(default)]
-    pub enable_sync_queues_on_sns_sequence_number: bool,
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
@@ -405,6 +405,10 @@ fn default_healthcheck_ports() -> Vec<String> {
     vec!["3000".to_string(); 3]
 }
 
+fn default_http_query_retry_delay_ms() -> u64 {
+    1000
+}
+
 fn default_max_deletions_per_batch() -> usize {
     100
 }
@@ -565,7 +569,6 @@ pub struct CommonConfig {
     mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
-    enable_sync_queues_on_sns_sequence_number: bool,
     sqs_sync_long_poll_seconds: i32,
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
@@ -603,9 +606,10 @@ impl From<Config> for CommonConfig {
             return_partial_results,
             disable_persistence,
             enable_debug_timing: _,
-            node_hostnames: _,    // Could be different for each server
-            service_ports: _,     // Could be different for each server
-            healthcheck_ports: _, // Could be different for each server
+            node_hostnames: _,            // Could be different for each server
+            service_ports: _,             // Could be different for each server
+            healthcheck_ports: _,         // Could be different for each server
+            http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
             image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
@@ -640,7 +644,6 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
@@ -692,7 +695,6 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,

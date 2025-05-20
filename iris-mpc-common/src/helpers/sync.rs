@@ -1,31 +1,21 @@
 use eyre::{ensure, Result};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
-use crate::{config::CommonConfig, IrisSerialId};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GenesisConfig {
-    pub max_indexation_height: IrisSerialId,
-    pub last_indexation_height: IrisSerialId,
-}
+use crate::config::CommonConfig;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
     pub db_len: u64,
-    pub deleted_request_ids: Vec<String>,
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
     pub common_config: CommonConfig,
-    // Genesis Sync State Config
-    pub genesis_config: Option<GenesisConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SyncResult {
     pub my_state: SyncState,
-    all_states: Vec<SyncState>,
+    pub all_states: Vec<SyncState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,44 +117,20 @@ impl SyncResult {
 
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_common_config(&self) -> Result<()> {
-        let config = self.my_state.common_config.clone();
-        for state in &self.all_states {
-            if state.common_config != config {
-                return Err(eyre::eyre!(
-                    "Inconsistent common config!\n
-                have: {:?}\n
-                got: {:?}",
-                    config,
-                    state.common_config
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    /// Check if the common part of the config is the same across all nodes.
-    pub fn check_genesis_config(&self) -> Result<()> {
-        let genesis_config = self.my_state.genesis_config.clone();
-        if genesis_config.is_none() {
-            return Err(eyre::eyre!("Genesis config is None for local state"));
-        }
-        for state in &self.all_states {
+        let my_config = &self.my_state.common_config;
+        for SyncState {
+            common_config: other_config,
+            ..
+        } in self.all_states.iter()
+        {
             ensure!(
-                state.genesis_config == genesis_config,
-                "Inconsistent genesis config"
+                my_config == other_config,
+                "Inconsistent common config!\nhave: {:?}\ngot: {:?}",
+                my_config,
+                other_config
             );
         }
         Ok(())
-    }
-
-    pub fn deleted_request_ids(&self) -> Vec<String> {
-        // Merge request IDs.
-        self.all_states
-            .iter()
-            .flat_map(|s| s.deleted_request_ids.clone())
-            .sorted()
-            .dedup()
-            .collect()
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {
@@ -305,34 +271,22 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 123,
-                deleted_request_ids: vec!["most late".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 456,
-                deleted_request_ids: vec!["x".to_string(), "y".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 789,
-                deleted_request_ids: vec!["most ahead".to_string()],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
-        ];
-        let deleted_request_ids = vec![
-            "most ahead".to_string(),
-            "most late".to_string(),
-            "x".to_string(),
-            "y".to_string(),
         ];
 
         let sync_res = SyncResult {
@@ -340,7 +294,6 @@ mod tests {
             all_states: states.clone(),
         };
         assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
-        assert_eq!(sync_res.deleted_request_ids(), deleted_request_ids);
     }
 
     // Helper function to create a Modification.
@@ -367,11 +320,9 @@ mod tests {
     fn create_sync_state(modifications: Vec<Modification>) -> SyncState {
         SyncState {
             db_len: modifications.len() as u64,
-            deleted_request_ids: vec![],
             modifications,
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
-            genesis_config: None,
         }
     }
 
@@ -700,27 +651,21 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 10,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 30,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: None,
                 common_config: CommonConfig::default(),
-                genesis_config: None,
             },
         ];
 
@@ -730,11 +675,9 @@ mod tests {
         // 2. Test with all None sequence values
         let state_with_none_sequence_num = SyncState {
             db_len: 10,
-            deleted_request_ids: vec![],
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
-            genesis_config: None,
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -838,156 +781,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_check_genesis_config_all_equal() {
-        let genesis_config = Some(GenesisConfig {
-            max_indexation_height: 100,
-            last_indexation_height: 50,
-        });
-
-        let states = vec![
-            SyncState {
-                db_len: 10,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config.clone(),
-            },
-            SyncState {
-                db_len: 20,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config.clone(),
-            },
-            SyncState {
-                db_len: 30,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config.clone(),
-            },
-        ];
-
-        let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_ok());
-    }
-
-    #[test]
-    fn test_check_genesis_config_not_equal() {
-        let genesis_config_1 = Some(GenesisConfig {
-            max_indexation_height: 100,
-            last_indexation_height: 50,
-        });
-        let genesis_config_2 = Some(GenesisConfig {
-            max_indexation_height: 200,
-            last_indexation_height: 150,
-        });
-
-        let states = vec![
-            SyncState {
-                db_len: 10,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config_1.clone(),
-            },
-            SyncState {
-                db_len: 20,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config_2.clone(),
-            },
-            SyncState {
-                db_len: 30,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config_1.clone(),
-            },
-        ];
-
-        let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_err());
-    }
-
-    #[test]
-    fn test_check_genesis_config_one_none() {
-        let genesis_config = Some(GenesisConfig {
-            max_indexation_height: 100,
-            last_indexation_height: 50,
-        });
-        let my_state = SyncState {
-            db_len: 10,
-            deleted_request_ids: vec![],
-            modifications: vec![],
-            next_sns_sequence_num: None,
-            common_config: CommonConfig::default(),
-            genesis_config: genesis_config.clone(),
-        };
-        let states = vec![
-            SyncState {
-                db_len: 10,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: genesis_config.clone(),
-            },
-            SyncState {
-                db_len: 20,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: None,
-            },
-        ];
-
-        let sync_result = SyncResult::new(my_state, states);
-        assert!(sync_result.check_genesis_config().is_err());
-    }
-
-    #[test]
-    fn test_check_genesis_config_all_none() {
-        let states = vec![
-            SyncState {
-                db_len: 10,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: None,
-            },
-            SyncState {
-                db_len: 20,
-                deleted_request_ids: vec![],
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-                genesis_config: None,
-            },
-        ];
-
-        let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_err());
-    }
-
     fn some_state() -> SyncState {
         SyncState {
             db_len: 123,
-            deleted_request_ids: vec!["abc".to_string(), "def".to_string()],
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
-            genesis_config: None,
         }
     }
 
@@ -1005,27 +804,21 @@ mod tests {
         let states = vec![
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config1),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config2),
-                genesis_config: None,
             },
             SyncState {
                 db_len: 20,
-                deleted_request_ids: vec![],
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config3),
-                genesis_config: None,
             },
         ];
 

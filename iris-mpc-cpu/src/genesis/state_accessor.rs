@@ -1,49 +1,76 @@
-use super::{errors::IndexationError, logger};
+use super::utils::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
+use eyre::Result;
 use iris_mpc_common::{config::Config, IrisSerialId};
-use iris_mpc_store::{DbStoredIris, Store as IrisPgresStore};
+use iris_mpc_store::{DbStoredIris, Store};
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 
 // Component name for logging purposes.
-const COMPONENT: &str = "Fetcher";
+const COMPONENT: &str = "State-Accessor";
 
-/// Fetches height of indexed from store.
+/// Domain for persistent state store entry for last indexed id
+const LAST_INDEXED_DOMAIN: &str = "genesis";
+
+/// Key for persistent state store entry for last indexed id
+const LAST_INDEXED_KEY: &str = "last_indexed";
+
+/// Get the maximum serial id of irises which have already been indexed from the store.
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 ///
 /// # Returns
 ///
-/// Height of indexed Iris's.
+/// Serial id of the last indexed iris, or 0 if no serial id is recorded.
 ///
-pub(crate) async fn fetch_height_of_indexed(
-    _: &IrisPgresStore,
-) -> Result<IrisSerialId, IndexationError> {
-    // TODO: fetch from store.
-    Ok(1)
+pub async fn get_last_indexed(iris_store: &Store) -> Result<IrisSerialId> {
+    let id = iris_store
+        .get_persistent_state(LAST_INDEXED_DOMAIN, LAST_INDEXED_KEY)
+        .await?
+        .unwrap_or(0);
+    Ok(id)
+}
+
+/// Set the maximum serial id of irises which have already been indexed from the store.
+///
+/// # Arguments
+///
+/// * `tx` - PostgreSQL Transaction to use for the operation.
+/// * `new_id` - the id to be stored in the database.
+///
+/// # Returns
+///
+/// Result<()> on success
+///
+pub async fn set_last_indexed(
+    tx: &mut Transaction<'_, Postgres>,
+    new_id: &IrisSerialId,
+) -> Result<()> {
+    Store::set_persistent_state(tx, LAST_INDEXED_DOMAIN, LAST_INDEXED_KEY, new_id).await
 }
 
 /// Fetch a batch of iris data for indexation.
 ///
 /// # Arguments
 ///
-/// * `store` - Iris PostgreSQL store provider.
+/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `identifiers` - Set of Iris serial identifiers within batch.
 ///
 /// # Returns
 ///
 /// Iris data for indexation.
 ///
-pub(crate) async fn fetch_iris_batch(
-    iris_store: &IrisPgresStore,
+pub async fn fetch_iris_batch(
+    iris_store: &Store,
     identifiers: Vec<IrisSerialId>,
 ) -> Result<Vec<DbStoredIris>, IndexationError> {
     logger::log_info(
         COMPONENT,
         format!(
-            "Fetching Iris batch for indexation: irises={:?}",
-            identifiers
+            "Fetching Iris batch for indexation: batch-size={}",
+            identifiers.len()
         ),
     );
 
@@ -67,7 +94,7 @@ pub(crate) async fn fetch_iris_batch(
 /// A set of Iris serial identifiers marked as deleted.
 ///
 #[allow(dead_code)]
-pub(crate) async fn fetch_iris_deletions(
+pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
@@ -119,6 +146,12 @@ pub(crate) async fn fetch_iris_deletions(
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
+    let n_exclusions = s3_object.deleted_serial_ids.len();
+    logger::log_info(
+        COMPONENT,
+        format!("Deletions for exclusion count = {}", n_exclusions,),
+    );
+
     Ok(s3_object.deleted_serial_ids)
 }
 
@@ -127,8 +160,9 @@ pub(crate) async fn fetch_iris_deletions(
 // ------------------------------------------------------------------------
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
-    use super::{fetch_height_of_indexed, fetch_iris_batch};
+    use super::{fetch_iris_batch, get_last_indexed};
     use eyre::Result;
     use iris_mpc_common::{
         postgres::{AccessMode, PostgresClient},
@@ -169,12 +203,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_height_of_indexed() -> Result<()> {
+    async fn test_get_last_indexed() -> Result<()> {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let height = fetch_height_of_indexed(&iris_store).await.unwrap();
-        assert_eq!(height, 1);
+        let last_indexed = get_last_indexed(&iris_store).await?;
+        assert_eq!(last_indexed, 0);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
