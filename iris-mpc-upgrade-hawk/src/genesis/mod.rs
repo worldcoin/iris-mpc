@@ -6,9 +6,7 @@ use aws_sdk_s3::{
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
-    helpers::{
-        inmemory_store::InMemoryStore, shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor,
-    },
+    helpers::{shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor},
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -111,7 +109,14 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
 
     // Process: initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(&config).await?;
-    init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
+    init_graph_from_stores(
+        &config,
+        &iris_store,
+        &graph_store,
+        &mut hawk_actor,
+        Arc::clone(&shutdown_handler),
+    )
+    .await?;
     background_tasks.check_tasks();
 
     // Start thread for persisting indexing results to DB.

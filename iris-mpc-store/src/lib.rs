@@ -221,6 +221,7 @@ impl Store {
         .bind(i64::try_from(id_range.end).expect("id fits into i64"))
         .fetch(&self.pool)
     }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,

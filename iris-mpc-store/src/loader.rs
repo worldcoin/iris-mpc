@@ -16,9 +16,9 @@ use tokio::sync::mpsc;
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
-// Helper function to load Aurora db records from the stream into memory
+/// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
-async fn load_db_records<'a>(
+async fn load_db_records_from_aurora<'a>(
     actor: &mut impl InMemoryStore,
     mut record_counter: i32,
     all_serial_ids: &mut HashSet<i64>,
@@ -65,6 +65,7 @@ async fn load_db_records<'a>(
     );
 }
 
+/// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
 pub async fn load_iris_db(
     actor: &mut impl InMemoryStore,
     store: &Store,
@@ -198,14 +199,14 @@ pub async fn load_iris_db(
             .stream_irises_par(Some(min_last_modified_at), store_load_parallelism)
             .await
             .boxed();
-        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+        load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;
     } else {
-        tracing::info!("S3 importer disabled. Fetching only from db");
+        tracing::info!("S3 importer disabled. Fetching only from Aurora db");
         let stream_db = store
             .stream_irises_par(None, store_load_parallelism)
             .await
             .boxed();
-        load_db_records(actor, record_counter, &mut all_serial_ids, stream_db).await;
+        load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;
     }
 
     if !all_serial_ids.is_empty() {
