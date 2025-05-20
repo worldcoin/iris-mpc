@@ -449,14 +449,12 @@ impl HawkActor {
 
     async fn update_anon_stats(
         &mut self,
-        session: &HawkSessionRef,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
         search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
     ) -> Result<()> {
-        let mut session = session.write().await;
-
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-
+            let mut session = sessions[side][0].write().await;
             self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
                 .await?;
         }
@@ -1095,8 +1093,9 @@ impl HawkHandle {
         };
 
         hawk_actor
-            .update_anon_stats(&sessions[0][0], &search_results)
+            .update_anon_stats(sessions, &search_results)
             .await?;
+        tracing::info!("Updated anonymized statistics.");
 
         // Insert into the in memory stores.
         let mutations =
@@ -1114,7 +1113,7 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-
+        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
@@ -1140,6 +1139,11 @@ impl HawkHandle {
         // For both eyes.
         for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
             // Focus on the insertions and keep only the centered irises.
+            tracing::info!(
+                "Inserting {} new irises for eye {}",
+                search_results.len(),
+                side
+            );
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| match decision {
                     UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
@@ -1546,3 +1550,6 @@ mod tests_db {
         Ok(())
     }
 }
+
+// { environment: "dev", results_topic_arn: "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo", processing_timeout_secs: 60, startup_sync_timeout_secs: 300, public_key_base_url: "", shares_bucket_name: "wf-smpcv2-dev-sns-requests", clear_db_before_init: false, init_db_size: 0, max_db_size: 10000, max_batch_size: 15, heartbeat_interval_secs: 2, heartbeat_initial_retries: 10, fake_db_size: 0, return_partial_results: false, disable_persistence: false, shutdown_last_results_sync_timeout_secs: 10, image_name: "", fixed_shared_secrets: false, luc_enabled: false, luc_lookback_records: 0, luc_serial_ids_from_smpc_request: false, match_distances_buffer_size: 128, match_distances_buffer_size_extra_percent: 20, n_buckets: 10, enable_sending_anonymized_stats_message: false, enable_sending_mirror_anonymized_stats_message: false, enable_reauth: false, enable_reset: false, hawk_request_parallelism: 10, hawk_stream_parallelism: 8, hawk_connection_parallelism: 16, hnsw_param_ef_constr: 320, hnsw_param_M: 256, hnsw_param_ef_search: 256, hawk_prng_seed: None, max_deletions_per_batch: 100, mode_of_compute: Cpu, mode_of_deployment: Standard, enable_modifications_sync: false, enable_modifications_replay: false, sqs_sync_long_poll_seconds: 10, hawk_server_deletions_enabled: false, hawk_server_reauths_enabled: false, app_name: "SMPC", cpu_disable_persistence: false, hawk_server_resets_enabled: false, full_scan_side: Left }
+// { environment: "dev", results_topic_arn: "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo", processing_timeout_secs: 60, startup_sync_timeout_secs: 300, public_key_base_url: "", shares_bucket_name: "wf-smpcv2-dev-sns-requests", clear_db_before_init: false, init_db_size: 0, max_db_size: 10000, max_batch_size: 64, heartbeat_interval_secs: 2, heartbeat_initial_retries: 10, fake_db_size: 0, return_partial_results: false, disable_persistence: false, shutdown_last_results_sync_timeout_secs: 10, image_name: "", fixed_shared_secrets: false, luc_enabled: false, luc_lookback_records: 0, luc_serial_ids_from_smpc_request: false, match_distances_buffer_size: 64, match_distances_buffer_size_extra_percent: 20, n_buckets: 10, enable_sending_anonymized_stats_message: false, enable_sending_mirror_anonymized_stats_message: false, enable_reauth: false, enable_reset: false, hawk_request_parallelism: 10, hawk_stream_parallelism: 8, hawk_connection_parallelism: 16, hnsw_param_ef_constr: 320, hnsw_param_M: 256, hnsw_param_ef_search: 256, hawk_prng_seed: None, max_deletions_per_batch: 100, mode_of_compute: Cpu, mode_of_deployment: Standard, enable_modifications_sync: false, enable_modifications_replay: false, sqs_sync_long_poll_seconds: 10, hawk_server_deletions_enabled: false, hawk_server_reauths_enabled: false, app_name: "SMPC", cpu_disable_persistence: false, hawk_server_resets_enabled: false, full_scan_side: Left }
