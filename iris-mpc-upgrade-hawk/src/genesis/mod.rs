@@ -227,12 +227,12 @@ async fn exec_main_loop(
                 "Indexing new batch: id={} :: batch-size={} :: batch-range=({}..={}) :: time {:?}",
                 batch.id,
                 batch.size(),
-                batch.height_start(),
-                batch.height_end(),
+                batch.id_start(),
+                batch.id_end(),
                 now.elapsed(),
             ));
 
-            // Process batch with genesis Handle over hawk actor.
+            // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
             let result = timeout(processing_timeout, result_future)
                 .await
@@ -694,8 +694,8 @@ fn validate_config(config: &Config) {
 ///
 /// * `config` - Application configuration instance.
 /// * `iris_store` - Iris PostgreSQL store provider.
-/// * `height_max` - Maximum Iris serial id to which to index.
-/// * `height_last` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
 ///
 async fn validate_consistency_of_stores(
     config: &Config,
@@ -703,10 +703,10 @@ async fn validate_consistency_of_stores(
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
 ) -> Result<()> {
-    // Bail if last indexation height exceeds max indexation height
+    // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {
         let msg = log_error(format!(
-            "Last indexation height {} exceeds max indexation height {}",
+            "Last indexed id {} exceeds max indexation id {}",
             last_indexed_id, max_indexation_id
         ));
         bail!(msg);
@@ -727,8 +727,8 @@ async fn validate_consistency_of_stores(
     let max_db_id = iris_store.get_max_serial_id().await?;
     if max_indexation_id as usize > max_db_id {
         let msg = log_error(format!(
-            "Max indexation height {} exceeds database size {}",
-            max_indexation_id, store_len
+            "Max indexation id {} exceeds max database id {}",
+            max_indexation_id, max_db_id
         ));
         bail!(msg);
     }

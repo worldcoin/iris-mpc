@@ -25,23 +25,23 @@ impl Batch {
 
 // Methods.
 impl Batch {
-    // Returns Iris serial id of batch's last element.
-    pub fn height_end(&self) -> IrisSerialId {
-        self.data
-            .last()
-            .map(|value| value.id() as IrisSerialId)
-            .unwrap()
-    }
-
-    // Returns Iris serial id of batch's first element.
-    pub fn height_start(&self) -> IrisSerialId {
+    /// Return the Iris serial id of batch's first element.
+    pub fn id_start(&self) -> IrisSerialId {
         self.data
             .first()
             .map(|value| value.id() as IrisSerialId)
             .unwrap()
     }
 
-    // Returns batch size.
+    /// Return the Iris serial id of batch's last element.
+    pub fn id_end(&self) -> IrisSerialId {
+        self.data
+            .last()
+            .map(|value| value.id() as IrisSerialId)
+            .unwrap()
+    }
+
+    // Return the size of this the batch.
     pub fn size(&self) -> usize {
         self.data.len()
     }
