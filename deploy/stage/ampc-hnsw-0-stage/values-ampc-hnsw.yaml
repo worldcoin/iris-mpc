@@ -42,10 +42,10 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "320000"
+    value: "3200"
 
   - name: SMPC__N_BUCKETS
-    value: "64"
+    value: "10"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "false"
