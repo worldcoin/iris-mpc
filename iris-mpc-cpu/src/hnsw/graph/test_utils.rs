@@ -53,7 +53,7 @@ impl DbContext {
         graph: GraphMem<PlaintextStore>,
         side: StoreId,
     ) -> Result<()> {
-        let mut graph_tx = self.graph_pg.tx().await.unwrap();
+        let mut graph_tx = self.graph_pg.tx().await?;
 
         let GraphMem {
             entry_point,
@@ -74,7 +74,7 @@ impl DbContext {
 
                 if (idx % 1000) == 999 {
                     graph_tx.tx.commit().await?;
-                    graph_tx = self.graph_pg.tx().await.unwrap();
+                    graph_tx = self.graph_pg.tx().await?;
                 }
             }
         }
@@ -121,7 +121,7 @@ impl DbContext {
         &self,
         side: StoreId,
     ) -> Result<GraphMem<PlaintextStore>, eyre::Report> {
-        let mut graph_tx = self.graph_pg.tx().await.unwrap();
+        let mut graph_tx = self.graph_pg.tx().await?;
         let mut graph_ops = graph_tx.with_graph(side);
 
         graph_ops.load_to_mem().await
@@ -182,7 +182,7 @@ impl DbContext {
     }
 
     // this function was stolen from other test code.
-    pub async fn gen_random(&mut self) -> Result<()> {
+    pub async fn gen_random(&self) -> Result<()> {
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let mut vector_store = PlaintextStore::new();
 
@@ -204,7 +204,7 @@ impl DbContext {
             d
         };
 
-        let mut tx = self.graph_pg.tx().await.unwrap();
+        let mut tx = self.graph_pg.tx().await?;
         let mut graph_ops = tx.with_graph(StoreId::Left);
 
         let ep = graph_ops.get_entry_point().await?;
@@ -241,7 +241,7 @@ impl DbContext {
             assert_eq!(*links, *links2);
         }
 
-        tx.tx.commit().await.unwrap();
+        tx.tx.commit().await?;
         Ok(())
     }
 }

@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
         command,
     } = cli;
 
-    let mut db_context = DbContext::new(&db_url, &schema).await;
+    let db_context = DbContext::new(&db_url, &schema).await;
 
     match command {
         Command::DumpDb => {
