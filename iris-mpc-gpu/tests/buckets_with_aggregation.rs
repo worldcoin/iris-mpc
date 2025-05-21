@@ -1,5 +1,5 @@
 // #[cfg(feature = "gpu_dependent")]
-mod buckets_test {
+mod buckets_with_aggregation_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
         nccl::Id,
