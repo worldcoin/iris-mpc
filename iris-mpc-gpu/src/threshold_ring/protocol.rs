@@ -2672,6 +2672,8 @@ impl Circuits {
         self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
         self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
 
+        let tmp_rotated = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let mut rotated = Buffers::get_buffer_chunk(&tmp_rotated, self.chunk_size);
         for (bucket_idx, a) in thresholds_a.iter().enumerate() {
             // Continue with threshold comparison
             self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
@@ -2679,8 +2681,6 @@ impl Circuits {
 
             // Result is in the first bit of the result buffer
             let result = self.take_result_buffer();
-            let tmp_rotated = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
-            let mut rotated = Buffers::get_buffer_chunk(&tmp_rotated, self.chunk_size);
 
             let mut bits = Vec::with_capacity(self.n_devices);
             for r in result.iter() {
@@ -2712,7 +2712,7 @@ impl Circuits {
             self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
             self.return_result_buffer(result);
         }
-
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, tmp_rotated);
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
