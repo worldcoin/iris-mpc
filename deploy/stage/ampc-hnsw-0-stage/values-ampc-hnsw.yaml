@@ -34,9 +34,21 @@ env:
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
-  
+
   - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "32"
+
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "1240"
+
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "1024"
+
+  - name: SMPC__HAWK_CONNECTION_PARALLELISM
+    value: "8"
+
+  - name: SMPC__HAWK_STREAM_PARALLELISM
+    value: "32"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
@@ -45,7 +57,7 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "64"
+    value: "10000"
 
   - name: SMPC__N_BUCKETS
     value: "10"
