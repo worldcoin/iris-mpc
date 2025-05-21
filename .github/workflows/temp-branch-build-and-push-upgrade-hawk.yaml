@@ -1,9 +1,9 @@
-name: Branch - Hawk Build and push docker image 
+name: Branch - Hawk Upgrade Build and push docker image 
 
 on:
   push:
     branches:
-      - "fix/anon-stats-session"
+      - "explicit-ordering-session-checks"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -11,7 +11,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-cpu
+  IMAGE_NAME: "iris-mpc-genesis"
 
 jobs:
   docker:
@@ -42,8 +42,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.hawk
+          file: Dockerfile.genesis.hawk
+
