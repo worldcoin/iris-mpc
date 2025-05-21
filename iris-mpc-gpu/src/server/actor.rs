@@ -1750,6 +1750,28 @@ impl ServerActor {
                 })
                 .collect::<Vec<_>>();
 
+            fn ids_to_bitvec(ids: &[u64]) -> Vec<u64> {
+                let mut result = vec![0; ids.len().div_ceil(64)];
+                // set first, bit, since it is always 1
+                result[0] = 1;
+                for (idx, (last, new)) in ids.iter().tuple_windows().enumerate() {
+                    if last == new {
+                        continue;
+                    }
+                    result[(idx + 1) / 64] |= 1 << ((idx + 1) % 64);
+                }
+                result
+            }
+            // sort all indices, and create bitmaps from them
+            let indices_bitmaps = indices
+                .into_iter()
+                .map(|mut x| {
+                    x.sort();
+                    x
+                })
+                .map(|sorted| ids_to_bitvec(&sorted))
+                .collect_vec();
+
             let shares = sort_shares_by_indices(
                 &self.device_manager,
                 &resort_indices,
@@ -1772,19 +1794,21 @@ impl ServerActor {
             let match_distances_buffers_masks_view =
                 shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
-            self.phase2_buckets.compare_multiple_thresholds(
-                &match_distances_buffers_codes_view,
-                &match_distances_buffers_masks_view,
-                streams,
-                &(1..=self.n_buckets)
-                    .map(|x: usize| {
-                        Circuits::translate_threshold_a(
-                            MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
-                        ) as u16
-                    })
-                    .collect::<Vec<_>>(),
-                &mut self.buckets,
-            );
+            self.phase2_buckets
+                .compare_multiple_thresholds_while_aggregating_per_query(
+                    &match_distances_buffers_codes_view,
+                    &match_distances_buffers_masks_view,
+                    &indices_bitmaps,
+                    streams,
+                    &(1..=self.n_buckets)
+                        .map(|x: usize| {
+                            Circuits::translate_threshold_a(
+                                MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                            ) as u16
+                        })
+                        .collect::<Vec<_>>(),
+                    &mut self.buckets,
+                );
 
             let buckets = self.phase2_buckets.open_buckets(&self.buckets, streams);
 
