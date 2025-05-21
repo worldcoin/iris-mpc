@@ -2364,7 +2364,7 @@ impl Circuits {
         assert_eq!(self.n_devices, bitvec_inout.len());
         assert!(self.chunk_size <= bitvec_inout[0].len());
         assert_eq!(self.n_devices, mask_in.len());
-        assert!(mask_in[0][mask_idx].len() >= bitvec_inout[0].len());
+        assert_eq!(mask_in[0][mask_idx].len(), bitvec_inout[0].len());
 
         for (idx, (inout, inp)) in bitvec_inout.iter_mut().zip(mask_in.iter()).enumerate() {
             let bitvec =
