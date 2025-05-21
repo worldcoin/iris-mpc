@@ -26,13 +26,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Load a graph from a database to memory, then write it to a file.
-    DumpDb,
+    BackupDb,
     /// (testing only) creates random data, stores it in the database, and then runs dump-db.
-    DumpRandom,
+    StoreRandom,
     /// Load a graph from a file to memory, then write it to a database
-    LoadDb,
-    /// (testing only) verify that Dump/Load works as expected
-    Test,
+    RestoreDb,
+    /// (testing only) verify that Load/Store works as expected
+    VerifyRestore,
+    /// Load a graph from a file and compare it to the graph stored in the database.
+    CompareToDb,
 }
 
 #[tokio::main]
@@ -50,20 +52,27 @@ async fn main() -> Result<()> {
     let db_context = DbContext::new(&db_url, &schema).await;
 
     match command {
-        Command::DumpDb => {
+        Command::BackupDb => {
             db_context.write_graph_to_file(&file, dbg).await?;
         }
-        Command::LoadDb => {
+        Command::RestoreDb => {
             db_context.load_graph_from_file(&file, dbg).await?;
         }
-        Command::Test => {
-            db_context.test_load_store(&file, dbg).await?;
+        Command::VerifyRestore => {
+            db_context.verify_restore(&file, dbg).await?;
         }
-        Command::DumpRandom => {
-            db_context.gen_random().await?;
+        Command::StoreRandom => {
+            db_context.store_random_graph().await?;
             db_context.write_graph_to_file(&file, dbg).await?;
         }
+        Command::CompareToDb => {
+            db_context.compare_to_db(&file, dbg).await?;
+        }
     }
-    println!("Command succeeded");
+    // this command has it own output
+    if !matches!(command, Command::CompareToDb) {
+        println!("Command succeeded");
+    }
+
     Ok(())
 }

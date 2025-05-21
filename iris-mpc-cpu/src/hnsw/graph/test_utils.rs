@@ -3,9 +3,12 @@
 use std::sync::Arc;
 
 use super::{graph_store::GraphPg, layered_graph::EntryPoint};
-use crate::hnsw::{
-    vector_store::{VectorStore, VectorStoreMut},
-    SortedNeighborhood,
+use crate::{
+    execution::hawk_main::BothEyes,
+    hnsw::{
+        vector_store::{VectorStore, VectorStoreMut},
+        SortedNeighborhood,
+    },
 };
 use crate::{
     execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
@@ -19,7 +22,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
-use serde::{Deserialize, Serialize};
+use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 
@@ -30,12 +33,6 @@ pub struct DbContext {
     /// Postgres store to persist data against
     pub store: Store,
     graph_pg: GraphPg<PlaintextStore>,
-}
-
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct BothSides {
-    left: GraphMem<PlaintextStore>,
-    right: GraphMem<PlaintextStore>,
 }
 
 impl DbContext {
@@ -117,6 +114,7 @@ impl DbContext {
         Ok((start_serial_id, end_serial_id))
     }
 
+    /// loads a graph from database to memory
     pub async fn load_graph_to_mem(
         &self,
         side: StoreId,
@@ -127,50 +125,53 @@ impl DbContext {
         graph_ops.load_to_mem().await
     }
 
-    // loads the graph from the database to memory and then writes it to a file
-    pub async fn write_graph_to_file(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
-        let left = self.load_graph_to_mem(StoreId::Left).await?;
-        let right = self.load_graph_to_mem(StoreId::Right).await?;
-        let graph = BothSides { left, right };
+    /// helper function to get a BothEyes<GraphMem>
+    pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextStore>>> {
+        Ok([
+            self.load_graph_to_mem(StoreId::Left).await?,
+            self.load_graph_to_mem(StoreId::Right).await?,
+        ])
+    }
+
+    /// loads a graph from database to memory and then writes it to a file
+    pub async fn write_graph_to_file(&self, path: &Path, dbg: bool) -> Result<()> {
+        let graph = self.get_both_eyes().await?;
         if dbg {
             println!("storing graph:");
             println!("{:#?}", graph);
         }
-        let serialized = bincode::serialize(&graph)?;
-        let mut file = File::create(path).await?;
-        file.write_all(&serialized).await?;
-        file.flush().await?;
-        Ok(())
+        serialize_graph(path, &graph).await
     }
 
-    // loads a graph to memory from a file and then persists it to the database
-    pub async fn load_graph_from_file(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
-        let data = tokio::fs::read(path).await?;
-        let graph: BothSides = bincode::deserialize(&data)?;
+    /// loads a graph to memory from a file and then persists it to the database
+    pub async fn load_graph_from_file(&self, path: &Path, dbg: bool) -> Result<()> {
+        let loaded_graph = deserialize_graph(path).await?;
         if dbg {
             println!("loaded graph:");
-            println!("{:#?}", graph);
+            println!("{:#?}", loaded_graph);
         }
-        self.persist_graph_db(graph.left, StoreId::Left).await?;
-        self.persist_graph_db(graph.right, StoreId::Right).await?;
+        // this order corresponds to the LEFT and RIGHT constants in hawk main.
+        // this code assumes that the stored graph could be very large and that a
+        // clone could increase the program's runtime unnecessarily.
+        let [left, right] = loaded_graph;
+        self.persist_graph_db(left, StoreId::Left).await?;
+        self.persist_graph_db(right, StoreId::Right).await?;
         Ok(())
     }
 
-    pub async fn test_load_store(&self, path: &std::path::Path, dbg: bool) -> Result<()> {
-        let left = self.load_graph_to_mem(StoreId::Left).await?;
-        let right = self.load_graph_to_mem(StoreId::Right).await?;
-        let stored_graph = BothSides { left, right };
+    /// loads the graph from database to memory, writes it to a file,
+    /// loads another graph from the file, and finally verifies that
+    /// the loaded graph equals the stored graph.
+    pub async fn verify_restore(&self, path: &Path, dbg: bool) -> Result<()> {
+        let stored_graph = self.get_both_eyes().await?;
         if dbg {
             println!("storing graph:");
             println!("{:#?}", stored_graph);
         }
-        let serialized = bincode::serialize(&stored_graph)?;
-        let mut file = File::create(path).await?;
-        file.write_all(&serialized).await?;
-        file.flush().await?;
+        serialize_graph(path, &stored_graph).await?;
 
         let data = tokio::fs::read(path).await?;
-        let loaded_graph: BothSides = bincode::deserialize(&data)?;
+        let loaded_graph: BothEyes<GraphMem<PlaintextStore>> = bincode::deserialize(&data)?;
         if dbg {
             println!("loaded graph:");
             println!("{:#?}", loaded_graph);
@@ -181,20 +182,45 @@ impl DbContext {
         Ok(())
     }
 
-    // this function was stolen from other test code.
-    pub async fn gen_random(&self) -> Result<()> {
+    /// load a graph from the file and compare it against the database
+    pub async fn compare_to_db(&self, path: &Path, dbg: bool) -> Result<()> {
+        let db_graph = self.get_both_eyes().await?;
+        if dbg {
+            println!("graph from database:");
+            println!("{:#?}", db_graph);
+        }
+        let loaded_graph = deserialize_graph(path).await?;
+        if dbg {
+            println!("graph from file:");
+            println!("{:#?}", loaded_graph);
+        }
+        if db_graph != loaded_graph {
+            eprintln!("the graphs don't match");
+        } else {
+            println!("the graphs match")
+        }
+        Ok(())
+    }
+
+    /// populates the database with a small graph. This is needed because
+    /// the test database is initially empty and some data is needed to
+    /// test the backup and restore commands.
+    /// The graph isn't actually random - the RNG uses the same seed.
+    pub async fn store_random_graph(&self) -> Result<()> {
+        const NUM_RANDOM_IRIS_CODES: usize = 10;
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let mut vector_store = PlaintextStore::new();
 
         let vectors = {
             let mut v = vec![];
-            for raw_query in IrisDB::new_random_rng(10, rng).db {
+            for raw_query in IrisDB::new_random_rng(NUM_RANDOM_IRIS_CODES, rng).db {
                 let q = Arc::new(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
             v
         };
 
+        // get the distance from point[0] to every other point
         let distances = {
             let mut d = vec![];
             let q = vector_store.points[0].clone();
@@ -210,21 +236,14 @@ impl DbContext {
         let ep = graph_ops.get_entry_point().await?;
         assert!(ep.is_none());
 
+        // set point[0] as the entry point
         let ep2 = EntryPoint {
             point: vectors[0],
             layer: ep.map(|e| e.1).unwrap_or_default() + 1,
         };
-
         graph_ops.set_entry_point(ep2.point, ep2.layer).await?;
 
-        let (point3, layer3) = graph_ops.get_entry_point().await?.unwrap();
-        let ep3 = EntryPoint {
-            point: point3,
-            layer: layer3,
-        };
-
-        assert_eq!(ep2, ep3);
-
+        // create edges between the first 4 vectors and each of the last 4 vectors
         for i in 1..4 {
             let mut links = SortedNeighborhood::new();
 
@@ -234,14 +253,23 @@ impl DbContext {
                     .await?;
             }
             let links = links.edge_ids();
-
             graph_ops.set_links(vectors[i], links.clone(), 0).await?;
-
-            let links2 = graph_ops.get_links(&vectors[i], 0).await?;
-            assert_eq!(*links, *links2);
         }
 
         tx.tx.commit().await?;
         Ok(())
     }
+}
+
+async fn serialize_graph(path: &Path, value: &BothEyes<GraphMem<PlaintextStore>>) -> Result<()> {
+    let serialized = bincode::serialize(value)?;
+    let mut file = File::create(path).await?;
+    file.write_all(&serialized).await?;
+    file.flush().await?;
+    Ok(())
+}
+
+async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextStore>>> {
+    let data = tokio::fs::read(path).await?;
+    Ok(bincode::deserialize(&data)?)
 }
