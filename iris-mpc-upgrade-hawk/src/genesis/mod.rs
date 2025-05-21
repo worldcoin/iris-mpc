@@ -21,7 +21,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        Batch, BatchGenerator, BatchIterator, JobResult,
+        BatchGenerator, BatchIterator, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -53,6 +53,11 @@ const DEFAULT_REGION: &str = "eu-north-1";
 pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
+    log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
+    log_info(format!(
+        "Mode of deployment: {:?}",
+        config.mode_of_deployment
+    ));
 
     // Process: set shutdown handler.
     let shutdown_handler = init_shutdown_handler(&config).await;
@@ -62,14 +67,28 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
 
     // Process: set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
+    log_info(String::from("Service clients instantiated"));
 
+    // Process: set serial identifier of last indexed Iris.
     let last_indexed_id = get_last_indexed(&iris_store).await?;
-    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client).await?;
+    log_info(format!(
+        "Identifier of last Iris to have been indexed = {}",
+        last_indexed_id,
+    ));
 
-    // Bail if stores are inconsistent.
+    // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
+    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client).await?;
+    log_info(format!(
+        "Deletions for exclusion count = {}",
+        excluded_serial_ids.len(),
+    ));
+
+    // Process: Bail if stores are inconsistent.
     validate_consistency_of_stores(&config, &iris_store, max_indexation_id, last_indexed_id)
         .await?;
-    // Await coordination server to start.
+    log_info(String::from("Store consistency checks OK"));
+
+    // Coordinator: Await coordination server to start.
     let my_state = get_sync_state(
         &config,
         &iris_store,
@@ -78,8 +97,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
         &excluded_serial_ids,
     )
     .await?;
-
-    // Coordinator: await server to start.
+    log_info(String::from("Synchronization state initialised"));
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
         &mut background_tasks,
@@ -89,17 +107,20 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     .await;
     background_tasks.check_tasks();
 
-    // Coordinator: await network state = unready.
+    // Coordinator: await network state = UNREADY.
     coordinator::wait_for_others_unready(&config).await?;
+    log_info(String::from("Network status = UNREADY"));
 
-    // Coordinator: await network state = healthy.
+    // Coordinator: await network state = HEALTHY.
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
+    log_info(String::from("Network status = HEALTHY"));
 
-    // Coordinator: await network state = synchronized.
+    // Coordinator: await network state = SYNCHRONIZED.
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
     sync_result.check_genesis_config()?;
+    log_info(String::from("Synchronization checks passed"));
 
     // TODO: What should happen here - see Bryan.
     // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
@@ -114,17 +135,18 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     let mut hawk_actor = get_hawk_actor(&config).await?;
     init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
     background_tasks.check_tasks();
+    log_info(String::from("HNSW graph initialised from store"));
 
-    // Start thread for persisting indexing results to DB.
+    // Process: Start thread for persisting indexing results to DB.
     let tx_results =
         start_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
-
     background_tasks.check_tasks();
 
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
+    log_info(String::from("Network status = READY"));
 
     // Process: execute main loop.
     log_info(String::from("Executing main loop"));
@@ -181,7 +203,7 @@ async fn exec_main_loop(
         config.max_batch_size,
         excluded_serial_ids,
     );
-    log_info(String::from("Batch generator initialised"));
+    log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set main loop result.
     let res: Result<()> = async {
@@ -192,58 +214,27 @@ async fn exec_main_loop(
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
         // Index until generator is exhausted.
-        while let Some(Batch { data, id: batch_id }) = batch_generator.next_batch(iris_store).await? {
-            // TODO: ask Bryan why this is necessary.
-            let data_len = data.len();
-
-            // Filter out any ids which have already been indexed -- there should be none
-            // TODO: ask Bryan why this is necessary as generator will NEVER
-            //       yield a batch with serial identifiers <= last_indexed_id.
-            let data: Vec<_> = data.into_iter().filter(|db_iris| db_iris.id() > (last_indexed_id as i64)).collect();
-            if data.len() < data_len {
-                log_warn(format!(
-                    "Filtered out previously indexed batch elements: id={} :: irises={} :: filtered={} :: time {:?}",
-                    batch_id,
-                    data_len,
-                    data_len - data.len(),
-                    now.elapsed(),
-                ));
-            }
-
-            // Filter out empty batches -- this should not occur
-            // TODO: ask Bryan why this is necessary as generator will NEVER
-            //       yield a None or empty batch.
-            if data.is_empty() {
-                log_warn(format!(
-                    "Skipping empty batch: id={} :: irises={} :: time {:?}",
-                    batch_id,
-                    data.len(),
-                    now.elapsed(),
-                ));
-                continue;
-            }
-
-            // Collate metrics.
-            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
-
-            // Coordinator: check background task processing.
-            task_monitor.check_tasks();
-
-            // TODO: ask Bryan why this is necessary as the tierator yields Batch instances
-            //       and we are unecessarily destructuring and then re-instantiating.
-            let batch = Batch::new(batch_id, data);
+        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            // Signal.
             log_info(format!(
                 "Indexing new batch: {} :: time {:?}",
                 batch,
                 now.elapsed(),
             ));
+            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
+
+            // Coordinator: check background task processing.
+            task_monitor.check_tasks();
 
             // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
-                    eyre!(log_error(format!("HawkActor processing timeout: {:?}", err)))
+                    eyre!(log_error(format!(
+                        "HawkActor processing timeout: {:?}",
+                        err
+                    )))
                 })??;
 
             // Send results to processing thread to persist to database.
@@ -707,12 +698,6 @@ fn validate_config(config: &Config) {
         ));
         panic!("{}", msg);
     }
-
-    log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
-    log_info(format!(
-        "Mode of deployment: {:?}",
-        config.mode_of_deployment
-    ));
 }
 
 /// Validates consistency of PostGres stores.

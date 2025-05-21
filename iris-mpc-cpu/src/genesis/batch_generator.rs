@@ -43,18 +43,18 @@ impl fmt::Display for Batch {
 
 /// Methods.
 impl Batch {
-    // Returns Iris serial id of batch's first element.
-    pub fn id_start(&self) -> IrisSerialId {
-        self.data
-            .first()
-            .map(|value| value.id() as IrisSerialId)
-            .unwrap()
-    }
-
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
         self.data
             .last()
+            .map(|value| value.id() as IrisSerialId)
+            .unwrap()
+    }
+
+    // Returns Iris serial id of batch's first element.
+    pub fn id_start(&self) -> IrisSerialId {
+        self.data
+            .first()
             .map(|value| value.id() as IrisSerialId)
             .unwrap()
     }
@@ -87,27 +87,27 @@ pub struct BatchGenerator {
 impl BatchGenerator {
     /// Create a new `BatchGenerator` with the following properties:
     ///
-    /// - Range of iris serial ids to be produced is those between `start_id` and `end_id`,
-    ///   inclusive.
-    /// - Batches produced are of size `batch_size` until the last batch, which may be smaller.
-    /// - Any serial ids contained in `exclusions` are skipped, and not included in batches.
+    /// # Arguments
+    ///
+    /// * `start_id` - Identifier of first Iris to be indexed.
+    /// * `end_id` - Identifier of last Iris to be indexed.
+    /// * `batch_size` - Maximum size of a batch.
+    /// * `exclusions` - Identifier Iris's not to be indexed.
+    ///
     pub fn new(
         start_id: IrisSerialId,
         end_id: IrisSerialId,
         batch_size: usize,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
-        let range = start_id..=end_id;
+        assert!(
+            end_id > start_id,
+            "Invalid indexation range: {}..{}.",
+            start_id,
+            end_id
+        );
 
-        Self::log_info(format!(
-            "Deletions for exclusion count = {}",
-            exclusions.len(),
-        ));
-        Self::log_info(format!(
-            "Range of serial-id's to index = {}..{}",
-            range.start(),
-            range.end()
-        ));
+        let range = start_id..=end_id;
 
         Self {
             batch_size,
@@ -119,14 +119,18 @@ impl BatchGenerator {
     }
 }
 
-/// Accessors.
-impl BatchGenerator {
-    pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
-        self.range.clone()
-    }
-
-    pub fn get_exclusions(&self) -> Vec<IrisSerialId> {
-        self.exclusions.clone()
+/// Trait: fmt::Display.
+impl fmt::Display for BatchGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "batch-size={}, count-of-exclusions={}, range-of-iris-ids=({}..{}), current-batch-id={}",
+            self.batch_size,
+            self.range.start(),
+            self.range.end(),
+            self.exclusions.len(),
+            self.batch_count
+        )
     }
 }
 
@@ -148,7 +152,6 @@ impl BatchGenerator {
             }
         }
 
-        // Escape if empty otherwise increment count.
         if identifiers.is_empty() {
             None
         } else {
@@ -197,10 +200,6 @@ impl BatchIterator for BatchGenerator {
         }
     }
 }
-
-/// ------------------------------------------------------------------------
-/// Tests.
-/// ------------------------------------------------------------------------
 
 #[cfg(test)]
 #[cfg(feature = "db_dependent")]

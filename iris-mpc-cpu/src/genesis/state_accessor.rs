@@ -155,12 +155,6 @@ pub async fn fetch_iris_deletions(
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
-    let n_exclusions = s3_object.deleted_serial_ids.len();
-    logger::log_info(
-        COMPONENT,
-        format!("Deletions for exclusion count = {}", n_exclusions,),
-    );
-
     Ok(s3_object.deleted_serial_ids)
 }
 
