@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc@sha256:c966498fb218e8ad64af5f46d0f969c9d5336cc23f8e5389849bbff6460ab068" # v0.15.6
+image: "ghcr.io/worldcoin/iris-mpc@sha256:c9af0bd603211ddf2d3a2e1659831769ea6e7ca706a48292accb4498ed1d9f4f" # combined changes: flip full scan side + min(fhd) in anon stats
 
 environment: stage
 replicaCount: 1
