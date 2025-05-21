@@ -243,7 +243,9 @@ impl DbContext {
         };
         graph_ops.set_entry_point(ep2.point, ep2.layer).await?;
 
-        // create edges between the first 4 vectors and each of the last 4 vectors
+        // create edges between vectors 1-3 and 4-6
+        // imagine vectors 1-3 as layer 1 and vectors 4-6 as layer 2
+        // then layers 1 and 2 are fully connected.
         for i in 1..4 {
             let mut links = SortedNeighborhood::new();
 
