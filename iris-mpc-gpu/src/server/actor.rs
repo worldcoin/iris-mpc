@@ -2017,11 +2017,6 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
     ) {
-        assert!(
-            eye_db == Eye::Right,
-            "We expect this to be called for the right eye only"
-        );
-
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
