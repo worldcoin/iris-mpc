@@ -583,10 +583,19 @@ extern "C" __global__ void collapse_sum(U32 *inout_a, U32 *inout_b,
 }
 
 extern "C" __global__ void rotate_bitvec(U64 *out_a, U64 *out_b, U64 *in_a,
-                                         U64 *in_b, size_t n) {
+                                         U64 *in_b, size_t rotation, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    out_a[i] = (in_a[i] >> 1) | (in_a[(i + 1) % n] << 63);
-    out_b[i] = (in_b[i] >> 1) | (in_b[(i + 1) % n] << 63);
+    out_a[i] = (in_a[i] >> rotation) | (in_a[(i + 1) % n] << (64 - rotation));
+    out_b[i] = (in_b[i] >> rotation) | (in_b[(i + 1) % n] << (64 - rotation));
+  }
+}
+
+extern "C" __global__ void mask_bitvec(U64 *inout_a, U64 *inout_b, U64 *mask,
+                                       size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    inout_a[i] = inout_a[i] & mask[i];
+    inout_b[i] = inout_b[i] & mask[i];
   }
 }

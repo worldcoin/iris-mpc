@@ -149,6 +149,7 @@ struct Kernels {
     pub(crate) collapse_sum_assign: CudaFunction,
     pub(crate) collapse_sum: CudaFunction,
     pub(crate) rotate_bitvec: CudaFunction,
+    pub(crate) mask_bitvec: CudaFunction,
 }
 
 impl Kernels {
@@ -184,6 +185,7 @@ impl Kernels {
                 "collapse_sum_assign",
                 "collapse_sum",
                 "rotate_bitvec",
+                "mask_bitvec",
             ],
         )
         .unwrap();
@@ -224,6 +226,7 @@ impl Kernels {
         let collapse_sum_assign = dev.get_func(Self::MOD_NAME, "collapse_sum_assign").unwrap();
         let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
         let rotate_bitvec = dev.get_func(Self::MOD_NAME, "rotate_bitvec").unwrap();
+        let mask_bitvec = dev.get_func(Self::MOD_NAME, "mask_bitvec").unwrap();
 
         Kernels {
             and,
@@ -251,6 +254,7 @@ impl Kernels {
             collapse_sum_assign,
             collapse_sum,
             rotate_bitvec,
+            mask_bitvec,
         }
     }
 }
@@ -2321,6 +2325,7 @@ impl Circuits {
         &mut self,
         bitvec_out: &mut [ChunkShareView<u64>],
         bitvec_in: &[ChunkShareView<u64>],
+        rotation: usize,
         streams: &[CudaStream],
     ) {
         assert_eq!(self.n_devices, bitvec_out.len());
@@ -2342,7 +2347,43 @@ impl Circuits {
                     .launch_on_stream(
                         &streams[idx],
                         cfg,
-                        (&out.a, &out.b, &inp.a, &inp.b, self.chunk_size),
+                        (&out.a, &out.b, &inp.a, &inp.b, rotation, out.len()),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn mask_bitvec(
+        &mut self,
+        bitvec_inout: &mut [ChunkShareView<u64>],
+        mask_in: &[Vec<Vec<u64>>],
+        mask_idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, bitvec_inout.len());
+        assert!(self.chunk_size <= bitvec_inout[0].len());
+        assert_eq!(self.n_devices, mask_in.len());
+        assert_eq!(mask_in[0][mask_idx].len(), bitvec_inout[0].len());
+
+        for (idx, (inout, inp)) in bitvec_inout.iter_mut().zip(mask_in.iter()).enumerate() {
+            let bitvec =
+                htod_on_stream_sync(&inp[mask_idx][..], &self.devs[idx], &streams[idx]).unwrap();
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .mask_bitvec
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&inout.a, &inout.b, &bitvec, inout.len()),
                     )
                     .unwrap();
             }
@@ -2638,27 +2679,27 @@ impl Circuits {
 
             // Result is in the first bit of the result buffer
             let result = self.take_result_buffer();
-            {
-                let mut bits = Vec::with_capacity(self.n_devices);
-                for r in result.iter() {
-                    // Result is in the first bit of the input
-                    bits.push(r.get_offset_mut(0, self.chunk_size));
-                }
-
-                // we now use the prepared bitmasks to aggregate the results with OR
-                for rotation in 0..max_rotations_needed {
-                    // we need to rotate the bitvecs to the right by one
-                    self.rotate_bitvec(&mut bits, &bits, streams);
-                    self.masked_or(&mut accumulated, &bits, &bitmasks, streams);
-                }
-            }
-            // we drop the mutable view, and get a non mutable one
+            let tmp_rotated = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+            let mut rotated = Buffers::get_buffer_chunk(&tmp_rotated, self.chunk_size);
 
             let mut bits = Vec::with_capacity(self.n_devices);
             for r in result.iter() {
                 // Result is in the first bit of the input
                 bits.push(r.get_offset(0, self.chunk_size));
             }
+            // we now use the prepared bitmasks to aggregate the results with OR
+            for rotation in 0..max_rotations_needed {
+                // we need to rotate the bitvecs to the right by one
+                self.rotate_bitvec(&mut rotated, &bits, rotation + 1, streams);
+                self.mask_bitvec(&mut rotated, &bitmasks, rotation + 1, streams);
+                for idx in 0..self.n_devices {
+                    self.or_many_pre_assign(&mut bits[idx], &rotated[idx], idx, streams);
+                }
+                self.send_receive_view_with_offset(&mut bits, 0..self.chunk_size, streams);
+            }
+            // finally, mask out all of the bits that are not the first match, where we have accumulated
+            self.mask_bitvec(&mut bits, &bitmasks, 0, streams);
+
             // Expand the result buffer to the x buffer and perform arithmetic xor
             self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
             // Sum all elements in x to get the result in the first 32 bit word on each GPU
@@ -2715,7 +2756,7 @@ mod detail {
         let mut last = vec[0] & 1;
         for i in (0..vec.len()).rev() {
             let tmp = vec[i] & 1;
-            vec[i] = (last << 63) | vec[i] >> 1;
+            vec[i] = (last << 63) | (vec[i] >> 1);
             last = tmp;
         }
     }
@@ -2728,7 +2769,7 @@ mod detail {
     pub fn bitvec_and(vec: &mut [u64], vec2: &[u64]) {
         assert!(vec.len() == vec2.len());
         for i in 0..vec.len() {
-            vec[i] = vec[i] & vec2[i];
+            vec[i] &= vec2[i];
         }
     }
 }

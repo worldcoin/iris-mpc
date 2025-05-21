@@ -52,11 +52,12 @@ mod buckets_test {
         let mut current_id = 0;
         for _ in 0..size {
             ids.push(current_id);
-            /// This ensures we have a few duplicates, with expected length of segments being around 3
+            // This ensures we have a few duplicates, with expected length of segments being around 3
             if rng.gen_bool(0.3) {
                 current_id += 1;
             }
         }
+        ids
     }
 
     fn ids_to_bitvec(ids: &[u64]) -> Vec<u64> {
@@ -203,8 +204,8 @@ mod buckets_test {
             party.compare_multiple_thresholds_while_aggregating_per_query(
                 &code_gpu,
                 &mask_gpu,
-                &streams,
                 &bitvecs,
+                &streams,
                 &threshold,
                 &mut bucket,
             );
