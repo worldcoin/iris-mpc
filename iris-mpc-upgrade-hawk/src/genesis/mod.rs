@@ -259,7 +259,15 @@ async fn exec_main_loop(
     match res {
         // Success.
         Ok(_) => {
-            log_info(String::from("Main loop exited normally"));
+            log_info(String::from(
+                "Waiting for last batch results to be processed before \
+                 shutting down...",
+            ));
+            shutdown_handler.wait_for_pending_batches_completion().await;
+            log_info(String::from(
+                "All batches have been processed, \
+                 shutting down...",
+            ));
         }
         // Error.
         Err(err) => {
