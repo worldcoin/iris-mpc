@@ -68,7 +68,7 @@ mod buckets_with_aggregation_test {
             if last == new {
                 continue;
             }
-            result[idx / 64] |= 1 << (idx % 64);
+            result[(idx + 1) / 64] |= 1 << ((idx + 1) % 64);
         }
         result
     }
