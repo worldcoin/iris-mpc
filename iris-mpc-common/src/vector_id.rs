@@ -1,5 +1,12 @@
+use crate::serialization::{ReadPacked, WritePacked};
+use eyre::Result;
 use serde::{Deserialize, Serialize};
-use std::{fmt::Display, str::FromStr};
+use std::{
+    fmt::Display,
+    io::{Read, Write},
+    mem::size_of,
+    str::FromStr,
+};
 
 // An Iris pair serial identifier.
 pub type SerialId = u32;
@@ -40,6 +47,29 @@ impl FromStr for VectorId {
         };
 
         Ok(VectorId { id, version })
+    }
+}
+
+impl ReadPacked for VectorId {
+    fn read_packed<R: Read>(reader: &mut R) -> Result<Self> {
+        let mut id_bytes = [0u8; size_of::<SerialId>()];
+        let mut version_bytes = [0u8; size_of::<VersionId>()];
+
+        reader.read_exact(&mut id_bytes)?;
+        reader.read_exact(&mut version_bytes)?;
+
+        let id = SerialId::from_le_bytes(id_bytes);
+        let version = VersionId::from_le_bytes(version_bytes);
+
+        Ok(Self { id, version })
+    }
+}
+
+impl WritePacked for VectorId {
+    fn write_packed<W: Write>(&self, writer: &mut W) -> Result<()> {
+        writer.write_all(&self.id.to_le_bytes())?;
+        writer.write_all(&self.version.to_le_bytes())?;
+        Ok(())
     }
 }
 
