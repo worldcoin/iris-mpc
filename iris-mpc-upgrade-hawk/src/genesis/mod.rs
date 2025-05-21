@@ -18,7 +18,9 @@ use iris_mpc_cpu::{
     genesis::{
         self,
         state_accessor::{fetch_iris_deletions, get_last_indexed, set_last_indexed},
-        sync::{GenesisConfig, GenesisSyncResult, GenesisSyncState},
+        state_sync::{
+            Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
+        },
         Batch, BatchGenerator, BatchIterator, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
@@ -104,7 +106,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
-        log_warn("Shutting down has been triggered".to_string());
+        log_warn(String::from("Shutting down has been triggered"));
         return Ok(());
     }
 
@@ -125,7 +127,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     background_tasks.check_tasks();
 
     // Process: execute main loop.
-    log_info("Executing main loop".to_string());
+    log_info(String::from("Executing main loop"));
     exec_main_loop(
         &config,
         last_indexed_id,
@@ -170,7 +172,7 @@ async fn exec_main_loop(
 ) -> Result<()> {
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
-    log_info("Hawk handle initialised".to_string());
+    log_info(String::from("Hawk handle initialised"));
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
@@ -179,11 +181,11 @@ async fn exec_main_loop(
         config.max_batch_size,
         excluded_serial_ids,
     );
-    log_info("Batch generator initialised".to_string());
+    log_info(String::from("Batch generator initialised"));
 
     // Set main loop result.
     let res: Result<()> = async {
-        log_info("Entering main loop".to_string());
+        log_info(String::from("Entering main loop"));
 
         // Housekeeping.
         let now = Instant::now();
@@ -237,10 +239,7 @@ async fn exec_main_loop(
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
-                    eyre!(
-                        "HNSW GENESIS :: Server :: HawkActor processing timeout: {:?}",
-                        err
-                    )
+                    eyre!(log_error(format!("HawkActor processing timeout: {:?}", err)))
                 })??;
 
             // Send results to processing thread to persist to database.
@@ -256,14 +255,14 @@ async fn exec_main_loop(
     match res {
         // Success.
         Ok(_) => {
-            log_info("Main loop exited normally".to_string());
+            log_info(String::from("Main loop exited normally"));
         }
         // Error.
         Err(err) => {
             log_error(format!("HawkActor processing error: {:?}", err));
 
             // Clean up & shutdown.
-            log_info("Initiating shutdown".to_string());
+            log_info(String::from("Initiating shutdown"));
             drop(hawk_handle);
             task_monitor.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
@@ -434,14 +433,22 @@ async fn get_sync_state(
     })
 }
 
+/// Returns result of performing distributed state synchronization.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `my_state` - Node specific synchronization state information.
+///
 async fn get_sync_result(
     config: &Config,
     my_state: &GenesisSyncState,
 ) -> Result<GenesisSyncResult> {
     let mut all_states = vec![my_state.clone()];
     all_states.extend(coordinator::get_others_sync_state(config).await?);
-    let sync_result = GenesisSyncResult::new(my_state.clone(), all_states);
-    Ok(sync_result)
+    let result = GenesisSyncResult::new(my_state.clone(), all_states);
+
+    Ok(result)
 }
 
 /// Initializes HNSW graph from data previously persisted to a store.
@@ -460,7 +467,7 @@ async fn init_graph_from_stores(
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
     // ANCHOR: Load the database
-    log_info("⚓️ ANCHOR: Load the database".to_string());
+    log_info(String::from("⚓️ ANCHOR: Load the database"));
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
     let parallelism = config
@@ -514,7 +521,7 @@ async fn start_results_thread(
                     batch_id,
                     first_id.serial_id(),
                     last_id.serial_id(),
-                ))
+                ));
             } else {
                 log_warn(format!(
                     "Received empty job result for batch {} in genesis indexer results thread",
@@ -581,7 +588,7 @@ async fn load_db(
         bail!(msg);
     }
 
-    log_info("Preprocessing db".to_string());
+    log_info(String::from("Preprocessing db"));
     actor.preprocess_db();
 
     log_info(format!(
@@ -647,22 +654,22 @@ async fn load_db_records<'a>(
     ));
 }
 
-/// Helper: process error logging.
+/// Helper: logs & returns an error message.
 fn log_error(msg: String) -> String {
     genesis::log_error("Server", msg)
 }
 
-/// Helper: process logging.
-fn log_info(msg: String) {
-    genesis::log_info("Server", msg);
+/// Helper: logs & returns an information message.
+fn log_info(msg: String) -> String {
+    genesis::log_info("Server", msg)
 }
 
-/// Helper: process warning logging.
-fn log_warn(msg: String) {
-    genesis::log_warn("Server", msg);
+/// Helper: logs & returns a warning message.
+fn log_warn(msg: String) -> String {
+    genesis::log_warn("Server", msg)
 }
 
-// TODO : implement db sync genesis
+/// TODO : implement db sync genesis
 #[allow(dead_code)]
 async fn sync_dbs_genesis(
     _config: &Config,
@@ -673,21 +680,28 @@ async fn sync_dbs_genesis(
 }
 
 /// Validates application config.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+///
 fn validate_config(config: &Config) {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
-        panic!(
-            "HNSW GENESIS :: Server :: Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
+        let msg = log_error(format!(
+            "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
-        );
+        ));
+        panic!("{}", msg);
     }
 
     // Validate modes of compute/deployment.
     if config.mode_of_deployment != ModeOfDeployment::Standard {
-        panic!(
-            "HNSW GENESIS :: Server :: Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
+        let msg = log_error(format!(
+            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
             config.mode_of_deployment
-        );
+        ));
+        panic!("{}", msg);
     }
 
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
