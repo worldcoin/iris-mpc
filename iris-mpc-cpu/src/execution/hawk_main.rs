@@ -496,7 +496,7 @@ impl HawkActor {
         sessions: &BothEyes<Vec<HawkSessionRef>>,
         side: usize,
     ) -> Result<VecBuckets> {
-        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets).await?;
+        let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
         let n_sessions = sessions[side].len();
         let distances = self.distances_cache[side].as_slice();
         let chunk_size = distances.len() / n_sessions;
