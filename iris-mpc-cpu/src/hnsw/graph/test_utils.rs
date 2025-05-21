@@ -162,7 +162,7 @@ impl DbContext {
     /// loads the graph from database to memory, writes it to a file,
     /// loads another graph from the file, and finally verifies that
     /// the loaded graph equals the stored graph.
-    pub async fn verify_restore(&self, path: &Path, dbg: bool) -> Result<()> {
+    pub async fn verify_backup(&self, path: &Path, dbg: bool) -> Result<()> {
         let stored_graph = self.get_both_eyes().await?;
         if dbg {
             println!("storing graph:");
