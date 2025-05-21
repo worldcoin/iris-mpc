@@ -1767,6 +1767,7 @@ impl ServerActor {
                 .into_iter()
                 .map(|mut x| {
                     x.sort();
+                    x.truncate(self.match_distances_buffer_size);
                     x
                 })
                 .map(|sorted| ids_to_bitvec(&sorted))
