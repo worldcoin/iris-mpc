@@ -965,7 +965,10 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Fetching partial {} results", self.full_scan_side);
         let mut partial_matches_side1 = self.distance_comparator.get_partial_results(
-            &self.db_match_list_left,
+            match self.full_scan_side {
+                Eye::Left => &self.db_match_list_left,
+                Eye::Right => &self.db_match_list_right,
+            },
             &self.current_db_sizes,
             &self.streams[0],
         );
