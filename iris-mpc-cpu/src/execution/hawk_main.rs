@@ -461,13 +461,12 @@ impl HawkActor {
         Ok(())
     }
 
-    async fn calculate_threshold_a(n_buckets: usize) -> Result<Vec<u32>> {
-        parallelize((1..=n_buckets).map(|x| async move {
-            Ok(translate_threshold_a(
-                MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64),
-            ))
-        }))
-        .await
+    fn calculate_threshold_a(n_buckets: usize) -> Vec<u32> {
+        (1..=n_buckets)
+            .map(|x: usize| {
+                translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
+            })
+            .collect::<Vec<_>>()
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
