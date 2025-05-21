@@ -1,4 +1,9 @@
-/// Logs component error messages.
+/// Returns a message for logging.
+fn get_formatted_message(component: &str, msg: String) -> String {
+    format!("HNSW-GENESIS :: {} :: {}", component, msg)
+}
+
+/// Logs & returns a component error message.
 ///
 /// # Arguments
 ///
@@ -6,7 +11,7 @@
 /// * `msg` - An error message.
 ///
 pub fn log_error(component: &str, msg: String) -> String {
-    let msg = format!("HNSW-GENESIS :: {} :: {}", component, msg);
+    let msg = get_formatted_message(component, msg);
 
     // In testing print to stdout.
     #[cfg(test)]
@@ -18,34 +23,41 @@ pub fn log_error(component: &str, msg: String) -> String {
     msg
 }
 
-/// Logs component information messages.
+/// Logs & returns a component information message.
 ///
 /// # Arguments
 ///
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An information message.
 ///
-pub fn log_info(component: &str, msg: String) {
+pub fn log_info(component: &str, msg: String) -> String {
+    let msg = get_formatted_message(component, msg);
+
     // In testing print to stdout.
     #[cfg(test)]
-    println!("HNSW-GENESIS :: {} :: {}", component, msg);
+    println!("{}", msg);
 
     // Trace as normal.
-    tracing::info!("HNSW-GENESIS :: {} :: {}", component, msg);
+    tracing::info!(msg);
+
+    msg
 }
 
-/// Logs component warning messages.
+/// Logs & returns a component warning message.
 ///
 /// # Arguments
 ///
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An information message.
 ///
-pub fn log_warn(component: &str, msg: String) {
+pub fn log_warn(component: &str, msg: String) -> String {
+    let msg = get_formatted_message(component, msg);
+
     // In testing print to stdout.
     #[cfg(test)]
-    println!("WARN :: HNSW-GENESIS :: {} :: {}", component, msg);
+    println!("WARN :: {}", msg);
 
-    // Trace as normal.
-    tracing::warn!("HNSW-GENESIS :: {} :: {}", component, msg);
+    tracing::warn!(msg);
+
+    msg
 }

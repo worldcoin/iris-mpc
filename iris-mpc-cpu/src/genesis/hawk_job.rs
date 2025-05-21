@@ -94,24 +94,3 @@ pub struct JobResult {
     /// Connect plans for updating the HNSW graph in DB
     pub connect_plans: HawkMutation,
 }
-
-/// An indexation result over a single iris.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResultOfBatchElement {
-    // Identifier of iris.
-    iris_vector_id: IrisVectorId,
-
-    // Error flag - TEMP.
-    did_error: bool,
-}
-
-/// Constructor.
-#[allow(dead_code)]
-impl JobResultOfBatchElement {
-    pub fn new(iris_identifier: IrisVectorId, did_error: bool) -> Self {
-        Self {
-            iris_vector_id: iris_identifier,
-            did_error,
-        }
-    }
-}

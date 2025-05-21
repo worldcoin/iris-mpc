@@ -184,9 +184,14 @@ fn max_rollback(config: &Config) -> usize {
 /// Returnes initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let schema_name = format!(
+    let iris_schema_name = format!(
         "{}_{}_{}",
-        config.app_name, config.environment, config.party_id
+        config.schema_name, config.environment, config.party_id
+    );
+
+    let hawk_schema_name = format!(
+        "{}{}_{}_{}",
+        config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
     );
 
     match config.mode_of_deployment {
@@ -197,9 +202,12 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let hawk_postgres_client =
-                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
-                    .await?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &iris_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             // Store -> CPU
             tracing::info!(
@@ -228,7 +236,8 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .ok_or(eyre!("Missing database config"))?;
 
             let postgres_client =
-                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadOnly).await?;
+                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadOnly)
+                    .await?;
 
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
@@ -242,9 +251,12 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let hawk_postgres_client =
-                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
-                    .await?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &hawk_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
@@ -256,29 +268,41 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             Ok((iris_store, graph_store))
         }
 
-        // use the base db for both stores
-        _ => {
+        ModeOfDeployment::Standard => {
             let db_config = config
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
 
             let postgres_client =
-                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
+                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadWrite)
+                    .await?;
 
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
                 db_config,
                 config.mode_of_deployment
             );
+
             let iris_store = Store::new(&postgres_client).await?;
+
+            let hawk_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in Standard"))?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &hawk_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
-                db_config,
+                hawk_db_config,
                 config.mode_of_deployment
             );
-            let graph_store = GraphStore::new(&postgres_client).await?;
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
             Ok((iris_store, graph_store))
         }

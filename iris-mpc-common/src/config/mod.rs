@@ -21,8 +21,8 @@ pub struct Opt {
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_app_name")]
-    pub app_name: String,
+    #[serde(default = "default_schema_name")]
+    pub schema_name: String,
 
     #[serde(default)]
     pub environment: String,
@@ -189,6 +189,9 @@ pub struct Config {
     #[serde(default)]
     pub enable_reset: bool,
 
+    #[serde(default)]
+    pub hnsw_schema_name_suffix: String,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
@@ -248,28 +251,6 @@ pub struct Config {
     // used to fix max batch size to 1 for correctness testing purposes
     #[serde(default = "default_override_max_batch_size")]
     pub override_max_batch_size: bool,
-}
-
-impl Config {
-    // Returns computed name of application's postgres database schema.
-    pub fn get_database_schema_name(&self) -> String {
-        format!(
-            "{}_{}_{}",
-            self.app_name.clone(),
-            self.environment.clone(),
-            self.party_id.clone()
-        )
-    }
-
-    // Returns computed name of an S3 bucket for fetching iris deletions.
-    pub fn get_s3_bucket_for_iris_deletions(&self) -> String {
-        format!("wf-smpcv2-{}-sync-protocol", self.environment)
-    }
-
-    // Returns computed name of an S3 key for fetching iris deletions.
-    pub fn get_s3_key_for_iris_deletions(&self) -> String {
-        format!("{}_deleted_serial_ids.json", self.environment)
-    }
 }
 
 fn default_full_scan_side() -> Eye {
@@ -335,7 +316,7 @@ fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
 }
 
-fn default_app_name() -> String {
+fn default_schema_name() -> String {
     "SMPC".to_string()
 }
 
@@ -572,7 +553,8 @@ pub struct CommonConfig {
     sqs_sync_long_poll_seconds: i32,
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
-    app_name: String,
+    schema_name: String,
+    hnsw_schema_name_suffix: String,
     cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
@@ -647,7 +629,8 @@ impl From<Config> for CommonConfig {
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
-            app_name,
+            schema_name,
+            hnsw_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
@@ -698,7 +681,8 @@ impl From<Config> for CommonConfig {
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
-            app_name,
+            schema_name,
+            hnsw_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
