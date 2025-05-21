@@ -482,9 +482,11 @@ impl HawkActor {
                 })
             });
         tracing::info!(
-            "Keeping {} distances for eye {side} out of {} search results.",
+            "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
             distances.clone().count(),
-            search_results.len()
+            search_results.len(),
+            self.distances_cache[side].len(),
+            self.args.match_distances_buffer_size,
         );
         self.distances_cache[side].extend(distances);
     }
