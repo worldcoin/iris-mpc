@@ -449,14 +449,12 @@ impl HawkActor {
 
     async fn update_anon_stats(
         &mut self,
-        session: &HawkSessionRef,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
         search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
     ) -> Result<()> {
-        let mut session = session.write().await;
-
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-
+            let mut session = sessions[side][0].write().await;
             self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
                 .await?;
         }
@@ -475,10 +473,19 @@ impl HawkActor {
         let distances = search_results
             .iter() // All requests.
             .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| plan.links.first()) // Bottom layer.
-            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
-            .map(|(_, distance)| distance.clone());
-
+            .flat_map(|plan| {
+                plan.links.first().into_iter().flat_map(move |neighbors| {
+                    neighbors
+                        .iter()
+                        .take(plan.match_count)
+                        .map(|(_, distance)| distance.clone())
+                })
+            });
+        tracing::info!(
+            "Keeping {} distances for eye {side} out of {} search results.",
+            distances.clone().count(),
+            search_results.len()
+        );
         self.distances_cache[side].extend(distances);
     }
 
@@ -1093,8 +1100,9 @@ impl HawkHandle {
         };
 
         hawk_actor
-            .update_anon_stats(&sessions[0][0], &search_results)
+            .update_anon_stats(sessions, &search_results)
             .await?;
+        tracing::info!("Updated anonymized statistics.");
 
         // Insert into the in memory stores.
         let mutations =
@@ -1112,7 +1120,7 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-
+        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
@@ -1138,6 +1146,11 @@ impl HawkHandle {
         // For both eyes.
         for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
             // Focus on the insertions and keep only the centered irises.
+            tracing::info!(
+                "Inserting {} new irises for eye {}",
+                search_results.len(),
+                side
+            );
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| match decision {
                     UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
