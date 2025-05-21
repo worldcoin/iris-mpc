@@ -193,13 +193,16 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         while let Some(Batch { data, id: batch_id }) = batch_generator.next_batch(iris_store).await? {
+            // TODO: ask Bryan why this is necessary.
             let data_len = data.len();
 
             // Filter out any ids which have already been indexed -- there should be none
+            // TODO: ask Bryan why this is necessary as generator will NEVER
+            //       yield a batch with serial identifiers <= last_indexed_id.
             let data: Vec<_> = data.into_iter().filter(|db_iris| db_iris.id() > (last_indexed_id as i64)).collect();
             if data.len() < data_len {
                 log_warn(format!(
-                    "HNSW GENESIS: Filtered out previously indexed batch elements: id={} :: irises={} :: filtered={} :: time {:?}",
+                    "Filtered out previously indexed batch elements: id={} :: irises={} :: filtered={} :: time {:?}",
                     batch_id,
                     data_len,
                     data_len - data.len(),
@@ -208,9 +211,11 @@ async fn exec_main_loop(
             }
 
             // Filter out empty batches -- this should not occur
+            // TODO: ask Bryan why this is necessary as generator will NEVER
+            //       yield a None or empty batch.
             if data.is_empty() {
                 log_warn(format!(
-                    "HNSW GENESIS: Skipping empty batch: id={} :: irises={} :: time {:?}",
+                    "Skipping empty batch: id={} :: irises={} :: time {:?}",
                     batch_id,
                     data.len(),
                     now.elapsed(),
@@ -224,13 +229,12 @@ async fn exec_main_loop(
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
 
+            // TODO: ask Bryan why this is necessary as the tierator yields Batch instances
+            //       and we are unecessarily destructuring and then re-instantiating.
             let batch = Batch::new(batch_id, data);
             log_info(format!(
-                "Indexing new batch: id={} :: batch-size={} :: batch-range=({}..={}) :: time {:?}",
-                batch.id,
-                batch.size(),
-                batch.id_start(),
-                batch.id_end(),
+                "Indexing new batch: {} :: time {:?}",
+                batch,
                 now.elapsed(),
             ));
 

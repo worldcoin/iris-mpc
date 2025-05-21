@@ -5,12 +5,13 @@ use super::{
 use eyre::Result;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_store::{DbStoredIris, Store as IrisStore};
-use std::{future::Future, iter::Peekable, ops::RangeInclusive};
+use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
-// Component name for logging purposes.
+/// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
 
-// A batch for upstream indexation.
+/// A batch for upstream indexation.
+#[derive(Debug)]
 pub struct Batch {
     // Array of stored Iris's to be indexed.
     pub data: Vec<DbStoredIris>,
@@ -19,16 +20,30 @@ pub struct Batch {
     pub id: usize,
 }
 
-// Constructor.
+/// Constructor.
 impl Batch {
     pub fn new(batch_id: usize, data: Vec<DbStoredIris>) -> Self {
         Self { data, id: batch_id }
     }
 }
 
-// Methods.
+/// Trait: fmt::Display.
+impl fmt::Display for Batch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "id={}, size={}, range=({}..{})",
+            self.id,
+            self.size(),
+            self.id_start(),
+            self.id_end()
+        )
+    }
+}
+
+/// Methods.
 impl Batch {
-    /// Return the Iris serial id of batch's first element.
+    // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
         self.data
             .first()
@@ -36,7 +51,7 @@ impl Batch {
             .unwrap()
     }
 
-    /// Return the Iris serial id of batch's last element.
+    // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
         self.data
             .last()
@@ -44,13 +59,13 @@ impl Batch {
             .unwrap()
     }
 
-    /// Return the size of the batch.
+    // Returns size of the batch.
     pub fn size(&self) -> usize {
         self.data.len()
     }
 }
 
-// Generates batches of Iris identifiers for processing.
+/// Generates batches of Iris identifiers for processing.
 pub struct BatchGenerator {
     // Count of generated batches.
     batch_count: usize,
@@ -68,7 +83,7 @@ pub struct BatchGenerator {
     range_iter: Peekable<RangeInclusive<IrisSerialId>>,
 }
 
-// Constructor.
+/// Constructor.
 impl BatchGenerator {
     /// Create a new `BatchGenerator` with the following properties:
     ///
@@ -104,7 +119,7 @@ impl BatchGenerator {
     }
 }
 
-// Accessors.
+/// Accessors.
 impl BatchGenerator {
     pub fn get_identifiers_range(&self) -> RangeInclusive<IrisSerialId> {
         self.range.clone()
@@ -115,38 +130,31 @@ impl BatchGenerator {
     }
 }
 
-// Methods.
+/// Methods.
 impl BatchGenerator {
     /// Returns next batch of Iris serial identifiers to be indexed.
-    pub fn next_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
+    fn next_identifiers(&mut self) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
 
         // Construct next batch.
-        let mut batch = Vec::<IrisSerialId>::new();
-        while self.range_iter.peek().is_some() && batch.len() < self.batch_size {
+        let mut identifiers = Vec::<IrisSerialId>::new();
+        while self.range_iter.peek().is_some() && identifiers.len() < self.batch_size {
             let next_id = self.range_iter.by_ref().next().unwrap();
             if !self.exclusions.contains(&next_id) {
-                batch.push(next_id);
+                identifiers.push(next_id);
             } else {
                 Self::log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
             }
         }
 
         // Escape if empty otherwise increment count.
-        if batch.is_empty() {
-            return None;
+        if identifiers.is_empty() {
+            None
         } else {
             self.batch_count += 1;
+            Some(identifiers)
         }
-
-        Self::log_info(format!(
-            "Constructed new batch for indexation: batch-id={} :: batch-size={}",
-            self.batch_count,
-            batch.len()
-        ));
-
-        Some(batch)
     }
 
     // Helper: component logging.
@@ -167,7 +175,7 @@ pub trait BatchIterator {
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
-// Batch iterator implementation.
+/// Batch iterator implementation.
 impl BatchIterator for BatchGenerator {
     // Count of generated batches.
     fn batch_count(&self) -> usize {
@@ -182,7 +190,7 @@ impl BatchIterator for BatchGenerator {
         if let Some(identifiers) = self.next_identifiers() {
             let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
             let batch = Batch::new(self.batch_count, data);
-            Self::log_info(format!("Iris batch fetched: batch-id={}", batch.id,));
+            Self::log_info(format!("Iris batch fetched: {}", batch));
             Ok(Some(batch))
         } else {
             Ok(None)
@@ -190,9 +198,9 @@ impl BatchIterator for BatchGenerator {
     }
 }
 
-// ------------------------------------------------------------------------
-// Tests.
-// ------------------------------------------------------------------------
+/// ------------------------------------------------------------------------
+/// Tests.
+/// ------------------------------------------------------------------------
 
 #[cfg(test)]
 #[cfg(feature = "db_dependent")]
@@ -232,7 +240,7 @@ mod tests {
         Ok((iris_store, pg_client, pg_schema))
     }
 
-    // Test new from range pulled from dB.
+    /// Test new from range pulled from dB.
     #[tokio::test]
     async fn test_new() -> Result<()> {
         // Set resources.
@@ -252,7 +260,7 @@ mod tests {
         Ok(())
     }
 
-    // Test iteration.
+    /// Test iteration.
     #[tokio::test]
     async fn test_iterator() -> Result<()> {
         // Set resources.
