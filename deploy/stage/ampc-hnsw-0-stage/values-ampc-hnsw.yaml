@@ -30,7 +30,7 @@ env:
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_URL
-        name: testing-db-creds-manual
+        name: application
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
