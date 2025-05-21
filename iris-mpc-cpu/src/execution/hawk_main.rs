@@ -543,7 +543,15 @@ impl HawkActor {
         }
 
         let mut session0 = sessions[side][0].write().await;
-        let buckets = open_ring(&mut session0.aby3_store.session, &bucket_result_shares).await?;
+        // Open all per-session bucket shares and aggregate into final per-threshold counts
+        let opened = open_ring(&mut session0.aby3_store.session, &bucket_result_shares).await?;
+        let n_buckets = translated_thresholds.len();
+        let mut buckets = vec![0u32; n_buckets];
+        for chunk in opened.chunks(n_buckets) {
+            for (i, &count) in chunk.iter().enumerate() {
+                buckets[i] = buckets[i].saturating_add(count);
+            }
+        }
         Ok(buckets)
     }
 
