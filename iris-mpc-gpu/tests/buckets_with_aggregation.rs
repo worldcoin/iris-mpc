@@ -1,4 +1,4 @@
-#[cfg(feature = "gpu_dependent")]
+// #[cfg(feature = "gpu_dependent")]
 mod buckets_with_aggregation_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -130,14 +130,14 @@ mod buckets_with_aggregation_test {
             let mut count = 0;
             let mut current_id = u64::MAX;
             let mut current_count = 0;
-            for (idx, &id) in ids.iter().enumerate() {
+            for (idx, (&code, &mask)) in code_input.iter().zip(mask_input.iter()).enumerate() {
+                // ids are repeated, so we need to use the index
+                let id = ids[idx % ids.len()];
                 if id != current_id {
                     count += current_count;
                     current_id = id;
                     current_count = 0;
                 }
-                let code = code_input[idx];
-                let mask = mask_input[idx];
                 let r = (((mask as u64) * a)
                     .wrapping_sub((code as u64) << B_BITS)
                     .wrapping_sub(1))
