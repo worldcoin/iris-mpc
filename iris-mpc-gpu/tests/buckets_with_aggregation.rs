@@ -143,7 +143,7 @@ mod buckets_with_aggregation_test {
                     .wrapping_sub(1))
                     % mod_;
                 let msb = r >> (B_BITS + 16 - 1) & 1 == 1;
-                current_count += msb as u32;
+                current_count |= msb as u32;
             }
             // also add final count
             count += current_count;

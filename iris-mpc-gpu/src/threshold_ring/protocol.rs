@@ -2637,7 +2637,7 @@ impl Circuits {
         }
 
         // prepare bitmasks for rotations
-        let max_rotations_needed = 31;
+        let max_rotations_needed = 30;
         // incoming bitmask looks like this for given query_indices:
         // [1,1,2,3,3,3,4,4,5] -> [1,0,1,1,0,0,1,0,1]
         // i.e., it is one if it is the first match for a given query index
