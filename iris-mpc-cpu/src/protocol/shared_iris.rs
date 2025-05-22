@@ -2,7 +2,7 @@ use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::iris::IrisCode,
-    job::{GaloisSharesBothSides, IrisQueryBatchEntries},
+    job::IrisQueryBatchEntries,
 };
 use itertools::izip;
 use rand::{CryptoRng, Rng};
@@ -48,19 +48,6 @@ impl GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::new(code.try_into()?, party_id),
             mask: GaloisRingTrimmedMaskCodeShare::new(mask.try_into()?, party_id),
         })
-    }
-
-    pub fn from_both_sides(x: &GaloisSharesBothSides) -> [Arc<Self>; 2] {
-        [
-            Arc::new(GaloisRingSharedIris {
-                code: x.code_left.clone(),
-                mask: x.mask_left.clone(),
-            }),
-            Arc::new(GaloisRingSharedIris {
-                code: x.code_right.clone(),
-                mask: x.mask_right.clone(),
-            }),
-        ]
     }
 
     /// Generate iris code shares of an input iris code using local randomness, alongside with

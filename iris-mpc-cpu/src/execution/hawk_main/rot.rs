@@ -19,12 +19,21 @@ impl<R> Deref for VecRots<R> {
 
 impl<R> From<Vec<R>> for VecRots<R> {
     fn from(rotations: Vec<R>) -> Self {
-        assert_eq!(rotations.len(), ROTATIONS);
+        assert!(
+            rotations.len() == 1 || rotations.len() == ROTATIONS,
+            "either no rotations or all rotations"
+        );
         Self { rotations }
     }
 }
 
 impl<R> VecRots<R> {
+    pub fn new_center_only(center: R) -> Self {
+        Self {
+            rotations: vec![center],
+        }
+    }
+
     /// Get the item attached to the center rotation.
     pub fn center(&self) -> &R {
         &self.rotations[self.rotations.len() / 2]
@@ -51,6 +60,7 @@ impl<R> VecRots<R> {
             .collect_vec()
     }
 
+    // TODO: type safety for no rotations.
     /// The opposite of flatten.
     /// Split a concatenated Vec into a batch of something with rotations.
     pub fn unflatten(batch: Vec<R>) -> Vec<VecRots<R>> {

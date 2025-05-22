@@ -7,7 +7,7 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::aby3::aby3_store::{
-        Aby3Store, Query, QueryRef, SharedIrises, SharedIrisesMut, SharedIrisesRef,
+        prepare_query, Aby3Store, Query, SharedIrises, SharedIrisesMut, SharedIrisesRef,
     },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
@@ -43,8 +43,9 @@ use matching::{
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use reset::{handle_reset_updates, ResetUpdateRequest};
+use reset::{search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
+use search::{SearchParams, SearchQueries};
 use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
@@ -625,8 +626,8 @@ struct HawkJob {
 #[derive(Clone, Debug)]
 pub struct HawkRequest {
     batch: BatchQuery,
-    queries: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
-    queries_mirror: Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
+    queries: SearchQueries,
+    queries_mirror: SearchQueries,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -755,7 +756,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn queries(&self, orient: Orientation) -> Arc<BothEyes<VecRequests<VecRots<QueryRef>>>> {
+    fn queries(&self, orient: Orientation) -> SearchQueries {
         match orient {
             Orientation::Normal => self.queries.clone(),
             Orientation::Mirror => self.queries_mirror.clone(),
@@ -780,16 +781,32 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn reset_updates(&self, iris_store: &SharedIrises) -> Vec<ResetUpdateRequest> {
-        izip!(
-            &self.batch.reset_update_indices,
-            &self.batch.reset_update_shares
-        )
-        .map(|(&idx, irises)| ResetUpdateRequest {
-            vector_id: iris_store.from_0_indices(&[idx])[0],
-            irises: GaloisRingSharedIris::from_both_sides(irises),
-        })
-        .collect_vec()
+    fn reset_updates(&self, iris_store: &SharedIrises) -> ResetRequests {
+        let queries = [LEFT, RIGHT].map(|side| {
+            self.batch
+                .reset_update_shares
+                .iter()
+                .map(|iris| {
+                    let iris = if side == LEFT {
+                        GaloisRingSharedIris {
+                            code: iris.code_left.clone(),
+                            mask: iris.mask_left.clone(),
+                        }
+                    } else {
+                        GaloisRingSharedIris {
+                            code: iris.code_right.clone(),
+                            mask: iris.mask_right.clone(),
+                        }
+                    };
+                    let query = prepare_query(iris);
+                    VecRots::new_center_only(query)
+                })
+                .collect_vec()
+        });
+        ResetRequests {
+            vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
+            queries: Arc::new(queries),
+        }
     }
 }
 
@@ -1105,8 +1122,6 @@ impl HawkHandle {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
 
-        handle_reset_updates(hawk_actor, &request).await?;
-
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
@@ -1121,8 +1136,11 @@ impl HawkHandle {
 
             // Search for nearest neighbors.
             // For both eyes, all requests, and rotations.
-            let search_results: BothEyes<VecRequests<VecRots<InsertPlan>>> =
-                search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
+            let search_params = SearchParams {
+                hnsw: hawk_actor.searcher(),
+                do_match: true,
+            };
+            let search_results = search::search(sessions, search_queries, search_params).await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1152,9 +1170,13 @@ impl HawkHandle {
             .update_anon_stats(&sessions[0][0], &search_results)
             .await?;
 
+        // Reset Updates. Find how to insert the new irises into the graph.
+        let resets = search_to_reset(hawk_actor, sessions, &request).await?;
+
         // Insert into the in memory stores.
         let mutations =
-            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result).await?;
+            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result, resets)
+                .await?;
 
         let results = HawkResult::new(
             request.batch,
@@ -1177,27 +1199,34 @@ impl HawkHandle {
         sessions: &BothEyes<Vec<HawkSessionRef>>,
         search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
         match_result: &matching::BatchStep3,
+        resets: ResetPlan,
     ) -> Result<HawkMutation> {
         use Decision::*;
         let decisions = match_result.decisions();
 
+        // The vector IDs of reauths and resets, or None for uniqueness insertions.
         let update_ids = decisions
             .iter()
             .map(|decision| match decision {
                 ReauthUpdate(update_id) => Some(*update_id),
                 _ => None,
             })
+            .chain(resets.vector_ids.into_iter().map(Some))
             .collect_vec();
 
         let mut connect_plans = HawkMutation([vec![], vec![]]);
 
         // For both eyes.
-        for (side, sessions, search_results) in izip!(&STORE_IDS, sessions, search_results) {
+        for (side, sessions, search_results, reset_results) in
+            izip!(&STORE_IDS, sessions, search_results, resets.search_results)
+        {
+            // The accepted insertions for uniqueness, reauth, and resets.
             // Focus on the insertions and keep only the centered irises.
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| {
                     decision.is_mutation().then(|| search_result.into_center())
                 })
+                .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
                 .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
