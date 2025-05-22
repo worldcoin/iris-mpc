@@ -155,7 +155,6 @@ impl BatchGenerator {
         if identifiers.is_empty() {
             None
         } else {
-            self.batch_count += 1;
             Some(identifiers)
         }
     }
@@ -192,6 +191,7 @@ impl BatchIterator for BatchGenerator {
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.next_identifiers() {
             let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
+            self.batch_count += 1;
             let batch = Batch::new(self.batch_count, data);
             Self::log_info(format!("Iris batch fetched: {}", batch));
             Ok(Some(batch))

@@ -10,12 +10,38 @@ pub struct Config {
     pub excluded_serial_ids: Vec<IrisSerialId>,
 }
 
+/// Constructor.
+impl Config {
+    pub fn new(
+        max_indexation_id: IrisSerialId,
+        last_indexed_id: IrisSerialId,
+        excluded_serial_ids: Vec<IrisSerialId>,
+    ) -> Self {
+        Self {
+            max_indexation_id,
+            last_indexed_id,
+            excluded_serial_ids,
+        }
+    }
+}
+
 /// Encapsulates a node's synchronization state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
     pub db_len: u64,
     pub common_config: CommonConfig,
     pub genesis_config: Config,
+}
+
+/// Constructor.
+impl SyncState {
+    pub fn new(db_len: u64, common_config: CommonConfig, genesis_config: Config) -> Self {
+        Self {
+            db_len,
+            common_config,
+            genesis_config,
+        }
+    }
 }
 
 /// Encapsulates a result over a node's synchronization state evaluation.
@@ -72,68 +98,48 @@ mod tests {
     use super::*;
 
     impl Config {
-        pub(crate) fn new_1() -> Self {
-            Self {
-                max_indexation_id: 100,
-                last_indexed_id: 50,
-                excluded_serial_ids: vec![3, 5],
-            }
+        fn new_1() -> Self {
+            Self::new(100, 50, vec![3, 5])
         }
 
-        pub(crate) fn new_2() -> Self {
-            Self {
-                max_indexation_id: 200,
-                last_indexed_id: 150,
-                excluded_serial_ids: vec![3, 5, 6],
-            }
+        fn new_2() -> Self {
+            Self::new(200, 150, vec![3, 5, 6])
+        }
+    }
+
+    impl SyncState {
+        fn new_0(db_len: u64, genesis_config: Config) -> Self {
+            Self::new(db_len, CommonConfig::default(), genesis_config)
+        }
+
+        fn new_1(db_len: u64) -> Self {
+            Self::new_0(db_len, Config::new_1())
+        }
+
+        fn new_2(db_len: u64) -> Self {
+            Self::new_0(db_len, Config::new_2())
         }
     }
 
     #[test]
     fn test_check_genesis_config_all_equal() {
         let states = vec![
-            SyncState {
-                db_len: 10,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_1(),
-            },
-            SyncState {
-                db_len: 20,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_1(),
-            },
-            SyncState {
-                db_len: 30,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_1(),
-            },
+            SyncState::new_1(10),
+            SyncState::new_1(20),
+            SyncState::new_1(30),
         ];
-
-        let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_ok());
+        let result = SyncResult::new(states[0].clone(), states);
+        assert!(result.check_genesis_config().is_ok());
     }
 
     #[test]
     fn test_check_genesis_config_not_equal() {
         let states = vec![
-            SyncState {
-                db_len: 10,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_1(),
-            },
-            SyncState {
-                db_len: 20,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_2(),
-            },
-            SyncState {
-                db_len: 30,
-                common_config: CommonConfig::default(),
-                genesis_config: Config::new_2(),
-            },
+            SyncState::new_1(10),
+            SyncState::new_2(20),
+            SyncState::new_2(30),
         ];
-
-        let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_err());
+        let result = SyncResult::new(states[0].clone(), states);
+        assert!(result.check_genesis_config().is_err());
     }
 }

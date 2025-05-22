@@ -17,7 +17,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         self,
-        state_accessor::{fetch_iris_deletions, get_last_indexed, set_last_indexed},
+        state_accessor::{fetch_iris_deletions, get_id_of_last_indexed, set_id_of_last_indexed},
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
@@ -70,7 +70,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     log_info(String::from("Service clients instantiated"));
 
     // Process: set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed(&iris_store).await?;
+    let last_indexed_id = get_id_of_last_indexed(&iris_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
@@ -508,7 +508,7 @@ async fn start_results_thread(
                 let mut graph_tx = graph_store.tx().await?;
                 connect_plans.persist(&mut graph_tx).await?;
                 let mut db_tx = graph_tx.tx;
-                set_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
+                set_id_of_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
                 db_tx.commit().await?;
 
                 log_info(format!(
