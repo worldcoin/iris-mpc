@@ -83,15 +83,15 @@ fn get_shared_template(
 
     // Create mirrored versions of the shares (before trimming for masks)
     let mut mirrored_shared_code = [
-        shared_code[0].mirrored(),
-        shared_code[1].mirrored(),
-        shared_code[2].mirrored(),
+        shared_code[0].mirrored_code(),
+        shared_code[1].mirrored_code(),
+        shared_code[2].mirrored_code(),
     ];
 
     let mirrored_shared_mask = [
-        shared_mask[0].mirrored(),
-        shared_mask[1].mirrored(),
-        shared_mask[2].mirrored(),
+        shared_mask[0].mirrored_mask(),
+        shared_mask[1].mirrored_mask(),
+        shared_mask[2].mirrored_mask(),
     ];
 
     // Now trim the masks

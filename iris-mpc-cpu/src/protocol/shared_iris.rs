@@ -82,11 +82,11 @@ impl GaloisRingSharedIris {
         let mask_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris.mask, rng);
         let code_shares_mirrored = code_shares
             .iter()
-            .map(|code| code.mirrored())
+            .map(|code| code.mirrored_code())
             .collect::<Vec<_>>();
         let mask_shares_mirrored = mask_shares
             .iter()
-            .map(|mask| mask.mirrored())
+            .map(|mask| mask.mirrored_mask())
             .collect::<Vec<_>>();
         [
             GaloisRingSharedIris {

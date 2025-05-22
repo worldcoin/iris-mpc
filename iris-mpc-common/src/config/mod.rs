@@ -21,8 +21,8 @@ pub struct Opt {
 #[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_app_name")]
-    pub app_name: String,
+    #[serde(default = "default_schema_name")]
+    pub schema_name: String,
 
     #[serde(default)]
     pub environment: String,
@@ -111,6 +111,9 @@ pub struct Config {
     )]
     pub healthcheck_ports: Vec<String>,
 
+    #[serde(default = "default_http_query_retry_delay_ms")]
+    pub http_query_retry_delay_ms: u64,
+
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
 
@@ -186,8 +189,14 @@ pub struct Config {
     #[serde(default)]
     pub enable_reset: bool,
 
+    #[serde(default)]
+    pub hnsw_schema_name_suffix: String,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
+
+    #[serde(default = "default_hawk_stream_parallelism")]
+    pub hawk_stream_parallelism: usize,
 
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
@@ -224,9 +233,6 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
-    #[serde(default)]
-    pub enable_sync_queues_on_sns_sequence_number: bool,
-
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
@@ -247,18 +253,6 @@ pub struct Config {
 
     #[serde(default = "default_sqs_long_poll_wait_time")]
     pub sqs_long_poll_wait_time: usize,
-}
-
-impl Config {
-    // Returns computed name of application's postgres database schema.
-    pub fn get_database_schema_name(&self) -> String {
-        format!(
-            "{}_{}_{}",
-            self.app_name.clone(),
-            self.environment.clone(),
-            self.party_id.clone()
-        )
-    }
 }
 
 fn default_full_scan_side() -> Eye {
@@ -320,7 +314,7 @@ fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
 }
 
-fn default_app_name() -> String {
+fn default_schema_name() -> String {
     "SMPC".to_string()
 }
 
@@ -354,11 +348,15 @@ fn default_n_buckets() -> usize {
 }
 
 fn default_hawk_request_parallelism() -> usize {
-    10
+    1024
+}
+
+fn default_hawk_stream_parallelism() -> usize {
+    8
 }
 
 fn default_hawk_connection_parallelism() -> usize {
-    10
+    16
 }
 
 fn default_hawk_server_healthcheck_port() -> usize {
@@ -384,6 +382,10 @@ fn default_service_ports() -> Vec<String> {
 
 fn default_healthcheck_ports() -> Vec<String> {
     vec!["3000".to_string(); 3]
+}
+
+fn default_http_query_retry_delay_ms() -> u64 {
+    1000
 }
 
 fn default_max_deletions_per_batch() -> usize {
@@ -543,6 +545,7 @@ pub struct CommonConfig {
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
+    hawk_stream_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
@@ -553,11 +556,11 @@ pub struct CommonConfig {
     mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
-    enable_sync_queues_on_sns_sequence_number: bool,
     sqs_sync_long_poll_seconds: i32,
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
-    app_name: String,
+    schema_name: String,
+    hnsw_schema_name_suffix: String,
     cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
@@ -593,9 +596,10 @@ impl From<Config> for CommonConfig {
             return_partial_results,
             disable_persistence,
             enable_debug_timing: _,
-            node_hostnames: _,    // Could be different for each server
-            service_ports: _,     // Could be different for each server
-            healthcheck_ports: _, // Could be different for each server
+            node_hostnames: _,            // Could be different for each server
+            service_ports: _,             // Could be different for each server
+            healthcheck_ports: _,         // Could be different for each server
+            http_query_retry_delay_ms: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
             image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
@@ -618,6 +622,7 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
@@ -629,11 +634,11 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
-            app_name,
+            schema_name,
+            hnsw_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
@@ -671,6 +676,7 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
+            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
             hnsw_param_M,
@@ -681,11 +687,11 @@ impl From<Config> for CommonConfig {
             mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
-            enable_sync_queues_on_sns_sequence_number,
             sqs_sync_long_poll_seconds,
             hawk_server_deletions_enabled,
             hawk_server_reauths_enabled,
-            app_name,
+            schema_name,
+            hnsw_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,

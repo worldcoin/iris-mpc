@@ -3,7 +3,6 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
-use crate::services::store::{load_db, S3LoaderParams};
 use aws_sdk_sns::types::MessageAttributeValue;
 
 use eyre::{bail, eyre, Report, Result};
@@ -31,10 +30,11 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::{S3Store, Store};
+use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::Store;
 use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 use std::mem;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
@@ -79,10 +79,10 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let sync_result = get_others_sync_state(&config, &my_state).await?;
+    let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    maybe_sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
     sync_dbs_rollback(&config, &sync_result, &iris_store).await?;
 
     if shutdown_handler.is_shutting_down() {
@@ -96,7 +96,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config,
         &iris_store,
         &graph_store,
-        &aws_clients,
         &shutdown_handler,
         &mut hawk_actor,
     )
@@ -127,7 +126,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &iris_store,
         &aws_clients,
         shares_encryption_key_pair,
-        &sync_result,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
@@ -189,9 +187,14 @@ fn max_rollback(config: &Config) -> usize {
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let schema_name = format!(
+    let iris_schema_name = format!(
         "{}_{}_{}",
-        config.app_name, config.environment, config.party_id
+        config.schema_name, config.environment, config.party_id
+    );
+
+    let hawk_schema_name = format!(
+        "{}{}_{}_{}",
+        config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
     );
 
     match config.mode_of_deployment {
@@ -202,9 +205,12 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let hawk_postgres_client =
-                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
-                    .await?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &iris_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             // Store -> CPU
             tracing::info!(
@@ -233,7 +239,8 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .ok_or(eyre!("Missing database config"))?;
 
             let postgres_client =
-                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadOnly).await?;
+                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadOnly)
+                    .await?;
 
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
@@ -247,9 +254,12 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let hawk_postgres_client =
-                PostgresClient::new(&hawk_db_config.url, &schema_name, AccessMode::ReadWrite)
-                    .await?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &hawk_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
@@ -261,29 +271,41 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             Ok((iris_store, graph_store))
         }
 
-        // use the base db for both stores
-        _ => {
+        ModeOfDeployment::Standard => {
             let db_config = config
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
 
             let postgres_client =
-                PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
+                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadWrite)
+                    .await?;
 
             tracing::info!(
                 "Creating new iris store from: {:?} in mode {:?}",
                 db_config,
                 config.mode_of_deployment
             );
+
             let iris_store = Store::new(&postgres_client).await?;
+
+            let hawk_db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config in Standard"))?;
+            let hawk_postgres_client = PostgresClient::new(
+                &hawk_db_config.url,
+                &hawk_schema_name,
+                AccessMode::ReadWrite,
+            )
+            .await?;
 
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
-                db_config,
+                hawk_db_config,
                 config.mode_of_deployment
             );
-            let graph_store = GraphStore::new(&postgres_client).await?;
+            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
             Ok((iris_store, graph_store))
         }
@@ -418,40 +440,42 @@ async fn build_sync_state(
     store: &Store,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
-    let deleted_request_ids = store
-        .last_deleted_requests(max_sync_lookback(config))
-        .await?;
     let modifications = store.last_modifications(max_sync_lookback(config)).await?;
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
+    tracing::info!("Database store length is: {}", db_len);
+
     Ok(SyncState {
         db_len,
-        deleted_request_ids,
         modifications,
         next_sns_sequence_num,
         common_config,
     })
 }
 
-/// If enabled in `config.enable_sync_queues_on_sns_sequence_number`, delete stale
-/// SQS messages in requests queue with sequence number older than the most
-/// recent sequence number seen by any MPC party.
-async fn maybe_sync_sqs_queues(
+async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncResult> {
+    let mut all_states = vec![my_state.clone()];
+    all_states.extend(get_others_sync_state(config).await?);
+    let sync_result = SyncResult::new(my_state.clone(), all_states);
+    Ok(sync_result)
+}
+
+/// Delete stale SQS messages in requests queue with sequence number older than the most recent
+/// sequence number seen by any MPC party.
+async fn sync_sqs_queues(
     config: &Config,
     sync_result: &SyncResult,
     aws_clients: &AwsClients,
 ) -> Result<()> {
-    if config.enable_sync_queues_on_sns_sequence_number {
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            config,
-            &aws_clients.sqs_client,
-            sync_result.my_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-        )
-        .await?;
-    }
+    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+    delete_messages_until_sequence_num(
+        config,
+        &aws_clients.sqs_client,
+        sync_result.my_state.next_sns_sequence_num,
+        max_sqs_sequence_num,
+    )
+    .await?;
 
     Ok(())
 }
@@ -466,6 +490,8 @@ async fn sync_dbs_rollback(
     iris_store: &Store,
 ) -> Result<()> {
     let my_db_len = iris_store.count_irises().await?;
+
+    tracing::info!("Database store length is: {}", my_db_len);
 
     if let Some(min_db_len) = sync_result.must_rollback_storage() {
         tracing::error!("Databases are out-of-sync: {:?}", sync_result);
@@ -506,6 +532,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
+        stream_parallelism: config.hawk_stream_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,
@@ -530,7 +557,6 @@ async fn load_database(
     config: &Config,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store>,
-    aws_clients: &AwsClients,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
@@ -558,26 +584,12 @@ async fn load_database(
 
     let store_len = iris_store.count_irises().await?;
 
-    let s3_loader_params = S3LoaderParams {
-        db_chunks_s3_store: S3Store::new(
-            aws_clients.db_chunks_s3_client.clone(),
-            config.db_chunks_bucket_name.clone(),
-        ),
-        db_chunks_s3_client: aws_clients.db_chunks_s3_client.clone(),
-        s3_chunks_folder_name: config.db_chunks_folder_name.clone(),
-        s3_chunks_bucket_name: config.db_chunks_bucket_name.clone(),
-        s3_load_parallelism: config.load_chunks_parallelism,
-        s3_load_max_retries: config.load_chunks_max_retries,
-        s3_load_initial_backoff_ms: config.load_chunks_initial_backoff_ms,
-    };
-
-    load_db(
+    load_iris_db(
         &mut iris_loader,
         iris_store,
         store_len,
         parallelism,
         config,
-        Some(s3_loader_params),
         download_shutdown_handler,
     )
     .await
@@ -643,7 +655,6 @@ async fn run_main_server_loop(
     iris_store: &Store,
     aws_clients: &AwsClients,
     shares_encryption_key_pair: SharesEncryptionKeyPairs,
-    sync_result: &SyncResult,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
@@ -656,8 +667,6 @@ async fn run_main_server_loop(
 
     let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
-    let mut skip_request_ids = sync_result.deleted_request_ids();
-
     let party_id = config.party_id;
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
@@ -666,9 +675,6 @@ async fn run_main_server_loop(
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let res: Result<()> = async {
         tracing::info!("Entering main loop");
-
-        // Skip requests based on the startup sync, only in the first iteration.
-        let skip_request_ids = mem::take(&mut skip_request_ids);
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
@@ -679,8 +685,6 @@ async fn run_main_server_loop(
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
-            iris_store.clone(),
-            skip_request_ids,
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
             uniqueness_error_result_attribute.clone(),

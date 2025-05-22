@@ -1,5 +1,4 @@
-use crate::services::aws::s3::{create_db_chunks_s3_client, create_s3_client};
-
+use crate::services::aws::s3::create_s3_client;
 use crate::services::aws::sqs::create_sqs_client;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -14,7 +13,6 @@ pub struct AwsClients {
     pub sqs_client: SQSClient,
     pub sns_client: SNSClient,
     pub s3_client: S3Client,
-    pub db_chunks_s3_client: S3Client,
     pub secrets_manager_client: SecretsManagerClient,
 }
 
@@ -35,14 +33,12 @@ impl AwsClients {
 
         let sqs_client = create_sqs_client(&shared_config, config.sqs_long_poll_wait_time);
         let s3_client = create_s3_client(&shared_config, force_path_style);
-        let db_chunks_s3_client = create_db_chunks_s3_client(&shared_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
 
         Ok(Self {
             sqs_client,
             sns_client,
             s3_client,
-            db_chunks_s3_client,
             secrets_manager_client,
         })
     }
@@ -55,7 +51,6 @@ impl Clone for AwsClients {
             sqs_client: self.sqs_client.clone(),
             sns_client: self.sns_client.clone(),
             s3_client: self.s3_client.clone(),
-            db_chunks_s3_client: self.db_chunks_s3_client.clone(),
             secrets_manager_client: self.secrets_manager_client.clone(),
         }
     }

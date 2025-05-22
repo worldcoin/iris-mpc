@@ -8,14 +8,22 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SessionId(pub u64);
+pub struct SessionId(pub u32);
 
-impl From<u64> for SessionId {
-    fn from(id: u64) -> Self {
+impl From<u32> for SessionId {
+    fn from(id: u32) -> Self {
         SessionId(id)
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StreamId(pub u32);
+
+impl From<u32> for StreamId {
+    fn from(id: u32) -> Self {
+        StreamId(id)
+    }
+}
 pub type NetworkingImpl = Box<dyn Networking + Send + Sync>;
 
 #[derive(Debug)]

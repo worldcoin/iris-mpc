@@ -1,3 +1,4 @@
+pub mod loader;
 mod s3_importer;
 
 use bytemuck::cast_slice;
@@ -12,13 +13,14 @@ use iris_mpc_common::{
     helpers::sync::{Modification, ModificationStatus},
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
-    vector_id::VectorId,
+    vector_id::{SerialId, VectorId},
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use serde::{de::DeserializeOwned, Serialize};
+use sqlx::{types::Json, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// The unified type that can hold either DB or S3 variants.
@@ -60,8 +62,7 @@ impl DbStoredIris {
     }
 
     pub fn vector_id(&self) -> VectorId {
-        // TODO: Distinguish vector_id from serial_id.
-        VectorId::from_serial_id(self.id as u32)
+        VectorId::new(self.id as u32, self.version_id)
     }
 
     pub fn left_code(&self) -> &[u16] {
@@ -93,9 +94,11 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
-#[derive(sqlx::FromRow, Debug, Default)]
-struct StoredState {
-    request_id: String,
+// Convertor: DbStoredIris -> IrisIdentifiers.
+impl From<&DbStoredIris> for VectorId {
+    fn from(value: &DbStoredIris) -> Self {
+        VectorId::new(value.serial_id() as SerialId, value.version_id())
+    }
 }
 
 #[derive(sqlx::FromRow, Debug, Default)]
@@ -167,7 +170,7 @@ impl Store {
     ///
     pub async fn fetch_iris_batch(
         &self,
-        identifiers: Vec<u64>,
+        identifiers: Vec<u32>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
         // TODO: define max batch size constant.
         assert!(
@@ -175,57 +178,22 @@ impl Store {
             "Invalid identifier set"
         );
 
-        tracing::info!(
-            "Iris Store: Fetching a batch of {} Irises",
-            identifiers.len()
-        );
-
-        // Conversion required for sql interpolation.
+        // Map identifiers - necessary for sql interpolation.
         let identifiers: Vec<i64> = identifiers.into_iter().map(|x| x as i64).collect();
 
-        let irises = sqlx::query_as::<_, DbStoredIris>(
+        // Exec query.
+        let data = sqlx::query_as::<_, DbStoredIris>(
             r#"
             SELECT * FROM irises
-            ORDER BY id ASC
             WHERE id = ANY($1)
+            ORDER BY id ASC
             "#,
         )
         .bind(&identifiers)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(irises)
-    }
-
-    /// Fetches first row from Iris table matched by id.
-    ///
-    /// # Arguments
-    ///
-    /// * `serial_id` - Serial ID of Iris to be fetched.
-    ///
-    /// # Returns
-    ///
-    /// Maybe a `DbStoredIris` instance.
-    ///
-    pub async fn fetch_iris_by_serial_id(
-        &self,
-        serial_id: u64,
-    ) -> sqlx::Result<DbStoredIris, sqlx::Error> {
-        tracing::info!(
-            "PostgreSQL Store: Fetching Iris by serial-id ({})",
-            serial_id
-        );
-
-        // Conversion required for sql interpolation.
-        let id_of_iris = serial_id as i32;
-
-        Ok(
-            sqlx::query_as::<_, DbStoredIris>("SELECT * FROM irises WHERE id = $1")
-                .bind(id_of_iris)
-                .fetch_one(&self.pool)
-                .await
-                .expect("DB operation failure :: Fetch Iris by ID."),
-        )
+        Ok(data)
     }
 
     /// Stream irises in order.
@@ -253,6 +221,7 @@ impl Store {
         .bind(i64::try_from(id_range.end).expect("id fits into i64"))
         .fetch(&self.pool)
     }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
@@ -440,27 +409,6 @@ WHERE id = $1;
         Ok(result_events)
     }
 
-    pub async fn mark_requests_deleted(&self, request_ids: &[String]) -> Result<()> {
-        if request_ids.is_empty() {
-            return Ok(());
-        }
-        // Insert request_ids that are deleted from the queue.
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO sync (request_id)");
-        query.push_values(request_ids, |mut query, request_id| {
-            query.push_bind(request_id);
-        });
-        query.build().execute(&self.pool).await?;
-        Ok(())
-    }
-
-    pub async fn last_deleted_requests(&self, count: usize) -> Result<Vec<String>> {
-        let rows = sqlx::query_as::<_, StoredState>("SELECT * FROM sync ORDER BY id DESC LIMIT $1")
-            .bind(count as i64)
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.into_iter().rev().map(|r| r.request_id).collect())
-    }
-
     pub async fn insert_modification(
         &self,
         serial_id: i64,
@@ -594,6 +542,86 @@ WHERE id = $1;
         Ok(())
     }
 
+    /// Retrieve entry from `persistent_state` table with associated `domain` and `key` identifiers.
+    ///
+    /// Returns `Some(value)` if an entry exists for these identifiers and deserialization to generic
+    /// type `T` succeeds.  If no entry exists, then returns `None`.
+    pub async fn get_persistent_state<T: DeserializeOwned>(
+        &self,
+        domain: &str,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let row = sqlx::query(
+            r#"
+            SELECT "value"
+            FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let value = row.try_get("value")?;
+            let deserialized: T = serde_json::from_value(value)?;
+            Ok(Some(deserialized))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set the entry in the `persistent_state` table for primary key `(domain, key)`.
+    ///
+    /// If an entry already exists for this primary key, this overwrites the existing
+    /// value with the value specified here.
+    pub async fn set_persistent_state<T: Serialize>(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+        value: &T,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO persistent_state (domain, "key", "value")
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain, "key")
+            DO UPDATE SET "value" = EXCLUDED."value"
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .bind(Json(value))
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete an entry in the `persistent_state` table with primary key `(domain, key)`,
+    /// if it exists.
+    pub async fn delete_persistent_state(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+    ) -> Result<()> {
+        // let value_json = Json(value);
+
+        sqlx::query(
+            r#"
+            DELETE FROM persistent_state
+            WHERE domain = $1 AND "key" = $2;
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
     /// Initialize the database with random shares and masks. Cleans up the db
     /// before inserting new generated irises.
     pub async fn init_db_with_random_shares(
@@ -692,7 +720,9 @@ pub mod tests {
         postgres::AccessMode,
     };
 
-    const MAX_CONNECTIONS: u32 = 100;
+    // Max connections default to 100 for Postgres, but can't test at quite this level when running
+    // multiple DB-related tests in parallel.
+    const MAX_CONNECTIONS: u32 = 80;
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
@@ -784,7 +814,6 @@ pub mod tests {
         store.insert_results(&mut tx, &[]).await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
-        store.mark_requests_deleted(&[]).await?;
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
@@ -928,30 +957,6 @@ pub mod tests {
 
         let got = store.last_results(2).await?;
         assert_eq!(got, vec!["event1", "event2"]);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_mark_requests_deleted() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        assert_eq!(store.last_deleted_requests(2).await?.len(), 0);
-
-        for i in 0..2 {
-            let request_ids = (0..2)
-                .map(|j| format!("test_{}_{}", i, j))
-                .collect::<Vec<_>>();
-            store.mark_requests_deleted(&request_ids).await?;
-
-            let got = store.last_deleted_requests(2).await?;
-            assert_eq!(got, request_ids);
-        }
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
@@ -1302,16 +1307,73 @@ pub mod tests {
             "IDs must be contiguous and in order"
         );
     }
+
+    #[tokio::test]
+    async fn test_persistent_state() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let domain = "test_domain".to_string();
+        let key = "foo".to_string();
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Insert value at index
+        let set_value = "bar".to_string();
+        let mut tx = store.tx().await?;
+        Store::set_persistent_state(&mut tx, &domain, &key, &set_value).await?;
+        tx.commit().await?;
+
+        // Check value is set at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(set_value));
+
+        // Insert new value at index
+        let new_set_value = "bear".to_string();
+        let mut tx = store.tx().await?;
+        Store::set_persistent_state(&mut tx, &domain, &key, &new_set_value).await?;
+        tx.commit().await?;
+
+        // Check value is updated at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(new_set_value));
+
+        // Delete value at index
+        let mut tx = store.tx().await?;
+        Store::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Delete value at index again
+        let mut tx = store.tx().await?;
+        Store::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check still no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        Ok(())
+    }
 }
 
 pub mod test_utils {
     use super::*;
-    const APP_NAME: &str = "SMPC";
+    const SCHEMA_NAME: &str = "SMPC";
     const DOTENV_TEST: &str = ".env.test";
 
     pub fn test_db_url() -> Result<String> {
         dotenvy::from_filename(DOTENV_TEST)?;
-        Ok(Config::load_config(APP_NAME)?
+        Ok(Config::load_config(SCHEMA_NAME)?
             .database
             .ok_or(eyre!("Missing database config"))?
             .url)

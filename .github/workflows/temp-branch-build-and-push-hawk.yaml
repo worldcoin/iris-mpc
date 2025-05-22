@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "POP-2269/add-pushing-branches-for-cpu"
+      - "POP-2413/update-s3-importer-to-include-version-id-2"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -15,8 +15,9 @@ env:
 
 jobs:
   docker:
+    timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: ubuntu-22.04-32core
     permissions:
       packages: write
       contents: read
@@ -41,7 +42,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          file: Dockerfile.hawk

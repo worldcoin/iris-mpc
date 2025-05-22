@@ -46,7 +46,10 @@ impl HawkSession {
         // Receive their state.
         let decode = |msg| match NetworkValue::from_network(msg) {
             Ok(NetworkValue::StateChecksum(c)) => Ok(c),
-            _ => Err(eyre!("Could not deserialize StateChecksum")),
+            other => {
+                tracing::error!("Unexpected message format: {:?}", other);
+                Err(eyre!("Could not deserialize StateChecksum"))
+            }
         };
         let prev_state = decode(net.receive_prev().await)?;
         let next_state = decode(net.receive_next().await)?;
