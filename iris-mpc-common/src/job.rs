@@ -129,6 +129,11 @@ pub struct ServerJobResult<A = ()> {
     pub partial_match_ids_left: Vec<Vec<u32>>,
     // same, but for the right side
     pub partial_match_ids_right: Vec<Vec<u32>>,
+    // For each query, the rotation indices (-15 to +15) that produced matches
+    // on the left eye. These correspond 1:1 with entries in partial_match_ids_left
+    pub partial_match_rotation_indices_left: Vec<Vec<i8>>,
+    // Same, but for the right side
+    pub partial_match_rotation_indices_right: Vec<Vec<i8>>,
     // same but for full face mirror attacks
     pub full_face_mirror_partial_match_ids_left: Vec<Vec<u32>>,
     pub full_face_mirror_partial_match_ids_right: Vec<Vec<u32>>,

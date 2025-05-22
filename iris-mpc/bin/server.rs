@@ -1733,6 +1733,8 @@ async fn server_main(config: Config) -> Result<()> {
             full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            partial_match_rotation_indices_left,
+            partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
@@ -1803,6 +1805,14 @@ async fn server_main(config: Config) -> Result<()> {
                         },
                         match partial_match_counters_left.is_empty() {
                             false => Some(partial_match_counters_left[i]),
+                            true => None,
+                        },
+                        match partial_match_rotation_indices_left[i].is_empty() {
+                            false => Some(partial_match_rotation_indices_left[i].clone()),
+                            true => None,
+                        },
+                        match partial_match_rotation_indices_right[i].is_empty() {
+                            false => Some(partial_match_rotation_indices_right[i].clone()),
                             true => None,
                         },
                         match full_face_mirror_match_ids[i].is_empty() {
