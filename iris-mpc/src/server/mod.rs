@@ -580,18 +580,25 @@ async fn load_database(
 
     let store_len = iris_store.count_irises().await?;
 
-    load_iris_db(
+    let now = Instant::now();
+    let iris_load_future = load_iris_db(
         &mut iris_loader,
         iris_store,
         store_len,
         parallelism,
         config,
         download_shutdown_handler,
-    )
-    .await
-    .expect("Failed to load DB");
+    );
 
-    graph_loader.load_graph_store(graph_store).await?;
+    let graph_load_future = graph_loader.load_graph_store(graph_store);
+
+    let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
+    iris_result.expect("Failed to load iris DB");
+    graph_result.expect("Failed to load graph DB");
+    tracing::info!(
+        "Loaded both iris and graph DBs into memory in {:?}",
+        now.elapsed()
+    );
 
     Ok(())
 }
