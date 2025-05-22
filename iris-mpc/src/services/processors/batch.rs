@@ -34,7 +34,6 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
-use tokio::time::{timeout, Duration};
 
 #[allow(clippy::too_many_arguments)]
 pub fn receive_batch_stream(
@@ -188,7 +187,7 @@ impl<'a> BatchProcessor<'a> {
         let max_batch_size = self.config.max_batch_size;
         let queue_url = &self.config.requests_queue_url;
         match self.poll_until_batch_size(max_batch_size, queue_url).await {
-            Ok(()) => {}
+            Ok(results) => results,
             Err(ReceiveRequestError::BatchPollingTimeout(timeout_secs)) => {
                 tracing::info!(
                     "Batch polling timeout reached after {} secs, checking other nodes' sync states",
@@ -237,43 +236,38 @@ impl<'a> BatchProcessor<'a> {
             max_batch_size,
             self.msg_counter
         );
-        let timeout_secs = self.config.batch_polling_timeout_secs;
-        let overall_timeout = Duration::from_secs(timeout_secs as u64);
+        while self.msg_counter < max_batch_size {
+            let rcv_message_output = self
+                .client
+                .receive_message()
+                .wait_time_seconds(self.config.batch_polling_timeout_secs)
+                .max_number_of_messages(10)
+                .queue_url(queue_url)
+                .send()
+                .await
+                .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
 
-        let polling_future = async {
-            while self.msg_counter < max_batch_size {
-                let rcv_message_output = self
-                    .client
-                    .receive_message()
-                    .wait_time_seconds(self.config.sqs_long_poll_wait_time as i32)
-                    .max_number_of_messages(1)
-                    .queue_url(queue_url)
-                    .send()
-                    .await
-                    .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
+            if let Some(messages) = rcv_message_output.messages {
+                if messages.is_empty() {
+                    // No more messages in the queue
+                    tracing::info!("No more messages in the queue");
+                    break;
+                }
 
-                if let Some(messages) = rcv_message_output.messages {
-                    if messages.is_empty() {
-                        tracing::info!("No more messages in the queue");
+                for sqs_message in messages {
+                    self.process_message(sqs_message).await?;
+
+                    // Check if we've reached the target batch size
+                    if self.msg_counter >= max_batch_size {
                         break;
                     }
-                    for sqs_message in messages {
-                        self.process_message(sqs_message).await?;
-                        if self.msg_counter >= max_batch_size {
-                            break;
-                        }
-                    }
-                } else {
-                    tokio::time::sleep(SQS_POLLING_INTERVAL).await;
                 }
+            } else {
+                // No messages received
+                tokio::time::sleep(SQS_POLLING_INTERVAL).await;
             }
-            Ok(())
-        };
-
-        match timeout(overall_timeout, polling_future).await {
-            Ok(res) => res,
-            Err(_) => Err(ReceiveRequestError::BatchPollingTimeout(timeout_secs)),
         }
+        Ok(())
     }
 
     async fn poll_until_sequence_num(

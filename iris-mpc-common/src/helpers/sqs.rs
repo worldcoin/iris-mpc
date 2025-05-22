@@ -41,7 +41,7 @@ pub async fn get_next_sns_seq_num(config: &Config, sqs_client: &Client) -> Resul
         }
     } else {
         tracing::info!("Timeout while waiting for a message in the queue. Queue is clean.");
-        Ok(Some(0))
+        Ok(None)
     }
 }
 

@@ -36,6 +36,10 @@ async fn per_side(
 ) -> Result<VecRequests<MapEdges<bool>>> {
     // A request is to compare all rotations to a list of vectors - it is the length of the vector ids.
     let n_requests = missing_vector_ids.len();
+    // If there are no missing vectors, there is nothing to match.
+    if n_requests == 0 {
+        return Ok(VecRequests::new());
+    }
     // A task is to compare one rotation to the vectors.
     let n_tasks = n_requests * ROTATIONS;
     let n_sessions = sessions.len();

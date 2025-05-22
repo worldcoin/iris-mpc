@@ -34,11 +34,17 @@ impl BatchSyncResult {
 pub async fn get_own_batch_sync_state(
     config: &Config,
     sqs_client: &aws_sdk_sqs::Client,
-) -> eyre::Result<BatchSyncState> {
-    let next_sns_sequence_num = get_next_sns_seq_num(config, &sqs_client.clone())
-        .await?
-        .unwrap_or(0);
-    println!("fetching next_sns_sequence_num: {}", next_sns_sequence_num);
+) -> Result<BatchSyncState> {
+    let next_sns_sequence_num = match get_next_sns_seq_num(config, &sqs_client.clone()).await? {
+        Some(seq) => {
+            println!("fetching next_sns_sequence_num: {}", seq);
+            seq
+        }
+        None => {
+            println!("fetching next_sns_sequence_num: None (queue was empty)");
+            0
+        }
+    };
     let batch_sync_state = BatchSyncState {
         next_sns_sequence_num,
     };
