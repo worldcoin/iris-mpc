@@ -54,6 +54,7 @@ use std::{
     vec,
 };
 use tokio::{
+    join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
 };
@@ -482,9 +483,11 @@ impl HawkActor {
                 })
             });
         tracing::info!(
-            "Keeping {} distances for eye {side} out of {} search results.",
+            "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
             distances.clone().count(),
-            search_results.len()
+            search_results.len(),
+            self.distances_cache[side].len(),
+            self.args.match_distances_buffer_size,
         );
         self.distances_cache[side].extend(distances);
     }
@@ -607,10 +610,29 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
-        let mut graph_tx = graph_store.tx().await?;
-        for (side, mut graph) in izip!(STORE_IDS, self.0) {
-            *graph = graph_tx.with_graph(side).load_to_mem().await?;
-        }
+        let now = Instant::now();
+
+        // Spawn two independent transactions and load each graph in parallel.
+        let (graph_left, graph_right) = join!(
+            async {
+                let mut graph_tx = graph_store.tx().await?;
+                graph_tx.with_graph(StoreId::Left).load_to_mem().await
+            },
+            async {
+                let mut graph_tx = graph_store.tx().await?;
+                graph_tx.with_graph(StoreId::Right).load_to_mem().await
+            }
+        );
+        let graph_left = graph_left.expect("Could not load left graph");
+        let graph_right = graph_right.expect("Could not load right graph");
+
+        let GraphLoader(mut graphs) = self;
+        *graphs[LEFT] = graph_left;
+        *graphs[RIGHT] = graph_right;
+        tracing::info!(
+            "GraphLoader: Loaded left and right graphs in {:?}",
+            now.elapsed()
+        );
         Ok(())
     }
 }

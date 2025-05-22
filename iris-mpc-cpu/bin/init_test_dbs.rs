@@ -141,6 +141,11 @@ struct Args {
     /// shares of iris codes.
     #[clap(long, default_value = "1")]
     aby3_prng_seed: u64,
+
+    /// Skip creation of the HNSW graph. When set to true, only the iris codes
+    /// are processed and persisted, without building the HNSW graph.
+    #[clap(long, default_value = "false")]
+    skip_hnsw_graph: bool,
 }
 
 impl Args {
@@ -282,6 +287,11 @@ async fn main() -> Result<()> {
     }
 
     info!("Finished persisting {} locally generated shares", n_read);
+
+    if args.skip_hnsw_graph {
+        info!("Skipping HNSW graph construction");
+        return Ok(());
+    }
 
     info!("⚓ ANCHOR: Constructing HNSW graph databases");
 

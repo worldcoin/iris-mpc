@@ -8,6 +8,7 @@ pub struct Config {
     pub max_indexation_id: IrisSerialId,
     pub last_indexed_id: IrisSerialId,
     pub excluded_serial_ids: Vec<IrisSerialId>,
+    pub batch_size: usize,
 }
 
 /// Constructor.
@@ -28,7 +29,6 @@ impl Config {
 /// Encapsulates a node's synchronization state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    pub db_len: u64,
     pub common_config: CommonConfig,
     pub genesis_config: Config,
 }
@@ -63,30 +63,14 @@ impl SyncResult {
 /// Methods.
 impl SyncResult {
     /// Check if the common part of the config is the same across all nodes.
-    pub fn check_genesis_config(&self) -> Result<()> {
-        let genesis_config = self.my_state.genesis_config.clone();
+    pub fn check_synced_state(&self) -> Result<()> {
+        let my_state = self.my_state.clone();
         for state in &self.all_states {
             ensure!(
-                state.genesis_config == genesis_config,
-                "Inconsistent genesis config"
-            );
-        }
-        Ok(())
-    }
-
-    /// Check if the genesis-specific state is the same across all nodes.
-    pub fn check_common_config(&self) -> Result<()> {
-        let my_config = &self.my_state.common_config;
-        for SyncState {
-            common_config: other_config,
-            ..
-        } in self.all_states.iter()
-        {
-            ensure!(
-                my_config == other_config,
-                "Inconsistent common config!\nhave: {:?}\ngot: {:?}",
-                my_config,
-                other_config
+                *state == my_state,
+                "Inconsistent genesis config!\nhave: {:?}\ngot: {:?}",
+                my_state,
+                state
             );
         }
         Ok(())
