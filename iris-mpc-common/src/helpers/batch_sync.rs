@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::helpers::sqs::get_next_sns_seq_num;
 use crate::server_coordination::get_check_addresses;
+use eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,7 +49,7 @@ pub async fn get_batch_sync_states(
     config: &Config,
     sqs_client: &aws_sdk_sqs::Client,
     own_state: Option<&BatchSyncState>,
-) -> Vec<BatchSyncState> {
+) -> Result<Vec<BatchSyncState>> {
     let all_batch_size_sync_addresses = get_check_addresses(
         &config.node_hostnames,
         &config.healthcheck_ports,
@@ -57,46 +58,24 @@ pub async fn get_batch_sync_states(
 
     let own_sync_state = match own_state {
         Some(state) => state.clone(),
-        None => get_own_batch_sync_state(config, sqs_client).await.unwrap(),
+        None => get_own_batch_sync_state(config, sqs_client).await?,
     };
 
     let next_node = &all_batch_size_sync_addresses[(config.party_id + 1) % 3];
     let prev_node = &all_batch_size_sync_addresses[(config.party_id + 2) % 3];
 
-    let mut states = vec![own_sync_state.clone()];
+    let mut states = Vec::with_capacity(3);
+    states.push(own_sync_state.clone());
 
     for host in [next_node, prev_node].iter() {
-        let res = reqwest::get(host.as_str()).await;
-        match res {
-            Ok(res) => {
-                let state: BatchSyncState = match res.json().await {
-                    Ok(state) => state,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to parse batch size sync state from party {}: {:?}",
-                            host,
-                            e
-                        );
-                        panic!(
-                            "could not get batch size sync state from party {}, trying to restart",
-                            host
-                        );
-                    }
-                };
-                states.push(state);
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Failed to fetch batch sync state from party {}: {:?}",
-                    host,
-                    e
-                );
-                panic!(
-                    "could not get batch sync state from party {}, trying to restart",
-                    host
-                );
-            }
-        }
+        let res = reqwest::get(host.as_str())
+            .await
+            .with_context(|| format!("Failed to fetch batch sync state from party {}", host))?;
+        let state: BatchSyncState = res
+            .json()
+            .await
+            .with_context(|| format!("Failed to parse batch sync state from party {}", host))?;
+        states.push(state);
     }
-    states
+    Ok(states)
 }

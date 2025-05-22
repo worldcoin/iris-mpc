@@ -15,6 +15,7 @@ pub fn create_sqs_client(
             .timeout_config(
                 TimeoutConfig::builder()
                     .operation_attempt_timeout(Duration::from_secs((wait_time_seconds + 2) as u64))
+                    .operation_timeout(Duration::from_secs((wait_time_seconds + 2) as u64))
                     .build(),
             )
             .build(),

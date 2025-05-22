@@ -123,10 +123,32 @@ where
                 .route(
                     "/batch-sync-state",
                     get(move || async move {
-                        let batch_sync_state = get_own_batch_sync_state(&config, &sqs_client)
-                            .await
-                            .unwrap();
-                        serde_json::to_string(&batch_sync_state).unwrap()
+                        match get_own_batch_sync_state(&config, &sqs_client).await {
+                            Ok(batch_sync_state) => {
+                                match serde_json::to_string(&batch_sync_state) {
+                                    Ok(body) => (StatusCode::OK, body).into_response(),
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to serialize batch sync state: {:?}",
+                                            e
+                                        );
+                                        (
+                                            StatusCode::INTERNAL_SERVER_ERROR,
+                                            format!("Serialization error: {}", e),
+                                        )
+                                            .into_response()
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to fetch batch sync state: {:?}", e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Error fetching batch sync state: {}", e),
+                                )
+                                    .into_response()
+                            }
+                        }
                     }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
