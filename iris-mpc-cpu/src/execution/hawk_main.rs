@@ -610,6 +610,8 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+        let now = Instant::now();
+
         // Spawn two independent transactions and load each graph in parallel.
         let (graph_left, graph_right) = join!(
             async {
@@ -627,7 +629,10 @@ impl<'a> GraphLoader<'a> {
         let GraphLoader(mut graphs) = self;
         *graphs[LEFT] = graph_left;
         *graphs[RIGHT] = graph_right;
-
+        tracing::info!(
+            "GraphLoader: Loaded left and right graphs in {:?}",
+            now.elapsed()
+        );
         Ok(())
     }
 }
