@@ -165,11 +165,25 @@ pub async fn set_id_of_last_indexed(
     .await
 }
 
+/// Unsets serial id of last Iris to have been indexed.
+///
+/// # Arguments
+///
+/// * `tx` - PostgreSQL transaction to use for operation scope.
+///
+/// # Returns
+///
+/// Result<()> on success
+///
+pub async fn unset_id_of_last_indexed(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    Store::delete_persistent_state(tx, STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED).await
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::genesis::set_id_of_last_indexed;
-
-    use super::{fetch_iris_batch, get_id_of_last_indexed};
+    use super::{
+        fetch_iris_batch, get_id_of_last_indexed, set_id_of_last_indexed, unset_id_of_last_indexed,
+    };
     use eyre::Result;
     use iris_mpc_common::{
         postgres::{AccessMode, PostgresClient, PostgresSchemaName},
@@ -210,20 +224,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_last_indexed() -> Result<()> {
+    async fn test_id_of_last_indexed() -> Result<()> {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
-        let mut tx = iris_store.tx().await?;
 
         let last_indexed = get_id_of_last_indexed(&iris_store).await?;
         assert_eq!(last_indexed, 0);
 
         let last_indexed = 10_u32;
+        let mut tx = iris_store.tx().await?;
         set_id_of_last_indexed(&mut tx, &last_indexed).await?;
         tx.commit().await?;
 
         let last_indexed = get_id_of_last_indexed(&iris_store).await?;
         assert_eq!(last_indexed, 10);
+
+        let mut tx = iris_store.tx().await?;
+        unset_id_of_last_indexed(&mut tx).await?;
+        tx.commit().await?;
+
+        let last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        assert_eq!(last_indexed, 0);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
