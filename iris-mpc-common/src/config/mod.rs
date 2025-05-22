@@ -409,11 +409,11 @@ fn default_hawk_server_deletions_enabled() -> bool {
 }
 
 fn default_batch_polling_timeout_secs() -> i32 {
-    10
+    1
 }
 
 fn default_sqs_long_poll_wait_time() -> usize {
-    20
+    10
 }
 
 impl Config {

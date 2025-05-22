@@ -241,7 +241,7 @@ impl<'a> BatchProcessor<'a> {
                 .client
                 .receive_message()
                 .wait_time_seconds(self.config.batch_polling_timeout_secs)
-                .max_number_of_messages(10)
+                .max_number_of_messages(1)
                 .queue_url(queue_url)
                 .send()
                 .await
@@ -512,8 +512,10 @@ impl<'a> BatchProcessor<'a> {
 
             match result {
                 Ok((share_left, share_right)) => {
+                    println!("Parsed shares successfully");
                     self.batch_query.valid_entries.push(true);
                     self.add_shares_to_batch_query(share_left, share_right);
+                    println!("ADDED SHARES TO BATCH QUERY");
                 }
                 Err(e) => {
                     tracing::error!("Failed to process iris shares: {:?}", e);
