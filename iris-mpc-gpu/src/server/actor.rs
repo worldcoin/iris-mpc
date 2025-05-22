@@ -637,6 +637,10 @@ impl ServerActor {
             );
 
             metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
+
+            // Alternate the full scan side for the next batch
+            self.full_scan_side = self.full_scan_side.other();
+            tracing::info!("Switching full scan side to {}", self.full_scan_side);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -961,7 +965,10 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Fetching partial {} results", self.full_scan_side);
         let mut partial_matches_side1 = self.distance_comparator.get_partial_results(
-            &self.db_match_list_left,
+            match self.full_scan_side {
+                Eye::Left => &self.db_match_list_left,
+                Eye::Right => &self.db_match_list_right,
+            },
             &self.current_db_sizes,
             &self.streams[0],
         );
@@ -2010,11 +2017,6 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
     ) {
-        assert!(
-            eye_db == Eye::Right,
-            "We expect this to be called for the right eye only"
-        );
-
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 

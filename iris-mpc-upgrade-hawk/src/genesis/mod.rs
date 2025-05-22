@@ -47,7 +47,11 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// * `config` - Application configuration instance.
 /// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
-pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Result<()> {
+pub async fn exec_main(
+    config: Config,
+    max_indexation_id: IrisSerialId,
+    batch_size: usize,
+) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
 
@@ -69,7 +73,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     // Await coordination server to start.
     let my_state = get_sync_state(
         &config,
-        &iris_store,
+        batch_size,
         max_indexation_id,
         last_indexed_id,
         &excluded_serial_ids,
@@ -95,12 +99,7 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
 
     // Coordinator: await network state = synchronized.
     let sync_result = get_sync_result(&config, &my_state).await?;
-    sync_result.check_common_config()?;
-    sync_result.check_genesis_config()?;
-
-    // TODO: What should happen here - see Bryan.
-    // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
-
+    sync_result.check_synced_state()?;
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
@@ -130,12 +129,19 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
 
+    // Coordinator: escape on shutdown.
+    if shutdown_handler.is_shutting_down() {
+        log_warn(String::from("Shutting down has been triggered"));
+        return Ok(());
+    }
+
     // Process: execute main loop.
     log_info(String::from("Executing main loop"));
     exec_main_loop(
         &config,
         last_indexed_id,
         max_indexation_id,
+        batch_size,
         excluded_serial_ids,
         &iris_store,
         background_tasks,
@@ -167,6 +173,7 @@ async fn exec_main_loop(
     config: &Config,
     last_indexed_id: IrisSerialId,
     max_indexation_id: IrisSerialId,
+    batch_size: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
     mut task_monitor: TaskMonitor,
@@ -182,7 +189,7 @@ async fn exec_main_loop(
     let mut batch_generator = BatchGenerator::new(
         last_indexed_id + 1,
         max_indexation_id,
-        config.max_batch_size,
+        batch_size,
         excluded_serial_ids,
     );
     log_info(String::from("Batch generator initialised"));
@@ -197,6 +204,11 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         while let Some(Batch { data, id: batch_id }) = batch_generator.next_batch(iris_store).await? {
+               // Coordinator: escape on shutdown.
+            if shutdown_handler.is_shutting_down() {
+                log_warn(String::from("Shutting down has been triggered"));
+                break;
+            }
             let data_len = data.len();
 
             // Filter out any ids which have already been indexed -- there should be none
@@ -423,12 +435,11 @@ async fn get_service_clients(
 ///
 async fn get_sync_state(
     config: &Config,
-    store: &IrisStore,
+    batch_size: usize,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
 ) -> Result<GenesisSyncState> {
-    let db_len = store.count_irises().await? as u64;
     let common_config = CommonConfig::from(config.clone());
     let excluded_serial_ids = excluded_serial_ids.to_vec();
 
@@ -436,10 +447,10 @@ async fn get_sync_state(
         max_indexation_id,
         last_indexed_id,
         excluded_serial_ids,
+        batch_size,
     };
 
     Ok(GenesisSyncState {
-        db_len,
         common_config,
         genesis_config,
     })
