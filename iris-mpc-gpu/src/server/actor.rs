@@ -1187,11 +1187,13 @@ impl ServerActor {
             }
         }
 
-        // Fetch the partial matches
+        // Fetch the partial matches and the rotation indices for them
         let (
             partial_match_ids_left,
+            partial_match_rotation_indices_left,
             partial_match_counters_left,
             partial_match_ids_right,
+            partial_match_rotation_indices_right,
             partial_match_counters_right,
         ) = if self.return_partial_results {
             // Transfer the partial results to the host
@@ -1212,18 +1214,25 @@ impl ServerActor {
                 &partial_match_counters_left,
                 &self.distance_comparator.partial_results_left,
             );
+            // TODO: Implement the fetching of rotation indices in distance comparator
+            let partial_match_rotation_indices_left = vec![];
+
             let partial_results_right = self.distance_comparator.fetch_all_match_ids(
                 &partial_match_counters_right,
                 &self.distance_comparator.partial_results_right,
             );
+            // TODO: Implement the fetching of rotation indices in distance comparator
+            let partial_match_rotation_indices_right = vec![];
             (
                 partial_results_left,
+                partial_match_rotation_indices_left,
                 partial_match_counters_left,
                 partial_results_right,
+                partial_match_rotation_indices_right,
                 partial_match_counters_right,
             )
         } else {
-            (vec![], vec![], vec![], vec![])
+            (vec![], vec![], vec![], vec![], vec![], vec![])
         };
 
         let partial_match_counters_left = partial_match_counters_left.iter().fold(
@@ -1553,6 +1562,8 @@ impl ServerActor {
             full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            partial_match_rotation_indices_left,
+            partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
