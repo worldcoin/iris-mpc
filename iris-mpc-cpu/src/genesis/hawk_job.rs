@@ -1,3 +1,7 @@
+use super::{
+    utils::{PartyId, COUNT_OF_MPC_PARTIES},
+    Batch,
+};
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
@@ -7,8 +11,6 @@ use eyre::Result;
 use iris_mpc_common::IrisVectorId;
 use std::sync::Arc;
 use tokio::sync::oneshot;
-
-use super::Batch;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
@@ -40,7 +42,10 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: usize, Batch { data, id: batch_id }: Batch) -> Self {
+    pub fn new(party_id: PartyId, Batch { data, id: batch_id }: Batch) -> Self {
+        assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
+        assert!(!data.is_empty(), "Invalid batch: is empty");
+
         Self {
             batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
@@ -93,4 +98,15 @@ pub struct JobResult {
 
     /// Connect plans for updating the HNSW graph in DB
     pub connect_plans: HawkMutation,
+}
+
+/// Constructor.
+impl JobResult {
+    pub(crate) fn new(request: &JobRequest, connect_plans: HawkMutation) -> Self {
+        Self {
+            batch_id: request.batch_id,
+            identifiers: request.identifiers.clone(),
+            connect_plans,
+        }
+    }
 }
