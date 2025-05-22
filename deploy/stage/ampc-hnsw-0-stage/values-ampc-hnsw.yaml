@@ -50,6 +50,9 @@ env:
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
+  - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
+    value: "false"
+
   - name: SMPC__CPU_DISABLE_PERSISTENCE
     value: "false"
 
