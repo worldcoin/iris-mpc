@@ -218,9 +218,9 @@ async fn exec_main_loop(
         while let Some(batch) = batch_generator.next_batch(iris_store).await? {
             // Signal.
             log_info(format!(
-                "Indexing new batch: {} :: time {:?}",
+                "Indexing new batch: {} :: time {:?}s",
                 batch,
-                now.elapsed(),
+                now.elapsed().as_secs_f64(),
             ));
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
