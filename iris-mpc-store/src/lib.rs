@@ -1,3 +1,4 @@
+pub mod loader;
 mod s3_importer;
 
 use bytemuck::cast_slice;
@@ -61,8 +62,7 @@ impl DbStoredIris {
     }
 
     pub fn vector_id(&self) -> VectorId {
-        // TODO: Distinguish vector_id from serial_id.
-        VectorId::from_serial_id(self.id as u32)
+        VectorId::new(self.id as u32, self.version_id)
     }
 
     pub fn left_code(&self) -> &[u16] {
@@ -221,6 +221,7 @@ impl Store {
         .bind(i64::try_from(id_range.end).expect("id fits into i64"))
         .fetch(&self.pool)
     }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
