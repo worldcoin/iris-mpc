@@ -481,14 +481,14 @@ impl HawkActor {
                         .map(|(_, distance)| distance.clone())
                 })
             });
+        self.distances_cache[side].extend(distances.clone());
         tracing::info!(
             "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
-            distances.clone().count(),
+            distances.count(),
             search_results.len(),
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances);
     }
 
     async fn compute_buckets(
@@ -511,52 +511,36 @@ impl HawkActor {
             start = end;
         }
 
-        let (tx, mut rx) = mpsc::unbounded_channel::<(usize, Vec<Share<u32>>)>();
+        // Run threshold comparisons in parallel, collecting shares in order
         let tasks = sessions[side]
             .iter()
             .cloned()
             .zip(slices_data.into_iter())
-            .enumerate()
-            .map(|(i_session, (session_ref, slice))| {
+            .map(|(session_ref, slice)| {
                 let thresholds = translated_thresholds.clone();
-                let tx = tx.clone();
                 async move {
                     let mut session = session_ref.write().await;
-                    let shares = compare_threshold_buckets(
+                    compare_threshold_buckets(
                         &mut session.aby3_store.session,
                         thresholds.as_slice(),
                         &slice,
                     )
-                    .await?;
-                    tx.send((i_session, shares))?;
-                    Ok(())
+                    .await
                 }
             });
+        let shares_acc = parallelize(tasks).await?;
 
-        parallelize(tasks).await?;
-        drop(tx);
-
-        let mut shares_acc = vec![Vec::new(); n_sessions];
-        while let Some((i_session, shares)) = rx.recv().await {
-            shares_acc[i_session] = shares;
-        }
-
-        let mut bucket_result_shares = Vec::new();
-        for shares in shares_acc {
-            bucket_result_shares.extend(shares);
-        }
-
-        let mut session0 = sessions[side][0].write().await;
-        // Open all per-session bucket shares and aggregate into final per-threshold counts
-        let opened = open_ring(&mut session0.aby3_store.session, &bucket_result_shares).await?;
+        // Aggregate shares before opening
         let n_buckets = translated_thresholds.len();
-        let mut buckets = vec![0u32; n_buckets];
-        for chunk in opened.chunks(n_buckets) {
-            for (i, &count) in chunk.iter().enumerate() {
-                buckets[i] = buckets[i].saturating_add(count);
+        let mut bucket_result_shares: Vec<Share<u32>> = vec![Share::default(); n_buckets];
+        for shares in shares_acc {
+            for (i, share) in shares.into_iter().enumerate() {
+                bucket_result_shares[i] += share;
             }
         }
-        Ok(buckets)
+        let mut session0 = sessions[side][0].write().await;
+        let opened = open_ring(&mut session0.aby3_store.session, &bucket_result_shares).await?;
+        Ok(opened)
     }
 
     async fn fill_anonymized_statistics_buckets(
