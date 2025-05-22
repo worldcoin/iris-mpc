@@ -8,12 +8,12 @@ pub struct Config {
     pub max_indexation_id: IrisSerialId,
     pub last_indexed_id: IrisSerialId,
     pub excluded_serial_ids: Vec<IrisSerialId>,
+    pub batch_size: usize,
 }
 
 /// Encapsulates a node's synchronization state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
-    pub db_len: u64,
     pub common_config: CommonConfig,
     pub genesis_config: Config,
 }
@@ -37,30 +37,14 @@ impl SyncResult {
 /// Methods.
 impl SyncResult {
     /// Check if the common part of the config is the same across all nodes.
-    pub fn check_genesis_config(&self) -> Result<()> {
-        let genesis_config = self.my_state.genesis_config.clone();
+    pub fn check_synced_state(&self) -> Result<()> {
+        let my_state = self.my_state.clone();
         for state in &self.all_states {
             ensure!(
-                state.genesis_config == genesis_config,
-                "Inconsistent genesis config"
-            );
-        }
-        Ok(())
-    }
-
-    /// Check if the genesis-specific state is the same across all nodes.
-    pub fn check_common_config(&self) -> Result<()> {
-        let my_config = &self.my_state.common_config;
-        for SyncState {
-            common_config: other_config,
-            ..
-        } in self.all_states.iter()
-        {
-            ensure!(
-                my_config == other_config,
-                "Inconsistent common config!\nhave: {:?}\ngot: {:?}",
-                my_config,
-                other_config
+                *state == my_state,
+                "Inconsistent genesis config!\nhave: {:?}\ngot: {:?}",
+                my_state,
+                state
             );
         }
         Ok(())
@@ -77,6 +61,7 @@ mod tests {
                 max_indexation_id: 100,
                 last_indexed_id: 50,
                 excluded_serial_ids: vec![3, 5],
+                batch_size: 10,
             }
         }
 
@@ -85,6 +70,7 @@ mod tests {
                 max_indexation_id: 200,
                 last_indexed_id: 150,
                 excluded_serial_ids: vec![3, 5, 6],
+                batch_size: 20,
             }
         }
     }
@@ -93,47 +79,41 @@ mod tests {
     fn test_check_genesis_config_all_equal() {
         let states = vec![
             SyncState {
-                db_len: 10,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_1(),
             },
             SyncState {
-                db_len: 20,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_1(),
             },
             SyncState {
-                db_len: 30,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_1(),
             },
         ];
 
         let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_ok());
+        assert!(sync_result.check_synced_state().is_ok());
     }
 
     #[test]
     fn test_check_genesis_config_not_equal() {
         let states = vec![
             SyncState {
-                db_len: 10,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_1(),
             },
             SyncState {
-                db_len: 20,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_2(),
             },
             SyncState {
-                db_len: 30,
                 common_config: CommonConfig::default(),
                 genesis_config: Config::new_2(),
             },
         ];
 
         let sync_result = SyncResult::new(states[0].clone(), states);
-        assert!(sync_result.check_genesis_config().is_err());
+        assert!(sync_result.check_synced_state().is_err());
     }
 }
