@@ -118,7 +118,18 @@ impl BucketStatistics {
 
             // The difference between buckets[i] and buckets[i - 1], except when i=0
             let previous_count = if i == 0 { 0 } else { buckets_array[i - 1] };
-            let count = buckets_array[i] - previous_count;
+            // Ensure non-decreasing cumulative counts to avoid underflow
+            let count = if buckets_array[i] >= previous_count {
+                buckets_array[i] - previous_count
+            } else {
+                tracing::warn!(
+                    "Non-monotonic cumulative bucket counts at index {}: current {}, previous {}; clamping to zero",
+                    i,
+                    buckets_array[i],
+                    previous_count,
+                );
+                0
+            };
 
             self.buckets.push(BucketResult {
                 hamming_distance_bucket: [previous_threshold, threshold],
