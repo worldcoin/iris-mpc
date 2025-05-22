@@ -1,4 +1,7 @@
-use super::{rot::VecRots, BothEyes, VecRequests};
+use super::{
+    rot::{Rotations, VecRots},
+    BothEyes, VecRequests,
+};
 use eyre::{eyre, Result};
 use futures::future::JoinAll;
 use itertools::Itertools;
@@ -81,10 +84,10 @@ impl Schedule {
             .collect_vec()
     }
 
-    pub fn organize_results<T>(
+    pub fn organize_results<T, ROT: Rotations>(
         &self,
         mut results: HashMap<TaskId, T>,
-    ) -> Result<BothEyes<VecRequests<VecRots<T>>>> {
+    ) -> Result<BothEyes<VecRequests<VecRots<T, ROT>>>> {
         let [l, r] = [0, 1].map(|i_eye| {
             (0..self.n_requests)
                 .map(|i_request| {

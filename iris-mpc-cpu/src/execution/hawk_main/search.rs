@@ -1,5 +1,5 @@
 use super::{
-    rot::VecRots,
+    rot::{Rotations, VecRots, WithRot},
     scheduler::{Batch, Schedule, TaskId},
     BothEyes, HawkSession, HawkSessionRef, InsertPlan, VecRequests, LEFT, RIGHT,
 };
@@ -12,8 +12,8 @@ use eyre::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-pub type SearchQueries = Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>;
-pub type SearchResults = BothEyes<VecRequests<VecRots<InsertPlan>>>;
+pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<QueryRef, ROT>>>>;
+pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<InsertPlan, ROT>>>;
 
 #[derive(Clone)]
 pub struct SearchParams {
@@ -21,16 +21,18 @@ pub struct SearchParams {
     pub do_match: bool,
 }
 
-pub async fn search(
+pub async fn search<ROT>(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-    search_queries: &SearchQueries,
+    search_queries: &SearchQueries<ROT>,
     search_params: SearchParams,
-) -> Result<SearchResults> {
+) -> Result<SearchResults<ROT>>
+where
+    ROT: Rotations,
+{
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
-    let n_rotations = search_queries[LEFT].first().map(|r| r.len()).unwrap_or(1);
 
     let (tx, rx) = unbounded_channel::<(TaskId, InsertPlan)>();
 
@@ -45,7 +47,7 @@ pub async fn search(
         }
     };
 
-    let schedule = Schedule::new(n_sessions, n_requests, n_rotations);
+    let schedule = Schedule::new(n_sessions, n_requests, ROT::n_rotations());
 
     parallelize(schedule.batches().into_iter().map(per_session)).await?;
 
@@ -54,9 +56,9 @@ pub async fn search(
     schedule.organize_results(results)
 }
 
-async fn per_session(
+async fn per_session<ROT>(
     session: &mut HawkSession,
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    search_queries: &BothEyes<VecRequests<VecRots<QueryRef, ROT>>>,
     search_params: &SearchParams,
     tx: UnboundedSender<(TaskId, InsertPlan)>,
     batch: Batch,
