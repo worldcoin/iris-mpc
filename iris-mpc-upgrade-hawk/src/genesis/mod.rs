@@ -4,12 +4,9 @@ use aws_sdk_s3::{
     Client as S3Client,
 };
 use eyre::{bail, eyre, Report, Result};
-use futures::{stream::BoxStream, StreamExt};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
-    helpers::{
-        inmemory_store::InMemoryStore, shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor,
-    },
+    helpers::{shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor},
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -26,9 +23,9 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{DbStoredIris, Store as IrisStore};
+use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::Store as IrisStore;
 use std::{
-    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -112,7 +109,14 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
 
     // Process: initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(&config).await?;
-    init_graph_from_stores(&config, &iris_store, &graph_store, &mut hawk_actor).await?;
+    init_graph_from_stores(
+        &config,
+        &iris_store,
+        &graph_store,
+        &mut hawk_actor,
+        Arc::clone(&shutdown_handler),
+    )
+    .await?;
     background_tasks.check_tasks();
 
     // Start thread for persisting indexing results to DB.
@@ -255,7 +259,15 @@ async fn exec_main_loop(
     match res {
         // Success.
         Ok(_) => {
-            log_info(String::from("Main loop exited normally"));
+            log_info(String::from(
+                "Waiting for last batch results to be processed before \
+                 shutting down...",
+            ));
+            shutdown_handler.wait_for_pending_batches_completion().await;
+            log_info(String::from(
+                "All batches have been processed, \
+                 shutting down...",
+            ));
         }
         // Error.
         Err(err) => {
@@ -465,6 +477,7 @@ async fn init_graph_from_stores(
     iris_store: &IrisStore,
     graph_store: &GraphPg<Aby3Store>,
     hawk_actor: &mut HawkActor,
+    shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
     // ANCHOR: Load the database
     log_info(String::from("⚓️ ANCHOR: Load the database"));
@@ -485,9 +498,16 @@ async fn init_graph_from_stores(
     //       to read into memory
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
-    load_db(&mut iris_loader, iris_store, store_len, parallelism)
-        .await
-        .expect("Failed to load DB");
+    load_iris_db(
+        &mut iris_loader,
+        iris_store,
+        store_len,
+        parallelism,
+        config,
+        shutdown_handler,
+    )
+    .await
+    .expect("Failed to load DB");
 
     graph_loader.load_graph_store(graph_store).await?;
 
@@ -553,105 +573,6 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     shutdown_handler.wait_for_shutdown_signal().await;
 
     shutdown_handler
-}
-
-/// Loads Aurora db records from the stream into memory
-///
-/// # Arguments
-///
-/// * `actor` - Hawk actor Iris loader.
-/// * `store` - Iris PostgreSQL store provider.
-/// * `store_len` - Count of Iris serial identifiers.
-/// * `store_load_parallelism` - Number of parallel threads to utilise when loading.
-///
-async fn load_db(
-    actor: &mut impl InMemoryStore,
-    store: &IrisStore,
-    store_len: usize,
-    store_load_parallelism: usize,
-) -> Result<()> {
-    let total_load_time = Instant::now();
-
-    let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
-    actor.reserve(store_len);
-    let stream_db = store
-        .stream_irises_par(None, store_load_parallelism)
-        .await
-        .boxed();
-    load_db_records(actor, &mut all_serial_ids, stream_db).await;
-
-    if !all_serial_ids.is_empty() {
-        let msg = log_error(format!(
-            "Not all serial_ids were loaded: {:?}",
-            all_serial_ids
-        ));
-        bail!(msg);
-    }
-
-    log_info(String::from("Preprocessing db"));
-    actor.preprocess_db();
-
-    log_info(format!(
-        "Loaded set records from db into memory in {:?} [DB sizes: {:?}]",
-        total_load_time.elapsed(),
-        actor.current_db_sizes()
-    ));
-
-    eyre::Ok(())
-}
-
-/// Loads Aurora db records from the stream into memory
-///
-/// # Arguments
-///
-/// * `actor` - Hawk actor Iris loader.
-/// * `all_serial_ids` - Set of Iris serial identifiers.
-/// * `stream_db` - Db stream for pulling data.
-///
-#[allow(clippy::needless_lifetimes)]
-async fn load_db_records<'a>(
-    actor: &mut impl InMemoryStore,
-    all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
-) {
-    let mut load_summary_ts = Instant::now();
-    let mut time_waiting_for_stream = Duration::from_secs(0);
-    let mut time_loading_into_memory = Duration::from_secs(0);
-    let mut record_counter = 0;
-    while let Some(iris) = stream_db.next().await {
-        // Update time waiting for the stream
-        time_waiting_for_stream += load_summary_ts.elapsed();
-        load_summary_ts = Instant::now();
-
-        let iris = iris.unwrap();
-
-        actor.load_single_record_from_db(
-            iris.serial_id() - 1,
-            iris.vector_id(),
-            iris.left_code(),
-            iris.left_mask(),
-            iris.right_code(),
-            iris.right_mask(),
-        );
-
-        // Only increment db size if record has not been loaded via s3 before
-        if all_serial_ids.contains(&(iris.serial_id() as i64)) {
-            actor.increment_db_size(iris.serial_id() - 1);
-            all_serial_ids.remove(&(iris.serial_id() as i64));
-            record_counter += 1;
-        }
-
-        // Update time spent loading into memory
-        time_loading_into_memory += load_summary_ts.elapsed();
-        load_summary_ts = Instant::now();
-    }
-
-    log_info(format!(
-        "Aurora Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into memory: {:?}",
-        record_counter,
-        time_waiting_for_stream,
-        time_loading_into_memory,
-    ));
 }
 
 /// Helper: logs & returns an error message.

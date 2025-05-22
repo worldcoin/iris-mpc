@@ -85,14 +85,11 @@ clean_mpc_database() {
   echo "Waiting 10s for db-cleaner pod to be ready..."
   sleep 10
 
-  # Remove the last segment after the last slash
-  DATABASE_URL_WITH_CORRECT_NAME=$(echo "$DATABASE_URL" | sed 's|/[^/]*$||')
-
-  echo "Cleaning Database for URL: $DATABASE_URL_WITH_CORRECT_NAME"
+  echo "Cleaning Database for URL: $DATABASE_URL"
   
   # Execute database cleanup commands
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE irises RESTART IDENTITY;'"
-  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE sync RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE persistent_state RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE results RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE modifications RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL_WITH_CORRECT_NAME -c 'SET search_path TO \"SMPC_stage_$PARTY_ID\"; TRUNCATE hawk_graph_entry RESTART IDENTITY;'"

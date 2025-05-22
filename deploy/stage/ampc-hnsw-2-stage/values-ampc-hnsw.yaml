@@ -29,14 +29,26 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
-        name: testing-db-creds-manual
+        key: TEMP_DATABASE_AURORA_HNSW_URL
+        name: application
 
   - name: SMPC__MAX_DB_SIZE
     value: "2000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "64"
+    value: "32"
+
+  - name: SMPC__PROCESSING_TIMEOUT_SECS
+    value: "1240"
+
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "1024"
+
+  - name: SMPC__HAWK_CONNECTION_PARALLELISM
+    value: "8"
+
+  - name: SMPC__HAWK_STREAM_PARALLELISM
+    value: "32"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
@@ -45,7 +57,7 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "64"
+    value: "10000"
 
   - name: SMPC__N_BUCKETS
     value: "10"
@@ -67,6 +79,21 @@ env:
 
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-stage-sns-requests"
+
+  - name: SMPC__ENABLE_S3_IMPORTER
+    value: "false"
+
+  - name: SMPC__DB_CHUNKS_BUCKET_NAME
+    value: "iris-mpc-db-exporter-store-node-2-stage--eun1-az3--x-s3"
+
+  - name: SMPC__DB_CHUNKS_FOLDER_NAME
+    value: "hnsw_even_odd_with_version_id_output_16k"
+
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "64"
+
+  - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
+    value: "1024"
 
   - name: SMPC__REQUESTS_QUEUE_URL
     valueFrom:
