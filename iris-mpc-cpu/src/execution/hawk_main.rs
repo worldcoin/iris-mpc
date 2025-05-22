@@ -977,6 +977,7 @@ pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
 impl HawkMutation {
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
+            tracing::info!("Hawk Main :: Persisting Hawk mutations: side={}", side);
             for plan in plans.into_iter().flatten() {
                 graph_tx.with_graph(side).insert_apply(plan).await?;
             }

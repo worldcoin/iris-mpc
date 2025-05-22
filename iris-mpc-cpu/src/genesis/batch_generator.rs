@@ -193,7 +193,7 @@ impl BatchIterator for BatchGenerator {
             let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
             self.batch_count += 1;
             let batch = Batch::new(self.batch_count, data);
-            Self::log_info(format!("Iris batch fetched: {}", batch));
+            Self::log_info(format!("Generated batch: {}", batch));
             Ok(Some(batch))
         } else {
             Ok(None)

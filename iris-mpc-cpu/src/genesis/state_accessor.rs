@@ -51,6 +51,7 @@ pub async fn fetch_iris_batch(
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `s3_client` - A configured AWS S3 client instance.
 ///
 /// # Returns
@@ -59,6 +60,7 @@ pub async fn fetch_iris_batch(
 ///
 pub async fn fetch_iris_deletions(
     config: &Config,
+    _max_indexation_id: IrisSerialId,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
@@ -109,6 +111,8 @@ pub async fn fetch_iris_deletions(
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
+    // TODO: only return deletions less than maximum indexation height.
+
     Ok(s3_object.deleted_serial_ids)
 }
 
@@ -154,13 +158,13 @@ fn get_s3_key_for_iris_deletions(environment: String) -> String {
 ///
 pub async fn set_id_of_last_indexed(
     tx: &mut Transaction<'_, Postgres>,
-    id_of_last_indexed: &IrisSerialId,
+    id_of_last_indexed: IrisSerialId,
 ) -> Result<()> {
     Store::set_persistent_state(
         tx,
         STATE_DOMAIN_LAST_INDEXED,
         STATE_KEY_LAST_INDEXED,
-        id_of_last_indexed,
+        &id_of_last_indexed,
     )
     .await
 }
@@ -235,7 +239,7 @@ mod tests {
         // Set -> 10.
         let id_of_last_indexed = 10_u32;
         let mut tx = iris_store.tx().await?;
-        set_id_of_last_indexed(&mut tx, &id_of_last_indexed).await?;
+        set_id_of_last_indexed(&mut tx, id_of_last_indexed).await?;
         tx.commit().await?;
 
         // Get -> should be 10.

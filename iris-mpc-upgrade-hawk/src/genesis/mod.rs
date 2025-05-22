@@ -77,7 +77,8 @@ pub async fn exec_main(config: Config, max_indexation_id: IrisSerialId) -> Resul
     ));
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
-    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client).await?;
+    let excluded_serial_ids =
+        fetch_iris_deletions(&config, max_indexation_id, &aws_s3_client).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -250,6 +251,7 @@ async fn exec_main_loop(
     match res {
         // Success.
         Ok(_) => {
+            task_monitor.check_tasks();
             log_info(String::from("Main loop exited normally"));
         }
         // Error.
@@ -495,34 +497,32 @@ async fn start_results_thread(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let _result_sender_abort = task_monitor.spawn(async move {
-        while let Some(JobResult {
-            batch_id,
-            identifiers,
-            connect_plans,
-        }) = rx.recv().await
-        {
-            if let (Some(first_id), Some(last_id)) = (identifiers.first(), identifiers.last()) {
-                let mut graph_tx = graph_store.tx().await?;
-                connect_plans.persist(&mut graph_tx).await?;
-                let mut db_tx = graph_tx.tx;
-                set_id_of_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
-                db_tx.commit().await?;
+        while let Some(result) = rx.recv().await {
+            log_info(format!("Job Results :: Received: {}", result));
 
-                log_info(format!(
-                    "Persisted results to database for batch {}; serial ids between {} and {}",
-                    batch_id,
-                    first_id.serial_id(),
-                    last_id.serial_id(),
-                ));
-            } else {
-                log_warn(format!(
-                    "Received empty job result for batch {} in genesis indexer results thread",
-                    batch_id
-                ));
-            }
+            log_info(format!(
+                "Job Results :: Persisting graph updates: {}",
+                result
+            ));
+            let mut graph_tx = graph_store.tx().await?;
+            result
+                .connect_plans
+                .to_owned()
+                .persist(&mut graph_tx)
+                .await?;
+
+            log_info(format!(
+                "Job Results :: Persisting last indexed id: {}",
+                result
+            ));
+            let mut db_tx = graph_tx.tx;
+            set_id_of_last_indexed(&mut db_tx, result.last_serial_id()).await?;
+            db_tx.commit().await?;
+
+            log_info(format!("Job Results :: Persisted to dB: {}", result));
 
             shutdown_handler_bg.decrement_batches_pending_completion();
         }

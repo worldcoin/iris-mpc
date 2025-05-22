@@ -8,8 +8,8 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
-use iris_mpc_common::IrisVectorId;
-use std::sync::Arc;
+use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
 // Helper type: Aby3 store batch query.
@@ -90,13 +90,13 @@ impl JobRequest {
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
-    /// Unique sequential identifier for the job
+    /// Unique sequential job identifier.
     pub batch_id: usize,
 
-    /// Which identifiers inserted in the job
+    /// Set of Iris identifiers being indexed.
     pub identifiers: Vec<IrisVectorId>,
 
-    /// Connect plans for updating the HNSW graph in DB
+    /// Connect plans for updating HNSW graph in DB.
     pub connect_plans: HawkMutation,
 }
 
@@ -108,5 +108,32 @@ impl JobResult {
             identifiers: request.identifiers.clone(),
             connect_plans,
         }
+    }
+}
+
+/// Methods.
+impl JobResult {
+    // Returns Iris serial id of batch's first element.
+    pub fn first_serial_id(&self) -> IrisSerialId {
+        self.identifiers.first().unwrap().serial_id()
+    }
+
+    // Returns Iris serial id of batch's last element.
+    pub fn last_serial_id(&self) -> IrisSerialId {
+        self.identifiers.last().unwrap().serial_id()
+    }
+}
+
+/// Trait: fmt::Display.
+impl fmt::Display for JobResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "batch-id={}, batch-size={}, range=({}..{})",
+            self.batch_id,
+            self.identifiers.len(),
+            self.first_serial_id(),
+            self.last_serial_id()
+        )
     }
 }
