@@ -228,23 +228,28 @@ mod tests {
         // Set resources.
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
-        let last_indexed = get_id_of_last_indexed(&iris_store).await?;
-        assert_eq!(last_indexed, 0);
+        // Get -> should be zero.
+        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        assert_eq!(id_of_last_indexed, 0);
 
-        let last_indexed = 10_u32;
+        // Set -> 10.
+        let id_of_last_indexed = 10_u32;
         let mut tx = iris_store.tx().await?;
-        set_id_of_last_indexed(&mut tx, &last_indexed).await?;
+        set_id_of_last_indexed(&mut tx, &id_of_last_indexed).await?;
         tx.commit().await?;
 
-        let last_indexed = get_id_of_last_indexed(&iris_store).await?;
-        assert_eq!(last_indexed, 10);
+        // Get -> should be 10.
+        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        assert_eq!(id_of_last_indexed, 10);
 
+        // Unset.
         let mut tx = iris_store.tx().await?;
         unset_id_of_last_indexed(&mut tx).await?;
         tx.commit().await?;
 
-        let last_indexed = get_id_of_last_indexed(&iris_store).await?;
-        assert_eq!(last_indexed, 0);
+        // Get -> should be 0.
+        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        assert_eq!(id_of_last_indexed, 0);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
