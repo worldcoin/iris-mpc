@@ -32,7 +32,7 @@ enum Command {
     /// Load a graph from a file to memory, then write it to a database
     RestoreDb,
     /// (testing only) verify that Load/Store works as expected
-    VerifyRestore,
+    VerifyBackup,
     /// Load a graph from a file and compare it to the graph stored in the database.
     CompareToDb,
 }
@@ -58,8 +58,8 @@ async fn main() -> Result<()> {
         Command::RestoreDb => {
             db_context.load_graph_from_file(&file, dbg).await?;
         }
-        Command::VerifyRestore => {
-            db_context.verify_restore(&file, dbg).await?;
+        Command::VerifyBackup => {
+            db_context.verify_backup(&file, dbg).await?;
         }
         Command::StoreRandom => {
             db_context.store_random_graph().await?;
