@@ -2,6 +2,7 @@ use super::{
     batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
     logger,
+    utils::PartyId,
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
@@ -19,7 +20,7 @@ const COMPONENT: &str = "Hawk-Handle";
 #[derive(Clone, Debug)]
 pub struct Handle {
     // Identifier of party participating in MPC protocol.
-    party_id: usize,
+    party_id: PartyId,
 
     // Queue of indexation jobs for processing.
     job_queue: mpsc::Sender<Job>,
@@ -27,7 +28,7 @@ pub struct Handle {
 
 /// Constructors.
 impl Handle {
-    pub async fn new(party_id: usize, mut actor: HawkActor) -> Result<Self> {
+    pub async fn new(party_id: PartyId, mut actor: HawkActor) -> Result<Self> {
         /// Performs post job processing health checks:
         /// - resets Hawk sessions upon job failure
         /// - ensures system state is in sync.
@@ -50,9 +51,9 @@ impl Handle {
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        Self::log_info("Starting State check left".to_string());
+        Self::log_info(String::from("Starting State check left"));
         HawkSession::state_check(&sessions[LEFT][0]).await?;
-        Self::log_info("Starting State check right".to_string());
+        Self::log_info(String::from("Starting State check right"));
         HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
         // Process jobs until health check fails or channel closes.
@@ -170,11 +171,7 @@ impl Handle {
         let results_ = parallelize(jobs_per_side.into_iter()).await?;
         let results: [_; 2] = results_.try_into().unwrap();
 
-        Ok(JobResult {
-            batch_id: request.batch_id,
-            identifiers: request.identifiers.clone(),
-            connect_plans: HawkMutation(results),
-        })
+        Ok(JobResult::new(request, HawkMutation(results)))
     }
 
     // Helper: component error logging.
