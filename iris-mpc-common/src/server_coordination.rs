@@ -1,6 +1,5 @@
 use crate::config::Config;
 use crate::helpers::shutdown_handler::ShutdownHandler;
-use crate::helpers::sync::{SyncResult, SyncState};
 use crate::helpers::task_monitor::TaskMonitor;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -11,6 +10,7 @@ use futures::future::try_join_all;
 use futures::FutureExt as _;
 use itertools::Itertools as _;
 use reqwest::Response;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -45,12 +45,15 @@ where
 ///
 /// Note: returns a reference to a readiness flag, an `AtomicBool`, which can later
 /// be set to indicate to other MPC nodes that this server is ready for operation.
-pub async fn start_coordination_server(
+pub async fn start_coordination_server<T>(
     config: &Config,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    my_state: Arc<SyncState>,
-) -> Arc<AtomicBool> {
+    my_state: &T,
+) -> Arc<AtomicBool>
+where
+    T: Serialize + DeserializeOwned + Clone + Send + 'static,
+{
     tracing::info!("⚓️ ANCHOR: Starting Healthcheck, Readiness and Sync server");
 
     let is_ready_flag = Arc::new(AtomicBool::new(false));
@@ -109,10 +112,7 @@ pub async fn start_coordination_server(
                 )
                 .route(
                     "/startup-sync",
-                    get({
-                        let my_state = Arc::clone(&my_state);
-                        move || async move { serde_json::to_string(&my_state).unwrap() }
-                    }),
+                    get(move || async move { serde_json::to_string(&my_state).unwrap() }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -141,7 +141,7 @@ pub async fn wait_for_others_unready(config: &Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Waiting for other servers to be un-ready (syncing on startup)");
 
     // Check other nodes and wait until all nodes are unready.
-    let connected_but_unready = try_get_endpoint_all_nodes(config, "ready").await?;
+    let connected_but_unready = try_get_endpoint_other_nodes(config, "ready").await?;
 
     let all_unready = connected_but_unready
         .iter()
@@ -281,25 +281,21 @@ pub async fn init_heartbeat_task(
 /// Retrieves synchronization state of other MPC nodes.  This data is
 /// used to ensure that all nodes are in a consistent state prior
 /// to starting MPC operations.
-pub async fn get_others_sync_state(
-    config: &Config,
-    my_state: Arc<SyncState>,
-) -> Result<SyncResult> {
+pub async fn get_others_sync_state<State>(config: &Config) -> Result<Vec<State>>
+where
+    State: DeserializeOwned + Clone,
+{
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
 
-    tracing::info!("Database store length is: {}", my_state.db_len);
-
-    let connected_and_ready = try_get_endpoint_all_nodes(config, "startup-sync").await?;
+    let connected_and_ready = try_get_endpoint_other_nodes(config, "startup-sync").await?;
 
     let response_texts_futs: Vec<_> = connected_and_ready
         .into_iter()
         .map(|resp| resp.json())
         .collect();
-    let mut all_sync_states: Vec<SyncState> = try_join_all(response_texts_futs).await?;
+    let sync_states: Vec<State> = try_join_all(response_texts_futs).await?;
 
-    all_sync_states.remove(config.party_id);
-
-    Ok(SyncResult::new((*my_state).clone(), all_sync_states))
+    Ok(sync_states)
 }
 
 /// Toggle `is_ready_flag` to `true` to signal to other nodes that this node
@@ -319,7 +315,7 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     // Check other nodes and wait until all nodes are ready.
     'outer: loop {
         'retry: {
-            let connected_and_ready_res = try_get_endpoint_all_nodes(config, "ready").await;
+            let connected_and_ready_res = try_get_endpoint_other_nodes(config, "ready").await;
 
             if connected_and_ready_res.is_err() {
                 break 'retry;
@@ -343,21 +339,27 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
     Ok(())
 }
 
-const TIME_BETWEEN_RETRIES: std::time::Duration = Duration::from_secs(1);
-
-pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Result<Vec<Response>> {
+/// Retrieve outputs from a healthcheck endpoint from all other server nodes.
+///
+/// Upon failure, retrues with wait duration `config.http_query_retry_delay_ms`
+/// between atttempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
+pub async fn try_get_endpoint_other_nodes(
+    config: &Config,
+    endpoint: &str,
+) -> Result<Vec<Response>> {
     const NODE_COUNT: usize = 3;
     let full_urls =
         get_check_addresses(&config.node_hostnames, &config.healthcheck_ports, endpoint);
-    let node_urls = (0..NODE_COUNT)
+    let node_urls = (1..NODE_COUNT)
         .map(|j| (config.party_id + j) % NODE_COUNT)
         .map(|i| (i, full_urls[i].to_owned()))
         .sorted_by(|a, b| Ord::cmp(&a.0, &b.0))
         .map(|(_i, full_url)| full_url);
 
-    let mut handles = Vec::with_capacity(NODE_COUNT);
-    let mut rxs = Vec::with_capacity(NODE_COUNT);
+    let mut handles = Vec::with_capacity(NODE_COUNT - 1);
+    let mut rxs = Vec::with_capacity(NODE_COUNT - 1);
 
+    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
     for node_url in node_urls {
         let (tx, rx) = oneshot::channel();
         let handle = tokio::spawn(async move {
@@ -366,7 +368,7 @@ pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Resu
                     let _ = tx.send(resp);
                     return;
                 }
-                tokio::time::sleep(TIME_BETWEEN_RETRIES).await;
+                tokio::time::sleep(retry_duration).await;
             }
         });
         handles.push(handle);
@@ -381,7 +383,7 @@ pub async fn try_get_endpoint_all_nodes(config: &Config, endpoint: &str) -> Resu
     )
     .await;
 
-    let msg = "Error occured reading response channels";
+    let msg = "Error occurred reading response channels";
     try_join_all(rxs)
         .now_or_never()
         .ok_or_eyre(msg)?

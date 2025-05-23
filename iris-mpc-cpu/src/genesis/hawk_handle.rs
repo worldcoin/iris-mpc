@@ -1,4 +1,5 @@
 use super::{
+    batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
     logger,
 };
@@ -7,11 +8,12 @@ use crate::execution::hawk_main::{
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
 };
 use eyre::{OptionExt, Result};
-use futures::try_join;
-use iris_mpc_store::DbStoredIris;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
+
+// Component name for logging purposes.
+const COMPONENT: &str = "Hawk-Handle";
 
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
@@ -40,20 +42,18 @@ impl Handle {
             }
 
             // Validate the common state after processing the requests.
-            try_join!(
-                HawkSession::state_check(&sessions[LEFT][0]),
-                HawkSession::state_check(&sessions[RIGHT][0]),
-            )?;
+            HawkSession::state_check(&sessions[LEFT][0]).await?;
+            HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
             Ok(())
         }
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
+        Self::log_info("Starting State check left".to_string());
+        HawkSession::state_check(&sessions[LEFT][0]).await?;
+        Self::log_info("Starting State check right".to_string());
+        HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
         // Process jobs until health check fails or channel closes.
         let (tx, mut rx) = mpsc::channel::<Job>(1);
@@ -106,8 +106,9 @@ impl Handle {
         request: &JobRequest,
     ) -> Result<JobResult> {
         Self::log_info(format!(
-            "Genesis Hawk job processing ::{} elements within batch",
-            request.identifiers.len()
+            "Hawk Job :: processing batch-id={}; batch-size={}",
+            request.batch_id,
+            request.batch_size()
         ));
         let _ = Instant::now();
 
@@ -170,6 +171,7 @@ impl Handle {
         let results: [_; 2] = results_.try_into().unwrap();
 
         Ok(JobResult {
+            batch_id: request.batch_id,
             identifiers: request.identifiers.clone(),
             connect_plans: HawkMutation(results),
         })
@@ -177,12 +179,12 @@ impl Handle {
 
     // Helper: component error logging.
     fn log_error(msg: String) {
-        logger::log_error("Hawk Handle", msg);
+        logger::log_error(COMPONENT, msg);
     }
 
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info("Hawk Handle", msg);
+        logger::log_info(COMPONENT, msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
@@ -190,7 +192,7 @@ impl Handle {
     ///
     /// # Arguments
     ///
-    /// * `batch` - A vector of `DbStoredIris` records to be processed.
+    /// * `batch` - A set of `DbStoredIris` records to be processed.
     ///
     /// # Returns
     ///
@@ -199,10 +201,7 @@ impl Handle {
     /// # Errors
     ///
     /// This method may return an error if the job queue channel is closed or if the job fails.
-    pub async fn submit_batch(
-        &mut self,
-        batch: &[DbStoredIris],
-    ) -> impl Future<Output = Result<()>> {
+    pub async fn submit_batch(&mut self, batch: Batch) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
@@ -219,10 +218,9 @@ impl Handle {
         async move {
             // In a second Future, wait for the result.
             sent?;
-            let _result = rx.await??;
+            let result = rx.await??;
 
-            // TODO: Implement job result processing.
-            Ok(())
+            Ok(result)
         }
     }
 }
