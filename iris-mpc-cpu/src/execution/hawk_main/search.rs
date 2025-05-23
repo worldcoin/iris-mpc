@@ -47,7 +47,7 @@ where
         }
     };
 
-    let schedule = Schedule::new(n_sessions, n_requests, ROT::n_rotations());
+    let schedule = Schedule::new(n_sessions, n_requests, ROT::N_ROTATIONS);
 
     parallelize(schedule.batches().into_iter().map(per_session)).await?;
 

@@ -5,25 +5,21 @@ use itertools::Itertools;
 
 pub trait Rotations: Send + Sync + 'static {
     /// The number of rotations.
-    fn n_rotations() -> usize;
+    const N_ROTATIONS: usize;
 }
 
 #[derive(Clone, Debug)]
 pub struct WithRot {}
 
 impl Rotations for WithRot {
-    fn n_rotations() -> usize {
-        ROTATIONS
-    }
+    const N_ROTATIONS: usize = ROTATIONS;
 }
 
 #[derive(Clone, Debug)]
 pub struct WithoutRot {}
 
 impl Rotations for WithoutRot {
-    fn n_rotations() -> usize {
-        1
-    }
+    const N_ROTATIONS: usize = 1;
 }
 
 /// VecRots are lists of things for each rotation.
@@ -43,7 +39,7 @@ impl<R, ROT> Deref for VecRots<R, ROT> {
 
 impl<R, ROT: Rotations> From<Vec<R>> for VecRots<R, ROT> {
     fn from(rotations: Vec<R>) -> Self {
-        assert_eq!(rotations.len(), ROT::n_rotations());
+        assert_eq!(rotations.len(), ROT::N_ROTATIONS);
         Self {
             rotations,
             phantom: PhantomData,
@@ -88,10 +84,10 @@ impl<R, ROT: Rotations> VecRots<R, ROT> {
     /// The opposite of flatten.
     /// Split a concatenated Vec into a batch of something with rotations.
     pub fn unflatten(batch: Vec<R>) -> Vec<Self> {
-        let mut rots = Vec::with_capacity(batch.len() / ROT::n_rotations());
+        let mut rots = Vec::with_capacity(batch.len() / ROT::N_ROTATIONS);
         let mut it = batch.into_iter();
         loop {
-            let rot = it.by_ref().take(ROT::n_rotations()).collect_vec();
+            let rot = it.by_ref().take(ROT::N_ROTATIONS).collect_vec();
             if rot.is_empty() {
                 break;
             }
