@@ -512,10 +512,8 @@ impl<'a> BatchProcessor<'a> {
 
             match result {
                 Ok((share_left, share_right)) => {
-                    println!("Parsed shares successfully");
                     self.batch_query.valid_entries.push(true);
                     self.add_shares_to_batch_query(share_left, share_right);
-                    println!("ADDED SHARES TO BATCH QUERY");
                 }
                 Err(e) => {
                     tracing::error!("Failed to process iris shares: {:?}", e);
