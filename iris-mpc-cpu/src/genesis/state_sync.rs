@@ -17,8 +17,10 @@ impl Config {
         max_indexation_id: IrisSerialId,
         last_indexed_id: IrisSerialId,
         excluded_serial_ids: Vec<IrisSerialId>,
+        batch_size: usize,
     ) -> Self {
         Self {
+            batch_size,
             max_indexation_id,
             last_indexed_id,
             excluded_serial_ids,
@@ -29,15 +31,17 @@ impl Config {
 /// Encapsulates a node's synchronization state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncState {
+    // Configuration common to all nodes.
     pub common_config: CommonConfig,
+
+    // Configuration common to all nodes during genesis.
     pub genesis_config: Config,
 }
 
 /// Constructor.
 impl SyncState {
-    pub fn new(db_len: u64, common_config: CommonConfig, genesis_config: Config) -> Self {
+    pub fn new(common_config: CommonConfig, genesis_config: Config) -> Self {
         Self {
-            db_len,
             common_config,
             genesis_config,
         }
@@ -46,7 +50,10 @@ impl SyncState {
 
 /// Encapsulates a result over a node's synchronization state evaluation.
 pub struct SyncResult {
+    // Own synchronization state.
     pub my_state: SyncState,
+
+    // Other node's synchronization states.
     pub all_states: Vec<SyncState>,
 }
 
@@ -68,7 +75,7 @@ impl SyncResult {
         for state in &self.all_states {
             ensure!(
                 *state == my_state,
-                "Inconsistent genesis config!\nhave: {:?}\ngot: {:?}",
+                "Inconsistent genesis config: \nhave: {:?} \ngot: {:?}",
                 my_state,
                 state
             );
@@ -83,47 +90,39 @@ mod tests {
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(100, 50, vec![3, 5])
+            Self::new(100, 50, vec![3, 5], 64)
         }
 
         fn new_2() -> Self {
-            Self::new(200, 150, vec![3, 5, 6])
+            Self::new(200, 150, vec![3, 5, 6], 64)
         }
     }
 
     impl SyncState {
-        fn new_0(db_len: u64, genesis_config: Config) -> Self {
-            Self::new(db_len, CommonConfig::default(), genesis_config)
+        fn new_0(genesis_config: Config) -> Self {
+            Self::new(CommonConfig::default(), genesis_config)
         }
 
-        fn new_1(db_len: u64) -> Self {
-            Self::new_0(db_len, Config::new_1())
+        fn new_1() -> Self {
+            Self::new_0(Config::new_1())
         }
 
-        fn new_2(db_len: u64) -> Self {
-            Self::new_0(db_len, Config::new_2())
+        fn new_2() -> Self {
+            Self::new_0(Config::new_2())
         }
     }
 
     #[test]
     fn test_check_genesis_config_all_equal() {
-        let states = vec![
-            SyncState::new_1(10),
-            SyncState::new_1(20),
-            SyncState::new_1(30),
-        ];
+        let states = vec![SyncState::new_1(), SyncState::new_1(), SyncState::new_1()];
         let result = SyncResult::new(states[0].clone(), states);
-        assert!(result.check_genesis_config().is_ok());
+        assert!(result.check_synced_state().is_ok());
     }
 
     #[test]
     fn test_check_genesis_config_not_equal() {
-        let states = vec![
-            SyncState::new_1(10),
-            SyncState::new_2(20),
-            SyncState::new_2(30),
-        ];
+        let states = vec![SyncState::new_1(), SyncState::new_2(), SyncState::new_2()];
         let result = SyncResult::new(states[0].clone(), states);
-        assert!(result.check_genesis_config().is_err());
+        assert!(result.check_synced_state().is_err());
     }
 }

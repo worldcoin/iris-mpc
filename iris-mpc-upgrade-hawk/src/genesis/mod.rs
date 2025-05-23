@@ -118,16 +118,13 @@ pub async fn exec_main(
     background_tasks.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
-    // Coordinator: await network state = SYNCHRONIZED.
-    sync_result.check_common_config()?;
-    sync_result.check_genesis_config()?;
-    log_info(String::from("Synchronization checks passed"));
-
     // TODO: What should happen here - see Bryan.
     // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
 
+    // Coordinator: await network state = SYNCHRONIZED.
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_synced_state()?;
+    log_info(String::from("Synchronization checks passed"));
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
