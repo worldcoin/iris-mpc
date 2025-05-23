@@ -168,41 +168,49 @@ impl<'a> BatchProcessor<'a> {
             return Ok(None);
         }
 
-        let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+        loop {
+            let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
-        // Determine the number of messages to poll based on synchronized state
-        let own_state = get_own_batch_sync_state(self.config, self.client, current_batch_id)
-            .await
-            .map_err(ReceiveRequestError::BatchSyncError)?;
-
-        let all_states =
-            get_batch_sync_states(self.config, self.client, Some(&own_state), current_batch_id)
+            // Determine the number of messages to poll based on synchronized state
+            let own_state = get_own_batch_sync_state(self.config, self.client, current_batch_id)
                 .await
                 .map_err(ReceiveRequestError::BatchSyncError)?;
 
-        let batch_sync_result = BatchSyncResult::new(own_state, all_states);
-        let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
+            let all_states =
+                get_batch_sync_states(self.config, self.client, Some(&own_state), current_batch_id)
+                    .await
+                    .map_err(ReceiveRequestError::BatchSyncError)?;
 
-        let num_to_poll = std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
+            let batch_sync_result = BatchSyncResult::new(own_state, all_states);
+            let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
 
-        tracing::info!(
-            "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
-            current_batch_id,
-            num_to_poll,
-            max_visible_messages,
-            self.config.max_batch_size
-        );
+            let num_to_poll =
+                std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
 
-        // Poll the determined number of messages
-        if num_to_poll > 0 {
-            self.poll_exact_messages(num_to_poll).await?;
-        } else {
             tracing::info!(
-                "Batch ID: {}. No messages to poll based on sync state.",
-                current_batch_id
+                "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
+                current_batch_id,
+                num_to_poll,
+                max_visible_messages,
+                self.config.max_batch_size
             );
-            if self.msg_counter == 0 {
-                return Ok(Some(BatchQuery::default()));
+
+            // Poll the determined number of messages
+            if num_to_poll > 0 {
+                self.poll_exact_messages(num_to_poll).await?;
+                break;
+            } else {
+                tracing::info!(
+                    "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
+                    current_batch_id
+                );
+                if self.shutdown_handler.is_shutting_down() {
+                    tracing::info!(
+                        "Stopping batch receive during polling wait due to shutdown signal..."
+                    );
+                    return Ok(None);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
         }
 
@@ -211,7 +219,7 @@ impl<'a> BatchProcessor<'a> {
 
         tracing::info!(
             "Batch ID: {}. Formed batch with requests: {:?}",
-            current_batch_id,
+            self.current_batch_id_atomic.load(Ordering::SeqCst),
             self.batch_query
                 .request_ids
                 .iter()
