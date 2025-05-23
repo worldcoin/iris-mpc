@@ -14,7 +14,7 @@ use itertools::Itertools as _;
 use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -54,6 +54,7 @@ pub async fn start_coordination_server<T>(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     my_state: &T,
+    current_batch_id: Arc<AtomicU64>,
 ) -> Arc<AtomicBool>
 where
     T: Serialize + DeserializeOwned + Clone + Send + 'static,
@@ -123,7 +124,9 @@ where
                 .route(
                     "/batch-sync-state",
                     get(move || async move {
-                        match get_own_batch_sync_state(&config, &sqs_client).await {
+                        let current_batch_id = current_batch_id.load(Ordering::SeqCst);
+                        match get_own_batch_sync_state(&config, &sqs_client, current_batch_id).await
+                        {
                             Ok(batch_sync_state) => {
                                 match serde_json::to_string(&batch_sync_state) {
                                     Ok(body) => (StatusCode::OK, body).into_response(),
@@ -378,8 +381,8 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
 
 /// Retrieve outputs from a healthcheck endpoint from all other server nodes.
 ///
-/// Upon failure, retrues with wait duration `config.http_query_retry_delay_ms`
-/// between atttempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
+/// Upon failure, retries with wait duration `config.http_query_retry_delay_ms`
+/// between attempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
 pub async fn try_get_endpoint_other_nodes(
     config: &Config,
     endpoint: &str,

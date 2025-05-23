@@ -253,6 +253,9 @@ pub struct Config {
 
     #[serde(default = "default_sqs_long_poll_wait_time")]
     pub sqs_long_poll_wait_time: usize,
+
+    #[serde(default = "default_batch_sync_polling_timeout_secs")]
+    pub batch_sync_polling_timeout_secs: u64,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -416,6 +419,10 @@ fn default_sqs_long_poll_wait_time() -> usize {
     10
 }
 
+fn default_batch_sync_polling_timeout_secs() -> u64 {
+    10
+}
+
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
@@ -566,6 +573,7 @@ pub struct CommonConfig {
     full_scan_side: Eye,
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
+    batch_sync_polling_timeout_secs: u64,
 }
 
 impl From<Config> for CommonConfig {
@@ -644,6 +652,7 @@ impl From<Config> for CommonConfig {
             full_scan_side,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
+            batch_sync_polling_timeout_secs,
         } = value;
 
         Self {
@@ -697,6 +706,7 @@ impl From<Config> for CommonConfig {
             full_scan_side,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
+            batch_sync_polling_timeout_secs,
         }
     }
 }

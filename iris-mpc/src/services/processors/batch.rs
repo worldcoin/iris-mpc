@@ -1,10 +1,9 @@
-use crate::server::{MAX_CONCURRENT_REQUESTS, SQS_POLLING_INTERVAL};
+use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
-use aws_sdk_sqs::types::MessageSystemAttributeName;
 use aws_sdk_sqs::Client;
 use eyre::Result;
 use iris_mpc_common::config::Config;
@@ -15,7 +14,7 @@ use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use iris_mpc_common::helpers::batch_sync::{
-    get_batch_sync_states, BatchSyncResult, BatchSyncState,
+    get_batch_sync_states, get_own_batch_sync_state, BatchSyncResult,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -30,6 +29,7 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::job::{BatchMetadata, BatchQuery};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
@@ -46,6 +46,7 @@ pub fn receive_batch_stream(
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    current_batch_id_atomic: Arc<AtomicU64>,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
@@ -66,6 +67,7 @@ pub fn receive_batch_stream(
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
                 &reauth_error_result_attributes,
+                current_batch_id_atomic.clone(),
             )
             .await;
 
@@ -93,6 +95,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    current_batch_id_atomic: Arc<AtomicU64>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
@@ -104,6 +107,7 @@ async fn receive_batch(
         shutdown_handler,
         uniqueness_error_result_attributes,
         reauth_error_result_attributes,
+        current_batch_id_atomic,
     );
 
     processor.receive_batch().await
@@ -123,7 +127,7 @@ pub struct BatchProcessor<'a> {
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
-    own_batch_sync_state: BatchSyncState,
+    current_batch_id_atomic: Arc<AtomicU64>,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -138,6 +142,7 @@ impl<'a> BatchProcessor<'a> {
         shutdown_handler: &'a ShutdownHandler,
         uniqueness_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+        current_batch_id_atomic: Arc<AtomicU64>,
     ) -> Self {
         Self {
             party_id,
@@ -153,9 +158,7 @@ impl<'a> BatchProcessor<'a> {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
             msg_counter: 0,
-            own_batch_sync_state: BatchSyncState {
-                next_sns_sequence_num: 0,
-            },
+            current_batch_id_atomic,
         }
     }
 
@@ -165,14 +168,51 @@ impl<'a> BatchProcessor<'a> {
             return Ok(None);
         }
 
-        // Poll messages until we have enough or timeout
-        self.poll_messages().await?;
+        let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+
+        // Determine the number of messages to poll based on synchronized state
+        let own_state = get_own_batch_sync_state(self.config, self.client, current_batch_id)
+            .await
+            .map_err(ReceiveRequestError::BatchSyncError)?;
+
+        let all_states =
+            get_batch_sync_states(self.config, self.client, Some(&own_state), current_batch_id)
+                .await
+                .map_err(ReceiveRequestError::BatchSyncError)?;
+
+        let batch_sync_result = BatchSyncResult::new(own_state, all_states);
+        let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
+
+        let num_to_poll = std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
+
+        tracing::info!(
+            "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
+            current_batch_id,
+            num_to_poll,
+            max_visible_messages,
+            self.config.max_batch_size
+        );
+
+        // Poll the determined number of messages
+        if num_to_poll > 0 {
+            self.poll_exact_messages(num_to_poll).await?;
+        } else {
+            tracing::info!(
+                "Batch ID: {}. No messages to poll based on sync state.",
+                current_batch_id
+            );
+            if self.msg_counter == 0 {
+                self.current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+                return Ok(Some(BatchQuery::default()));
+            }
+        }
 
         // Process all parse tasks
         self.process_parse_tasks().await?;
 
         tracing::info!(
-            "Batch requests: {:?}",
+            "Batch ID: {}. Formed batch with requests: {:?}",
+            current_batch_id,
             self.batch_query
                 .request_ids
                 .iter()
@@ -180,63 +220,30 @@ impl<'a> BatchProcessor<'a> {
                 .collect::<Vec<_>>()
         );
 
+        // Increment batch_id for the next batch
+        self.current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+
         Ok(Some(self.batch_query.clone()))
     }
 
-    async fn poll_messages(&mut self) -> Result<(), ReceiveRequestError> {
-        let max_batch_size = self.config.max_batch_size;
-        let queue_url = &self.config.requests_queue_url;
-        match self.poll_until_batch_size(max_batch_size, queue_url).await {
-            Ok(results) => results,
-            Err(ReceiveRequestError::BatchPollingTimeout(timeout_secs)) => {
-                tracing::info!(
-                    "Batch polling timeout reached after {} secs, checking other nodes' sync states",
-                    timeout_secs
-                );
-
-                let states = get_batch_sync_states(
-                    self.config,
-                    self.client,
-                    Some(&self.own_batch_sync_state),
-                )
-                .await
-                .map_err(ReceiveRequestError::BatchSyncError)?;
-                let batch_sync_result =
-                    BatchSyncResult::new(self.own_batch_sync_state.clone(), states);
-
-                let max_sequence_num = batch_sync_result.max_sns_sequence_num();
-                let own_sequence_num = batch_sync_result.my_state.next_sns_sequence_num;
-
-                tracing::info!(
-                    "Max sequence number across nodes: {}, own sequence number: {}",
-                    max_sequence_num,
-                    own_sequence_num
-                );
-
-                if (own_sequence_num >= max_sequence_num) && self.msg_counter > 0 {
-                    tracing::info!(
-                        "Own sequence number is greater than or equal to max sequence number. No need to poll further."
-                    );
-                    return Ok(());
-                }
-                self.poll_until_sequence_num(max_sequence_num, queue_url)
-                    .await?;
-            }
-            Err(err) => return Err(err),
-        }
-        Ok(())
-    }
-    async fn poll_until_batch_size(
-        &mut self,
-        max_batch_size: usize,
-        queue_url: &str,
-    ) -> Result<(), ReceiveRequestError> {
+    async fn poll_exact_messages(&mut self, num_to_poll: u32) -> Result<(), ReceiveRequestError> {
+        let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
         tracing::info!(
-            "Polling SQS for messages until batch size {} is reached, msg counter: {}",
-            max_batch_size,
-            self.msg_counter
+            "Batch ID: {}. Polling SQS for up to {} messages.",
+            current_batch_id,
+            num_to_poll
         );
-        while self.msg_counter < max_batch_size {
+        let queue_url = &self.config.requests_queue_url;
+
+        for _ in 0..num_to_poll {
+            if self.msg_counter >= self.config.max_batch_size {
+                tracing::info!(
+                    "Reached max_batch_size ({}), stopping polling for current batch.",
+                    self.config.max_batch_size
+                );
+                break;
+            }
+
             let rcv_message_output = self
                 .client
                 .receive_message()
@@ -249,91 +256,36 @@ impl<'a> BatchProcessor<'a> {
 
             if let Some(messages) = rcv_message_output.messages {
                 if messages.is_empty() {
-                    // No more messages in the queue
-                    tracing::info!("No more messages in the queue");
+                    tracing::info!(
+                        "Batch ID: {}. No more messages in the queue while polling exact count.",
+                        current_batch_id
+                    );
                     break;
                 }
 
                 for sqs_message in messages {
                     self.process_message(sqs_message).await?;
-
                     // Check if we've reached the target batch size
-                    if self.msg_counter >= max_batch_size {
+                    if self.msg_counter >= self.config.max_batch_size
+                        || self.msg_counter as u32 >= num_to_poll
+                    {
                         break;
                     }
                 }
-            } else {
-                // No messages received
-                tokio::time::sleep(SQS_POLLING_INTERVAL).await;
-            }
-        }
-        Ok(())
-    }
-
-    async fn poll_until_sequence_num(
-        &mut self,
-        target_sequence_num: u128,
-        queue_url: &str,
-    ) -> Result<(), ReceiveRequestError> {
-        let mut current_sequence_num = 0;
-
-        while current_sequence_num < target_sequence_num {
-            let rcv_message_output = self
-                .client
-                .receive_message()
-                .wait_time_seconds(self.config.sqs_long_poll_wait_time as i32)
-                .max_number_of_messages(1)
-                .queue_url(queue_url)
-                .send()
-                .await
-                .map_err(ReceiveRequestError::FailedToReadFromSQS)?;
-
-            if let Some(messages) = rcv_message_output.messages {
-                if messages.is_empty() {
-                    // No more messages in the queue even though we haven't reached target sequence
-                    tracing::warn!("No more messages in queue but target sequence not reached: current={}, target={}",
-                                  current_sequence_num, target_sequence_num);
+                if self.msg_counter >= self.config.max_batch_size
+                    || self.msg_counter as u32 >= num_to_poll
+                {
                     break;
                 }
-
-                for sqs_message in messages {
-                    // Extract sequence number from message attributes if available
-                    if let Some(attributes) = &sqs_message.attributes {
-                        if let Some(sequence_num_str) =
-                            attributes.get(&MessageSystemAttributeName::SequenceNumber)
-                        {
-                            if let Ok(seq_num) = sequence_num_str.parse::<u128>() {
-                                current_sequence_num = seq_num;
-                            } else {
-                                tracing::error!(
-                                    "Failed to parse sequence number from message attributes: {}",
-                                    sequence_num_str
-                                );
-                            }
-                        }
-                    }
-
-                    // Process the message regardless of sequence number
-                    self.process_message(sqs_message.clone()).await?;
-
-                    // If we've reached or exceeded the target sequence number, we're done
-                    if current_sequence_num >= target_sequence_num {
-                        break;
-                    }
-                }
             } else {
-                // No messages received
-                tokio::time::sleep(SQS_POLLING_INTERVAL).await;
+                tracing::info!(
+                    "Batch ID: {}. No messages received in a polling attempt.",
+                    current_batch_id
+                );
+                break;
             }
         }
-
         Ok(())
-    }
-
-    fn update_own_batch_sync_state(&mut self, sequence_number: u128) {
-        self.own_batch_sync_state = BatchSyncState {
-            next_sns_sequence_num: sequence_number,
-        };
     }
 
     async fn process_message(
@@ -342,14 +294,6 @@ impl<'a> BatchProcessor<'a> {
     ) -> Result<(), ReceiveRequestError> {
         let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
             .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
-
-        let sequence_number: u128 = message.sequence_number.parse::<u128>().map_err(|e| {
-            ReceiveRequestError::seq_number_parse_error(
-                format!("SQS sequence number {}", message.sequence_number),
-                e,
-            )
-        })?;
-        self.update_own_batch_sync_state(sequence_number);
 
         let message_attributes = message.message_attributes.clone();
         let batch_metadata = self.extract_batch_metadata(&message_attributes);

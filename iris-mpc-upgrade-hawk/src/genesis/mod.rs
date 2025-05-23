@@ -26,6 +26,7 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store as IrisStore;
+use std::sync::atomic::AtomicU64;
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -82,6 +83,8 @@ pub async fn exec_main(
     )
     .await?;
 
+    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
+
     // Coordinator: await server to start.
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
@@ -89,6 +92,7 @@ pub async fn exec_main(
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
+        current_batch_id_atomic,
     )
     .await;
     background_tasks.check_tasks();
