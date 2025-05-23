@@ -1,7 +1,9 @@
-use super::{rot::VecRots, BothEyes, VecRequests};
+use super::{
+    rot::{Rotations, VecRots},
+    BothEyes, VecRequests,
+};
 use eyre::{eyre, Result};
 use futures::future::JoinAll;
-use iris_mpc_common::ROTATIONS;
 use itertools::Itertools;
 use std::{collections::HashMap, future::Future};
 use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError};
@@ -12,6 +14,7 @@ const N_EYES: usize = 2;
 pub struct Schedule {
     n_sessions: usize,
     n_requests: usize,
+    n_rotations: usize,
 }
 
 /// A batch is a list of tasks to do within the same unit of parallelism.
@@ -40,23 +43,24 @@ impl Task {
 pub type TaskId = (usize, usize, usize);
 
 impl Schedule {
-    pub fn new(n_sessions: usize, n_requests: usize) -> Self {
+    pub fn new(n_sessions: usize, n_requests: usize, n_rotations: usize) -> Self {
         Self {
             n_sessions,
             n_requests,
+            n_rotations,
         }
     }
 
     /// Enumerate all combinations of eye sides, requests, and rotations.
     /// Distribute the tasks over a number of sessions.
     pub fn batches(&self) -> Vec<Batch> {
-        let n_tasks = self.n_requests * ROTATIONS;
+        let n_tasks = self.n_requests * self.n_rotations;
         let batch_size = n_tasks / self.n_sessions;
         let rest_size = n_tasks % self.n_sessions;
 
         (0..N_EYES)
             .flat_map(|i_eye| {
-                let mut task_iter = (0..ROTATIONS).flat_map(move |i_rotation| {
+                let mut task_iter = (0..self.n_rotations).flat_map(move |i_rotation| {
                     range_forward_backward(self.n_requests).map(move |i_request| Task {
                         i_eye,
                         i_request,
@@ -80,14 +84,14 @@ impl Schedule {
             .collect_vec()
     }
 
-    pub fn organize_results<T>(
+    pub fn organize_results<T, ROT: Rotations>(
         &self,
         mut results: HashMap<TaskId, T>,
-    ) -> Result<BothEyes<VecRequests<VecRots<T>>>> {
+    ) -> Result<BothEyes<VecRequests<VecRots<T, ROT>>>> {
         let [l, r] = [0, 1].map(|i_eye| {
             (0..self.n_requests)
                 .map(|i_request| {
-                    (0..ROTATIONS)
+                    (0..self.n_rotations)
                         .map(|i_rotation| {
                             let task = Task {
                                 i_eye,
@@ -148,23 +152,24 @@ mod test {
 
     #[test]
     fn test_schedule() {
-        test_schedule_impl(1, 0);
-        test_schedule_impl(1, 1);
-        test_schedule_impl(1, 2);
-        test_schedule_impl(10, 1);
-        test_schedule_impl(1, 10);
-        test_schedule_impl(7, 10);
-        test_schedule_impl(10, 30);
-        test_schedule_impl(10, 97);
+        for n_rotations in [1, ROTATIONS] {
+            test_schedule_impl(1, 0, n_rotations);
+            test_schedule_impl(1, 1, n_rotations);
+            test_schedule_impl(1, 2, n_rotations);
+            test_schedule_impl(10, 1, n_rotations);
+            test_schedule_impl(1, 10, n_rotations);
+            test_schedule_impl(7, 10, n_rotations);
+            test_schedule_impl(10, 30, n_rotations);
+            test_schedule_impl(10, 97, n_rotations);
+        }
     }
 
-    fn test_schedule_impl(n_sessions: usize, n_requests: usize) {
+    fn test_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
         let n_batches = n_eyes * n_sessions;
-        let n_rotations = ROTATIONS;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
-        let batches = Schedule::new(n_sessions, n_requests).batches();
+        let batches = Schedule::new(n_sessions, n_requests, n_rotations).batches();
         assert_eq!(batches.len(), n_batches);
 
         let count_tasks: usize = batches.iter().map(|b| b.tasks.len()).sum();
