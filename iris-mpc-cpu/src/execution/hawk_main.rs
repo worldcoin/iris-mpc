@@ -1125,6 +1125,7 @@ impl HawkHandle {
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
+                // The store to find vector ids (same left or right).
                 let store = hawk_actor.iris_store[LEFT].read().await;
                 (
                     request.luc_ids(&store),
