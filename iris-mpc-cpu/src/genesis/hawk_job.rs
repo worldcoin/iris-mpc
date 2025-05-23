@@ -5,9 +5,10 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_store::DbStoredIris;
 use std::sync::Arc;
 use tokio::sync::oneshot;
+
+use super::Batch;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
@@ -27,17 +28,21 @@ pub struct Job {
 /// An indexation job request.
 #[derive(Clone, Debug)]
 pub struct JobRequest {
+    // Incoming batch identifier.
+    pub batch_id: usize,
+
     // Incoming batch of iris identifiers for subsequent correlation.
     pub identifiers: Vec<IrisVectorId>,
 
-    // HNSW indexation queries over both eyes.
+    /// HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
 }
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: usize, data: &[DbStoredIris]) -> Self {
+    pub fn new(party_id: usize, Batch { data, id: batch_id }: Batch) -> Self {
         Self {
+            batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
             queries: Arc::new([
                 data.iter()
@@ -69,33 +74,23 @@ impl JobRequest {
     }
 }
 
+// Methods.
+impl JobRequest {
+    // Incoming batch size.
+    pub fn batch_size(&self) -> usize {
+        self.identifiers.len()
+    }
+}
+
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
+    /// Unique sequential identifier for the job
+    pub batch_id: usize,
+
     /// Which identifiers inserted in the job
     pub identifiers: Vec<IrisVectorId>,
 
     /// Connect plans for updating the HNSW graph in DB
     pub connect_plans: HawkMutation,
-}
-
-/// An indexation result over a single iris.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResultOfBatchElement {
-    // Identifier of iris.
-    iris_vector_id: IrisVectorId,
-
-    // Error flag - TEMP.
-    did_error: bool,
-}
-
-/// Constructor.
-#[allow(dead_code)]
-impl JobResultOfBatchElement {
-    pub fn new(iris_identifier: IrisVectorId, did_error: bool) -> Self {
-        Self {
-            iris_vector_id: iris_identifier,
-            did_error,
-        }
-    }
 }

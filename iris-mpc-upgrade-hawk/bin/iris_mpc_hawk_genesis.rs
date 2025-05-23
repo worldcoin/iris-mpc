@@ -1,7 +1,7 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
-use iris_mpc_cpu::genesis::logger;
+use iris_mpc_cpu::genesis::{log_error, log_info};
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 #[derive(Parser)]
@@ -11,29 +11,39 @@ struct Args {
     // Maximum height of indexation.
     #[clap(long("max-height"))]
     max_indexation_height: Option<String>,
+
+    // Batch size for processing.
+    #[clap(long("batch-size"))]
+    batch_size: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
-
-    let max_indexation_height_arg = args.max_indexation_height;
-
-    if max_indexation_height_arg.is_none() {
-        eprintln!("Error: --max-height argument is required.");
-        bail!("--max-height argument is required.");
-    }
-    let max_indexation_height_arg = max_indexation_height_arg.unwrap();
-
-    let max_indexation_height: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
-        eprintln!("Error: --max-height argument must be a valid u32.");
-        eyre::eyre!("--max-height argument must be a valid u32.")
-    })?;
-
     // Set config.
     println!("Initialising config");
     dotenvy::dotenv().ok();
     let config: Config = Config::load_config("SMPC").unwrap();
+    // Set args.
+    let args = Args::parse();
+
+    if args.max_indexation_height.is_none() {
+        eprintln!("Error: --max-height argument is required.");
+        bail!("--max-height argument is required.");
+    }
+    let max_indexation_height_arg = args.max_indexation_height.as_ref().unwrap();
+    let height_max: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
+        eprintln!("Error: --max-height argument must be a valid u32.");
+        eyre::eyre!("--max-height argument must be a valid u32.")
+    })?;
+
+    let batch_size = if args.batch_size.is_some() {
+        args.batch_size.as_ref().unwrap().parse().map_err(|_| {
+            eprintln!("Error: --batch-size argument must be a valid usize.");
+            eyre::eyre!("--batch-size argument must be a valid usize.")
+        })?
+    } else {
+        config.max_batch_size
+    };
 
     // Set tracing.
     println!("Initialising tracing");
@@ -46,12 +56,12 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, max_indexation_height).await {
+    match exec_main(config, height_max, batch_size).await {
         Ok(_) => {
-            logger::log_info("Server", "Exited normally".to_string());
+            log_info("Server", "Exited normally".to_string());
         }
         Err(err) => {
-            logger::log_error("Server", format!("Server exited with error: {:?}", err));
+            log_error("Server", format!("Server exited with error: {:?}", err));
             return Err(err);
         }
     }

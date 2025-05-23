@@ -23,6 +23,7 @@ pub async fn search_to_reset(
 ) -> Result<ResetPlan> {
     // Get the reset updates from the request.
     let updates = {
+        // The store to find vector ids (same left or right).
         let store = hawk_actor.iris_store[LEFT].read().await;
         request.reset_updates(&store)
     };

@@ -4,10 +4,10 @@
 # The script will loop through each cluster, port-forward ArgoCD server, authenticate to it, update the targetRevision of the application, and close port-forward.
 # The script can be configured to use either CPU or GPU clusters by passing the appropriate argument. The default is GPU
 # Usage examples:
-#   ./scripts/argo_stage_update_revision.sh $(git branch --show-current)
-#   ./scripts/argo_stage_update_revision.sh main
-#   ./scripts/argo_stage_update_revision.sh <another-branch>
-#   ./scripts/argo_stage_update_revision.sh <another-branch> cpu 
+#   ./scripts/tools/argo_stage_update_revision.sh $(git branch --show-current)
+#   ./scripts/tools/argo_stage_update_revision.sh main
+#   ./scripts/tools/argo_stage_update_revision.sh <another-branch>
+#   ./scripts/tools/argo_stage_update_revision.sh <another-branch> cpu
 #
 # Pre-requisites:
 # 1. Ensure that you have the ArgoCD CLI installed on your local machine. (brew install argocd)

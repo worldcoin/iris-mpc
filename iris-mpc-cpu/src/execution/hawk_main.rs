@@ -58,6 +58,7 @@ use std::{
     vec,
 };
 use tokio::{
+    join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
     task::JoinSet,
 };
@@ -458,14 +459,12 @@ impl HawkActor {
 
     async fn update_anon_stats(
         &mut self,
-        session: &HawkSessionRef,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
         search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
     ) -> Result<()> {
-        let mut session = session.write().await;
-
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-
+            let mut session = sessions[side][0].write().await;
             self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
                 .await?;
         }
@@ -484,10 +483,21 @@ impl HawkActor {
         let distances = search_results
             .iter() // All requests.
             .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| plan.links.first()) // Bottom layer.
-            .flat_map(|neighbors| neighbors.iter()) // Nearest neighbors.
-            .map(|(_, distance)| distance.clone());
-
+            .flat_map(|plan| {
+                plan.links.first().into_iter().flat_map(move |neighbors| {
+                    neighbors
+                        .iter()
+                        .take(plan.match_count)
+                        .map(|(_, distance)| distance.clone())
+                })
+            });
+        tracing::info!(
+            "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
+            distances.clone().count(),
+            search_results.len(),
+            self.distances_cache[side].len(),
+            self.args.match_distances_buffer_size,
+        );
         self.distances_cache[side].extend(distances);
     }
 
@@ -609,10 +619,29 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
     pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
-        let mut graph_tx = graph_store.tx().await?;
-        for (side, mut graph) in izip!(STORE_IDS, self.0) {
-            *graph = graph_tx.with_graph(side).load_to_mem().await?;
-        }
+        let now = Instant::now();
+
+        // Spawn two independent transactions and load each graph in parallel.
+        let (graph_left, graph_right) = join!(
+            async {
+                let mut graph_tx = graph_store.tx().await?;
+                graph_tx.with_graph(StoreId::Left).load_to_mem().await
+            },
+            async {
+                let mut graph_tx = graph_store.tx().await?;
+                graph_tx.with_graph(StoreId::Right).load_to_mem().await
+            }
+        );
+        let graph_left = graph_left.expect("Could not load left graph");
+        let graph_right = graph_right.expect("Could not load right graph");
+
+        let GraphLoader(mut graphs) = self;
+        *graphs[LEFT] = graph_left;
+        *graphs[RIGHT] = graph_right;
+        tracing::info!(
+            "GraphLoader: Loaded left and right graphs in {:?}",
+            now.elapsed()
+        );
         Ok(())
     }
 }
@@ -1081,10 +1110,8 @@ impl HawkHandle {
         let mut sessions = hawk_actor.new_sessions().await?;
 
         // Validate the common state before starting.
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
+        HawkSession::state_check(&sessions[LEFT][0]).await?;
+        HawkSession::state_check(&sessions[RIGHT][0]).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -1125,6 +1152,7 @@ impl HawkHandle {
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
+                // The store to find vector ids (same left or right).
                 let store = hawk_actor.iris_store[LEFT].read().await;
                 (
                     request.luc_ids(&store),
@@ -1167,8 +1195,9 @@ impl HawkHandle {
         };
 
         hawk_actor
-            .update_anon_stats(&sessions[0][0], &search_results)
+            .update_anon_stats(sessions, &search_results)
             .await?;
+        tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
         let resets = search_to_reset(hawk_actor, sessions, &request).await?;
@@ -1190,7 +1219,7 @@ impl HawkHandle {
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
-
+        tracing::info!("Finished processing a Hawk job…");
         Ok(results)
     }
 
@@ -1222,6 +1251,11 @@ impl HawkHandle {
         {
             // The accepted insertions for uniqueness, reauth, and resets.
             // Focus on the insertions and keep only the centered irises.
+            tracing::info!(
+                "Inserting {} new irises for eye {}",
+                search_results.len(),
+                side
+            );
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| {
                     decision.is_mutation().then(|| search_result.into_center())
