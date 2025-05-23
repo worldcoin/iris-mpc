@@ -202,7 +202,6 @@ impl<'a> BatchProcessor<'a> {
                 current_batch_id
             );
             if self.msg_counter == 0 {
-                self.current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
                 return Ok(Some(BatchQuery::default()));
             }
         }
