@@ -1,4 +1,5 @@
 use super::{
+    rot::WithoutRot,
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT,
 };
@@ -7,12 +8,12 @@ use eyre::Result;
 
 pub struct ResetRequests {
     pub vector_ids: Vec<VectorId>,
-    pub queries: SearchQueries,
+    pub queries: SearchQueries<WithoutRot>,
 }
 
 pub struct ResetPlan {
     pub vector_ids: Vec<VectorId>,
-    pub search_results: SearchResults,
+    pub search_results: SearchResults<WithoutRot>,
 }
 
 pub async fn search_to_reset(
