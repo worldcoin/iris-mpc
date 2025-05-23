@@ -1,18 +1,18 @@
-name: Build and push base docker image (CUDA, NCCL)
+name: Branch - Hawk Upgrade Build and push docker image 
 
 on:
   push:
-    paths:
-      - Dockerfile.base
-      - .github/workflows/build-and-push-base.yaml
+    branches:
+      - "wait-for-completed-batches"
 
-  workflow_dispatch:
+concurrency:
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}-base
-  CUDA_VERSION: 12_2
-  NCCL_VERSION: 2_22_3_1
+  IMAGE_NAME: "iris-mpc-genesis"
+
 jobs:
   docker:
     timeout-minutes: 40
@@ -42,8 +42,9 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ env.CUDA_VERSION }}-nccl${{ env.NCCL_VERSION }}
+            ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.base
+          file: Dockerfile.genesis.hawk
+

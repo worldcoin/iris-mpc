@@ -159,6 +159,9 @@ pub struct ServerActor {
     mask_chunk_buffers: Vec<DBChunkBuffers>,
     phase1_events: Vec<Vec<CUevent>>,
     phase2_events: Vec<Vec<CUevent>>,
+    // counter that has number of queries that have been processed
+    // this is used to determine the "global" query id for the current query for bucket statistics
+    internal_batch_counter: u64,
     // Normal orientation buffers
     match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
     match_distances_buffer_codes_right: Vec<ChunkShare<u16>>,
@@ -166,8 +169,8 @@ pub struct ServerActor {
     match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
     match_distances_counter_left: Vec<CudaSlice<u32>>,
     match_distances_counter_right: Vec<CudaSlice<u32>>,
-    match_distances_indices_left: Vec<CudaSlice<u32>>,
-    match_distances_indices_right: Vec<CudaSlice<u32>>,
+    match_distances_indices_left: Vec<CudaSlice<u64>>,
+    match_distances_indices_right: Vec<CudaSlice<u64>>,
     // Mirror orientation buffers
     match_distances_buffer_codes_left_mirror: Vec<ChunkShare<u16>>,
     match_distances_buffer_codes_right_mirror: Vec<ChunkShare<u16>>,
@@ -175,8 +178,8 @@ pub struct ServerActor {
     match_distances_buffer_masks_right_mirror: Vec<ChunkShare<u16>>,
     match_distances_counter_left_mirror: Vec<CudaSlice<u32>>,
     match_distances_counter_right_mirror: Vec<CudaSlice<u32>>,
-    match_distances_indices_left_mirror: Vec<CudaSlice<u32>>,
-    match_distances_indices_right_mirror: Vec<CudaSlice<u32>>,
+    match_distances_indices_left_mirror: Vec<CudaSlice<u64>>,
+    match_distances_indices_right_mirror: Vec<CudaSlice<u64>>,
     buckets: ChunkShare<u32>,
     anonymized_bucket_statistics_left: BucketStatistics,
     anonymized_bucket_statistics_right: BucketStatistics,
@@ -562,6 +565,7 @@ impl ServerActor {
             mask_chunk_buffers,
             phase1_events,
             phase2_events,
+            internal_batch_counter: 0,
             match_distances_buffer_codes_left,
             match_distances_buffer_codes_right,
             match_distances_buffer_masks_left,
@@ -637,6 +641,10 @@ impl ServerActor {
             );
 
             metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
+
+            // Alternate the full scan side for the next batch
+            self.full_scan_side = self.full_scan_side.other();
+            tracing::info!("Switching full scan side to {}", self.full_scan_side);
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }
@@ -802,6 +810,7 @@ impl ServerActor {
         batch_size = valid_entry_idxs.len();
         batch.retain(&valid_entry_idxs);
         tracing::info!("Sync and filter done in {:?}", tmp_now.elapsed());
+        self.internal_batch_counter += 1;
 
         ///////////////////////////////////////////////////////////////////
         // PERFORM DELETIONS (IF ANY)
@@ -961,7 +970,10 @@ impl ServerActor {
         ///////////////////////////////////////////////////////////////////
         tracing::info!("Fetching partial {} results", self.full_scan_side);
         let mut partial_matches_side1 = self.distance_comparator.get_partial_results(
-            &self.db_match_list_left,
+            match self.full_scan_side {
+                Eye::Left => &self.db_match_list_left,
+                Eye::Right => &self.db_match_list_right,
+            },
             &self.current_db_sizes,
             &self.streams[0],
         );
@@ -1745,6 +1757,29 @@ impl ServerActor {
                 })
                 .collect::<Vec<_>>();
 
+            fn ids_to_bitvec(ids: &[u64]) -> Vec<u64> {
+                let mut result = vec![0; ids.len().div_ceil(64)];
+                // set first, bit, since it is always 1
+                result[0] = 1;
+                for (idx, (last, new)) in ids.iter().tuple_windows().enumerate() {
+                    if last == new {
+                        continue;
+                    }
+                    result[(idx + 1) / 64] |= 1 << ((idx + 1) % 64);
+                }
+                result
+            }
+            // sort all indices, and create bitmaps from them
+            let indices_bitmaps = indices
+                .into_iter()
+                .map(|mut x| {
+                    x.sort();
+                    x.truncate(self.match_distances_buffer_size);
+                    x
+                })
+                .map(|sorted| ids_to_bitvec(&sorted))
+                .collect_vec();
+
             let shares = sort_shares_by_indices(
                 &self.device_manager,
                 &resort_indices,
@@ -1767,19 +1802,21 @@ impl ServerActor {
             let match_distances_buffers_masks_view =
                 shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
-            self.phase2_buckets.compare_multiple_thresholds(
-                &match_distances_buffers_codes_view,
-                &match_distances_buffers_masks_view,
-                streams,
-                &(1..=self.n_buckets)
-                    .map(|x: usize| {
-                        Circuits::translate_threshold_a(
-                            MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
-                        ) as u16
-                    })
-                    .collect::<Vec<_>>(),
-                &mut self.buckets,
-            );
+            self.phase2_buckets
+                .compare_multiple_thresholds_while_aggregating_per_query(
+                    &match_distances_buffers_codes_view,
+                    &match_distances_buffers_masks_view,
+                    &indices_bitmaps,
+                    streams,
+                    &(1..=self.n_buckets)
+                        .map(|x: usize| {
+                            Circuits::translate_threshold_a(
+                                MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                            ) as u16
+                        })
+                        .collect::<Vec<_>>(),
+                    &mut self.buckets,
+                );
 
             let buckets = self.phase2_buckets.open_buckets(&self.buckets, streams);
 
@@ -1838,7 +1875,7 @@ impl ServerActor {
 
             let reset_all_buffers =
                 |counter: &[CudaSlice<u32>],
-                 indices: &[CudaSlice<u32>],
+                 indices: &[CudaSlice<u64>],
                  codes: &[ChunkShare<u16>],
                  masks: &[ChunkShare<u16>]| {
                     reset_slice(self.device_manager.devices(), counter, 0, streams);
@@ -2010,11 +2047,6 @@ impl ServerActor {
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
     ) {
-        assert!(
-            eye_db == Eye::Right,
-            "We expect this to be called for the right eye only"
-        );
-
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2463,6 +2495,7 @@ impl ServerActor {
                             match_distances_buffers_masks,
                             match_distances_counters,
                             match_distances_indices,
+                            self.internal_batch_counter,
                             &code_dots,
                             &mask_dots,
                             batch_size,
@@ -2713,7 +2746,8 @@ fn open(
     match_distances_buffers_codes: &[ChunkShare<u16>],
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
-    match_distances_indices: &[CudaSlice<u32>],
+    match_distances_indices: &[CudaSlice<u64>],
+    batch_id: u64,
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
@@ -2758,6 +2792,7 @@ fn open(
         match_distances_buffers_masks,
         match_distances_counters,
         match_distances_indices,
+        batch_id,
         code_dots,
         mask_dots,
         batch_size,
