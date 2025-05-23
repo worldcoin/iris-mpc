@@ -37,11 +37,11 @@ pub async fn get_own_batch_sync_state(
 ) -> Result<BatchSyncState> {
     let next_sns_sequence_num = match get_next_sns_seq_num(config, &sqs_client.clone()).await? {
         Some(seq) => {
-            println!("fetching next_sns_sequence_num: {}", seq);
+            tracing::info!("fetching next_sns_sequence_num: {}", seq);
             seq
         }
         None => {
-            println!("fetching next_sns_sequence_num: None (queue was empty)");
+            tracing::info!("fetching next_sns_sequence_num: None (queue was empty)");
             0
         }
     };
