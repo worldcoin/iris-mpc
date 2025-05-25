@@ -51,7 +51,6 @@ pub async fn fetch_iris_batch(
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `s3_client` - A configured AWS S3 client instance.
 ///
 /// # Returns
@@ -60,7 +59,6 @@ pub async fn fetch_iris_batch(
 ///
 pub async fn fetch_iris_deletions(
     config: &Config,
-    _max_indexation_id: IrisSerialId,
     s3_client: &S3_Client,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
@@ -111,8 +109,6 @@ pub async fn fetch_iris_deletions(
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
-    // TODO: only return deletions less than maximum indexation height.
-
     Ok(s3_object.deleted_serial_ids)
 }
 
@@ -126,7 +122,7 @@ pub async fn fetch_iris_deletions(
 ///
 /// Serial id of the last indexed iris, or 0 if no serial id is recorded.
 ///
-pub async fn get_id_of_last_indexed(iris_store: &Store) -> Result<IrisSerialId> {
+pub async fn get_last_indexed_id(iris_store: &Store) -> Result<IrisSerialId> {
     let id = iris_store
         .get_persistent_state(STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED)
         .await?
@@ -150,21 +146,21 @@ fn get_s3_key_for_iris_deletions(environment: String) -> String {
 /// # Arguments
 ///
 /// * `tx` - PostgreSQL transaction to use for operation scope.
-/// * `id_of_last_indexed` - Iris serial id to be persisted.
+/// * `value` - Iris serial id to be persisted.
 ///
 /// # Returns
 ///
 /// Result<()> on success
 ///
-pub async fn set_id_of_last_indexed(
+pub async fn set_last_indexed_id(
     tx: &mut Transaction<'_, Postgres>,
-    id_of_last_indexed: IrisSerialId,
+    value: IrisSerialId,
 ) -> Result<()> {
     Store::set_persistent_state(
         tx,
         STATE_DOMAIN_LAST_INDEXED,
         STATE_KEY_LAST_INDEXED,
-        &id_of_last_indexed,
+        &value,
     )
     .await
 }
@@ -179,14 +175,15 @@ pub async fn set_id_of_last_indexed(
 ///
 /// Result<()> on success
 ///
-pub async fn unset_id_of_last_indexed(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     Store::delete_persistent_state(tx, STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED).await
 }
 
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use super::{
-        fetch_iris_batch, get_id_of_last_indexed, set_id_of_last_indexed, unset_id_of_last_indexed,
+        fetch_iris_batch, get_last_indexed_id, set_last_indexed_id, unset_last_indexed_id,
     };
     use eyre::Result;
     use iris_mpc_common::{
@@ -233,26 +230,26 @@ mod tests {
         let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
-        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Set -> 10.
         let id_of_last_indexed = 10_u32;
         let mut tx = iris_store.tx().await?;
-        set_id_of_last_indexed(&mut tx, id_of_last_indexed).await?;
+        set_last_indexed_id(&mut tx, id_of_last_indexed).await?;
         tx.commit().await?;
 
         // Get -> should be 10.
-        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
         assert_eq!(id_of_last_indexed, 10);
 
         // Unset.
         let mut tx = iris_store.tx().await?;
-        unset_id_of_last_indexed(&mut tx).await?;
+        unset_last_indexed_id(&mut tx).await?;
         tx.commit().await?;
 
         // Get -> should be 0.
-        let id_of_last_indexed = get_id_of_last_indexed(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Unset resources.

@@ -53,7 +53,7 @@ pub struct SyncResult {
     // Own synchronization state.
     pub my_state: SyncState,
 
-    // Other node's synchronization states.
+    // Network synchronization state.
     pub all_states: Vec<SyncState>,
 }
 

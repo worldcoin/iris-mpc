@@ -93,34 +93,29 @@ pub struct JobResult {
     /// Unique sequential job identifier.
     pub batch_id: usize,
 
+    /// Connect plans for updating HNSW graph in DB.
+    pub connect_plans: HawkMutation,
+
+    /// Iris serial id of batch's first element.
+    pub first_serial_id: IrisSerialId,
+
     /// Set of Iris identifiers being indexed.
     pub identifiers: Vec<IrisVectorId>,
 
-    /// Connect plans for updating HNSW graph in DB.
-    pub connect_plans: HawkMutation,
+    /// Iris serial id of batch's last element.
+    pub last_serial_id: IrisSerialId,
 }
 
 /// Constructor.
 impl JobResult {
     pub(crate) fn new(request: &JobRequest, connect_plans: HawkMutation) -> Self {
         Self {
-            batch_id: request.batch_id,
-            identifiers: request.identifiers.clone(),
             connect_plans,
+            batch_id: request.batch_id,
+            first_serial_id: request.identifiers.first().unwrap().serial_id(),
+            identifiers: request.identifiers.clone(),
+            last_serial_id: request.identifiers.last().unwrap().serial_id(),
         }
-    }
-}
-
-/// Methods.
-impl JobResult {
-    // Returns Iris serial id of batch's first element.
-    pub fn first_serial_id(&self) -> IrisSerialId {
-        self.identifiers.first().unwrap().serial_id()
-    }
-
-    // Returns Iris serial id of batch's last element.
-    pub fn last_serial_id(&self) -> IrisSerialId {
-        self.identifiers.last().unwrap().serial_id()
     }
 }
 
@@ -132,8 +127,8 @@ impl fmt::Display for JobResult {
             "batch-id={}, batch-size={}, range=({}..{})",
             self.batch_id,
             self.identifiers.len(),
-            self.first_serial_id(),
-            self.last_serial_id()
+            self.first_serial_id,
+            self.last_serial_id
         )
     }
 }
