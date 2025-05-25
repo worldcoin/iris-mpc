@@ -543,9 +543,8 @@ async fn start_results_thread(
         while let Some(JobResult {
             batch_id,
             connect_plans,
-            identifiers: _,
             last_serial_id,
-            first_serial_id: _,
+            ..
         }) = rx.recv().await
         {
             log_info(format!("Job Results :: Received: batch-id={}", batch_id));
