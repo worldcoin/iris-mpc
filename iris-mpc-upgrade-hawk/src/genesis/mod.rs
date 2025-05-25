@@ -572,33 +572,6 @@ async fn start_results_thread(
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 
-        // while let Some(result) = rx.recv().await {
-        //     log_info(format!("Job Results :: Received: {}", result));
-
-        //     log_info(format!(
-        //         "Job Results :: Persisting graph updates: {}",
-        //         result
-        //     ));
-        //     let mut graph_tx = graph_store.tx().await?;
-        //     result
-        //         .connect_plans
-        //         .to_owned()
-        //         .persist(&mut graph_tx)
-        //         .await?;
-
-        //     log_info(format!(
-        //         "Job Results :: Persisting last indexed id: {}",
-        //         result
-        //     ));
-        //     let mut db_tx = graph_tx.tx;
-        //     set_last_indexed_id(&mut db_tx, result.last_serial_id()).await?;
-        //     db_tx.commit().await?;
-
-        //     log_info(format!("Job Results :: Persisted to dB: {}", result));
-
-        //     shutdown_handler_bg.decrement_batches_pending_completion();
-        // }
-
         Ok(())
     });
 
