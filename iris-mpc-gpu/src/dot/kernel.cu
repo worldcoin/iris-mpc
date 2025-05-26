@@ -98,7 +98,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
-extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping)
+extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, unsigned int *partialResultsRotations)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -116,8 +116,16 @@ extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *resul
                 continue;
             }
 
-            // Mark which results are matches with a bit in the output
             unsigned int dbIdx = indexMapping[chunkDbIdx];
+            unsigned int matchCounter = atomicAdd(&partialResultsCounter[0], 1);
+            if (matchCounter < MAX_MATCHES_LEN * queryLength) 
+            {
+                partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
+                partialResultsDbIndices[matchCounter] = dbIdx;
+                partialResultsRotations[matchCounter] = queryIdx % ALL_ROTATIONS;
+            }
+
+            // Mark which results are matches with a bit in the output
             unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
         }

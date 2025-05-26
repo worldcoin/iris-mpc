@@ -316,6 +316,10 @@ impl DistanceComparator {
                             real_db_sizes[i],
                             total_db_sizes[i],
                             &index_mapping,
+                            &self.partial_match_counter[i],
+                            &self.partial_results_query_indices[i],
+                            &self.partial_results_db_indices[i],
+                            &self.partial_results_rotations[i],
                         ),
                     )
                     .unwrap();

@@ -1244,6 +1244,18 @@ impl ServerActor {
             (vec![], vec![], vec![], vec![])
         };
 
+        tracing::info!(
+            party_id = self.party_id,
+            "Partial results OLD in subset LEFT: {:?}",
+            partial_match_ids_left
+        );
+
+        tracing::info!(
+            party_id = self.party_id,
+            "Partial results OLD in subset RIGHT: {:?}",
+            partial_match_ids_right
+        );
+
         let partial_match_counters_left = partial_match_counters_left.iter().fold(
             vec![0usize; batch_size],
             |mut acc, counters| {
@@ -2218,6 +2230,25 @@ impl ServerActor {
                 );
                 self.phase2.return_result_buffer(res);
             }
+        );
+
+        // Retrieve partial results
+        let partial_results = self
+            .distance_comparator
+            .get_partial_results_with_rotations(&self.streams[0]);
+
+        tracing::info!(
+            party_id = self.party_id,
+            "Partial results NEW in subset: {:?}",
+            partial_results
+        );
+
+        // Reset the partial counter
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.partial_match_counter,
+            0,
+            &self.streams[0],
         );
     }
 
