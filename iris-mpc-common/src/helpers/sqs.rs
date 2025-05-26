@@ -1,7 +1,9 @@
 use crate::config::Config;
 use crate::helpers::smpc_request::SQSMessage;
+use aws_sdk_sqs::error::ProvideErrorMetadata;
 use aws_sdk_sqs::Client;
 use eyre::eyre;
+use eyre::private::kind::TraitKind;
 use eyre::Context;
 use eyre::Result;
 
@@ -156,7 +158,15 @@ pub async fn get_approximate_number_of_messages(
         .attribute_names(aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
         .send()
         .await
-        .context("Failed to get queue attributes from SQS")?;
+        .map_err(|sdk_err| {
+            tracing::error!(
+                "SQS GetQueueAttributes failed. SDK error: {:?}, AWS error kind: {:?}, Message: {:?}",
+                sdk_err,
+                sdk_err.eyre_kind(),
+                sdk_err.message()
+            );
+            eyre!("Failed to get queue attributes from SQS")
+        })?;
 
     let num_messages_str = attributes_response
         .attributes
