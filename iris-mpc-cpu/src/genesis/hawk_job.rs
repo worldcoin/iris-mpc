@@ -1,14 +1,16 @@
+use super::{
+    utils::{PartyId, COUNT_OF_MPC_PARTIES},
+    Batch,
+};
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use eyre::Result;
-use iris_mpc_common::IrisVectorId;
-use std::sync::Arc;
+use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
-
-use super::Batch;
 
 // Helper type: Aby3 store batch query.
 pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
@@ -40,7 +42,10 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: usize, Batch { data, id: batch_id }: Batch) -> Self {
+    pub fn new(party_id: PartyId, Batch { data, id: batch_id }: Batch) -> Self {
+        assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
+        assert!(!data.is_empty(), "Invalid batch: is empty");
+
         Self {
             batch_id,
             identifiers: data.iter().map(IrisVectorId::from).collect(),
@@ -85,12 +90,45 @@ impl JobRequest {
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobResult {
-    /// Unique sequential identifier for the job
+    /// Unique sequential job identifier.
     pub batch_id: usize,
 
-    /// Which identifiers inserted in the job
+    /// Connect plans for updating HNSW graph in DB.
+    pub connect_plans: HawkMutation,
+
+    /// Iris serial id of batch's first element.
+    pub first_serial_id: IrisSerialId,
+
+    /// Set of Iris identifiers being indexed.
     pub identifiers: Vec<IrisVectorId>,
 
-    /// Connect plans for updating the HNSW graph in DB
-    pub connect_plans: HawkMutation,
+    /// Iris serial id of batch's last element.
+    pub last_serial_id: IrisSerialId,
+}
+
+/// Constructor.
+impl JobResult {
+    pub(crate) fn new(request: &JobRequest, connect_plans: HawkMutation) -> Self {
+        Self {
+            connect_plans,
+            batch_id: request.batch_id,
+            first_serial_id: request.identifiers.first().unwrap().serial_id(),
+            identifiers: request.identifiers.clone(),
+            last_serial_id: request.identifiers.last().unwrap().serial_id(),
+        }
+    }
+}
+
+/// Trait: fmt::Display.
+impl fmt::Display for JobResult {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "batch-id={}, batch-size={}, range=({}..{})",
+            self.batch_id,
+            self.identifiers.len(),
+            self.first_serial_id,
+            self.last_serial_id
+        )
+    }
 }
