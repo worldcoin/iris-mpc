@@ -14,11 +14,11 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         self,
-        state_accessor::{fetch_iris_deletions, get_last_indexed, set_last_indexed},
+        state_accessor::{fetch_iris_deletions, get_last_indexed_id, set_last_indexed_id},
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        Batch, BatchGenerator, BatchIterator, JobResult,
+        BatchGenerator, BatchIterator, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -54,6 +54,11 @@ pub async fn exec_main(
 ) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
+    log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
+    log_info(format!(
+        "Mode of deployment: {:?}",
+        config.mode_of_deployment
+    ));
 
     // Process: set shutdown handler.
     let shutdown_handler = init_shutdown_handler(&config).await;
@@ -63,24 +68,42 @@ pub async fn exec_main(
 
     // Process: set service clients.
     let (aws_s3_client, iris_store, graph_store) = get_service_clients(&config).await?;
+    log_info(String::from("Service clients instantiated"));
 
-    let last_indexed_id = get_last_indexed(&iris_store).await?;
-    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client).await?;
+    // Process: set serial identifier of last indexed Iris.
+    let last_indexed_id = get_last_indexed_id(&iris_store).await?;
+    log_info(format!(
+        "Identifier of last Iris to have been indexed = {}",
+        last_indexed_id,
+    ));
 
-    // Bail if stores are inconsistent.
+    // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
+    let exclusions_all = fetch_iris_deletions(&config, &aws_s3_client).await?;
+    let exclusions = exclusions_all
+        .iter()
+        .filter(|&&x| x <= max_indexation_id)
+        .cloned()
+        .collect::<Vec<u32>>();
+    log_info(format!(
+        "Deletions for exclusion count = {}",
+        exclusions.len(),
+    ));
+
+    // Process: Bail if stores are inconsistent.
     validate_consistency_of_stores(&config, &iris_store, max_indexation_id, last_indexed_id)
         .await?;
-    // Await coordination server to start.
+    log_info(String::from("Store consistency checks OK"));
+
+    // Coordinator: Await coordination server to start.
     let my_state = get_sync_state(
         &config,
         batch_size,
         max_indexation_id,
         last_indexed_id,
-        &excluded_serial_ids,
+        &exclusions,
     )
     .await?;
-
-    // Coordinator: await server to start.
+    log_info(String::from("Synchronization state initialised"));
     let is_ready_flag = coordinator::start_coordination_server(
         &config,
         &mut background_tasks,
@@ -90,16 +113,23 @@ pub async fn exec_main(
     .await;
     background_tasks.check_tasks();
 
-    // Coordinator: await network state = unready.
+    // Coordinator: await network state = UNREADY.
     coordinator::wait_for_others_unready(&config).await?;
+    log_info(String::from("Network status = UNREADY"));
 
-    // Coordinator: await network state = healthy.
+    // Coordinator: await network state = HEALTHY.
     coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
+    log_info(String::from("Network status = HEALTHY"));
 
-    // Coordinator: await network state = synchronized.
+    // TODO: What should happen here - see Bryan.
+    // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
+
+    // Coordinator: await network state = SYNCHRONIZED.
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_synced_state()?;
+    log_info(String::from("Synchronization checks passed"));
+
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
@@ -117,17 +147,18 @@ pub async fn exec_main(
     )
     .await?;
     background_tasks.check_tasks();
+    log_info(String::from("HNSW graph initialised from store"));
 
-    // Start thread for persisting indexing results to DB.
+    // Process: Start thread for persisting indexing results to DB.
     let tx_results =
         start_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
-
     background_tasks.check_tasks();
 
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
     coordinator::wait_for_others_ready(&config).await?;
     background_tasks.check_tasks();
+    log_info(String::from("Network status = READY"));
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
@@ -142,7 +173,7 @@ pub async fn exec_main(
         last_indexed_id,
         max_indexation_id,
         batch_size,
-        excluded_serial_ids,
+        exclusions,
         &iris_store,
         background_tasks,
         &shutdown_handler,
@@ -192,7 +223,7 @@ async fn exec_main_loop(
         batch_size,
         excluded_serial_ids,
     );
-    log_info(String::from("Batch generator initialised"));
+    log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set main loop result.
     let res: Result<()> = async {
@@ -203,59 +234,34 @@ async fn exec_main_loop(
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
         // Index until generator is exhausted.
-        while let Some(Batch { data, id: batch_id }) = batch_generator.next_batch(iris_store).await? {
-               // Coordinator: escape on shutdown.
+        // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
+        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+            // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
                 break;
             }
-            let data_len = data.len();
 
-            // Filter out any ids which have already been indexed -- there should be none
-            let data: Vec<_> = data.into_iter().filter(|db_iris| db_iris.id() > (last_indexed_id as i64)).collect();
-            if data.len() < data_len {
-                log_warn(format!(
-                    "HNSW GENESIS: Filtered out previously indexed batch elements: id={} :: irises={} :: filtered={} :: time {:?}",
-                    batch_id,
-                    data_len,
-                    data_len - data.len(),
-                    now.elapsed(),
-                ));
-            }
-
-            // Filter out empty batches -- this should not occur
-            if data.is_empty() {
-                log_warn(format!(
-                    "HNSW GENESIS: Skipping empty batch: id={} :: irises={} :: time {:?}",
-                    batch_id,
-                    data.len(),
-                    now.elapsed(),
-                ));
-                continue;
-            }
-
-            // Collate metrics.
+            // Signal.
+            log_info(format!(
+                "Indexing new batch: {} :: time {:?}s",
+                batch,
+                now.elapsed().as_secs_f64(),
+            ));
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor.check_tasks();
-
-            let batch = Batch::new(batch_id, data);
-            log_info(format!(
-                "Indexing new batch: id={} :: batch-size={} :: batch-range=({}..={}) :: time {:?}",
-                batch.id,
-                batch.size(),
-                batch.id_start(),
-                batch.id_end(),
-                now.elapsed(),
-            ));
 
             // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
-                    eyre!(log_error(format!("HawkActor processing timeout: {:?}", err)))
+                    eyre!(log_error(format!(
+                        "HawkActor processing timeout: {:?}",
+                        err
+                    )))
                 })??;
 
             // Send results to processing thread to persist to database.
@@ -531,34 +537,37 @@ async fn start_results_thread(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel(32); // TODO: pick some buffer value
+    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(JobResult {
             batch_id,
-            identifiers,
             connect_plans,
+            last_serial_id,
+            ..
         }) = rx.recv().await
         {
-            if let (Some(first_id), Some(last_id)) = (identifiers.first(), identifiers.last()) {
-                let mut graph_tx = graph_store.tx().await?;
-                connect_plans.persist(&mut graph_tx).await?;
-                let mut db_tx = graph_tx.tx;
-                set_last_indexed(&mut db_tx, &last_id.serial_id()).await?;
-                db_tx.commit().await?;
+            log_info(format!("Job Results :: Received: batch-id={}", batch_id));
 
-                log_info(format!(
-                    "Persisted results to database for batch {}; serial ids between {} and {}",
-                    batch_id,
-                    first_id.serial_id(),
-                    last_id.serial_id(),
-                ));
-            } else {
-                log_warn(format!(
-                    "Received empty job result for batch {} in genesis indexer results thread",
-                    batch_id
-                ));
-            }
+            let mut graph_tx = graph_store.tx().await?;
+            connect_plans.persist(&mut graph_tx).await?;
+            log_info(format!(
+                "Job Results :: Persisted graph updates: batch-id={}",
+                batch_id
+            ));
+
+            let mut db_tx = graph_tx.tx;
+            set_last_indexed_id(&mut db_tx, last_serial_id).await?;
+            db_tx.commit().await?;
+            log_info(format!(
+                "Job Results :: Persisted last indexed id: batch-id={}",
+                batch_id
+            ));
+
+            log_info(format!(
+                "Job Results :: Persisted to dB: batch-id={}",
+                batch_id
+            ));
 
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
@@ -635,12 +644,6 @@ fn validate_config(config: &Config) {
         ));
         panic!("{}", msg);
     }
-
-    log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
-    log_info(format!(
-        "Mode of deployment: {:?}",
-        config.mode_of_deployment
-    ));
 }
 
 /// Validates consistency of PostGres stores.
