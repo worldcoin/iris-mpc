@@ -15,7 +15,7 @@ use cudarc::{
     nvrtc::compile_ptx,
 };
 use itertools::Itertools;
-use std::{cmp::min, sync::Arc};
+use std::{cmp::min, collections::HashMap, sync::Arc};
 
 const PTX_SRC: &str = include_str!("kernel.cu");
 const OPEN_RESULTS_FUNCTION: &str = "openResults";
@@ -48,6 +48,10 @@ pub struct DistanceComparator {
     pub partial_results: Vec<CudaSlice<u32>>,
     pub partial_results_left: Vec<CudaSlice<u32>>,
     pub partial_results_right: Vec<CudaSlice<u32>>,
+    pub partial_match_counter: Vec<CudaSlice<u32>>,
+    pub partial_results_query_indices: Vec<CudaSlice<u32>>,
+    pub partial_results_db_indices: Vec<CudaSlice<u32>>,
+    pub partial_results_rotations: Vec<CudaSlice<u32>>,
 }
 
 impl DistanceComparator {
@@ -69,7 +73,10 @@ impl DistanceComparator {
         let mut partial_results = vec![];
         let mut partial_results_left = vec![];
         let mut partial_results_right = vec![];
-
+        let mut partial_results_query_indices = vec![];
+        let mut partial_results_db_indices = vec![];
+        let mut partial_results_rotations = vec![];
+        let mut partial_match_counter = vec![];
         let devices_count = device_manager.device_count();
 
         let results_init_host = vec![u32::MAX; query_length];
@@ -128,6 +135,13 @@ impl DistanceComparator {
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
             );
+            partial_results_query_indices
+                .push(device.alloc_zeros(ALL_MATCHES_LEN * query_length).unwrap());
+            partial_results_db_indices
+                .push(device.alloc_zeros(ALL_MATCHES_LEN * query_length).unwrap());
+            partial_results_rotations
+                .push(device.alloc_zeros(ALL_MATCHES_LEN * query_length).unwrap());
+            partial_match_counter.push(device.alloc_zeros(1).unwrap());
 
             open_kernels.push(open_results_function);
             open_batch_kernels.push(open_results_batch_function);
@@ -159,6 +173,10 @@ impl DistanceComparator {
             partial_results,
             partial_results_left,
             partial_results_right,
+            partial_match_counter,
+            partial_results_query_indices,
+            partial_results_db_indices,
+            partial_results_rotations,
         }
     }
 
@@ -178,6 +196,10 @@ impl DistanceComparator {
         match_distances_buffers_masks: &[ChunkShare<u16>],
         match_distances_counters: &[CudaSlice<u32>],
         match_distances_indices: &[CudaSlice<u64>],
+        partial_match_counter: &[CudaSlice<u32>],
+        partial_results_query_indices: &[CudaSlice<u32>],
+        partial_results_db_indices: &[CudaSlice<u32>],
+        partial_results_rotations: &[CudaSlice<u32>],
         batch_id: u64,
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
@@ -223,6 +245,10 @@ impl DistanceComparator {
                             &match_distances_buffers_masks[i].b,
                             &match_distances_counters[i],
                             &match_distances_indices[i],
+                            &partial_match_counter[i],
+                            &partial_results_query_indices[i],
+                            &partial_results_db_indices[i],
+                            &partial_results_rotations[i],
                             &code_dots[i].a,
                             &code_dots[i].b,
                             &mask_dots[i].a,
@@ -501,6 +527,61 @@ impl DistanceComparator {
         );
 
         matches
+    }
+
+    /// Get the partial results with rotations
+    /// Returns a hashmap of query index -> db index -> list of matching rotations
+    pub fn get_partial_results_with_rotations(
+        &self,
+        streams: &[CudaStream],
+    ) -> HashMap<u32, HashMap<u32, Vec<u32>>> {
+        let mut partial_results_with_rotations = HashMap::new();
+        for i in 0..self.device_manager.device_count() {
+            let counter = dtoh_on_stream_sync(
+                &self.partial_match_counter[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap()[0] as usize;
+            if counter == 0 {
+                continue;
+            }
+
+            let query_indices = dtoh_on_stream_sync(
+                &self.partial_results_query_indices[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap()[0..counter]
+                .to_vec();
+            let db_indices = dtoh_on_stream_sync(
+                &self.partial_results_db_indices[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap()[0..counter]
+                .to_vec();
+            let rotations = dtoh_on_stream_sync(
+                &self.partial_results_rotations[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap()[0..counter]
+                .to_vec();
+
+            for (query_idx, (db_idx, rotation)) in query_indices
+                .iter()
+                .zip(db_indices.iter().zip(rotations.iter()))
+            {
+                partial_results_with_rotations
+                    .entry(*query_idx)
+                    .or_insert_with(HashMap::new)
+                    .entry(*db_idx)
+                    .or_insert_with(Vec::new)
+                    .push(*rotation);
+            }
+        }
+        partial_results_with_rotations
     }
 
     pub fn join_db_matches(
