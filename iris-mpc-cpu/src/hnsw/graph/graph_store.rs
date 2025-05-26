@@ -17,7 +17,7 @@ use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    // these can be turned into a SortedEdgeIds<V::VectorRef> using the ReadPacked trait
+    // this is a serialized SortedEdgeIds<V::VectorRef> (using bincode)
     links: Vec<u8>,
     layer: i32,
 }
