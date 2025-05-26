@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
@@ -19,13 +17,13 @@ fn main() -> Result<()> {
 
     let (_vector, _graph) = rt.block_on(async move {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let mut vector = PlaintextStore::new();
+        let mut vector = PlaintextStore::default();
         let mut graph = GraphMem::new();
-        let searcher = HnswSearcher::new_with_test_parameters();
+        let searcher = HnswSearcher::default();
 
         for idx in 0..DATABASE_SIZE {
             let raw_query = IrisCode::random_rng(&mut rng);
-            let query = Arc::new(raw_query);
+            let query = vector.prepare_query(raw_query.clone());
             searcher
                 .insert(&mut vector, &mut graph, &query, &mut rng)
                 .await?;

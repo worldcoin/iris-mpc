@@ -2,11 +2,13 @@ use crate::config::Config;
 use crate::helpers::smpc_request::SQSMessage;
 use aws_sdk_sqs::Client;
 use eyre::Context;
-use eyre::Result;
 
 /// SQS messages contain a sequence number when they originate from SNS and raw message delivery is enabled.
 /// This function reads the top of the requests SQS queue and returns its sequence number.
-pub async fn get_next_sns_seq_num(config: &Config, sqs_client: &Client) -> Result<Option<u128>> {
+pub async fn get_next_sns_seq_num(
+    config: &Config,
+    sqs_client: &Client,
+) -> eyre::Result<Option<u128>> {
     let sqs_snoop_response = sqs_client
         .receive_message()
         .wait_time_seconds(config.sqs_sync_long_poll_seconds)
@@ -53,7 +55,7 @@ pub async fn delete_messages_until_sequence_num(
     sqs_client: &Client,
     my_sequence_num: Option<u128>,
     target_sequence_num: Option<u128>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     tracing::info!(
         "Syncing queues. my_sequence_num: {:?}, target_sequence_num: {:?}.",
         my_sequence_num,

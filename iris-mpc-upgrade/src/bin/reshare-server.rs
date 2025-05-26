@@ -1,5 +1,4 @@
 use clap::Parser;
-use eyre::Result;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::Store;
@@ -17,7 +16,7 @@ use tonic::transport::Server;
 const APP_NAME: &str = "SMPC";
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> eyre::Result<()> {
     install_tracing();
     let config = ReShareServerConfig::parse();
 

@@ -3,16 +3,11 @@ syntax = "proto3";
 package party_node;
 
 service PartyNode {
-    rpc StartMessageStream (stream SendRequests) returns (SendResponse);
+    rpc StartMessageStream (stream SendRequest) returns (SendResponse);
 }
 
 message SendRequest {
-    uint32 session_id = 1;
-    bytes data = 2;
-}
-
-message SendRequests {
-    repeated SendRequest requests = 1;
+    bytes data = 1;
 }
 
 message SendResponse {}

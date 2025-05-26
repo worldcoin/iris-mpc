@@ -63,11 +63,6 @@ pub trait VectorStore: Debug {
     /// to help comparison to other vectors.
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef>;
 
-    /// Retain only vectors that are valid and currently usable by other methods.
-    async fn only_valid_vectors(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::VectorRef> {
-        vectors
-    }
-
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.

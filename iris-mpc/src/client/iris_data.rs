@@ -1,6 +1,5 @@
 #![allow(clippy::needless_range_loop)]
 use eyre::Context;
-use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::GaloisRingIrisCodeShare, helpers::smpc_request::IrisCodeSharesJSON,
     iris_db::iris::IrisCode,
@@ -49,7 +48,7 @@ impl IrisCodePartyShares {
     }
 }
 
-pub async fn read_iris_data_from_file(file_name: &str) -> Result<Vec<IrisCodePartyShares>> {
+pub async fn read_iris_data_from_file(file_name: &str) -> eyre::Result<Vec<IrisCodePartyShares>> {
     let mut file = File::open(file_name).context(format!("Failed to open file: {}", file_name))?;
 
     let mut bytes = Vec::new();

@@ -1,5 +1,5 @@
 use crate::shares::{bit::Bit, ring_impl::RingElement, IntRing2k};
-use eyre::{bail, eyre, Result};
+use eyre::{eyre, Result};
 
 /// Size of a PRF key in bytes
 const PRF_KEY_SIZE: usize = 16;
@@ -15,13 +15,6 @@ pub enum NetworkValue {
     VecRing16(Vec<RingElement<u16>>),
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
-    StateChecksum(StateChecksum),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StateChecksum {
-    pub irises: u64,
-    pub graph: u64,
 }
 
 impl NetworkValue {
@@ -41,7 +34,6 @@ impl NetworkValue {
             NetworkValue::VecRing16(_) => 0x06,
             NetworkValue::VecRing32(_) => 0x07,
             NetworkValue::VecRing64(_) => 0x08,
-            NetworkValue::StateChecksum(_) => 0x09,
         }
     }
 
@@ -55,7 +47,6 @@ impl NetworkValue {
             NetworkValue::VecRing16(v) => 5 + 2 * v.len(),
             NetworkValue::VecRing32(v) => 5 + 4 * v.len(),
             NetworkValue::VecRing64(v) => 5 + 8 * v.len(),
-            NetworkValue::StateChecksum(_) => 1 + 8 + 8,
         }
     }
 
@@ -89,10 +80,6 @@ impl NetworkValue {
                     res.extend_from_slice(&x.convert().to_le_bytes());
                 }
             }
-            NetworkValue::StateChecksum(checksums) => {
-                res.extend_from_slice(&u64::to_le_bytes(checksums.irises));
-                res.extend_from_slice(&u64::to_le_bytes(checksums.graph));
-            }
         }
     }
 
@@ -105,13 +92,13 @@ impl NetworkValue {
     pub fn from_network(serialized: Result<Vec<u8>>) -> Result<Self> {
         let serialized = serialized?;
         if serialized.is_empty() {
-            bail!("Empty serialized data");
+            return Err(eyre!("Empty serialized data"));
         }
         let descriptor = serialized[0];
         match descriptor {
             0x01 => {
                 if serialized.len() != 1 + PRF_KEY_SIZE {
-                    bail!("Invalid length for PrfKey");
+                    return Err(eyre!("Invalid length for PrfKey"));
                 }
                 Ok(NetworkValue::PrfKey(<[u8; PRF_KEY_SIZE]>::try_from(
                     &serialized[1..1 + PRF_KEY_SIZE],
@@ -119,7 +106,7 @@ impl NetworkValue {
             }
             0x02 | 0x12 => {
                 if serialized.len() != 1 {
-                    bail!("Invalid length for RingElementBit");
+                    return Err(eyre!("Invalid length for RingElementBit"));
                 }
                 let bit = if descriptor == 0x12 {
                     Bit::new(true)
@@ -130,7 +117,7 @@ impl NetworkValue {
             }
             0x03 => {
                 if serialized.len() != 3 {
-                    bail!("Invalid length for RingElement16");
+                    return Err(eyre!("Invalid length for RingElement16"));
                 }
                 Ok(NetworkValue::RingElement16(RingElement(
                     u16::from_le_bytes(<[u8; 2]>::try_from(&serialized[1..3])?),
@@ -138,7 +125,7 @@ impl NetworkValue {
             }
             0x04 => {
                 if serialized.len() != 5 {
-                    bail!("Invalid length for RingElement32");
+                    return Err(eyre!("Invalid length for RingElement32"));
                 }
                 Ok(NetworkValue::RingElement32(RingElement(
                     u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?),
@@ -146,7 +133,7 @@ impl NetworkValue {
             }
             0x05 => {
                 if serialized.len() != 9 {
-                    bail!("Invalid length for RingElement64");
+                    return Err(eyre!("Invalid length for RingElement64"));
                 }
                 Ok(NetworkValue::RingElement64(RingElement(
                     u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[1..9])?),
@@ -154,11 +141,13 @@ impl NetworkValue {
             }
             0x06 => {
                 if serialized.len() < 5 {
-                    bail!("Invalid length for VecRing16: can't parse vector length");
+                    return Err(eyre!(
+                        "Invalid length for VecRing16: can't parse vector length"
+                    ));
                 }
                 let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
                 if serialized.len() != 5 + 2 * len {
-                    bail!("Invalid length for VecRing16");
+                    return Err(eyre!("Invalid length for VecRing16"));
                 }
                 let mut res = Vec::with_capacity(len);
                 for i in 0..len {
@@ -170,11 +159,13 @@ impl NetworkValue {
             }
             0x07 => {
                 if serialized.len() < 5 {
-                    bail!("Invalid length for VecRing32: can't parse vector length");
+                    return Err(eyre!(
+                        "Invalid length for VecRing32: can't parse vector length"
+                    ));
                 }
                 let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
                 if serialized.len() != 5 + 4 * len {
-                    bail!("Invalid length for VecRing32");
+                    return Err(eyre!("Invalid length for VecRing32"));
                 }
                 let mut res = Vec::with_capacity(len);
                 for i in 0..len {
@@ -186,11 +177,13 @@ impl NetworkValue {
             }
             0x08 => {
                 if serialized.len() < 5 {
-                    bail!("Invalid length for VecRing64: can't parse vector length");
+                    return Err(eyre!(
+                        "Invalid length for VecRing64: can't parse vector length"
+                    ));
                 }
                 let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
                 if serialized.len() != 5 + 8 * len {
-                    bail!("Invalid length for VecRing64");
+                    return Err(eyre!("Invalid length for VecRing64"));
                 }
                 let mut res = Vec::with_capacity(len);
                 for i in 0..len {
@@ -199,16 +192,6 @@ impl NetworkValue {
                     )?)));
                 }
                 Ok(NetworkValue::VecRing64(res))
-            }
-            0x09 => {
-                let (a, b, c) = (1, 9, 17);
-                if serialized.len() != c {
-                    bail!("Invalid length for StateChecksum");
-                }
-                Ok(NetworkValue::StateChecksum(StateChecksum {
-                    irises: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[a..b])?),
-                    graph: u64::from_le_bytes(<[u8; 8]>::try_from(&serialized[b..c])?),
-                }))
             }
             _ => Err(eyre!("Invalid network value type")),
         }
@@ -228,7 +211,7 @@ impl NetworkValue {
     pub fn vec_from_network(serialized: Result<Vec<u8>>) -> Result<Vec<Self>> {
         let serialized = serialized?;
         if serialized.len() < 4 {
-            bail!("Can't parse vector length");
+            return Err(eyre!("Can't parse vector length"));
         }
         let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[0..4])?) as usize;
         let mut res = Vec::with_capacity(len);
@@ -243,7 +226,9 @@ impl NetworkValue {
                 0x05 => 9,        // RingElement64
                 0x06 => {
                     if serialized.len() < offset + 5 {
-                        bail!("Invalid length for VecRing16: can't parse vector length");
+                        return Err(eyre!(
+                            "Invalid length for VecRing16: can't parse vector length"
+                        ));
                     }
                     let len = u32::from_le_bytes(<[u8; 4]>::try_from(
                         &serialized[offset + 1..offset + 5],
@@ -252,7 +237,9 @@ impl NetworkValue {
                 }
                 0x07 => {
                     if serialized.len() < offset + 5 {
-                        bail!("Invalid length for VecRing32: can't parse vector length");
+                        return Err(eyre!(
+                            "Invalid length for VecRing32: can't parse vector length"
+                        ));
                     }
                     let len = u32::from_le_bytes(<[u8; 4]>::try_from(
                         &serialized[offset + 1..offset + 5],
@@ -261,14 +248,16 @@ impl NetworkValue {
                 }
                 0x08 => {
                     if serialized.len() < offset + 5 {
-                        bail!("Invalid length for VecRing64: can't parse vector length");
+                        return Err(eyre!(
+                            "Invalid length for VecRing64: can't parse vector length"
+                        ));
                     }
                     let len = u32::from_le_bytes(<[u8; 4]>::try_from(
                         &serialized[offset + 1..offset + 5],
                     )?) as usize;
                     5 + 8 * len
                 }
-                _ => bail!("Invalid network value type"),
+                _ => return Err(eyre!("Invalid network value type")),
             };
             res.push(NetworkValue::from_network(Ok(serialized
                 [offset..offset + value_len]

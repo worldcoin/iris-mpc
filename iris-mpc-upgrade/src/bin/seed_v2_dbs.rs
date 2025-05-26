@@ -1,5 +1,4 @@
 use clap::Parser;
-use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,
@@ -40,7 +39,7 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> eyre::Result<()> {
     let args = Args::parse();
 
     let party_1_pg_client = PostgresClient::new(

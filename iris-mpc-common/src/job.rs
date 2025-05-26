@@ -3,7 +3,6 @@ use crate::{
     helpers::{statistics::BucketStatistics, sync::Modification},
 };
 use core::fmt;
-use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -151,9 +150,6 @@ pub struct ServerJobResult<A = ()> {
     // See struct definition for more details
     pub anonymized_bucket_statistics_left: BucketStatistics,
     pub anonymized_bucket_statistics_right: BucketStatistics,
-    // Mirror orientation bucket statistics
-    pub anonymized_bucket_statistics_left_mirror: BucketStatistics,
-    pub anonymized_bucket_statistics_right_mirror: BucketStatistics,
     // Reauth results, this can be ignored on the first iterations of HNSW
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
@@ -202,5 +198,5 @@ pub trait JobSubmissionHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = Result<ServerJobResult<Self::A>>>;
+    ) -> impl Future<Output = ServerJobResult<Self::A>>;
 }

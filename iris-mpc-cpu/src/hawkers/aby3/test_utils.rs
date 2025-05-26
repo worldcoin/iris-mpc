@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use aes_prng::AesRng;
-use eyre::{bail, Result};
+use eyre::{eyre, Result};
 use futures::future::join_all;
 use iris_mpc_common::iris_db::db::IrisDB;
 use rand::{CryptoRng, RngCore, SeedableRng};
@@ -12,7 +12,7 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PointId},
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -45,8 +45,8 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
     for (i, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from_0_index(i as u32);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
+        let vector_id = VectorId::from(PointId::from(i));
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.data.0.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -98,7 +98,7 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
         1 => Share::new(zero_elem, distance_elem),
         2 => Share::new(zero_elem, zero_elem),
         _ => {
-            bail!("Invalid player index: {player_index}");
+            return Err(eyre!("Invalid player index: {player_index}"));
         }
     };
     Ok(res)
@@ -215,7 +215,7 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
         plaingraph_file,
         rng,
         database_size,
-        NetworkType::default_grpc(),
+        NetworkType::GrpcChannel,
     )
     .await
 }
@@ -234,12 +234,9 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    let searcher = HnswSearcher::new_with_test_parameters();
-
-    let mut plaintext_vector_store = PlaintextStore::new_random(rng, database_size);
-    let plaintext_graph_store = plaintext_vector_store
-        .generate_graph(rng, database_size, &searcher)
-        .await?;
+    let searcher = HnswSearcher::default();
+    let (plaintext_vector_store, plaintext_graph_store) =
+        PlaintextStore::create_random(rng, database_size, &searcher).await?;
 
     let protocol_stores =
         setup_local_aby3_players_with_preloaded_db(rng, &plaintext_vector_store, network_t).await?;
@@ -288,7 +285,7 @@ pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(rng, database_size, NetworkType::default_grpc()).await
+    lazy_random_setup(rng, database_size, NetworkType::GrpcChannel).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
@@ -320,7 +317,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
                 let mut graph_store = GraphMem::new();
-                let searcher = HnswSearcher::new_with_test_parameters();
+                let searcher = HnswSearcher::default();
                 // insert queries
                 for query in queries.iter() {
                     searcher
@@ -360,5 +357,5 @@ pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
-    shared_random_setup(rng, database_size, NetworkType::default_grpc()).await
+    shared_random_setup(rng, database_size, NetworkType::GrpcChannel).await
 }

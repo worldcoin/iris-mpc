@@ -177,13 +177,13 @@ impl DistanceComparator {
         match_distances_buffers_codes: &[ChunkShare<u16>],
         match_distances_buffers_masks: &[ChunkShare<u16>],
         match_distances_counters: &[CudaSlice<u32>],
-        match_distances_indices: &[CudaSlice<u64>],
-        batch_id: u64,
+        match_distances_indices: &[CudaSlice<u32>],
         code_dots: &[ChunkShareView<u16>],
         mask_dots: &[ChunkShareView<u16>],
         batch_size: usize,
         max_bucket_distances: usize,
         streams: &[CudaStream],
+        is_mirror_orientation: bool,
     ) {
         for i in 0..self.device_manager.device_count() {
             // Those correspond to 0 length dbs, which were just artificially increased to
@@ -228,8 +228,7 @@ impl DistanceComparator {
                             &mask_dots[i].a,
                             &mask_dots[i].b,
                             max_bucket_distances,
-                            batch_id,
-                            self.query_length,
+                            is_mirror_orientation,
                         ),
                     )
                     .unwrap();
@@ -708,7 +707,7 @@ impl DistanceComparator {
             .collect::<Vec<_>>()
     }
 
-    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u64>> {
+    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u32>> {
         (0..self.device_manager.device_count())
             .map(|i| {
                 let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();

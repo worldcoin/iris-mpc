@@ -1,7 +1,6 @@
 use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
 use base64::{prelude::BASE64_STANDARD, Engine};
 use eyre::bail;
-use eyre::Result;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -12,7 +11,7 @@ use serde_big_array::BigArray;
 pub const MATCH_THRESHOLD_RATIO: f64 = 0.375;
 
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IrisCodeArray(#[serde(with = "BigArray")] pub [u64; Self::IRIS_CODE_SIZE_U64]);
 impl Default for IrisCodeArray {
     fn default() -> Self {
@@ -75,7 +74,7 @@ impl IrisCodeArray {
     }
 
     /// Decode from base64 string compatible with Open IRIS
-    pub fn from_base64(s: &str) -> Result<Self> {
+    pub fn from_base64(s: &str) -> eyre::Result<Self> {
         let decoded_bytes = BASE64_STANDARD.decode(s)?;
         if decoded_bytes.len() % 8 != 0 {
             bail!("Invalid length for u64 array");
@@ -96,7 +95,7 @@ impl IrisCodeArray {
     }
 
     /// Encode to base64 string compatible with Open IRIS
-    pub fn to_base64(&self) -> Result<String> {
+    pub fn to_base64(&self) -> eyre::Result<String> {
         Ok(BASE64_STANDARD.encode(
             self.0
                 .iter()
@@ -145,7 +144,7 @@ impl std::ops::BitXor for IrisCodeArray {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct IrisCode {
     pub code: IrisCodeArray,
     pub mask: IrisCodeArray,
@@ -180,41 +179,13 @@ impl IrisCode {
         code
     }
 
-    /// Return the fractional Hamming distance between two iris codes, represented
-    /// as a single floating point value.
     pub fn get_distance(&self, other: &Self) -> f64 {
-        let (code_distance, combined_mask_len) = self.get_distance_fraction(other);
-        code_distance as f64 / combined_mask_len as f64
-    }
-
-    /// Return the fractional Hamming distance between two iris codes, represented
-    /// as `u16` numerator and denominator.
-    pub fn get_distance_fraction(&self, other: &Self) -> (u16, u16) {
         let combined_mask = self.mask & other.mask;
         let combined_mask_len = combined_mask.count_ones();
 
         let combined_code = (self.code ^ other.code) & combined_mask;
         let code_distance = combined_code.count_ones();
-
-        (code_distance as u16, combined_mask_len as u16)
-    }
-
-    /// Return the fractional Hamming distance between two iris codes, represented
-    /// as the `i16` dot product of associated masked-bit vectors and the `u16` size
-    /// of the common unmasked region.
-    pub fn get_dot_distance_fraction(&self, other: &Self) -> (i16, u16) {
-        let (code_distance, combined_mask_len) = self.get_distance_fraction(other);
-
-        // `code_distance` gives the number of common unmasked bits which are
-        // different between two iris codes, and `combined_mask_len` gives the
-        // total number of common unmasked bits. The dot product of masked-bit
-        // vectors adds 1 for each unmasked bit which is equal, and subtracts 1
-        // for each unmasked bit which is unequal; so this can be computed by
-        // starting with 1 for every unmasked bit, and subtracting 2 for every
-        // unequal unmasked bit, as follows.
-        let dot_product = combined_mask_len.wrapping_sub(2 * code_distance) as i16;
-
-        (dot_product, combined_mask_len)
+        code_distance as f64 / combined_mask_len as f64
     }
 
     pub fn is_close(&self, other: &Self) -> bool {
@@ -290,7 +261,6 @@ impl ExactSizeIterator for Bits<'_> {}
 #[cfg(test)]
 mod tests {
     use super::{IrisCode, IrisCodeArray};
-    use eyre::Result;
     use eyre::{Context, ContextCompat};
     use float_eq::assert_float_eq;
     use std::collections::HashMap;
@@ -348,7 +318,7 @@ mod tests {
         let distance = original_iris.get_distance(&mirrored_iris);
         assert_float_eq!(distance, 0.0, abs <= 1e-6);
     }
-    pub fn parse_test_data(s: &str) -> Result<(&str, HashMap<i32, String>)> {
+    pub fn parse_test_data(s: &str) -> eyre::Result<(&str, HashMap<i32, String>)> {
         let lines = s.lines();
         let mut lines = lines.map(|s| s.trim()).filter(|s| !s.is_empty());
         let code: &str = lines.next().context("Missing code")?;

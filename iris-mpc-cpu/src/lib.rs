@@ -1,5 +1,4 @@
 pub mod execution;
-pub mod genesis;
 pub mod hawkers;
 pub mod hnsw;
 pub(crate) mod network;

@@ -208,12 +208,6 @@ iris-mpc-2:
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
       value: "true"
 
-    - name: SMPC__ENABLE_REAUTH
-      value: "false"
-
-    - name: SMPC__ENABLE_RESET
-      value: "false"
-
     - name: SMPC__LUC_ENABLED
       value: "true"
 
@@ -254,15 +248,6 @@ iris-mpc-2:
 
     - name: SMPC__HEARTBEAT_INITIAL_RETRIES
       value: "1000"
-
-    - name: SMPC__ENABLE_MODIFICATIONS_SYNC
-      value: "true"
-
-    - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
-      value: "true"
-
-    - name : SMPC__ENABLE_DEBUG_TIMING
-      value: "true"
 
   initContainer:
     enabled: true

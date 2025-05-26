@@ -9,7 +9,6 @@ use aws_sdk_secretsmanager::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
-use eyre::Result;
 use rand::{thread_rng, Rng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
@@ -68,7 +67,7 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() -> eyre::Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = KeyManagerCli::parse();
@@ -127,7 +126,7 @@ async fn validate_keys(
     public_key_bucket_name: Option<String>,
     region: String,
     endpoint_url: Option<String>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
 
     if let Some(endpoint_url) = endpoint_url.as_ref() {
@@ -175,7 +174,7 @@ async fn rotate_keys(
     dry_run: Option<bool>,
     public_key_bucket_name: Option<String>,
     endpoint_url: Option<String>,
-) -> Result<()> {
+) -> eyre::Result<()> {
     let mut rng = thread_rng();
 
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {

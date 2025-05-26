@@ -5,7 +5,6 @@
 //!
 //! [link]: https://docs.aws.amazon.com/AmazonS3/latest/API/sig-v4-authenticating-requests.html
 
-use eyre::Result;
 use hmac::{Hmac, Mac};
 use http::HeaderMap;
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
@@ -95,7 +94,7 @@ pub fn canonical_query_string(uri: &Url) -> String {
 }
 
 /// Generate a canonical header string from the provided headers.
-pub fn canonical_header_string(headers: &HeaderMap) -> Result<String> {
+pub fn canonical_header_string(headers: &HeaderMap) -> eyre::Result<String> {
     let mut keyvalues = vec![];
     for (key, value) in headers.iter() {
         keyvalues.push(format!(
@@ -124,7 +123,7 @@ pub fn canonical_request(
     url: &Url,
     headers: &HeaderMap,
     sha256: &str,
-) -> Result<String> {
+) -> eyre::Result<String> {
     Ok(format!(
         "{method}\n{uri}\n{query_string}\n{headers}\n\n{signed}\n{sha256}",
         method = method,
@@ -137,7 +136,7 @@ pub fn canonical_request(
 }
 
 /// Generate an AWS scope string.
-pub fn scope_string(datetime: &OffsetDateTime, region: &str) -> Result<String> {
+pub fn scope_string(datetime: &OffsetDateTime, region: &str) -> eyre::Result<String> {
     Ok(format!(
         "{date}/{region}/s3/aws4_request",
         date = datetime.format(SHORT_DATE)?,
@@ -150,7 +149,7 @@ pub fn scope_string_with_service(
     datetime: &OffsetDateTime,
     region: &str,
     service: &str,
-) -> Result<String> {
+) -> eyre::Result<String> {
     Ok(format!(
         "{date}/{region}/{service}/aws4_request",
         date = datetime.format(SHORT_DATE)?,
@@ -165,7 +164,7 @@ pub fn string_to_sign(
     datetime: &OffsetDateTime,
     canonical_req: &str,
     scope: &str,
-) -> Result<String> {
+) -> eyre::Result<String> {
     let mut hasher = Sha256::default();
     hasher.update(canonical_req.as_bytes());
     let string_to = format!(
@@ -184,7 +183,7 @@ pub fn signing_key(
     secret_key: &str,
     region: &str,
     service: &str,
-) -> Result<Vec<u8>> {
+) -> eyre::Result<Vec<u8>> {
     let secret = format!("AWS4{}", secret_key);
     let mut date_hmac = HmacSha256::new_from_slice(secret.as_bytes())?;
     date_hmac.update(datetime.format(SHORT_DATE)?.as_bytes());
@@ -203,7 +202,7 @@ pub fn authorization_header(
     scope: &str,
     signed_headers: &str,
     signature: &str,
-) -> Result<String> {
+) -> eyre::Result<String> {
     Ok(format!(
         "AWS4-HMAC-SHA256 \
          Credential={access_key}/{scope},SignedHeaders={signed_headers},Signature={signature}",

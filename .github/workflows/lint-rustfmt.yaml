@@ -14,17 +14,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Cache Rust build
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
-        id: cache-rust
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            rust-build-${{ runner.os }}-
       - name: Show errors inline
         uses: r7kamura/rust-problem-matchers@9fe7ca9f6550e5d6358e179d451cc25ea6b54f98
       - name: Install Rust

@@ -8,7 +8,6 @@ use crate::proto::iris_mpc_reshare::{
     iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
     IrisCodeReShareResponse, IrisCodeReShareStatus,
 };
-use eyre::Result;
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -566,7 +565,7 @@ pub struct RecombinedIrisCodeBatch {
 }
 
 impl RecombinedIrisCodeBatch {
-    pub async fn insert_into_store(self, store: &Store) -> Result<()> {
+    pub async fn insert_into_store(self, store: &Store) -> eyre::Result<()> {
         let to_be_inserted = izip!(
             &self.left_iris_codes,
             &self.left_masks,

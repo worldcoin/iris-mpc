@@ -15,7 +15,6 @@ use cudarc::{
     },
     nccl::Id,
 };
-use eyre::Result;
 use std::{
     sync::{Arc, Mutex},
     thread::sleep,
@@ -155,7 +154,7 @@ impl DeviceManager {
         streams: &[CudaStream],
         batch_size: usize,
         code_size: usize,
-    ) -> Result<CudaVec2DSlicerU8> {
+    ) -> eyre::Result<CudaVec2DSlicerU8> {
         let mut slices0 = vec![];
         let mut slices1 = vec![];
         let query_size = batch_size * ROTATIONS * code_size;
@@ -312,7 +311,7 @@ impl DeviceManager {
         &self,
         peer_id: usize,
         ids: &[Id],
-    ) -> Result<Vec<Arc<NcclComm>>> {
+    ) -> eyre::Result<Vec<Arc<NcclComm>>> {
         let n_devices = self.devices.len();
         let mut comms = Vec::with_capacity(n_devices);
 

@@ -148,8 +148,6 @@ struct Kernels {
     pub(crate) collapse_u64_helper: CudaFunction,
     pub(crate) collapse_sum_assign: CudaFunction,
     pub(crate) collapse_sum: CudaFunction,
-    pub(crate) rotate_bitvec: CudaFunction,
-    pub(crate) mask_bitvec: CudaFunction,
 }
 
 impl Kernels {
@@ -184,8 +182,6 @@ impl Kernels {
                 "collapse_u64_helper",
                 "collapse_sum_assign",
                 "collapse_sum",
-                "rotate_bitvec",
-                "mask_bitvec",
             ],
         )
         .unwrap();
@@ -225,8 +221,6 @@ impl Kernels {
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
         let collapse_sum_assign = dev.get_func(Self::MOD_NAME, "collapse_sum_assign").unwrap();
         let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
-        let rotate_bitvec = dev.get_func(Self::MOD_NAME, "rotate_bitvec").unwrap();
-        let mask_bitvec = dev.get_func(Self::MOD_NAME, "mask_bitvec").unwrap();
 
         Kernels {
             and,
@@ -253,8 +247,6 @@ impl Kernels {
             collapse_u64_helper,
             collapse_sum_assign,
             collapse_sum,
-            rotate_bitvec,
-            mask_bitvec,
         }
     }
 }
@@ -264,7 +256,6 @@ struct Buffers {
     lifted_shares_buckets1: Option<Vec<ChunkShare<u32>>>,
     lifted_shares_buckets2: Option<Vec<ChunkShare<u32>>>,
     lifting_corrections: Option<Vec<ChunkShare<u16>>>,
-    buckets_recv_buffer: Option<Vec<ChunkShare<u32>>>,
     // This is also the buffer where the result is stored:
     lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
     lifted_shares_split2: Option<Vec<ChunkShare<u64>>>,
@@ -278,7 +269,7 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize, n_buckets: Option<usize>) -> Self {
+    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
         let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_buckets1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_buckets2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
@@ -295,9 +286,6 @@ impl Buffers {
         let ot_m1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
-        let buckets_recv_buffer =
-            n_buckets.map(|n_buckets| Self::allocate_buffer(n_buckets, devices));
-
         Buffers {
             lifted_shares,
             lifted_shares_buckets1,
@@ -306,7 +294,6 @@ impl Buffers {
             lifted_shares_split1_result,
             lifted_shares_split2,
             lifted_shares_split3,
-            buckets_recv_buffer,
             binary_adder_s,
             binary_adder_c,
             ot_m0,
@@ -429,7 +416,6 @@ impl Circuits {
         peer_id: usize,
         input_size: usize, // per GPU
         alloc_size: usize,
-        n_buckets: Option<usize>,
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
@@ -456,7 +442,7 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let buffers = Buffers::new(&devs, alloc_size, n_buckets);
+        let buffers = Buffers::new(&devs, alloc_size);
 
         Circuits {
             peer_id,
@@ -2321,75 +2307,6 @@ impl Circuits {
         }
     }
 
-    fn rotate_bitvec(
-        &mut self,
-        bitvec_out: &mut [ChunkShareView<u64>],
-        bitvec_in: &[ChunkShareView<u64>],
-        rotation: usize,
-        streams: &[CudaStream],
-    ) {
-        assert_eq!(self.n_devices, bitvec_out.len());
-        assert!(self.chunk_size <= bitvec_out[0].len());
-        assert_eq!(self.n_devices, bitvec_in.len());
-        assert_eq!(bitvec_in[0].len(), bitvec_out[0].len());
-
-        for (idx, (out, inp)) in bitvec_out.iter_mut().zip(bitvec_in.iter()).enumerate() {
-            let cfg = launch_config_from_elements_and_threads(
-                self.chunk_size as u32,
-                DEFAULT_LAUNCH_CONFIG_THREADS,
-                &self.devs[idx],
-            );
-
-            unsafe {
-                self.kernels[idx]
-                    .rotate_bitvec
-                    .clone()
-                    .launch_on_stream(
-                        &streams[idx],
-                        cfg,
-                        (&out.a, &out.b, &inp.a, &inp.b, rotation, out.len()),
-                    )
-                    .unwrap();
-            }
-        }
-    }
-
-    fn mask_bitvec(
-        &mut self,
-        bitvec_inout: &mut [ChunkShareView<u64>],
-        mask_in: &[Vec<Vec<u64>>],
-        mask_idx: usize,
-        streams: &[CudaStream],
-    ) {
-        assert_eq!(self.n_devices, bitvec_inout.len());
-        assert!(self.chunk_size <= bitvec_inout[0].len());
-        assert_eq!(self.n_devices, mask_in.len());
-        assert_eq!(mask_in[0][mask_idx].len(), bitvec_inout[0].len());
-
-        for (idx, (inout, inp)) in bitvec_inout.iter_mut().zip(mask_in.iter()).enumerate() {
-            let bitvec =
-                htod_on_stream_sync(&inp[mask_idx][..], &self.devs[idx], &streams[idx]).unwrap();
-
-            let cfg = launch_config_from_elements_and_threads(
-                self.chunk_size as u32,
-                DEFAULT_LAUNCH_CONFIG_THREADS,
-                &self.devs[idx],
-            );
-
-            unsafe {
-                self.kernels[idx]
-                    .mask_bitvec
-                    .clone()
-                    .launch_on_stream(
-                        &streams[idx],
-                        cfg,
-                        (&inout.a, &inout.b, &bitvec, inout.len()),
-                    )
-                    .unwrap();
-            }
-        }
-    }
-
     // Result is in the first bit of the first GPU
     pub fn or_reduce_result(&mut self, result: &mut [ChunkShare<u64>], streams: &[CudaStream]) {
         let mut bits = Vec::with_capacity(self.n_devices);
@@ -2620,113 +2537,12 @@ impl Circuits {
         self.buffers.check_buffers();
     }
 
-    pub fn compare_multiple_thresholds_while_aggregating_per_query(
-        &mut self,
-        code_dots: &[ChunkShareView<u16>],
-        mask_dots: &[ChunkShareView<u16>],
-        bitmask: &[Vec<u64>],
-        streams: &[CudaStream],
-        thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
-        buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
-    ) {
-        assert_eq!(self.n_devices, code_dots.len());
-        assert_eq!(self.n_devices, mask_dots.len());
-        assert_eq!(thresholds_a.len(), buckets.len());
-        assert_eq!(bitmask.len(), self.n_devices);
-        for chunk in code_dots.iter().chain(mask_dots.iter()) {
-            assert!(chunk.len() % 64 == 0);
-        }
-
-        // prepare bitmasks for rotations
-        let max_rotations_needed = 30;
-        // incoming bitmask looks like this for given query_indices:
-        // [1,1,2,3,3,3,4,4,5] -> [1,0,1,1,0,0,1,0,1]
-        // i.e., it is one if it is the first match for a given query index
-        // we negate it -> [0,1,0,0,1,1,0,1,0] this gives us the indices of the duplicates
-        // STEP i: We rotate the bitmask to the right by 1, so that we can use it as a mask
-        // -> [1,0,0,1,1,0,1,0,0], this is then used to MASK the OR of the original bit vector with the rotated one
-        // after the rotation, we AND the bitmask with the negated original bitmask, to clear the current bit for accumulation
-        // and then we repeat from STEP i
-        let mut bitmasks = vec![vec![]; self.n_devices];
-        for i in 0..self.n_devices {
-            bitmasks[i].push(bitmask[i].clone());
-            let mut bitmask_negated = bitmask[i].clone();
-            detail::negate_bitvec(&mut bitmask_negated);
-            let mut bitmask = bitmask_negated.clone();
-            for _ in 0..max_rotations_needed {
-                detail::rotate_bitvec_right(&mut bitmask);
-                bitmasks[i].push(bitmask.clone());
-                detail::bitvec_and(&mut bitmask, &bitmask_negated);
-            }
-        }
-
-        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
-        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets1);
-        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
-        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
-        let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
-        let mut codes = Buffers::get_buffer_chunk(&x2_, 64 * self.chunk_size);
-        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
-        let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
-
-        // Start with lifting
-        self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
-        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
-
-        for (bucket_idx, a) in thresholds_a.iter().enumerate() {
-            // Continue with threshold comparison
-            self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
-            self.extract_msb(&mut x, streams);
-
-            // Result is in the first bit of the result buffer
-            let result = self.take_result_buffer();
-
-            let mut bits = Vec::with_capacity(self.n_devices);
-            for r in result.iter() {
-                // Result is in the first bit of the input
-                bits.push(r.get_offset(0, self.chunk_size));
-            }
-            let tmp_rotated = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
-            let mut rotated = Buffers::get_buffer_chunk(&tmp_rotated, self.chunk_size);
-            // we now use the prepared bitmasks to aggregate the results with OR
-            for rotation in 0..max_rotations_needed {
-                // we need to rotate the bitvecs to the right by one
-                self.rotate_bitvec(&mut rotated, &bits, rotation + 1, streams);
-                self.mask_bitvec(&mut rotated, &bitmasks, rotation + 1, streams);
-                for idx in 0..self.n_devices {
-                    self.or_many_pre_assign(&mut bits[idx], &rotated[idx], idx, streams);
-                }
-                self.send_receive_view_with_offset(&mut bits, 0..self.chunk_size, streams);
-            }
-            Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, tmp_rotated);
-            // finally, mask out all of the bits that are not the first match, where we have accumulated
-            self.mask_bitvec(&mut bits, &bitmasks, 0, streams);
-
-            // Expand the result buffer to the x buffer and perform arithmetic xor
-            self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
-            // Sum all elements in x to get the result in the first 32 bit word on each GPU
-            self.collapse_sum(&mut x, streams);
-            // Get data onto the first GPU
-            if self.n_devices > 1 {
-                self.collect_graphic_result_u32(&mut x, streams);
-            }
-            // Accumulate first result onto bucket
-            self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
-            self.return_result_buffer(result);
-        }
-        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
-        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
-        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
-        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
-        self.buffers.check_buffers();
-    }
-
     pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
         let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
         let res = buckets.as_view();
 
-        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.buckets_recv_buffer);
+        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
         let mut rcv_buffer = rcv_buffer_[0].get_range(0, buckets.len());
 
         result::group_start().unwrap();
@@ -2740,7 +2556,7 @@ impl Circuits {
 
         let c = dtoh_on_stream_sync(&rcv_buffer.a, &self.devs[0], &streams[0]).unwrap();
 
-        Buffers::return_buffer(&mut self.buffers.buckets_recv_buffer, rcv_buffer_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, rcv_buffer_);
         self.buffers.check_buffers();
 
         a.iter()
@@ -2748,29 +2564,5 @@ impl Circuits {
             .zip(c.iter())
             .map(|((&a, &b), &c)| a.wrapping_add(b).wrapping_add(c))
             .collect()
-    }
-}
-
-mod detail {
-    // rotate a bit vector to the right by one (bit 1 -> bit 0)
-    pub fn rotate_bitvec_right(vec: &mut [u64]) {
-        let mut last = vec[0] & 1;
-        for i in (0..vec.len()).rev() {
-            let tmp = vec[i] & 1;
-            vec[i] = (last << 63) | (vec[i] >> 1);
-            last = tmp;
-        }
-    }
-
-    pub fn negate_bitvec(vec: &mut [u64]) {
-        for i in 0..vec.len() {
-            vec[i] = !vec[i];
-        }
-    }
-    pub fn bitvec_and(vec: &mut [u64], vec2: &[u64]) {
-        assert!(vec.len() == vec2.len());
-        for i in 0..vec.len() {
-            vec[i] &= vec2[i];
-        }
     }
 }

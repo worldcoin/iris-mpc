@@ -13,7 +13,7 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
-use eyre::{bail, eyre, Result};
+use eyre::{eyre, Result};
 use itertools::{izip, Itertools};
 use rand::RngCore;
 use rand_distr::{Distribution, Geometric};
@@ -209,29 +209,16 @@ pub struct ConnectPlanLayer<Vector, Distance> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
-#[allow(non_snake_case)]
-impl HnswSearcher {
-    /// Construct an HnswSearcher with specified parameters, constructed using
-    /// `HnswParamas::new`.
-    pub fn new(ef_constr: usize, ef_search: usize, M: usize) -> Self {
-        Self {
-            params: HnswParams::new(ef_constr, ef_search, M),
-        }
-    }
-
-    /// Construct an HnswSearcher with test parameters suitable for exercising
-    /// search functionality.
-    ///
-    /// This function is provided in lieu of a `Default` implementation because
-    /// good parameter selections for HNSW search generally depend on the
-    /// underlying data distribution, so there isn't a reasonable "generally
-    /// applicable" default value.
-    pub fn new_with_test_parameters() -> Self {
-        Self {
+impl Default for HnswSearcher {
+    fn default() -> Self {
+        HnswSearcher {
             params: HnswParams::new(64, 32, 32),
         }
     }
+}
 
+#[allow(non_snake_case)]
+impl HnswSearcher {
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
     pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
@@ -287,7 +274,7 @@ impl HnswSearcher {
     ) -> Result<()> {
         match ef {
             0 => {
-                bail!("ef cannot be 0");
+                return Err(eyre!("ef cannot be 0"));
             }
             1 => {
                 let start = W.get_nearest().ok_or(eyre!("W cannot be empty"))?;
@@ -757,13 +744,11 @@ impl HnswSearcher {
             .filter(|e| visited.insert(e.clone()))
             .collect();
 
-        let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
-
         let distances = store
-            .eval_distance_batch(&[query.clone()], &valid_neighbors)
+            .eval_distance_batch(&[query.clone()], &unvisited_neighbors)
             .await?;
 
-        Ok(valid_neighbors
+        Ok(unvisited_neighbors
             .into_iter()
             .zip(distances.into_iter())
             .collect())
@@ -779,7 +764,7 @@ impl HnswSearcher {
     pub async fn search<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V>,
+        graph: &mut GraphMem<V>,
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
@@ -926,7 +911,6 @@ impl HnswSearcher {
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
                 let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
@@ -1056,8 +1040,6 @@ impl HnswSearcher {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
     use aes_prng::AesRng;
@@ -1067,15 +1049,15 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db() -> Result<()> {
-        let vector_store = &mut PlaintextStore::new();
+        let vector_store = &mut PlaintextStore::default();
         let graph_store = &mut GraphMem::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
-        let db = HnswSearcher::new_with_test_parameters();
+        let db = HnswSearcher::default();
 
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(Arc::new)
+            .map(|raw_query| vector_store.prepare_query(raw_query))
             .collect::<Vec<_>>();
 
         // Insert the codes.
@@ -1094,7 +1076,7 @@ mod tests {
         let queries2 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .map(Arc::new)
+            .map(|raw_query| vector_store.prepare_query(raw_query))
             .collect::<Vec<_>>();
 
         // Insert the codes with helper function

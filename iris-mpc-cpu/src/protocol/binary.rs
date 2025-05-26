@@ -9,7 +9,7 @@ use crate::{
         vecshare::{SliceShare, VecShare},
     },
 };
-use eyre::{bail, eyre, Error, Result};
+use eyre::{eyre, Error, Result};
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::{distributions::Standard, prelude::Distribution, Rng};
@@ -65,7 +65,9 @@ fn a2b_pre<T: IntRing2k>(session: &Session, x: Share<T>) -> Result<(Share<T>, Sh
             x2.b = b;
         }
         _ => {
-            bail!("Cannot deal with roles that have index outside of the set [0, 1, 2]")
+            return Err(eyre!(
+                "Cannot deal with roles that have index outside of the set [0, 1, 2]"
+            ))
         }
     }
     Ok((x1, x2, x3))
@@ -103,7 +105,7 @@ where
     Standard: Distribution<T>,
 {
     if a.len() != b.len() {
-        bail!("InvalidSize in and_many_send");
+        return Err(eyre!("InvalidSize in and_many_send"));
     }
     let mut shares_a = Vec::with_capacity(a.len());
     for (a_, b_) in a.iter().zip(b.iter()) {
@@ -165,12 +167,16 @@ where
     Standard: Distribution<T>,
 {
     if x1.len() != x2.len() {
-        bail!("Inputs have different length {} {}", x1.len(), x2.len());
+        return Err(eyre!(
+            "Inputs have different length {} {}",
+            x1.len(),
+            x2.len()
+        ));
     }
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
     let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
     if chunk_sizes != chunk_sizes2 {
-        bail!("VecShare lengths are not equal");
+        return Err(eyre!("VecShare lengths are not equal"));
     }
 
     let x1 = VecShare::flatten(x1);
@@ -203,16 +209,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        bail!(
+        return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        );
+        ));
     };
 
     if len < 16 {
-        bail!("Input length should be at least 16: {len}");
+        return Err(eyre!("Input length should be at least 16: {len}"));
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -303,11 +309,6 @@ where
     let next_id = session.next_identity()?;
     let network = &mut session.network_session;
     trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
     // Send masks to Receiver
     network
         .send_next(T::new_network_vec(wc).to_network())
@@ -344,10 +345,10 @@ where
         let reply_m0_and_m1 = network.receive_next().await;
         let m0_and_m1 = NetworkValue::vec_from_network(reply_m0_and_m1)?;
         if m0_and_m1.len() != 2 {
-            bail!(
+            return Err(eyre!(
                 "Deserialized vec in bit inject is wrong length: {}",
                 m0_and_m1.len()
-            );
+            ));
         }
         let (m0, m1) = m0_and_m1
             .into_iter()
@@ -387,11 +388,6 @@ where
 
     // Send unmasked m to Helper
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
     network
         .send_prev(T::new_network_vec(unmasked_m).to_network())
         .await?;
@@ -436,11 +432,6 @@ where
         .map(T::new_network_vec)
         .collect::<Vec<_>>();
     trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => session.network_session.session_id.0.to_string(),
-    )
-    .increment(1);
     // Send m0 and m1 to Receiver
     session
         .network_session
@@ -476,7 +467,9 @@ where
             bit_inject_ot_2round_sender::<T>(session, input).await?
         }
         _ => {
-            bail!("Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot")
+            return Err(eyre!(
+                "Cannot deal with roles outside of the set [0, 1, 2] in bit_inject_ot"
+            ))
         }
     };
     Ok(res)
@@ -576,16 +569,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        bail!(
+        return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        );
+        ));
     };
 
     if len < 32 {
-        bail!("Input length should be at least 32: {len}");
+        return Err(eyre!("Input length should be at least 32: {len}"));
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -653,16 +646,16 @@ where
 {
     let len = x1.len();
     if len != x2.len() || len != x3.len() {
-        bail!(
+        return Err(eyre!(
             "Inputs have different length {} {} {}",
             len,
             x2.len(),
             x3.len()
-        );
+        ));
     };
 
     if len < 32 {
-        bail!("Input length should be at least 32: {len}");
+        return Err(eyre!("Input length should be at least 32: {len}"));
     }
 
     // Let x1, x2, x3 are integers modulo 2^k.
@@ -775,7 +768,7 @@ where
 /// This function follow the arithmetic-to-binary (A2B) conversion protocol from the ABY3 framework (see Section 5.3, Bit Decomposition).
 /// The only difference is that the binary circuit returns only the MSB of the sum.
 ///
-/// The generic T type is only used to batch bits and has no relation to the underlying type of the input arithmetic shares.
+/// The generic T type is only used to batch bits and has no relation to the underlying type of the input arithmetic shares.  
 async fn extract_msb<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     x: Vec<VecShare<T>>,

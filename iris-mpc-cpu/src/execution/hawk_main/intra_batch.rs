@@ -12,16 +12,10 @@ use itertools::{izip, Itertools};
 use std::{collections::HashMap, sync::Arc, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct IntraMatch {
-    pub other_request_i: usize,
-    pub is_match: BothEyes<bool>,
-}
-
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
-) -> Result<VecRequests<Vec<IntraMatch>>> {
+) -> Result<VecRequests<Vec<usize>>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -105,7 +99,7 @@ struct IsMatch {
 async fn aggregate_results(
     n_requests: usize,
     mut rx: UnboundedReceiver<IsMatch>,
-) -> Result<VecRequests<Vec<IntraMatch>>> {
+) -> Result<VecRequests<Vec<usize>>> {
     rx.close();
     let mut join = HashMap::new();
 
@@ -118,14 +112,11 @@ async fn aggregate_results(
 
     let mut match_lists = vec![Vec::new(); n_requests];
 
-    // Report pairs with a left OR right match.
+    // Find pairs with left AND right match.
     for ((i_request, earlier_request), [left, right]) in join {
-        if left || right {
-            // This request matches a request that came before it in the batch.
-            match_lists[i_request].push(IntraMatch {
-                other_request_i: earlier_request,
-                is_match: [left, right],
-            });
+        if left && right {
+            // This request is a duplicate of a request that came before it in the batch.
+            match_lists[i_request].push(earlier_request);
         }
     }
 

@@ -7,9 +7,9 @@ use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
         aby3::aby3_store::{Aby3Store, SharedIrises},
-        plaintext_store::PlaintextStore,
+        plaintext_store::{PlaintextStore, PointId},
     },
-    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
+    hnsw::{graph::layered_graph::migrate, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -22,14 +22,9 @@ const INTERNAL_RNG_SEED: u64 = 0xdeadbeef;
 const NUM_BATCHES: usize = 5;
 const MAX_BATCH_SIZE: usize = 5;
 const HAWK_REQUEST_PARALLELISM: usize = 1;
-const HAWK_STREAM_PARALLELISM: usize = 1;
 const HAWK_CONNECTION_PARALLELISM: usize = 1;
 const MAX_DELETIONS_PER_BATCH: usize = 0; // TODO: set back to 10 or so once deletions are supported
 const MAX_RESET_UPDATES_PER_BATCH: usize = 0; // TODO: set back to 10 or so once reset is supported
-
-const HNSW_EF_CONSTR: usize = 320;
-const HNSW_M: usize = 256;
-const HNSW_EF_SEARCH: usize = 256;
 
 fn install_tracing() {
     tracing_subscriber::registry()
@@ -44,24 +39,12 @@ async fn create_graph_from_plain_dbs(
     player_index: usize,
     left_db: &IrisDB,
     right_db: &IrisDB,
-    params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let mut left_store = PlaintextStore {
-        points: left_db.db.clone(),
-    };
-    let mut right_store = PlaintextStore {
-        points: right_db.db.clone(),
-    };
-    let searcher = HnswSearcher {
-        params: params.clone(),
-    };
-    let left_graph = left_store
-        .generate_graph(&mut rng, DB_SIZE, &searcher)
-        .await?;
-    let right_graph = right_store
-        .generate_graph(&mut rng, DB_SIZE, &searcher)
-        .await?;
+    let mut left_store = PlaintextStore::create_random_store_with_db(left_db.db.clone()).await?;
+    let mut right_store = PlaintextStore::create_random_store_with_db(right_db.db.clone()).await?;
+    let left_graph = left_store.create_graph(&mut rng, DB_SIZE).await?;
+    let right_graph = right_store.create_graph(&mut rng, DB_SIZE).await?;
 
     let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
     let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
@@ -70,13 +53,13 @@ async fn create_graph_from_plain_dbs(
     let mut right_shared_irises = HashMap::new();
 
     for (vector_id, iris) in left_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
+        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
     for (vector_id, iris) in right_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
+        let vector_id: VectorId = VectorId::from(PointId::from(vector_id));
+        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.data.0.clone());
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
@@ -96,16 +79,11 @@ async fn start_hawk_node(
 ) -> Result<HawkHandle> {
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
-    let params = HnswParams::new(
-        args.hnsw_param_ef_constr,
-        args.hnsw_param_ef_search,
-        args.hnsw_param_M,
-    );
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &params).await?;
+        create_graph_from_plain_dbs(args.party_index, left_db, right_db).await?;
     let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
 
-    let handle = HawkHandle::new(hawk_actor).await?;
+    let handle = HawkHandle::new(hawk_actor, HAWK_REQUEST_PARALLELISM).await?;
 
     Ok(handle)
 }
@@ -128,11 +106,7 @@ async fn e2e_test() -> Result<()> {
         party_index: 0,
         addresses,
         request_parallelism: HAWK_REQUEST_PARALLELISM,
-        stream_parallelism: HAWK_STREAM_PARALLELISM,
         connection_parallelism: HAWK_CONNECTION_PARALLELISM,
-        hnsw_param_ef_constr: HNSW_EF_CONSTR,
-        hnsw_param_M: HNSW_M,
-        hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_prng_seed: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
@@ -160,10 +134,12 @@ async fn e2e_test() -> Result<()> {
     // Disable test cases that are not yet supported
     // TODO: enable these once supported
 
+    test_case_generator.disable_test_case(TestCase::FullFaceMirrorAttack);
     test_case_generator.disable_test_case(TestCase::MatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::NonMatchSkipPersistence);
     test_case_generator.disable_test_case(TestCase::CloseToThreshold);
     test_case_generator.disable_test_case(TestCase::PreviouslyDeleted);
+    test_case_generator.disable_test_case(TestCase::WithOrRuleSet);
     test_case_generator.disable_test_case(TestCase::ReauthMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthNonMatchingTarget);
     test_case_generator.disable_test_case(TestCase::ReauthOrRuleMatchingTarget);

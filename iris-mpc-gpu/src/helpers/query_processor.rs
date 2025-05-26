@@ -13,7 +13,6 @@ use cudarc::{
         CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
-use eyre::Result;
 use iris_mpc_common::galois_engine::CompactGaloisRingShares;
 use std::marker::{Send, Sync};
 
@@ -115,7 +114,7 @@ impl CompactQuery {
         device: &DeviceManager,
         streams: &[CudaStream],
         batch_size: usize,
-    ) -> Result<DeviceCompactQuery> {
+    ) -> eyre::Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
             code_query: device.htod_transfer_query(
                 &self.code_query,
@@ -159,7 +158,7 @@ impl DeviceCompactQuery {
         mask_engine: &ShareDB,
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> Result<DeviceCompactSums> {
+    ) -> eyre::Result<DeviceCompactSums> {
         Ok(DeviceCompactSums {
             code_query: code_engine.query_sums(&self.code_query, streams, blass),
             mask_query: mask_engine.query_sums(&self.mask_query, streams, blass),

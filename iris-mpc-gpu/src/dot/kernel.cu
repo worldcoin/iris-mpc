@@ -51,7 +51,7 @@ extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigne
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned long long *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, unsigned long long batch_id, size_t max_batch_size)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned int *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, bool is_mirror_orientation)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -59,9 +59,8 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
         unsigned long long result = result1[idx] ^ result2[idx] ^ result3[idx];
         for (int i = 0; i < 64; i++)
         {
-            unsigned long long query_db_rot_idx = idx * 64 + i;
-            unsigned int queryIdx = (query_db_rot_idx) / chunkLength;
-            unsigned int dbIdx = (query_db_rot_idx) % chunkLength;
+            unsigned int queryIdx = (idx * 64 + i) / chunkLength;
+            unsigned int dbIdx = (idx * 64 + i) % chunkLength;
             bool match = (result & (1ULL << i));
 
             // Check if we are out of bounds for the query or db
@@ -71,16 +70,18 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             }
 
 
-            // Save the corresponding code and mask dots for later (match distributions)
-            unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
-            if (match_distances_counter_idx < max_bucket_distances)
+            if (!is_mirror_orientation)
             {
-                unsigned long long match_id = batch_id * (totalDbLen * (ALL_ROTATIONS * max_batch_size)) + queryIdx * totalDbLen + dbIdx + offset;
-                match_distances_indices[match_distances_counter_idx] = match_id;
-                match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];
-                match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx * 64 + i];
-                match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx * 64 + i];
-                match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx * 64 + i];
+                // Save the corresponding code and mask dots for later (match distributions)
+                unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
+                if (match_distances_counter_idx < max_bucket_distances)
+                {
+                    match_distances_indices[match_distances_counter_idx] = idx * 64 + i;
+                    match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];
+                    match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx * 64 + i];
+                    match_distances_buffer_masks_a[match_distances_counter_idx] = mask_dots_a[idx * 64 + i];
+                    match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx * 64 + i];
+                }
             }
 
             // Mark which results are matches with a bit in the output

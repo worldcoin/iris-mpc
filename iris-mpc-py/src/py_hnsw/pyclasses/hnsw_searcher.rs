@@ -6,14 +6,8 @@ use iris_mpc_cpu::{
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PyHnswSearcher(pub HnswSearcher);
-
-impl Default for PyHnswSearcher {
-    fn default() -> Self {
-        Self(HnswSearcher::new_with_test_parameters())
-    }
-}
 
 #[pymethods]
 #[allow(non_snake_case)]

@@ -3,7 +3,6 @@ pub mod job;
 pub mod result_message;
 
 use aws_sdk_s3::Client as S3Client;
-use eyre::Result;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
     preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
@@ -24,26 +23,15 @@ type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
-) -> Result<(
-    GaloisRingIrisCodeShare,
-    GaloisRingTrimmedMaskCodeShare,
-    GaloisRingIrisCodeShare,
-    GaloisRingTrimmedMaskCodeShare,
-)> {
+) -> eyre::Result<(GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare)> {
     let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
         .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingIrisCodeShare = GaloisRingIrisCodeShare::from_base64(&mask_share)
-        .context("Failed to base64 parse iris mask")?;
+    let mask_share: GaloisRingTrimmedMaskCodeShare =
+        GaloisRingIrisCodeShare::from_base64(&mask_share)
+            .context("Failed to base64 parse iris mask")?
+            .into();
 
-    let iris_share_mirrored = iris_share.mirrored_code();
-    let mask_share_mirrored = mask_share.mirrored_mask();
-
-    Ok((
-        iris_share,
-        mask_share.into(),
-        iris_share_mirrored,
-        mask_share_mirrored.into(),
-    ))
+    Ok((iris_share, mask_share))
 }
 
 fn get_iris_shares_parse_task(
@@ -86,39 +74,26 @@ fn get_iris_shares_parse_task(
                 }
             }
 
-            let (left_code, left_mask, left_code_mirrored, left_mask_mirrored) =
-                decode_iris_message_shares(
-                    iris_message_share.left_iris_code_shares,
-                    iris_message_share.left_mask_code_shares,
-                )?;
+            let (left_code, left_mask) = decode_iris_message_shares(
+                iris_message_share.left_iris_code_shares,
+                iris_message_share.left_mask_code_shares,
+            )?;
 
-            let (right_code, right_mask, right_code_mirrored, right_mask_mirrored) =
-                decode_iris_message_shares(
-                    iris_message_share.right_iris_code_shares,
-                    iris_message_share.right_mask_code_shares,
-                )?;
+            let (right_code, right_mask) = decode_iris_message_shares(
+                iris_message_share.right_iris_code_shares,
+                iris_message_share.right_mask_code_shares,
+            )?;
 
             // Preprocess shares for left eye.
-            let left_future = spawn_blocking(move || {
-                preprocess_iris_message_shares(
-                    left_code,
-                    left_mask,
-                    left_code_mirrored,
-                    left_mask_mirrored,
-                )
-            });
+            let left_future =
+                spawn_blocking(move || preprocess_iris_message_shares(left_code, left_mask));
 
             // Preprocess shares for right eye.
-            let right_future = spawn_blocking(move || {
-                preprocess_iris_message_shares(
-                    right_code,
-                    right_mask,
-                    right_code_mirrored,
-                    right_mask_mirrored,
-                )
-            });
+            let right_future =
+                spawn_blocking(move || preprocess_iris_message_shares(right_code, right_mask));
 
             let (left_result, right_result) = tokio::join!(left_future, right_future);
+
             Ok((
                 left_result.context("while processing left iris shares")??,
                 right_result.context("while processing right iris shares")??,
@@ -132,7 +107,7 @@ pub async fn process_identity_deletions(
     store: &Store,
     dummy_iris_share: &GaloisRingIrisCodeShare,
     dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> Result<()> {
+) -> eyre::Result<()> {
     if batch.deletion_requests_indices.is_empty() {
         return Ok(());
     }

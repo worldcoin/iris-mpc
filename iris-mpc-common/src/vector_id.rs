@@ -1,17 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
-// An Iris pair serial identifier.
-pub type SerialId = u32;
-
-// An Iris pair version identifier.
-pub type VersionId = i16;
-
 /// Unique identifier for an immutable pair of iris codes.
 #[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct VectorId {
-    id: SerialId,
-    version: VersionId,
+    id: u32,
+    version: i16,
 }
 
 impl Display for VectorId {
@@ -32,10 +26,10 @@ impl FromStr for VectorId {
         // Parse as "id" or "id:version".
         let mut parts = s.split(':');
 
-        let id = parts.next().unwrap().parse::<SerialId>()?;
+        let id = parts.next().unwrap().parse::<u32>()?;
 
         let version = match parts.next() {
-            Some(v) => v.parse::<VersionId>()?,
+            Some(v) => v.parse::<i16>()?,
             None => 0,
         };
 
@@ -44,7 +38,7 @@ impl FromStr for VectorId {
 }
 
 impl VectorId {
-    pub fn new(serial_id: SerialId, version: VersionId) -> Self {
+    pub fn new(serial_id: u32, version: i16) -> Self {
         VectorId {
             id: serial_id,
             version,
@@ -52,12 +46,12 @@ impl VectorId {
     }
 
     /// From Serial ID (1-indexed).
-    pub fn from_serial_id(id: SerialId) -> Self {
+    pub fn from_serial_id(id: u32) -> Self {
         VectorId { id, version: 0 }
     }
 
     /// To Serial ID (1-indexed).
-    pub fn serial_id(&self) -> SerialId {
+    pub fn serial_id(&self) -> u32 {
         self.id
     }
 
@@ -72,24 +66,6 @@ impl VectorId {
     /// To index (0-indexed).
     pub fn index(&self) -> u32 {
         self.id - 1
-    }
-
-    /// Get the version number of the iris code for a same serial ID.
-    pub fn version_id(&self) -> VersionId {
-        self.version
-    }
-
-    /// Whether the version of this vector ID matches the other vector ID.
-    pub fn version_matches(&self, other_version: VersionId) -> bool {
-        self.version == other_version
-    }
-
-    /// Return the next version of this vector ID.
-    pub fn next_version(self) -> Self {
-        VectorId {
-            id: self.id,
-            version: self.version + 1,
-        }
     }
 }
 

@@ -4,7 +4,6 @@ mod bucket_threshold_test {
         driver::{CudaDevice, CudaStream},
         nccl::Id,
     };
-    use eyre::Result;
     use iris_mpc_common::iris_db::iris::{IrisCodeArray, MATCH_THRESHOLD_RATIO};
     use iris_mpc_gpu::{
         helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
@@ -236,7 +235,7 @@ mod bucket_threshold_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_bucket_threshold() -> Result<()> {
+    async fn test_bucket_threshold() -> eyre::Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
@@ -295,7 +294,6 @@ mod bucket_threshold_test {
                 0,
                 INPUTS_PER_GPU_SIZE,
                 INPUTS_PER_GPU_SIZE / 64,
-                None,
                 chacha_seeds0,
                 device_manager0,
                 comms0,
@@ -320,7 +318,6 @@ mod bucket_threshold_test {
                 1,
                 INPUTS_PER_GPU_SIZE,
                 INPUTS_PER_GPU_SIZE / 64,
-                None,
                 chacha_seeds1,
                 device_manager1,
                 comms1,
@@ -345,7 +342,6 @@ mod bucket_threshold_test {
                 2,
                 INPUTS_PER_GPU_SIZE,
                 INPUTS_PER_GPU_SIZE / 64,
-                None,
                 chacha_seeds2,
                 device_manager2,
                 comms2,
