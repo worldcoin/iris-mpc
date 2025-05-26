@@ -43,7 +43,7 @@ use matching::{
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use reset::{search_to_reset, ResetPlan, ResetRequests};
+use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
 use siphasher::sip::SipHasher13;
@@ -837,6 +837,10 @@ impl HawkRequest {
             queries: Arc::new(queries),
         }
     }
+
+    fn deletion_ids(&self, iris_store: &SharedIrises) -> Vec<VectorId> {
+        iris_store.from_0_indices(&self.batch.deletion_requests_indices)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1035,7 +1039,7 @@ impl HawkResult {
 
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
-            deleted_ids: vec![], // TODO.
+            deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
@@ -1149,6 +1153,9 @@ impl HawkHandle {
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+
+        // Deletions.
+        apply_deletions(hawk_actor, &request).await?;
 
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
