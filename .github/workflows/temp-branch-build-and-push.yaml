@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "add-batch-level-config-mirror"
+      - "POP-2413/update-s3-importer-to-include-version-id-2"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -15,8 +15,9 @@ env:
 
 jobs:
   docker:
+    timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: ubuntu-22.04-32core
     permissions:
       packages: write
       contents: read

@@ -1,0 +1,88 @@
+include:
+  - docker-compose.dev.yaml
+
+services:
+  init_db:
+    # Use a more complete Rust image with build tools
+    image: rust:1-slim
+    volumes:
+      - ./:/workspace
+      - ./scripts/tools/init_db_from_plaintext_iris_file.sh:/init_db.sh
+    environment:
+      - SMPC_INIT_SKIP_HNSW_GRAPH=true
+      - SMPC_INIT_TARGET_DB_SIZE=100
+      - SMPC_INIT_PATH_TO_IRIS_PLAINTEXT=/workspace/iris-mpc-cpu/data/store.ndjson
+    working_dir: /workspace
+    entrypoint: [ "bash", "-c", "apt-get update && apt-get install -y build-essential pkg-config autoconf automake libtool libssl-dev protobuf-compiler && /init_db.sh && mkdir -p /tmp && touch /tmp/init_db_complete && tail -f /dev/null" ]
+    depends_on:
+      dev_db:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "test -f /tmp/init_db_complete" ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  hawk_participant_0:
+    image: hawk-server-genesis:latest
+    env_file:
+      - .test.env
+      - .test.hawk0.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+      init_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+      - "3000:3000"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3000/health" ]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 0 genesis
+
+  hawk_participant_1:
+    image: hawk-server-genesis:latest
+    env_file:
+      - .test.env
+      - .test.hawk1.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+      init_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4001:4001"
+      - "3001:3001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3001/health" ]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 1 genesis
+
+  hawk_participant_2:
+    image: hawk-server-genesis:latest
+    env_file:
+      - .test.env
+      - .test.hawk2.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+      init_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4002:4002"
+      - "3002:3002"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:3002/health" ]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 2 genesis

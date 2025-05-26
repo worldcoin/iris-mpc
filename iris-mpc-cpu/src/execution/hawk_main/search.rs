@@ -90,3 +90,30 @@ async fn per_query(
         set_ep,
     })
 }
+
+/// Search for a single query with the given session and searcher, without
+/// calculating the match count of the results.
+///
+/// (The `match_count` field returned is always set to 0.)
+pub async fn search_single_query_no_match_count(
+    session: HawkSessionRef,
+    query: QueryRef,
+    searcher: &HnswSearcher,
+) -> Result<InsertPlan> {
+    let mut session = session.write().await;
+
+    let graph = session.graph_store.clone().read_owned().await;
+    let insertion_layer = searcher.select_layer(&mut session.shared_rng)?;
+
+    let (links, set_ep) = searcher
+        .search_to_insert(&mut session.aby3_store, &graph, &query, insertion_layer)
+        .await?;
+
+    Ok(InsertPlan {
+        query,
+        links,
+        // TODO consider refactoring this field out of InsertPlan
+        match_count: 0,
+        set_ep,
+    })
+}

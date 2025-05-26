@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
     },
 };
 use rand::SeedableRng;
-use std::{error::Error, fs::File};
+use std::{error::Error, fs::File, sync::Arc};
 use tracing::Level;
 use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
 use tracing_subscriber::{filter::Targets, prelude::*, EnvFilter};
@@ -86,7 +86,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run HNSW construction
 
     let mut rng = AesRng::seed_from_u64(42_u64);
-    let mut vector = PlaintextStore::default();
+    let mut vector = PlaintextStore::new();
     let mut graph = GraphMem::new();
     let mut params = HnswParams::new(ef_constr, ef_search, M);
     if let Some(q) = layer_probability {
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     for idx in 0..database_size {
         let raw_query = IrisCode::random_rng(&mut rng);
-        let query = vector.prepare_query(raw_query.clone());
+        let query = Arc::new(raw_query.clone());
         searcher
             .insert(&mut vector, &mut graph, &query, &mut rng)
             .await?;
