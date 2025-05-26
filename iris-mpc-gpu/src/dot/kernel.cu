@@ -51,7 +51,7 @@ extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigne
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned long long *match_distances_indices, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, unsigned int *partialResultsRotations, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, unsigned long long batch_id, size_t max_batch_size)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned long long *match_distances_indices, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, signed char *partialResultsRotations, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, unsigned long long batch_id, size_t max_batch_size)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -88,7 +88,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             {
                 partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
                 partialResultsDbIndices[matchCounter] = dbIdx + offset;
-                partialResultsRotations[matchCounter] = queryIdx % ALL_ROTATIONS;
+                partialResultsRotations[matchCounter] = (queryIdx % ALL_ROTATIONS) - ROTATIONS;  // Convert to signed range [-15, 15]
             }
 
             // Mark which results are matches with a bit in the output
@@ -98,7 +98,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
-extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, unsigned int *partialResultsRotations)
+extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, signed char *partialResultsRotations)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -122,7 +122,7 @@ extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *resul
             {
                 partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
                 partialResultsDbIndices[matchCounter] = dbIdx;
-                partialResultsRotations[matchCounter] = queryIdx % ALL_ROTATIONS;
+                partialResultsRotations[matchCounter] = (queryIdx % ALL_ROTATIONS) - ROTATIONS;  // Convert to signed range [-15, 15]
             }
 
             // Mark which results are matches with a bit in the output
