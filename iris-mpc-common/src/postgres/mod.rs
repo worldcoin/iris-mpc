@@ -10,6 +10,9 @@ pub struct PostgresClient {
     pub access_mode: AccessMode,
 }
 
+// Helper type: name of a PostgreSQL schema.
+pub type PostgresSchemaName = String;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessMode {
     ReadOnly,
