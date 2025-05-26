@@ -3,7 +3,6 @@ use crate::helpers::smpc_request::SQSMessage;
 use aws_sdk_sqs::error::ProvideErrorMetadata;
 use aws_sdk_sqs::Client;
 use eyre::eyre;
-use eyre::private::kind::TraitKind;
 use eyre::Context;
 use eyre::Result;
 
@@ -160,9 +159,8 @@ pub async fn get_approximate_number_of_messages(
         .await
         .map_err(|sdk_err| {
             tracing::error!(
-                "SQS GetQueueAttributes failed. SDK error: {:?}, AWS error kind: {:?}, Message: {:?}",
+                "SQS GetQueueAttributes failed. SDK error: {:?},  Message: {:?}",
                 sdk_err,
-                sdk_err.eyre_kind(),
                 sdk_err.message()
             );
             eyre!("Failed to get queue attributes from SQS")
