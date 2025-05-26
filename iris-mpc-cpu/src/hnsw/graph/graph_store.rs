@@ -9,8 +9,8 @@ use crate::{
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::postgres::PostgresClient;
-use iris_mpc_common::serialization::{ReadPacked, WritePacked};
 use itertools::izip;
+use serde::{Deserialize, Serialize};
 use sqlx::{error::BoxDynError, types::Text, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
@@ -81,7 +81,7 @@ pub struct GraphOps<'a, 'b, V> {
 
 impl<V: VectorStore> GraphOps<'_, '_, V>
 where
-    V::VectorRef: WritePacked + ReadPacked,
+    V::VectorRef: Sized + Serialize + for<'a> Deserialize<'a>,
 {
     fn entry_table(&self) -> String {
         format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
@@ -148,7 +148,7 @@ where
 
         if let Some(row) = opt {
             let entry_point: Vec<u8> = row.get("entry_point");
-            let x = EntryPoint::read_packed(&mut &entry_point[..])
+            let x: EntryPoint<V::VectorRef> = bincode::deserialize(&entry_point)
                 .map_err(|e| eyre!("Failed to deserialize entry point: {e}"))?;
             Ok(Some((x.point, x.layer)))
         } else {
@@ -197,8 +197,7 @@ where
 
         if let Some(row) = opt {
             let links: Vec<u8> = row.get("links");
-            SortedEdgeIds::read_packed(&mut &links[..])
-                .map_err(|e| eyre!("Failed to deserialize links: {e}"))
+            bincode::deserialize(&links).map_err(|e| eyre!("Failed to deserialize links: {e}"))
         } else {
             Ok(SortedEdgeIds::default())
         }
@@ -237,7 +236,7 @@ where
 
 impl<V: VectorStore> GraphOps<'_, '_, V>
 where
-    V::VectorRef: WritePacked + ReadPacked + Send + Unpin + 'static,
+    V::VectorRef: Serialize + for<'a> Deserialize<'a> + Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
@@ -267,7 +266,7 @@ where
         let mut irises = self.stream_links();
         while let Some(row) = irises.next().await {
             let row = row?;
-            let links = SortedEdgeIds::read_packed(&mut &row.links[..])?;
+            let links = bincode::deserialize(&row.links)?;
             graph_mem
                 .set_links(row.source_ref.0, links, row.layer as usize)
                 .await;

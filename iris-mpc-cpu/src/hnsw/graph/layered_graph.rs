@@ -12,15 +12,9 @@ use crate::{
     },
 };
 use eyre::Result;
-use iris_mpc_common::serialization::{ReadPacked, WritePacked};
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    io::{Read, Write},
-    mem::size_of,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -35,38 +29,12 @@ pub struct EntryPoint<VectorRef> {
     pub layer: usize,
 }
 
-impl<VectorRef> ReadPacked for EntryPoint<VectorRef>
-where
-    VectorRef: ReadPacked,
-{
-    fn read_packed<R: Read>(reader: &mut R) -> Result<Self> {
-        let point = VectorRef::read_packed(reader)?;
-        let mut layer_bytes = [0u8; size_of::<usize>()];
-        reader.read_exact(&mut layer_bytes)?;
-        let layer = usize::from_le_bytes(layer_bytes);
-        Ok(EntryPoint { point, layer })
-    }
-}
-
-impl<VectorRef> WritePacked for EntryPoint<VectorRef>
-where
-    VectorRef: WritePacked,
-{
-    fn write_packed<W: Write>(&self, writer: &mut W) -> Result<()> {
-        self.point.write_packed(writer)?;
-        writer.write_all(&self.layer.to_le_bytes())?;
-        Ok(())
-    }
-}
-
 impl<VectorRef> EntryPoint<VectorRef>
 where
-    VectorRef: WritePacked,
+    VectorRef: Sized + Serialize,
 {
-    pub fn to_packed(self) -> Result<Vec<u8>> {
-        let mut ret = vec![];
-        self.write_packed(&mut ret)?;
-        Ok(ret)
+    pub fn to_packed(&self) -> Result<Vec<u8>> {
+        Ok(bincode::serialize(&self)?)
     }
 }
 

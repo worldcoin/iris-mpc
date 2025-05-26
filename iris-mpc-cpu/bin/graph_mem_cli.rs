@@ -27,7 +27,7 @@ struct Cli {
 enum Command {
     /// Load a graph from a database to memory, then write it to a file.
     BackupDb,
-    /// (testing only) creates random data, stores it in the database, and then runs dump-db.
+    /// (testing only) creates random data, stores it in the database, and then runs backup-db.
     StoreRandom,
     /// Load a graph from a file to memory, then write it to a database
     RestoreDb,
