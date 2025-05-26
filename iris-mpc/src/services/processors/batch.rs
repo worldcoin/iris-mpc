@@ -242,10 +242,7 @@ impl<'a> BatchProcessor<'a> {
         );
         let queue_url = &self.config.requests_queue_url;
 
-        // Loop until the desired number of messages (num_to_poll) is processed or max_batch_size is reached
-        while (self.msg_counter as u32) < num_to_poll
-            && self.msg_counter < self.config.max_batch_size
-        {
+        while self.msg_counter < num_to_poll as usize {
             if self.shutdown_handler.is_shutting_down() {
                 tracing::info!(
                     "Stopping batch receive during polling exact messages due to shutdown signal..."
@@ -283,12 +280,6 @@ impl<'a> BatchProcessor<'a> {
                 for sqs_message in messages {
                     // Should be only one message due to max_number_of_messages(1)
                     self.process_message(sqs_message).await?;
-                    // Check if we've reached the target batch size or num_to_poll after processing the message
-                    if (self.msg_counter as u32) >= num_to_poll
-                        || self.msg_counter >= self.config.max_batch_size
-                    {
-                        break;
-                    }
                 }
             } else {
                 // This case should ideally not be hit often if wait_time_seconds > 0,
@@ -306,7 +297,7 @@ impl<'a> BatchProcessor<'a> {
         tracing::info!(
             "Batch ID: {}. Finished polling SQS. Processed {} messages for this batch attempt (target: {}).",
             current_batch_id,
-            self.msg_counter, // This will reflect messages processed in this call to poll_exact_messages
+            self.msg_counter,
             num_to_poll
         );
         Ok(())
@@ -373,7 +364,9 @@ impl<'a> BatchProcessor<'a> {
             tracing::warn!("Identity deletions are disabled");
         }
 
-        self.delete_message(sqs_message).await
+        self.delete_message(sqs_message).await?;
+        self.msg_counter += 1;
+        Ok(())
     }
 
     async fn process_uniqueness_request(
@@ -382,8 +375,6 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
-        self.msg_counter += 1;
-
         let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
 
@@ -392,6 +383,8 @@ impl<'a> BatchProcessor<'a> {
         self.delete_message(sqs_message).await?;
 
         self.update_luc_config_if_needed(&uniqueness_request);
+
+        self.msg_counter += 1;
 
         self.batch_query
             .request_ids
