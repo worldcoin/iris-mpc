@@ -186,10 +186,12 @@ cargo test --release --features db_dependent -- --test-threads=1 # require a run
 If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
 ## CPU Genesis
-
-docker-compose -f docker-compose.test.yaml up
-docker build -f Dockerfile.genesis.dev.hawk -t genesis2:latest .
-
+1. Create binary for initializaing DBs
+* note you can change the value of the benchmark data to generate less data (100 is required for local stack)
+```bash
+cargo run --bin generate_benchmark_data
+```
+2. Run the commands
 ```bash
 docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
 docker-compose -f docker-compose.test.genesis.yaml up

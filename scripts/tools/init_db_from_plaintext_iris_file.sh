@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# set -e
+set -e
 
 # Default hnsw parameter :: EF.
 declare DEFAULT_HNSW_PARAM_EF=320
@@ -26,7 +26,7 @@ function get_default_db_url() {
     local party_idx=$((${1} - 1))
     local party_db="SMPC_dev_$party_idx"
 
-    echo "postgres://postgres:postgres@localhost:5432/$party_db"
+    echo "postgres://postgres:postgres@dev_db:5432/$party_db"
 }
 
 # Returns default db schema for an MPC participant.
@@ -52,7 +52,13 @@ function get_default_path_to_prng_state() {
     echo ".prng_state"
 }
 
-# Execute binary.
+# Handle the skip-hnsw-graph flag properly
+SKIP_HNSW_GRAPH_FLAG=""
+if [[ "${SMPC_INIT_SKIP_HNSW_GRAPH}" == "true" ]]; then
+    SKIP_HNSW_GRAPH_FLAG="--skip-hnsw-graph"
+fi
+
+
 cargo run --release --bin init-test-dbs -- \
     --db-schema-party1 \
         "${SMPC_INIT_DB_SCHEMA_PARTY_1:-$(get_default_db_schema 1)}" \
@@ -75,4 +81,5 @@ cargo run --release --bin init-test-dbs -- \
     --prng-state-file \
         "${SMPC_INIT_PATH_TO_PRNG_STATE:-$(get_default_path_to_prng_state)}" \
     --source \
-        "${SMPC_INIT_PATH_TO_IRIS_PLAINTEXT:-$(get_default_path_to_iris_plaintext)}"
+        "${SMPC_INIT_PATH_TO_IRIS_PLAINTEXT:-$(get_default_path_to_iris_plaintext)}" \
+    ${SKIP_HNSW_GRAPH_FLAG}

@@ -3,7 +3,6 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use crate::services::processors::result_message::send_results_to_sns;
-use crate::services::store::{load_db, S3LoaderParams};
 use aws_sdk_sns::types::MessageAttributeValue;
 
 use eyre::{bail, eyre, Report, Result};
@@ -31,7 +30,8 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::{S3Store, Store};
+use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -91,7 +91,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config,
         &iris_store,
         &graph_store,
-        &aws_clients,
         &shutdown_handler,
         &mut hawk_actor,
     )
@@ -554,7 +553,6 @@ async fn load_database(
     config: &Config,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store>,
-    aws_clients: &AwsClients,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
 ) -> Result<()> {
@@ -582,32 +580,25 @@ async fn load_database(
 
     let store_len = iris_store.count_irises().await?;
 
-    let s3_loader_params = S3LoaderParams {
-        db_chunks_s3_store: S3Store::new(
-            aws_clients.db_chunks_s3_client.clone(),
-            config.db_chunks_bucket_name.clone(),
-        ),
-        db_chunks_s3_client: aws_clients.db_chunks_s3_client.clone(),
-        s3_chunks_folder_name: config.db_chunks_folder_name.clone(),
-        s3_chunks_bucket_name: config.db_chunks_bucket_name.clone(),
-        s3_load_parallelism: config.load_chunks_parallelism,
-        s3_load_max_retries: config.load_chunks_max_retries,
-        s3_load_initial_backoff_ms: config.load_chunks_initial_backoff_ms,
-    };
-
-    load_db(
+    let now = Instant::now();
+    let iris_load_future = load_iris_db(
         &mut iris_loader,
         iris_store,
         store_len,
         parallelism,
         config,
-        Some(s3_loader_params),
         download_shutdown_handler,
-    )
-    .await
-    .expect("Failed to load DB");
+    );
 
-    graph_loader.load_graph_store(graph_store).await?;
+    let graph_load_future = graph_loader.load_graph_store(graph_store);
+
+    let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
+    iris_result.expect("Failed to load iris DB");
+    graph_result.expect("Failed to load graph DB");
+    tracing::info!(
+        "Loaded both iris and graph DBs into memory in {:?}",
+        now.elapsed()
+    );
 
     Ok(())
 }
