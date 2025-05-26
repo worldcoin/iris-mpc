@@ -1,13 +1,17 @@
 use async_trait::async_trait;
+use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
+use aws_sdk_s3::config::StalledStreamProtectionConfig;
+use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
-use eyre::eyre;
+use eyre::{bail, eyre, Result};
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
-    + mem::size_of::<u32>(); // 75 KB
+    + mem::size_of::<u32>()
+    + mem::size_of::<u16>(); // 75 KB
 
 const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
 
@@ -22,17 +26,18 @@ pub struct S3StoredIris {
     right_code_odd: Vec<u8>,
     right_mask_even: Vec<u8>,
     right_mask_odd: Vec<u8>,
+    version_id: i16,
 }
 
 impl S3StoredIris {
-    pub fn from_bytes(bytes: &[u8]) -> eyre::Result<Self, eyre::Error> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
         let mut cursor = 0;
 
         // Helper closure to extract a slice of a given size
         let extract_slice =
-            |bytes: &[u8], cursor: &mut usize, size: usize| -> eyre::Result<Vec<u8>, eyre::Error> {
+            |bytes: &[u8], cursor: &mut usize, size: usize| -> Result<Vec<u8>, eyre::Error> {
                 if *cursor + size > bytes.len() {
-                    return Err(eyre!("Exceeded total bytes while extracting slice",));
+                    bail!("Exceeded total bytes while extracting slice",);
                 }
                 let slice = &bytes[*cursor..*cursor + size];
                 *cursor += size;
@@ -57,6 +62,14 @@ impl S3StoredIris {
         let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
         let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
 
+        // Parse `version_id` (i16)
+        let version_id_bytes = extract_slice(bytes, &mut cursor, 2)?;
+        let version_id = u16::from_be_bytes(
+            version_id_bytes
+                .try_into()
+                .map_err(|_| eyre!("Failed to convert version id bytes to i16"))?,
+        ) as i16;
+
         Ok(S3StoredIris {
             id,
             left_code_even,
@@ -67,6 +80,7 @@ impl S3StoredIris {
             right_code_odd,
             right_mask_even,
             right_mask_odd,
+            version_id,
         })
     }
 
@@ -74,9 +88,12 @@ impl S3StoredIris {
         self.id as usize
     }
 
+    pub fn version_id(&self) -> i16 {
+        self.version_id
+    }
+
     pub fn vector_id(&self) -> VectorId {
-        // TODO: Distinguish vector_id from serial_id.
-        VectorId::from_serial_id(self.id as u32)
+        VectorId::new(self.id as u32, self.version_id)
     }
 
     pub fn left_code_odd(&self) -> &Vec<u8> {
@@ -116,10 +133,34 @@ impl S3StoredIris {
     }
 }
 
+/// Creates an S3 client specifically for database chunks with additional
+/// configuration
+pub fn create_db_chunks_s3_client(
+    shared_config: &aws_config::SdkConfig,
+    force_path_style: bool,
+) -> S3Client {
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
+
+    // Increase S3 connect timeouts to 10s
+    let timeout_config = TimeoutConfig::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .build();
+
+    let db_chunks_s3_config = S3ConfigBuilder::from(shared_config)
+        // disable stalled stream protection to avoid panics during s3 import
+        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
+        .retry_config(retry_config)
+        .timeout_config(timeout_config)
+        .force_path_style(force_path_style)
+        .build();
+
+    S3Client::from_conf(db_chunks_s3_config)
+}
+
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream>;
-    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>>;
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream>;
+    async fn list_objects(&self, prefix: &str) -> Result<Vec<String>>;
 }
 
 pub struct S3Store {
@@ -135,7 +176,7 @@ impl S3Store {
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
         let res = self
             .client
             .get_object()
@@ -148,7 +189,7 @@ impl ObjectStore for S3Store {
         Ok(res.body)
     }
 
-    async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
+    async fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
         let mut objects = Vec::new();
         let mut continuation_token = None;
 
@@ -211,7 +252,7 @@ impl LastSnapshotDetails {
 pub async fn last_snapshot_timestamp(
     store: &impl ObjectStore,
     prefix_name: String,
-) -> eyre::Result<LastSnapshotDetails> {
+) -> Result<LastSnapshotDetails> {
     tracing::info!("Looking for last snapshot time in prefix: {}", prefix_name);
     let timestamps_path = format!("{}/timestamps/", prefix_name);
     store
@@ -234,7 +275,7 @@ pub async fn fetch_and_parse_chunks(
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
-) -> eyre::Result<()> {
+) -> Result<()> {
     tracing::info!("Generating chunk files using: {:?}", last_snapshot_details);
     let range_size = if last_snapshot_details.chunk_size as usize > MAX_RANGE_SIZE {
         MAX_RANGE_SIZE
@@ -325,7 +366,7 @@ async fn read_range_in_chunk(
     offset_within_chunk: usize,
     range_size: usize,
     tx: Sender<S3StoredIris>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let mut stream = store
         .get_object(
             key,
@@ -388,6 +429,7 @@ mod tests {
                 result.extend_from_slice(&record.left_mask);
                 result.extend_from_slice(&record.right_code);
                 result.extend_from_slice(&record.right_mask);
+                result.extend_from_slice(&(record.version_id as u16).to_be_bytes());
             }
             self.objects.insert(key.to_string(), result);
         }
@@ -395,7 +437,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
             let bytes = self
                 .objects
                 .get(key)
@@ -410,7 +452,7 @@ mod tests {
             Ok(ByteStream::from(SdkBody::from(sliced_bytes)))
         }
 
-        async fn list_objects(&self, _: &str) -> eyre::Result<Vec<String>> {
+        async fn list_objects(&self, _: &str) -> Result<Vec<String>> {
             Ok(self.objects.keys().cloned().collect())
         }
     }
@@ -434,7 +476,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ObjectStore for IntentionalFailureStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> eyre::Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
             let range_hash = format!("{}_{},{}", key, range.0, range.1);
             let mut failures = self.remaining_failures.lock().await;
             let n_remaining = failures
@@ -449,7 +491,7 @@ mod tests {
             self.inner.get_object(key, range).await
         }
 
-        async fn list_objects(&self, prefix: &str) -> eyre::Result<Vec<String>> {
+        async fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
             self.inner.list_objects(prefix).await
         }
     }

@@ -18,29 +18,19 @@ use iris_mpc_cpu::{
         },
         shared_iris::GaloisRingSharedIris,
     },
-    shares::{share::DistanceShare, IntRing2k, RingElement, Share},
+    shares::share::DistanceShare,
 };
-use rand::{Rng, RngCore, SeedableRng};
-use rand_distr::{Distribution, Standard};
+use rand::SeedableRng;
+use std::sync::Arc;
 use tokio::task::JoinSet;
 
-pub fn create_random_sharing<R, ShareRing>(rng: &mut R, input: ShareRing) -> Vec<Share<ShareRing>>
-where
-    R: RngCore,
-    ShareRing: IntRing2k + std::fmt::Display,
-    Standard: Distribution<ShareRing>,
-{
-    let val = RingElement(input);
-    let a = RingElement(rng.gen());
-    let b = RingElement(rng.gen());
-    let c = val - a - b;
+#[path = "bench_utils.rs"]
+mod bench_utils;
+use bench_utils::create_random_sharing;
 
-    let share1 = Share::new(a, c);
-    let share2 = Share::new(b, a);
-    let share3 = Share::new(c, b);
-
-    vec![share1, share2, share3]
-}
+const DEFAULT_CONNECTION_PARALLELISM: usize = 1;
+const DEFAULT_STREAM_PARALLELISM: usize = 1;
+const DEFAULT_REQUEST_PARALLELISM: usize = 1;
 
 fn bench_plaintext_hnsw(c: &mut Criterion) {
     let mut group = c.benchmark_group("plaintext_hnsw");
@@ -55,13 +45,13 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
 
         let (vector, graph) = rt.block_on(async move {
             let mut rng = AesRng::seed_from_u64(0_u64);
-            let mut vector = PlaintextStore::default();
+            let mut vector = PlaintextStore::new();
             let mut graph = GraphMem::new();
-            let searcher = HnswSearcher::default();
+            let searcher = HnswSearcher::new_with_test_parameters();
 
             for _ in 0..database_size {
                 let raw_query = IrisCode::random_rng(&mut rng);
-                let query = vector.prepare_query(raw_query.clone());
+                let query = Arc::new(raw_query.clone());
                 searcher
                     .insert(&mut vector, &mut graph, &query, &mut rng)
                     .await
@@ -74,10 +64,10 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             b.to_async(&rt).iter_batched(
                 || (vector.clone(), graph.clone()),
                 |(mut db_vectors, mut graph)| async move {
-                    let searcher = HnswSearcher::default();
+                    let searcher = HnswSearcher::new_with_test_parameters();
                     let mut rng = AesRng::seed_from_u64(0_u64);
                     let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let query = db_vectors.prepare_query(on_the_fly_query);
+                    let query = Arc::new(on_the_fly_query);
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, &mut rng)
                         .await
@@ -103,7 +93,13 @@ fn bench_hnsw_primitives(c: &mut Criterion) {
             let t1 = create_random_sharing(&mut rng, 10_u16);
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
-            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc(
+                DEFAULT_CONNECTION_PARALLELISM,
+                DEFAULT_STREAM_PARALLELISM,
+                DEFAULT_REQUEST_PARALLELISM,
+            )
+            .await
+            .unwrap();
 
             let mut jobs = JoinSet::new();
             for (index, player_session) in sessions.into_iter().enumerate() {
@@ -143,7 +139,13 @@ fn bench_gr_primitives(c: &mut Criterion) {
             .build()
             .unwrap();
         b.to_async(&rt).iter(|| async move {
-            let sessions = LocalRuntime::mock_sessions_with_grpc().await.unwrap();
+            let sessions = LocalRuntime::mock_sessions_with_grpc(
+                DEFAULT_CONNECTION_PARALLELISM,
+                DEFAULT_STREAM_PARALLELISM,
+                DEFAULT_REQUEST_PARALLELISM,
+            )
+            .await
+            .unwrap();
             let mut rng = AesRng::seed_from_u64(0);
             let iris_db = IrisDB::new_random_rng(4, &mut rng).db;
 
@@ -230,7 +232,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(
@@ -269,7 +271,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                 b.to_async(&rt).iter_batched(
                     || secret_searcher.clone(),
                     |vectors_graphs| async move {
-                        let searcher = HnswSearcher::default();
+                        let searcher = HnswSearcher::new_with_test_parameters();
                         let mut rng = AesRng::seed_from_u64(0_u64);
                         let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
                         let raw_query = GaloisRingSharedIris::generate_shares_locally(
@@ -283,11 +285,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                             let query = prepare_query(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let vector_store = vector_store.clone();
-                            let mut graph_store = graph_store;
                             jobs.spawn(async move {
                                 let mut vector_store = vector_store.lock().await;
                                 let neighbors = searcher
-                                    .search(&mut *vector_store, &mut graph_store, &query, 1)
+                                    .search(&mut *vector_store, &graph_store, &query, 1)
                                     .await
                                     .unwrap();
                                 searcher
