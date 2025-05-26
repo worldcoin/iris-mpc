@@ -51,7 +51,7 @@ pub struct DistanceComparator {
     pub partial_match_counter: Vec<CudaSlice<u32>>,
     pub partial_results_query_indices: Vec<CudaSlice<u32>>,
     pub partial_results_db_indices: Vec<CudaSlice<u32>>,
-    pub partial_results_rotations: Vec<CudaSlice<u32>>,
+    pub partial_results_rotations: Vec<CudaSlice<i8>>,
 }
 
 impl DistanceComparator {
@@ -534,7 +534,7 @@ impl DistanceComparator {
     pub fn get_partial_results_with_rotations(
         &self,
         streams: &[CudaStream],
-    ) -> HashMap<u32, HashMap<u32, Vec<u32>>> {
+    ) -> HashMap<u32, HashMap<u32, Vec<i8>>> {
         let mut partial_results_with_rotations = HashMap::new();
         for i in 0..self.device_manager.device_count() {
             let counter = dtoh_on_stream_sync(
