@@ -29,19 +29,25 @@ struct Signup {
     // idcomm: String,
 }
 
-#[derive(Debug, Serialize, Deserialize,Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct InversedSignup {
     iris_codes: String,
     mask_codes: String,
 }
 
 impl Signup {
-    fn add_shares(&mut self, signup_inversed: InversedSignup, signup_inversed_right: InversedSignup) {
+    fn add_shares(
+        &mut self,
+        signup_inversed: InversedSignup,
+        signup_inversed_right: InversedSignup,
+    ) {
         let mut rng = rand::rngs::StdRng::seed_from_u64(RNG_SEED);
         let iris_code_left = IrisCodeArray::from_base64(&signup_inversed.iris_codes).unwrap();
         let mask_code_left = IrisCodeArray::from_base64(&signup_inversed.mask_codes).unwrap();
-        let iris_code_right = IrisCodeArray::from_base64(&signup_inversed_right.iris_codes).unwrap();
-        let mask_code_right = IrisCodeArray::from_base64(&signup_inversed_right.mask_codes).unwrap();
+        let iris_code_right =
+            IrisCodeArray::from_base64(&signup_inversed_right.iris_codes).unwrap();
+        let mask_code_right =
+            IrisCodeArray::from_base64(&signup_inversed_right.mask_codes).unwrap();
 
         // Encode iris code shares left
         let shares_iris_code_left =
@@ -94,7 +100,7 @@ fn write_json_file(file_path: &str, signups: &Vec<Signup>) -> std::io::Result<()
 fn main() {
     let input_file = "./iris-mpc-common/src/bin/data/1001lines.json";
     let output_file = "./iris-mpc-common/src/bin/data/1001lines_shares.json";
-    let mut signups = read_json_file(input_file).unwrap();
+    let signups = read_json_file(input_file).unwrap();
 
     let mut output_signups = vec![];
     let mut s = Signup {
@@ -105,15 +111,10 @@ fn main() {
         mask_code_shares_right: None,
     };
 
-    s.add_shares(signups[0].clone(),signups[1].clone());
+    s.add_shares(signups[0].clone(), signups[1].clone());
     output_signups.push(s.clone());
 
-
-    write_json_file(
-        output_file,
-        &output_signups,
-    )
-    .unwrap();
+    write_json_file(output_file, &output_signups).unwrap();
     println!(
         "Share calculation completed. Results written to {:?}",
         output_file

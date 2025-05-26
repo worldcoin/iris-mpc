@@ -161,7 +161,7 @@ impl Args {
         if let Some(party_idx) = self.party_idx {
             info!("Running for writes only for party id {party_idx}");
             vec![v[party_idx].clone()]
-        }else {
+        } else {
             v
         }
     }
@@ -179,7 +179,6 @@ impl Args {
         } else {
             v
         }
-
     }
 }
 
@@ -212,7 +211,7 @@ impl From<&Args> for Rngs {
 const N_PARTIES: usize = 1;
 
 /// Number of secret-shared iris code pairs to persist to Postgres per transaction.
-const SECRET_SHARING_PG_TX_SIZE: usize = 100;
+// const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
 #[allow(non_snake_case)]
 #[tokio::main]
@@ -286,6 +285,11 @@ async fn main() -> Result<()> {
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
             let right_shares =
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
+
+            let left_shares: [GaloisRingSharedIris; 1] =
+                [left_shares[args.party_idx.unwrap()].clone()];
+            let right_shares: [GaloisRingSharedIris; 1] =
+                [right_shares[args.party_idx.unwrap()].clone()];
 
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
                 batch[party].push((shares_l, shares_r));
