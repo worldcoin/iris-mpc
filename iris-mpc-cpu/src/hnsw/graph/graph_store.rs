@@ -253,12 +253,18 @@ where
             graph_mem.set_entry_point(point, layer).await;
         }
 
+        let mut count = 0;
+
         let mut irises = self.stream_links();
         while let Some(row) = irises.next().await {
             let row = row?;
             graph_mem
                 .set_links(row.source_ref.0, row.links.0, row.layer as usize)
                 .await;
+            count += 1;
+            if count % 100000 == 0 {
+                tracing::info!("GraphLoader: Loaded {} graph links", count);
+            }
         }
 
         Ok(graph_mem)
