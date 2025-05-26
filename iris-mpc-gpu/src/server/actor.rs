@@ -992,6 +992,12 @@ impl ServerActor {
             &self.streams[0],
         );
 
+        tracing::info!(
+            party_id = self.party_id,
+            "Partial matches OLD: {:?}",
+            partial_matches_side1
+        );
+
         // also add the OR rule indices to the partial matches
         let or_indices = batch
             .or_rule_indices
@@ -2500,6 +2506,10 @@ impl ServerActor {
                             match_distances_buffers_masks,
                             match_distances_counters,
                             match_distances_indices,
+                            &self.distance_comparator.partial_match_counter,
+                            &self.distance_comparator.partial_results_query_indices,
+                            &self.distance_comparator.partial_results_db_indices,
+                            &self.distance_comparator.partial_results_rotations,
                             self.internal_batch_counter,
                             &code_dots,
                             &mask_dots,
@@ -2533,6 +2543,25 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[0]);
         self.device_manager.await_streams(&self.streams[1]);
         tracing::info!(party_id = self.party_id, "db search finished");
+
+        // Retrieve partial results
+        let partial_results = self
+            .distance_comparator
+            .get_partial_results_with_rotations(&self.streams[0]);
+
+        tracing::info!(
+            party_id = self.party_id,
+            "Partial results NEW: {:?}",
+            partial_results
+        );
+
+        // Reset the partial counter
+        reset_slice(
+            self.device_manager.devices(),
+            &self.distance_comparator.partial_match_counter,
+            0,
+            &self.streams[0],
+        );
 
         // Reset the results buffers for reuse
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
@@ -2752,6 +2781,10 @@ fn open(
     match_distances_buffers_masks: &[ChunkShare<u16>],
     match_distances_counters: &[CudaSlice<u32>],
     match_distances_indices: &[CudaSlice<u64>],
+    partial_match_counter: &[CudaSlice<u32>],
+    partial_results_query_indices: &[CudaSlice<u32>],
+    partial_results_db_indices: &[CudaSlice<u32>],
+    partial_results_rotations: &[CudaSlice<u32>],
     batch_id: u64,
     code_dots: &[ChunkShareView<u16>],
     mask_dots: &[ChunkShareView<u16>],
@@ -2797,6 +2830,10 @@ fn open(
         match_distances_buffers_masks,
         match_distances_counters,
         match_distances_indices,
+        partial_match_counter,
+        partial_results_query_indices,
+        partial_results_db_indices,
+        partial_results_rotations,
         batch_id,
         code_dots,
         mask_dots,
