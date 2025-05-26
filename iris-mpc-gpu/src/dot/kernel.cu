@@ -87,7 +87,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             if (matchCounter < MAX_MATCHES_LEN * queryLength) 
             {
                 partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
-                partialResultsDbIndices[matchCounter] = dbIdx;
+                partialResultsDbIndices[matchCounter] = dbIdx + offset;
                 partialResultsRotations[matchCounter] = queryIdx % ALL_ROTATIONS;
             }
 
