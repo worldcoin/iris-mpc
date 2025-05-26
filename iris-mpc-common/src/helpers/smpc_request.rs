@@ -11,7 +11,6 @@ use eyre::Report;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::num::ParseIntError;
 use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -182,11 +181,6 @@ pub enum ReceiveRequestError {
     #[error("Failed to join receive handle: {0}")]
     FailedToJoinHandle(#[from] tokio::task::JoinError),
 
-    #[error("Failed to parse sequence number: {sequence_number}, {err}")]
-    InvalidSequenceNumber {
-        sequence_number: String,
-        err: ParseIntError,
-    },
     #[error("Failed to synchronize batch states: {0}")]
     BatchSyncError(Report),
     #[error("Batch polling timeout reached after {0} seconds")]
@@ -197,13 +191,6 @@ impl ReceiveRequestError {
     pub fn json_parse_error(json_name: &str, err: serde_json::error::Error) -> Self {
         ReceiveRequestError::JsonParseError {
             json_name: json_name.to_string(),
-            err,
-        }
-    }
-
-    pub fn seq_number_parse_error(sequence_number: String, err: ParseIntError) -> Self {
-        ReceiveRequestError::InvalidSequenceNumber {
-            sequence_number,
             err,
         }
     }

@@ -242,20 +242,24 @@ impl<'a> BatchProcessor<'a> {
         );
         let queue_url = &self.config.requests_queue_url;
 
-        for _ in 0..num_to_poll {
-            if self.msg_counter >= self.config.max_batch_size {
+        // Loop until the desired number of messages (num_to_poll) is processed or max_batch_size is reached
+        while (self.msg_counter as u32) < num_to_poll
+            && self.msg_counter < self.config.max_batch_size
+        {
+            if self.shutdown_handler.is_shutting_down() {
                 tracing::info!(
-                    "Reached max_batch_size ({}), stopping polling for current batch.",
-                    self.config.max_batch_size
+                    "Stopping batch receive during polling exact messages due to shutdown signal..."
                 );
-                break;
+                return Ok(()); // Exit if shutdown is signaled
             }
 
             let rcv_message_output = self
                 .client
                 .receive_message()
-                .wait_time_seconds(self.config.batch_polling_timeout_secs)
-                .max_number_of_messages(1)
+                // Set a short wait time to avoid busy-looping when the queue is temporarily empty
+                // but we still expect more messages for the current batch.
+                .wait_time_seconds(1) // Short poll to quickly check for messages
+                .max_number_of_messages(1) // Process one message at a time to respect num_to_poll accurately
                 .queue_url(queue_url)
                 .send()
                 .await
@@ -263,35 +267,48 @@ impl<'a> BatchProcessor<'a> {
 
             if let Some(messages) = rcv_message_output.messages {
                 if messages.is_empty() {
-                    tracing::info!(
-                        "Batch ID: {}. No more messages in the queue while polling exact count.",
-                        current_batch_id
+                    // If the queue is empty, short poll again until num_to_poll is met or shutdown.
+                    // This can happen if messages are arriving slower than we are polling.
+                    tracing::debug!(
+                        "Batch ID: {}. No message received in a polling attempt, will retry as {} out of {} messages have been processed.",
+                        current_batch_id,
+                        self.msg_counter,
+                        num_to_poll
                     );
-                    break;
+                    // Add a small delay to prevent tight looping when queue is empty but we are still expecting messages
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
                 }
 
                 for sqs_message in messages {
+                    // Should be only one message due to max_number_of_messages(1)
                     self.process_message(sqs_message).await?;
-                    // Check if we've reached the target batch size
-                    if self.msg_counter >= self.config.max_batch_size
-                        || self.msg_counter as u32 >= num_to_poll
+                    // Check if we've reached the target batch size or num_to_poll after processing the message
+                    if (self.msg_counter as u32) >= num_to_poll
+                        || self.msg_counter >= self.config.max_batch_size
                     {
                         break;
                     }
                 }
-                if self.msg_counter >= self.config.max_batch_size
-                    || self.msg_counter as u32 >= num_to_poll
-                {
-                    break;
-                }
             } else {
-                tracing::info!(
-                    "Batch ID: {}. No messages received in a polling attempt.",
+                // This case should ideally not be hit often if wait_time_seconds > 0,
+                // as SQS long polling usually returns an empty messages array instead of None.
+                // However, handling it defensively.
+                tracing::debug!(
+                    "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
                     current_batch_id
                 );
-                break;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                continue;
             }
         }
+
+        tracing::info!(
+            "Batch ID: {}. Finished polling SQS. Processed {} messages for this batch attempt (target: {}).",
+            current_batch_id,
+            self.msg_counter, // This will reflect messages processed in this call to poll_exact_messages
+            num_to_poll
+        );
         Ok(())
     }
 
