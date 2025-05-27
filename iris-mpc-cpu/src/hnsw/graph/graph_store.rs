@@ -157,8 +157,7 @@ where
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
-        let entry_buf = EntryPoint { point, layer }
-            .to_packed()
+        let entry_buf = bincode::serialize(&EntryPoint { point, layer })
             .map_err(|e| eyre!("Failed to serialize entry point: {e}"))?;
 
         let table = self.entry_table();
@@ -193,7 +192,8 @@ where
         .bind(Text(base))
         .bind(lc as i32)
         .fetch_optional(self.tx())
-        .await?;
+        .await
+        .map_err(|e| eyre!("Failed to fetch links: {e}"))?;
 
         if let Some(row) = opt {
             let links: Vec<u8> = row.get("links");
@@ -209,9 +209,8 @@ where
         links: SortedEdgeIds<V::VectorRef>,
         lc: usize,
     ) -> Result<()> {
-        let links = links
-            .to_packed()
-            .map_err(|e| eyre!("Failed to serialize links: {e}"))?;
+        let links =
+            bincode::serialize(&links).map_err(|e| eyre!("Failed to serialize links: {e}"))?;
 
         let table = self.links_table();
         sqlx::query(&format!(

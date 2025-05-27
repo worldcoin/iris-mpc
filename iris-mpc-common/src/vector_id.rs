@@ -1,4 +1,3 @@
-use eyre::Result;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 

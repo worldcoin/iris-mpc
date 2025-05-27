@@ -19,15 +19,6 @@ use tracing::{debug, instrument};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct SortedEdgeIds<V>(pub Vec<V>);
 
-impl<V> SortedEdgeIds<V>
-where
-    V: Sized + Serialize,
-{
-    pub fn to_packed(&self) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(&self)?)
-    }
-}
-
 impl<V> SortedEdgeIds<V> {
     pub fn from_ascending_vec(edges: Vec<V>) -> Self {
         SortedEdgeIds(edges)

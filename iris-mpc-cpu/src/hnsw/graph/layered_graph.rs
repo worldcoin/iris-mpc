@@ -11,7 +11,6 @@ use crate::{
         VectorStore,
     },
 };
-use eyre::Result;
 use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
@@ -27,15 +26,6 @@ pub struct EntryPoint<VectorRef> {
 
     /// The layer at which HNSW search begins
     pub layer: usize,
-}
-
-impl<VectorRef> EntryPoint<VectorRef>
-where
-    VectorRef: Sized + Serialize,
-{
-    pub fn to_packed(&self) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(&self)?)
-    }
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
