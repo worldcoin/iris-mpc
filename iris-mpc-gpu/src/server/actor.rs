@@ -3,7 +3,7 @@ use crate::{
     dot::{
         distance_comparator::DistanceComparator,
         share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
+        PartialResultsWithRotations, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
     },
     helpers::{
         self,
@@ -2038,7 +2038,7 @@ impl ServerActor {
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
-    ) -> (HashMap<u32, HashMap<u32, Vec<i8>>>, Vec<usize>) {
+    ) -> (PartialResultsWithRotations, Vec<usize>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2238,7 +2238,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         orientation: Orientation,
-    ) -> (HashMap<u32, HashMap<u32, Vec<i8>>>, Vec<usize>) {
+    ) -> (PartialResultsWithRotations, Vec<usize>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2734,7 +2734,7 @@ impl ServerActor {
     /// Extract partial results with rotations from the new flow and convert them to the format needed for ServerJobResult
     fn extract_partial_results_with_rotations(
         &self,
-        partial_results_with_rotations: HashMap<u32, HashMap<u32, Vec<i8>>>,
+        partial_results_with_rotations: PartialResultsWithRotations,
         batch_size: usize,
     ) -> (Vec<Vec<u32>>, Vec<Vec<Vec<i8>>>) {
         let mut partial_match_ids = vec![vec![]; batch_size];
