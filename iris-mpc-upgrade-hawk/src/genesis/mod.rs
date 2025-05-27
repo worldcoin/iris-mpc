@@ -74,7 +74,6 @@ pub async fn exec_main(
         get_service_clients(&config).await?;
     log_info(String::from("Service clients instantiated"));
 
-    let last_indexed_id = get_last_indexed(&iris_store).await?;
     // Process: set serial identifier of last indexed Iris.
     let last_indexed_id = get_last_indexed_id(&iris_store).await?;
     log_info(format!(
