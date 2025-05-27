@@ -970,7 +970,7 @@ impl ServerActor {
             "Comparing {} eye queries against DB and self",
             self.full_scan_side
         );
-        self.compare_query_against_db_and_self(
+        let partial_results_with_rotations_side1 = self.compare_query_against_db_and_self(
             &compact_device_queries_side1,
             &compact_device_sums_side1,
             &mut events,
@@ -1072,7 +1072,7 @@ impl ServerActor {
             }
         );
 
-        if partial_matches_side1
+        let partial_results_with_rotations_side2 = if partial_matches_side1
             .iter()
             .any(|x| x.len() >= DB_CHUNK_SIZE)
         {
@@ -1091,7 +1091,7 @@ impl ServerActor {
                 other_side,
                 batch_size,
                 orientation,
-            );
+            )
         } else {
             tracing::info!("Comparing {} eye queries against DB subset", other_side);
             self.compare_query_against_db_subset_and_self(
@@ -1102,8 +1102,8 @@ impl ServerActor {
                 batch_size,
                 &partial_matches_side1,
                 orientation,
-            );
-        }
+            )
+        };
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1220,6 +1220,7 @@ impl ServerActor {
         }
 
         // Fetch the partial matches
+        // TODO: remove this fetching of partial results, we should use the partial results with rotations instead
         let (
             partial_match_ids_left,
             partial_match_counters_left,
@@ -1258,12 +1259,38 @@ impl ServerActor {
             (vec![], vec![], vec![], vec![])
         };
 
+        // Convert the new partial results to the required format
+        let (new_partial_match_ids_left, partial_match_rotation_indices_left) = self
+            .extract_partial_results_with_rotations(
+                partial_results_with_rotations_side1,
+                batch_size,
+            );
+        let (new_partial_match_ids_right, partial_match_rotation_indices_right) = self
+            .extract_partial_results_with_rotations(
+                partial_results_with_rotations_side2,
+                batch_size,
+            );
+
+        // temp: use the new partial results to replace the old ones
+        let partial_match_ids_left = if !new_partial_match_ids_left.is_empty() {
+            new_partial_match_ids_left
+        } else {
+            partial_match_ids_left
+        };
+        let partial_match_ids_right = if !new_partial_match_ids_right.is_empty() {
+            new_partial_match_ids_right
+        } else {
+            partial_match_ids_right
+        };
+
+        // TODO: remove debug prints
         tracing::info!(
             party_id = self.party_id,
             "Partial results OLD in subset LEFT: {:?}",
             partial_match_ids_left
         );
 
+        // TODO: remove debug prints
         tracing::info!(
             party_id = self.party_id,
             "Partial results OLD in subset RIGHT: {:?}",
@@ -1597,6 +1624,8 @@ impl ServerActor {
             full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            partial_match_rotation_indices_left,
+            partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
@@ -2069,7 +2098,7 @@ impl ServerActor {
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
-    ) {
+    ) -> HashMap<u32, HashMap<u32, Vec<i8>>> {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2084,7 +2113,7 @@ impl ServerActor {
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
         if db_subset_idx.iter().all(|x| x.is_empty()) {
-            return;
+            return HashMap::new();
         }
 
         // which database are we querying against
@@ -2238,14 +2267,15 @@ impl ServerActor {
         );
 
         // Retrieve partial results
-        let partial_results = self
+        let partial_results_with_rotations = self
             .distance_comparator
             .get_partial_results_with_rotations(&self.streams[0]);
 
+        // TODO: remove debug prints
         tracing::info!(
             party_id = self.party_id,
             "Partial results NEW in subset: {:?}",
-            partial_results
+            partial_results_with_rotations
         );
 
         // Reset the partial counter
@@ -2255,6 +2285,8 @@ impl ServerActor {
             0,
             &self.streams[0],
         );
+
+        partial_results_with_rotations
     }
 
     fn compare_query_against_db_and_self(
@@ -2265,7 +2297,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         orientation: Orientation,
-    ) {
+    ) -> HashMap<u32, HashMap<u32, Vec<i8>>> {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2572,14 +2604,15 @@ impl ServerActor {
         tracing::info!(party_id = self.party_id, "db search finished");
 
         // Retrieve partial results
-        let partial_results = self
+        let partial_results_with_rotations = self
             .distance_comparator
             .get_partial_results_with_rotations(&self.streams[0]);
 
+        // TODO: remove debug prints
         tracing::info!(
             party_id = self.party_id,
             "Partial results NEW: {:?}",
-            partial_results
+            partial_results_with_rotations
         );
 
         // Reset the partial counter
@@ -2594,6 +2627,8 @@ impl ServerActor {
         for dst in &[&self.results, &self.batch_results, &self.final_results] {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
+
+        partial_results_with_rotations
     }
 
     fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
@@ -2752,6 +2787,27 @@ impl ServerActor {
             or_policy_bitmap.push(_bitmap);
         }
         or_policy_bitmap
+    }
+
+    /// Extract partial results with rotations from the new flow and convert them to the format needed for ServerJobResult
+    fn extract_partial_results_with_rotations(
+        &self,
+        partial_results_with_rotations: HashMap<u32, HashMap<u32, Vec<i8>>>,
+        batch_size: usize,
+    ) -> (Vec<Vec<u32>>, Vec<Vec<Vec<i8>>>) {
+        let mut partial_match_ids = vec![vec![]; batch_size];
+        let mut partial_match_rotation_indices = vec![vec![]; batch_size];
+
+        for (query_idx, db_matches) in partial_results_with_rotations {
+            if (query_idx as usize) < batch_size {
+                for (db_idx, rotations) in db_matches {
+                    partial_match_ids[query_idx as usize].push(db_idx);
+                    partial_match_rotation_indices[query_idx as usize].push(rotations);
+                }
+            }
+        }
+
+        (partial_match_ids, partial_match_rotation_indices)
     }
 }
 
