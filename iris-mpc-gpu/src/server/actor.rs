@@ -1222,22 +1222,35 @@ impl ServerActor {
             partial_match_ids_right,
             partial_match_rotation_indices_right,
         ) = if self.return_partial_results {
-            let (partial_match_ids_left, partial_match_rotation_indices_left) = self
-                .extract_partial_results_with_rotations(
+            // Dynamically assign based on which eye is doing the full scan
+            let (
+                (partial_match_ids_full_scan, partial_match_rotation_indices_full_scan),
+                (partial_match_ids_other, partial_match_rotation_indices_other),
+            ) = (
+                self.extract_partial_results_with_rotations(
                     partial_results_with_rotations_side1,
                     batch_size,
-                );
-            let (partial_match_ids_right, partial_match_rotation_indices_right) = self
-                .extract_partial_results_with_rotations(
+                ),
+                self.extract_partial_results_with_rotations(
                     partial_results_with_rotations_side2,
                     batch_size,
-                );
-            (
-                partial_match_ids_left,
-                partial_match_rotation_indices_left,
-                partial_match_ids_right,
-                partial_match_rotation_indices_right,
-            )
+                ),
+            );
+
+            match self.full_scan_side {
+                Eye::Left => (
+                    partial_match_ids_full_scan,
+                    partial_match_rotation_indices_full_scan,
+                    partial_match_ids_other,
+                    partial_match_rotation_indices_other,
+                ),
+                Eye::Right => (
+                    partial_match_ids_other,
+                    partial_match_rotation_indices_other,
+                    partial_match_ids_full_scan,
+                    partial_match_rotation_indices_full_scan,
+                ),
+            }
         } else {
             (
                 vec![vec![]; batch_size],
@@ -1558,8 +1571,14 @@ impl ServerActor {
             partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
-            partial_match_counters_left: partial_match_counters_side1,
-            partial_match_counters_right: partial_match_counters_side2,
+            partial_match_counters_left: match self.full_scan_side {
+                Eye::Left => partial_match_counters_side1.clone(),
+                Eye::Right => partial_match_counters_side2.clone(),
+            },
+            partial_match_counters_right: match self.full_scan_side {
+                Eye::Left => partial_match_counters_side2,
+                Eye::Right => partial_match_counters_side1,
+            },
             full_face_mirror_partial_match_counters_left,
             full_face_mirror_partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
