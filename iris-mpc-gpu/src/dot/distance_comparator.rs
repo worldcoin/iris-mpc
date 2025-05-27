@@ -1,4 +1,4 @@
-use super::ROTATIONS;
+use super::{PartialResultsWithRotations, ROTATIONS};
 use crate::{
     helpers::{
         device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync,
@@ -506,7 +506,7 @@ impl DistanceComparator {
     pub fn get_partial_results_with_rotations(
         &self,
         streams: &[CudaStream],
-    ) -> HashMap<u32, HashMap<u32, Vec<i8>>> {
+    ) -> PartialResultsWithRotations {
         let mut partial_results_with_rotations = HashMap::new();
         for i in 0..self.device_manager.device_count() {
             let counter = dtoh_on_stream_sync(
