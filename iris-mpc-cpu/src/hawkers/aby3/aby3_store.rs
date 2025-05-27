@@ -136,12 +136,6 @@ impl SharedIrises {
         new_id
     }
 
-    /// Overwrite the iris at the given vector id, and return the same id.
-    pub fn overwrite(&mut self, vector_id: VectorId, iris: IrisRef) -> VectorId {
-        // TODO: Should use update and increment the version instead.
-        self.insert(vector_id, iris)
-    }
-
     /// Return the next id for new insertions, which should have the serial id
     /// following the largest previously inserted serial id, and version 0.
     fn next_id(&self) -> VectorId {

@@ -55,7 +55,7 @@ pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) 
 
     for del_id in del_ids {
         for store in &mut stores {
-            store.overwrite(del_id, dummy.clone());
+            store.update(del_id, dummy.clone());
         }
     }
     Ok(())
