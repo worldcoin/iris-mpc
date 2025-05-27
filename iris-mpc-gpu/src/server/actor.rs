@@ -1202,16 +1202,36 @@ impl ServerActor {
         }
 
         // Convert the new partial results to the required format
-        let (partial_match_ids_left, partial_match_rotation_indices_left) = self
-            .extract_partial_results_with_rotations(
-                partial_results_with_rotations_side1,
-                batch_size,
-            );
-        let (partial_match_ids_right, partial_match_rotation_indices_right) = self
-            .extract_partial_results_with_rotations(
-                partial_results_with_rotations_side2,
-                batch_size,
-            );
+        let (
+            partial_match_ids_left,
+            partial_match_rotation_indices_left,
+            partial_match_ids_right,
+            partial_match_rotation_indices_right,
+        ) = if self.return_partial_results {
+            let (partial_match_ids_left, partial_match_rotation_indices_left) = self
+                .extract_partial_results_with_rotations(
+                    partial_results_with_rotations_side1,
+                    batch_size,
+                );
+            let (partial_match_ids_right, partial_match_rotation_indices_right) = self
+                .extract_partial_results_with_rotations(
+                    partial_results_with_rotations_side2,
+                    batch_size,
+                );
+            (
+                partial_match_ids_left,
+                partial_match_rotation_indices_left,
+                partial_match_ids_right,
+                partial_match_rotation_indices_right,
+            )
+        } else {
+            (
+                vec![vec![]; batch_size],
+                vec![vec![]; batch_size],
+                vec![vec![]; batch_size],
+                vec![vec![]; batch_size],
+            )
+        };
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]
