@@ -40,7 +40,7 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 4;
 const DEFAULT_BATCH_SIZE: usize = 64;
 const DEFAULT_N_BATCHES: usize = 5;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(10);
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(5);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser, Clone)]
@@ -131,7 +131,7 @@ impl E2EClient {
         let region = Region::new(opts.region.clone());
         let shared_config = aws_config::from_env()
             .region(region)
-            .retry_config(RetryConfig::standard().with_max_attempts(5))
+            .retry_config(RetryConfig::standard().with_max_attempts(20))
             .load()
             .await;
 

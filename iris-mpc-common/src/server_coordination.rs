@@ -1,6 +1,8 @@
 use crate::config::Config;
+use crate::helpers::batch_sync::get_own_batch_sync_state;
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
+use aws_sdk_sqs::Client as SQSClient;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -12,10 +14,11 @@ use itertools::Itertools as _;
 use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReadyProbeResponse {
     pub image_name: String,
@@ -47,9 +50,11 @@ where
 /// be set to indicate to other MPC nodes that this server is ready for operation.
 pub async fn start_coordination_server<T>(
     config: &Config,
+    sqs_client: &SQSClient,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     my_state: &T,
+    current_batch_id: Arc<AtomicU64>,
 ) -> Arc<AtomicBool>
 where
     T: Serialize + DeserializeOwned + Clone + Send + 'static,
@@ -80,6 +85,8 @@ where
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
         let my_state = my_state.clone();
+        let config = config.clone();
+        let sqs_client = sqs_client.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -113,6 +120,39 @@ where
                 .route(
                     "/startup-sync",
                     get(move || async move { serde_json::to_string(&my_state).unwrap() }),
+                )
+                .route(
+                    "/batch-sync-state",
+                    get(move || async move {
+                        let current_batch_id = current_batch_id.load(Ordering::SeqCst);
+                        match get_own_batch_sync_state(&config, &sqs_client, current_batch_id).await
+                        {
+                            Ok(batch_sync_state) => {
+                                match serde_json::to_string(&batch_sync_state) {
+                                    Ok(body) => (StatusCode::OK, body).into_response(),
+                                    Err(e) => {
+                                        tracing::error!(
+                                            "Failed to serialize batch sync state: {:?}",
+                                            e
+                                        );
+                                        (
+                                            StatusCode::INTERNAL_SERVER_ERROR,
+                                            format!("Serialization error: {}", e),
+                                        )
+                                            .into_response()
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to fetch batch sync state: {:?}", e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Error fetching batch sync state: {}", e),
+                                )
+                                    .into_response()
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -341,8 +381,8 @@ pub async fn wait_for_others_ready(config: &Config) -> Result<()> {
 
 /// Retrieve outputs from a healthcheck endpoint from all other server nodes.
 ///
-/// Upon failure, retrues with wait duration `config.http_query_retry_delay_ms`
-/// between atttempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
+/// Upon failure, retries with wait duration `config.http_query_retry_delay_ms`
+/// between attempts, until `config.startup_sync_timeout_secs` seconds have elapsed.
 pub async fn try_get_endpoint_other_nodes(
     config: &Config,
     endpoint: &str,
