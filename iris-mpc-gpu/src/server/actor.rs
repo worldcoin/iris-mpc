@@ -2224,10 +2224,19 @@ impl ServerActor {
             }
         }
 
-        // Reset the partial counter
+        // Reset the partial results buffers and counter for re-use
+        for dst in [
+            &self.distance_comparator.partial_results_query_indices,
+            &self.distance_comparator.partial_results_db_indices,
+            &self.distance_comparator.partial_match_counter,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        // Reset rotations buffer separately due to different type (i8 vs u32)
         reset_slice(
             self.device_manager.devices(),
-            &self.distance_comparator.partial_match_counter,
+            &self.distance_comparator.partial_results_rotations,
             0,
             &self.streams[0],
         );
@@ -2562,10 +2571,19 @@ impl ServerActor {
             }
         }
 
-        // Reset the partial counter
+        // Reset the partial results buffers and counter for re-use
+        for dst in [
+            &self.distance_comparator.partial_results_query_indices,
+            &self.distance_comparator.partial_results_db_indices,
+            &self.distance_comparator.partial_match_counter,
+        ] {
+            reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
+        }
+
+        // Reset rotations buffer separately due to different type (i8 vs u32)
         reset_slice(
             self.device_manager.devices(),
-            &self.distance_comparator.partial_match_counter,
+            &self.distance_comparator.partial_results_rotations,
             0,
             &self.streams[0],
         );
