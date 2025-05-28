@@ -15,6 +15,10 @@ struct Args {
     // Batch size for processing.
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
+
+    // Whether to perform a snapshot.
+    #[clap(long("perform-snapshot"), default_value = "true")]
+    perform_snapshot: bool,
 }
 
 #[tokio::main]
@@ -56,7 +60,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, height_max, batch_size).await {
+    match exec_main(config, height_max, batch_size, args.perform_snapshot).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }
