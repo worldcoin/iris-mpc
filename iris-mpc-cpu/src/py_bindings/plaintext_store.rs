@@ -74,3 +74,16 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     writer.flush()?;
     Ok(())
 }
+
+// pub fn to_ndjson_file(graph GraphMem<PlaintextStore>, filename: &str) -> std::io::Result<()> {
+//     // Serialize the objects to the file
+//     let file = File::create(filename)?;
+//     let mut writer = BufWriter::new(file);
+//     for pt in &vector.points {
+//         let json_pt: Base64IrisCode = pt.into();
+//         serde_json::to_writer(&mut writer, &json_pt)?;
+//         writer.write_all(b"\n")?; // Write a newline after each JSON object
+//     }
+//     writer.flush()?;
+//     Ok(())
+// }
