@@ -2,6 +2,7 @@
 pub mod aws;
 #[cfg(feature = "helpers")]
 pub mod aws_sigv4;
+pub mod batch_sync;
 #[cfg(feature = "helpers")]
 pub mod inmemory_store;
 #[cfg(feature = "helpers")]
