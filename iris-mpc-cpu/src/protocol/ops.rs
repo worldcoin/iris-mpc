@@ -113,6 +113,10 @@ pub async fn compare_threshold_buckets(
     threshold_a_terms: &[u32],
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<Share<u32>>> {
+    // Return zero shares for each threshold if not shares
+    if distances.is_empty() {
+        return Ok(vec![Share::default(); threshold_a_terms.len()]);
+    }
     let diffs = threshold_a_terms
         .iter()
         .flat_map(|a| {
@@ -124,13 +128,10 @@ pub async fn compare_threshold_buckets(
         })
         .collect_vec();
 
-    tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
     let msbs = extract_msb_u32_batch(session, &diffs).await?;
     let msbs = VecShare::new_vec(msbs);
-    tracing::info!("msbs extracted, now bit_injecting");
     // bit_inject all MSBs into u32 to be able to add them up
     let sums = bit_inject_ot_2round(session, msbs).await?;
-    tracing::info!("bit_inject done, now summing");
     // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
     let buckets = sums
         .into_iter()
