@@ -200,7 +200,7 @@ pub async fn exec_main(
         log_info(String::from("Snapshotting the database"));
         let unix_timestamp = Utc::now().timestamp();
         let snapshot_id = format!(
-            "{}_{}_{}_{}",
+            "genesis-{}-{}-{}-{}",
             last_indexed_id, max_indexation_id, batch_size, unix_timestamp
         );
         let db_config_graph = config
