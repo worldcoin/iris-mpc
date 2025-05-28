@@ -40,7 +40,7 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 4;
 const DEFAULT_BATCH_SIZE: usize = 7;
 const DEFAULT_N_BATCHES: usize = 3;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(5);
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(0);
 const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
@@ -263,7 +263,7 @@ impl E2EClient {
             for handle in handles {
                 handle.await??;
             }
-            println!("Batch {} sent!", batch_idx);
+            println!("Batch {} sent!", batch_idx + 1);
             batch_idx += 1;
             sleep(WAIT_AFTER_BATCH).await;
         }
@@ -337,27 +337,49 @@ impl E2EClient {
                                 party_share_data
                             }
                             1 => {
-                                let locked_responses = responses.lock().await;
-                                let mut locked_response_indices =
-                                    used_response_indices.lock().await;
+                                let new_request_id_for_duplicate = request_id.clone(); // Capture new request_id for clarity
+                                let original_serial_id_to_duplicate;
+                                let duplicated_party_shares;
 
-                                let keys_vec = locked_responses.keys().cloned().collect::<Vec<_>>();
-                                let mut keys_idx = rng.gen_range(0..keys_vec.len());
-                                while locked_response_indices.contains(&keys_vec[keys_idx]) {
-                                    keys_idx = rng.gen_range(0..keys_vec.len());
-                                }
-                                let _ = locked_response_indices.insert(keys_vec[keys_idx]);
-                                let party_shares =
-                                    { locked_responses.get(&keys_vec[keys_idx]).unwrap().clone() };
+                                {
+                                    // Scope for responses and used_response_indices locks
+                                    let locked_responses = responses.lock().await;
+                                    let mut locked_response_indices =
+                                        used_response_indices.lock().await;
+
+                                    let keys_vec =
+                                        locked_responses.keys().cloned().collect::<Vec<_>>();
+                                    let mut keys_idx = rng.gen_range(0..keys_vec.len());
+                                    while locked_response_indices.contains(&keys_vec[keys_idx]) {
+                                        keys_idx = rng.gen_range(0..keys_vec.len());
+                                    }
+                                    original_serial_id_to_duplicate = keys_vec[keys_idx];
+
+                                    let original_party_shares_to_duplicate = locked_responses
+                                        .get(&original_serial_id_to_duplicate)
+                                        .unwrap();
+                                    duplicated_party_shares = original_party_shares_to_duplicate
+                                        .create_duplicate_party_shares(
+                                            new_request_id_for_duplicate.clone(),
+                                        );
+
+                                    locked_response_indices.insert(original_serial_id_to_duplicate);
+                                } // `locked_responses` and `locked_response_indices` are released here
+
                                 {
                                     let mut tmp = expected_results.lock().await;
-                                    tmp.insert(request_id.to_string(), Some(keys_vec[keys_idx]));
+                                    tmp.insert(
+                                        new_request_id_for_duplicate.to_string(),
+                                        Some(original_serial_id_to_duplicate),
+                                    );
                                 }
                                 println!(
-                                    "Sending freshly inserted iris code for request id {} - this is the same as the request id for the {} and serial id {:?}",
-                                    request_id, party_shares.signup_id, Some(keys_vec[keys_idx])
+                                    "Sending freshly inserted iris code for request id {} - this is a duplicate of data originally from serial id {:?}",
+                                    new_request_id_for_duplicate, Some(original_serial_id_to_duplicate)
                                 );
-                                party_shares.create_duplicate_party_shares(request_id.clone())
+                                // The party_shares variable for the outer scope should be the duplicated_party_shares
+                                request_id = new_request_id_for_duplicate; // Ensure outer request_id is the new one
+                                duplicated_party_shares // This becomes the party_shares for the current iteration
                             }
                             _ => unreachable!(),
                         }
@@ -403,7 +425,6 @@ impl E2EClient {
             );
             let mut counter = 0;
             while counter < total_messages {
-                println!("Waiting for message {}/{}...", counter + 1, total_messages);
                 // Receive responses with 2s long polling
                 let msg = sqs_client
                     .receive_message()
