@@ -37,10 +37,11 @@ use tokio::{
 use uuid::Uuid;
 
 const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 4;
-const DEFAULT_BATCH_SIZE: usize = 10;
+const DEFAULT_BATCH_SIZE: usize = 7;
 const DEFAULT_N_BATCHES: usize = 3;
 
 const WAIT_AFTER_BATCH: Duration = Duration::from_secs(5);
+const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
 #[derive(Debug, Parser, Clone)]
@@ -395,11 +396,18 @@ impl E2EClient {
         let responses = self.responses.clone();
 
         spawn(async move {
+            let total_messages = n_queries * 3;
+            println!(
+                "Receiver thread started: expecting {} messages total",
+                total_messages
+            );
             let mut counter = 0;
-            while counter < n_queries * 3 {
-                // Receive responses
+            while counter < total_messages {
+                println!("Waiting for message {}/{}...", counter + 1, total_messages);
+                // Receive responses with 2s long polling
                 let msg = sqs_client
                     .receive_message()
+                    .wait_time_seconds(2)
                     .max_number_of_messages(1)
                     .queue_url(response_queue_url.clone())
                     .send()
@@ -408,6 +416,12 @@ impl E2EClient {
 
                 for msg in msg.messages.unwrap_or_default() {
                     counter += 1;
+                    let remaining = total_messages - counter;
+                    // print only every
+                    println!(
+                        "Received message {}/{} ({} remaining)",
+                        counter, total_messages, remaining
+                    );
 
                     let sns_notification: serde_json::Value =
                         serde_json::from_str(&msg.body.context("No body found")?)
@@ -425,10 +439,6 @@ impl E2EClient {
                     };
                     assert!(expected_result_option.is_some());
                     let expected_result = expected_result_option.unwrap();
-                    println!(
-                        "Received result: {:?} - expected result {:?}",
-                        result, expected_result
-                    );
 
                     if expected_result.is_none() {
                         // New insertion
@@ -458,6 +468,8 @@ impl E2EClient {
                         .await
                         .context("Failed to delete message")?;
                 }
+                // throttle polling interval
+                sleep(RECEIVER_POLL_INTERVAL).await;
             }
             eyre::Ok(())
         })
@@ -504,9 +516,15 @@ impl E2EClient {
         {
             Ok(url) => url,
             Err(e) => {
-                eprintln!("Failed to upload file: {}", e);
-                // ignore the error and continue
-                return Ok(());
+                eprintln!(
+                    "Failed to upload file for signup_id {}: {}",
+                    party_shares.signup_id, e
+                );
+                return Err(eyre::eyre!(
+                    "S3 upload failed for signup_id {}: {}",
+                    party_shares.signup_id,
+                    e
+                ));
             }
         };
 
