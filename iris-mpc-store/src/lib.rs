@@ -10,7 +10,12 @@ use futures::{
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::sync::{Modification, ModificationStatus},
+    helpers::{
+        smpc_request::{
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        },
+        sync::{Modification, ModificationStatus},
+    },
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
     vector_id::{SerialId, VectorId},
@@ -464,6 +469,46 @@ WHERE id = $1;
         let modifications = rows.into_iter().map(Into::into).collect();
         Ok(modifications)
     }
+    // Fetch modifications updated after a certain ID that are less than a serial id.
+    // This is for the genesis protocol to fetch modifications that need to be indexed.
+    pub async fn get_persisted_modifications_after_id(
+        &self,
+        after_modification_id: i64,
+        serial_id_less_than: u32,
+    ) -> Result<Vec<Modification>> {
+        let message_types = &[
+            RESET_UPDATE_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        ];
+
+        let rows = sqlx::query_as::<_, StoredModification>(
+            r#"
+            SELECT
+                id,
+                serial_id,
+                request_type,
+                s3_url,
+                status,
+                persisted,
+                result_message_body
+            FROM modifications
+            WHERE id > $1
+              AND request_type = ANY($2)
+              AND persisted = true
+              AND serial_id <= $3
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(after_modification_id)
+        .bind(message_types)
+        .bind(serial_id_less_than as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let modifications = rows.into_iter().map(Into::into).collect();
+        Ok(modifications)
+    }
 
     /// Update the status, persisted flag, and result_message_body of the
     /// modifications based on their id.
@@ -713,7 +758,7 @@ pub mod tests {
     use futures::TryStreamExt;
     use iris_mpc_common::{
         helpers::{
-            smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+            smpc_request::{RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
             smpc_response::UniquenessResult,
             sync::ModificationStatus,
         },
@@ -1362,6 +1407,168 @@ pub mod tests {
         let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
         assert_eq!(value, None);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_update_modifications_from() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // Insert a variety of modifications with different request types
+        // ID 1: identity_deletion (should be included when persisted = true)
+        let mod1 = store
+            .insert_modification(100, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+
+        // ID 2: reauth (should be included when persisted = true)
+        let mod2 = store
+            .insert_modification(101, REAUTH_MESSAGE_TYPE, Some("http://example.com/reauth"))
+            .await?;
+
+        // ID 3: reset_update (should not be included when persisted = false)
+        store
+            .insert_modification(
+                102,
+                RESET_UPDATE_MESSAGE_TYPE,
+                Some("http://example.com/reset"),
+            )
+            .await?;
+
+        // ID 4: reset_update (should be included when persisted = true)
+        let mod4 = store
+            .insert_modification(
+                103,
+                RESET_UPDATE_MESSAGE_TYPE,
+                Some("http://example.com/reset"),
+            )
+            .await?;
+
+        // ID 4: uniqueness (should NOT be included due to request type)
+        store
+            .insert_modification(
+                104,
+                UNIQUENESS_MESSAGE_TYPE,
+                Some("http://example.com/uniqueness"),
+            )
+            .await?;
+
+        // ID 5: reset_check (should NOT be included due to request type)
+        store
+            .insert_modification(
+                105,
+                RESET_CHECK_MESSAGE_TYPE,
+                Some("http://example.com/reset_check"),
+            )
+            .await?;
+
+        // ID 6: identity_deletion (should NOT be included due to persisted = false)
+        let mod6 = store
+            .insert_modification(106, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .await?;
+
+        // Make modifications 1, 2, 4 persisted = true
+        let mut mod1 = mod1;
+        let mut mod2 = mod2;
+        let mut mod4 = mod4;
+        mod1.mark_completed(true, "result1");
+        mod2.mark_completed(true, "result2");
+        mod4.mark_completed(true, "result4");
+
+        let mut tx = store.tx().await?;
+        store
+            .update_modifications(&mut tx, &[&mod1, &mod2, &mod4])
+            .await?;
+        tx.commit().await?;
+
+        // Test 1: Get all modifications with ID > 0 (should return only the 3 persisted ones with valid request types)
+        let modifications = store.get_persisted_modifications_after_id(0, 106).await?;
+        assert_eq!(
+            modifications.len(),
+            3,
+            "Should return 3 persisted modifications"
+        );
+
+        // Check the specific request types are correct
+        let request_types: Vec<&str> = modifications
+            .iter()
+            .map(|m| m.request_type.as_str())
+            .collect();
+        assert!(
+            request_types[0] == IDENTITY_DELETION_MESSAGE_TYPE,
+            "Should include persisted identity_deletion requests"
+        );
+        assert!(
+            request_types[1] == REAUTH_MESSAGE_TYPE,
+            "Should include persisted reauth requests"
+        );
+        assert!(
+            request_types[2] == RESET_UPDATE_MESSAGE_TYPE,
+            "Should NOT include persisted reset_update requests"
+        );
+
+        // Test 2: Get persisted modifications with ID > 2 (should exclude the first two)
+        let modifications = store.get_persisted_modifications_after_id(2, 106).await?;
+        assert_eq!(
+            modifications.len(),
+            1,
+            "Should return 1 persisted modification"
+        );
+
+        // The IDs should be greater than 2
+        for modification in &modifications {
+            assert!(
+                modification.id > 2,
+                "Modification ID should be greater than 2"
+            );
+            assert!(modification.persisted, "Modification should be persisted");
+        }
+
+        // Make mod6 persisted=true
+        let mut mod6 = mod6;
+        mod6.mark_completed(true, "result6");
+
+        let mut tx = store.tx().await?;
+        store.update_modifications(&mut tx, &[&mod6]).await?;
+        tx.commit().await?;
+
+        // Test 3: Get persisted modifications with ID > 3 (should include ID 4 now)
+        // Should not include the last serial id
+        let modifications = store.get_persisted_modifications_after_id(3, 105).await?;
+        assert_eq!(
+            modifications.len(),
+            1,
+            "Should return 1 persisted modification"
+        );
+        assert_eq!(
+            modifications[0].id, 4,
+            "Should return modification with ID 4"
+        );
+
+        // Test 4: Get modifications with ID > 6 (should return none)
+        let modifications = store.get_persisted_modifications_after_id(7, 106).await?;
+        assert_eq!(modifications.len(), 0, "Should return 0 modifications");
+
+        // Test 5: Get modifications with ID > 0 and serial id is less than 102
+        let modifications = store.get_persisted_modifications_after_id(0, 102).await?;
+        assert_eq!(
+            modifications.len(),
+            2,
+            "Should return 2 persisted modifications"
+        );
+        assert_eq!(
+            modifications[0].id, 1,
+            "Should return modification with ID 1"
+        );
+        assert_eq!(
+            modifications[1].id, 2,
+            "Should return modification with ID 2"
+        );
+
+        cleanup(&postgres_client, &schema_name).await?;
         Ok(())
     }
 }

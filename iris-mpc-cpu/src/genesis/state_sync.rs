@@ -9,6 +9,7 @@ pub struct Config {
     pub last_indexed_id: IrisSerialId,
     pub excluded_serial_ids: Vec<IrisSerialId>,
     pub batch_size: usize,
+    pub max_modification_id: i64,
 }
 
 /// Constructor.
@@ -18,12 +19,14 @@ impl Config {
         last_indexed_id: IrisSerialId,
         excluded_serial_ids: Vec<IrisSerialId>,
         batch_size: usize,
+        max_modification_id: i64,
     ) -> Self {
         Self {
             batch_size,
             max_indexation_id,
             last_indexed_id,
             excluded_serial_ids,
+            max_modification_id,
         }
     }
 }
@@ -90,11 +93,11 @@ mod tests {
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(100, 50, vec![3, 5], 64)
+            Self::new(100, 50, vec![3, 5], 64, 100)
         }
 
         fn new_2() -> Self {
-            Self::new(200, 150, vec![3, 5, 6], 64)
+            Self::new(200, 150, vec![3, 5, 6], 64, 200)
         }
     }
 
