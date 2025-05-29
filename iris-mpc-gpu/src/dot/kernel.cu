@@ -51,7 +51,7 @@ extern "C" __global__ void openResultsBatch(unsigned long long *result1, unsigne
     }
 }
 
-extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned long long *match_distances_indices, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, unsigned long long batch_id, size_t max_batch_size)
+extern "C" __global__ void openResults(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t offset, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned short *match_distances_buffer_codes_a, unsigned short *match_distances_buffer_codes_b, unsigned short *match_distances_buffer_masks_a, unsigned short *match_distances_buffer_masks_b, unsigned int *match_distances_counter, unsigned long long *match_distances_indices, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, signed char *partialResultsRotations, unsigned short *code_dots_a, unsigned short *code_dots_b, unsigned short *mask_dots_a, unsigned short *mask_dots_b, size_t max_bucket_distances, unsigned long long batch_id, size_t max_batch_size)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -83,6 +83,14 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
                 match_distances_buffer_masks_b[match_distances_counter_idx] = mask_dots_b[idx * 64 + i];
             }
 
+            unsigned int matchCounter = atomicAdd(&partialResultsCounter[0], 1);
+            if (matchCounter < MAX_MATCHES_LEN * queryLength) 
+            {
+                partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
+                partialResultsDbIndices[matchCounter] = dbIdx + offset;
+                partialResultsRotations[matchCounter] = (queryIdx % ALL_ROTATIONS) - ROTATIONS;  // Convert to signed range [-15, 15]
+            }
+
             // Mark which results are matches with a bit in the output
             unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx + offset;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
@@ -90,7 +98,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
     }
 }
 
-extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping)
+extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *result1, unsigned long long *result2, unsigned long long *result3, unsigned long long *output, size_t chunkLength, size_t queryLength, size_t numElements, size_t realChunkLen, size_t totalDbLen, unsigned int* indexMapping, unsigned int *partialResultsCounter, unsigned int *partialResultsQueryIndices, unsigned int *partialResultsDbIndices, signed char *partialResultsRotations)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
@@ -108,8 +116,16 @@ extern "C" __global__ void openResultsWithIndexMapping(unsigned long long *resul
                 continue;
             }
 
-            // Mark which results are matches with a bit in the output
             unsigned int dbIdx = indexMapping[chunkDbIdx];
+            unsigned int matchCounter = atomicAdd(&partialResultsCounter[0], 1);
+            if (matchCounter < MAX_MATCHES_LEN * queryLength) 
+            {
+                partialResultsQueryIndices[matchCounter] = queryIdx / ALL_ROTATIONS;
+                partialResultsDbIndices[matchCounter] = dbIdx;
+                partialResultsRotations[matchCounter] = (queryIdx % ALL_ROTATIONS) - ROTATIONS;  // Convert to signed range [-15, 15]
+            }
+
+            // Mark which results are matches with a bit in the output
             unsigned int outputIdx = totalDbLen * (queryIdx / ALL_ROTATIONS) + dbIdx;
             atomicOr(&output[outputIdx / 64], (1ULL << (outputIdx % 64)));
         }
@@ -143,7 +159,7 @@ extern "C" __global__ void partialDbResults(unsigned long long *matchResults, un
     }
 }
 
-extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight)
+extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches)
 {
 
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -160,20 +176,6 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
             if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
 
-            // Check for partial results (only used for debugging)
-            if (matchLeft)
-            {
-                unsigned int queryMatchCounter = atomicAdd(&matchCounterLeft[queryIdx], 1);
-                if (queryMatchCounter < MAX_MATCHES_LEN)
-                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
-            }
-            if (matchRight)
-            {
-                unsigned int queryMatchCounter = atomicAdd(&matchCounterRight[queryIdx], 1);
-                if (queryMatchCounter < MAX_MATCHES_LEN)
-                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + queryMatchCounter] = dbIdx;
-            }
-
             // Current *AND* policy: only match, if both eyes match
             if (matchLeft && matchRight)
             {
@@ -186,7 +188,7 @@ extern "C" __global__ void mergeDbResults(unsigned long long *matchResultsLeft, 
     }
 }
 
-extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *matchCounterLeft, unsigned int *matchCounterRight, unsigned int *partialResultsLeft, unsigned int *partialResultsRight, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId)
+extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *matchResultsLeft, unsigned long long *matchResultsRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, size_t maxDbLength, unsigned int *matchCounter, unsigned int *allMatches, const unsigned long long *orPolicyBitmap, size_t numDevices, size_t deviceId)
 {
 
     size_t rowStride64 = (maxDbLength + 63) / 64;
@@ -211,20 +213,6 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
             // Check bounds
             if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
-
-            // Check for partial results (only used for debugging)
-            if (matchLeft)
-            {
-                unsigned int qmcL = atomicAdd(&matchCounterLeft[queryIdx], 1);
-                if (qmcL < MAX_MATCHES_LEN)
-                    partialResultsLeft[MAX_MATCHES_LEN * queryIdx + qmcL] = dbIdx;
-            }
-            if (matchRight)
-            {
-                unsigned int qmcR = atomicAdd(&matchCounterRight[queryIdx], 1);
-                if (qmcR < MAX_MATCHES_LEN)
-                    partialResultsRight[MAX_MATCHES_LEN * queryIdx + qmcR] = dbIdx;
-            }
 
             size_t rowIndex = queryIdx * rowStride64;
 
@@ -254,7 +242,7 @@ extern "C" __global__ void mergeDbResultsWithOrPolicyBitmap(unsigned long long *
 }
 
 
-extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches, unsigned int *__matchCounterLeft, unsigned int *__matchCounterRight, unsigned int *__partialResultsLeft, unsigned int *__partialResultsRight)
+extern "C" __global__ void mergeBatchResults(unsigned long long *matchResultsSelfLeft, unsigned long long *matchResultsSelfRight, unsigned int *finalResults, size_t queryLength, size_t dbLength, size_t numElements, unsigned int *matchCounter, unsigned int *allMatches)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
