@@ -1,7 +1,7 @@
 use super::utils::{errors::IndexationError, logger};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
-use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
 use iris_mpc_store::{DbStoredIris, Store};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -10,12 +10,13 @@ use sqlx::{Postgres, Transaction};
 const COMPONENT: &str = "State-Accessor";
 
 /// Domain for persistent state store entry for last indexed id
-const STATE_DOMAIN_LAST_INDEXED: &str = "genesis";
+const STATE_DOMAIN_GENESIS: &str = "genesis";
 
 /// Key for persistent state store entry for last indexed id
 const STATE_KEY_LAST_INDEXED: &str = "id_of_last_indexed";
+
 /// Key for persistent state store entry for last indexed modification id
-const STATE_KEY_MODIFICATION_ID_LAST_INDEXED: &str = "id_of_last_indexed_modification";
+const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "id_of_last_indexed_modification";
 
 /// Fetch a batch of iris data for indexation.
 ///
@@ -114,26 +115,38 @@ pub async fn fetch_iris_deletions(
     Ok(s3_object.deleted_serial_ids)
 }
 
-/// Gets the modification id of the last indexed modification.
+/// Fetch Iris modifications that need to be applied post indexation phase one.
 ///
 /// # Arguments
 ///
 /// * `iris_store` - Iris PostgreSQL store provider.
+/// * `after_modification_id` - Set of Iris serial identifiers within batch.
+/// * `serial_id_less_than` - Set of Iris serial identifiers within batch.
 ///
 /// # Returns
 ///
-/// The modification id of the last indexed modification, or 0 if no modification id is recorded.
+/// 2 member tuple: (Modification data, Last modification ID).
 ///
-pub async fn get_last_indexed_modification_id(iris_store: &Store) -> Result<i64> {
-    let id = iris_store
-        .get_persistent_state(
-            STATE_DOMAIN_LAST_INDEXED,
-            STATE_KEY_MODIFICATION_ID_LAST_INDEXED,
-        )
-        .await?
-        .unwrap_or(0);
+pub async fn fetch_iris_modifications(
+    iris_store: &Store,
+    from_modification_id: i64,
+    to_serial_id: u32,
+) -> Result<(Vec<Modification>, i64), IndexationError> {
+    logger::log_info(
+        COMPONENT,
+        format!(
+            "Fetching Iris modifications for indexation: from-modification-id={} :: to-serial-id={}",
+            from_modification_id, to_serial_id
+        ),
+    );
 
-    Ok(id)
+    let data = iris_store
+        .get_persisted_modifications_after_id(from_modification_id, to_serial_id)
+        .await
+        .map_err(|err| IndexationError::PostgresFetchModificationBatch(err.to_string()))?;
+    let last_id = data.last().map(|m| m.id).unwrap_or(0);
+
+    Ok((data, last_id))
 }
 
 /// Get serial id of last iris to have been indexed.
@@ -148,7 +161,26 @@ pub async fn get_last_indexed_modification_id(iris_store: &Store) -> Result<i64>
 ///
 pub async fn get_last_indexed_id(iris_store: &Store) -> Result<IrisSerialId> {
     let id = iris_store
-        .get_persistent_state(STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED)
+        .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
+        .await?
+        .unwrap_or(0);
+
+    Ok(id)
+}
+
+/// Gets the modification id of the last indexed modification.
+///
+/// # Arguments
+///
+/// * `iris_store` - Iris PostgreSQL store provider.
+///
+/// # Returns
+///
+/// The modification id of the last indexed modification, or 0 if no modification id is recorded.
+///
+pub async fn get_last_indexed_modification_id(iris_store: &Store) -> Result<i64> {
+    let id = iris_store
+        .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
         .await?
         .unwrap_or(0);
 
@@ -180,13 +212,7 @@ pub async fn set_last_indexed_id(
     tx: &mut Transaction<'_, Postgres>,
     value: IrisSerialId,
 ) -> Result<()> {
-    Store::set_persistent_state(
-        tx,
-        STATE_DOMAIN_LAST_INDEXED,
-        STATE_KEY_LAST_INDEXED,
-        &value,
-    )
-    .await
+    Store::set_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED, &value).await
 }
 
 /// Sets the last indexed modification id.
@@ -206,8 +232,8 @@ pub async fn set_last_indexed_modification_id(
 ) -> Result<()> {
     Store::set_persistent_state(
         tx,
-        STATE_DOMAIN_LAST_INDEXED,
-        STATE_KEY_MODIFICATION_ID_LAST_INDEXED,
+        STATE_DOMAIN_GENESIS,
+        STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
         &value,
     )
     .await
@@ -224,12 +250,33 @@ pub async fn set_last_indexed_modification_id(
 /// Result<()> on success
 ///
 pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    Store::delete_persistent_state(tx, STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED).await
+    Store::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED).await
+}
+
+/// Unsets serial id of last Iris to have been indexed.
+///
+/// # Arguments
+///
+/// * `tx` - PostgreSQL transaction to use for operation scope.
+///
+/// # Returns
+///
+/// Result<()> on success
+///
+pub async fn unset_last_indexed_modification_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    Store::delete_persistent_state(
+        tx,
+        STATE_DOMAIN_GENESIS,
+        STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+    )
+    .await
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
+// #[cfg(feature = "db_dependent")]
 mod tests {
+    use crate::genesis::state_accessor::unset_last_indexed_modification_id;
+
     use super::{
         fetch_iris_batch, get_last_indexed_id, get_last_indexed_modification_id,
         set_last_indexed_id, set_last_indexed_modification_id, unset_last_indexed_id,
@@ -350,6 +397,15 @@ mod tests {
         // Get -> should be 999.
         let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
         assert_eq!(modification_id_of_last_indexed, 999);
+
+        // Unset.
+        let mut tx = iris_store.tx().await?;
+        unset_last_indexed_modification_id(&mut tx).await?;
+        tx.commit().await?;
+
+        // Get -> should be 0.
+        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        assert_eq!(modification_id_of_last_indexed, 0);
 
         // Unset resources.
         cleanup(&pg_client, &pg_schema).await?;
