@@ -21,7 +21,7 @@ jobs:
         include:
           - runner: ubuntu-22.04-16core
             platform: linux/amd64
-          - runner: arm-ubuntu-22.04-16core
+          - runner: arm64-ubuntu-22.04-16core
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     permissions:
