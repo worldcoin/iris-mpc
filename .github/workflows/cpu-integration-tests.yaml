@@ -13,8 +13,13 @@ env:
 jobs:
   integration-tests:
     timeout-minutes: 20
-    runs-on:
-      labels: ubuntu-22.04-16core
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04-16core
+            platform: linux/amd64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -44,6 +49,9 @@ jobs:
           file: Dockerfile.dev.hawk
           load: true
           tags: hawk-server-local-build:latest
+          platforms: ${{ matrix.platform }}
+          cache-from: type=gha,scope=${{ github.repository }}-${{ github.ref_name }}-${{ matrix.platform }}
+          cache-to: type=gha,scope=${{ github.repository }}-${{ github.ref_name }}-${{ matrix.platform }},mode=max
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@8be2d741e891ac9b8ac20825e6f3904149599925
