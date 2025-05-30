@@ -154,7 +154,7 @@ pub async fn fetch_iris_modifications(
 ///
 /// # Arguments
 ///
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
 ///
 /// # Returns
 ///
@@ -162,7 +162,26 @@ pub async fn fetch_iris_modifications(
 ///
 pub async fn get_last_indexed_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
     let id = graph_store
-        .get_persistent_state(STATE_DOMAIN_LAST_INDEXED, STATE_KEY_LAST_INDEXED)
+        .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
+        .await?
+        .unwrap_or(0);
+
+    Ok(id)
+}
+
+/// Gets the modification id of the last indexed modification.
+///
+/// # Arguments
+///
+/// * `graph_store` - Graph PostgreSQL store provider.
+///
+/// # Returns
+///
+/// The modification id of the last indexed modification, or 0 if no modification id is recorded.
+///
+pub async fn get_last_indexed_modification_id(graph_store: &GraphPg<Aby3Store>) -> Result<i64> {
+    let id = graph_store
+        .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
         .await?
         .unwrap_or(0);
 
@@ -194,7 +213,13 @@ pub async fn set_last_indexed_id(
     tx: &mut Transaction<'_, Postgres>,
     value: IrisSerialId,
 ) -> Result<()> {
-    Store::set_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED, &value).await
+    GraphPg::<Aby3Store>::set_persistent_state(
+        tx,
+        STATE_DOMAIN_GENESIS,
+        STATE_KEY_LAST_INDEXED,
+        &value,
+    )
+    .await
 }
 
 /// Sets the last indexed modification id.
@@ -212,7 +237,7 @@ pub async fn set_last_indexed_modification_id(
     tx: &mut Transaction<'_, Postgres>,
     value: i64,
 ) -> Result<()> {
-    Store::set_persistent_state(
+    GraphPg::<Aby3Store>::set_persistent_state(
         tx,
         STATE_DOMAIN_GENESIS,
         STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
@@ -232,8 +257,8 @@ pub async fn set_last_indexed_modification_id(
 /// Result<()> on success
 ///
 pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-<<<<<<< HEAD
-    Store::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED).await
+    GraphPg::<Aby3Store>::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
+        .await
 }
 
 /// Unsets serial id of last Iris to have been indexed.
@@ -247,22 +272,16 @@ pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result
 /// Result<()> on success
 ///
 pub async fn unset_last_indexed_modification_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    Store::delete_persistent_state(
+    GraphPg::<Aby3Store>::delete_persistent_state(
         tx,
         STATE_DOMAIN_GENESIS,
         STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
-=======
-    GraphPg::<Aby3Store>::delete_persistent_state(
-        tx,
-        STATE_DOMAIN_LAST_INDEXED,
-        STATE_KEY_LAST_INDEXED,
->>>>>>> 32a6e4ed (Migrate persisted state to the graph store)
     )
     .await
 }
 
 #[cfg(test)]
-// #[cfg(feature = "db_dependent")]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use crate::genesis::state_accessor::unset_last_indexed_modification_id;
 
@@ -298,9 +317,10 @@ mod tests {
         let pg_schema = temporary_name();
         let pg_client =
             PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+        // Set graph store
         let graph_store = GraphPg::new(&pg_client).await?;
 
-        // Set store.
+        // Set iris store.
         let iris_store = IrisStore::new(&pg_client).await?;
 
         // Set dB with 100 Iris's.
@@ -319,7 +339,7 @@ mod tests {
     #[tokio::test]
     async fn test_id_of_last_indexed() -> Result<()> {
         // Set resources.
-        let (iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (_iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
         let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
@@ -327,7 +347,8 @@ mod tests {
 
         // Set -> 10.
         let id_of_last_indexed = 10_u32;
-        let mut tx = iris_store.tx().await?;
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
         set_last_indexed_id(&mut tx, id_of_last_indexed).await?;
         tx.commit().await?;
 
@@ -336,7 +357,8 @@ mod tests {
         assert_eq!(id_of_last_indexed, 10);
 
         // Unset.
-        let mut tx = iris_store.tx().await?;
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
         unset_last_indexed_id(&mut tx).await?;
         tx.commit().await?;
 
@@ -368,39 +390,46 @@ mod tests {
     #[tokio::test]
     async fn test_modification_id_of_last_indexed() -> Result<()> {
         // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (_iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 0);
 
         // Set -> 42.
         let modification_id_of_last_indexed = 42_i64;
-        let mut tx = iris_store.tx().await?;
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
         set_last_indexed_modification_id(&mut tx, modification_id_of_last_indexed).await?;
         tx.commit().await?;
 
         // Get -> should be 42.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 42);
 
         // Set -> 999.
         let modification_id_of_last_indexed = 999_i64;
-        let mut tx = iris_store.tx().await?;
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
         set_last_indexed_modification_id(&mut tx, modification_id_of_last_indexed).await?;
         tx.commit().await?;
 
         // Get -> should be 999.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 999);
 
         // Unset.
-        let mut tx = iris_store.tx().await?;
+        let graph_tx = graph_store.tx().await?;
+        let mut tx = graph_tx.tx;
         unset_last_indexed_modification_id(&mut tx).await?;
         tx.commit().await?;
 
         // Get -> should be 0.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 0);
 
         // Unset resources.
