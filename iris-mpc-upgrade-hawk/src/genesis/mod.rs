@@ -1,9 +1,11 @@
 use aws_config::retry::RetryConfig;
+use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
     Client as S3Client,
 };
 use aws_sdk_sqs::Client as SQSClient;
+use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
@@ -53,6 +55,7 @@ pub async fn exec_main(
     config: Config,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    perform_snapshot: bool,
 ) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
@@ -70,7 +73,7 @@ pub async fn exec_main(
 
     // Process: set service clients.
     // Set service clients.
-    let ((aws_s3_client, sqs_client), iris_store, graph_store) =
+    let ((aws_s3_client, sqs_client, rds_client), iris_store, graph_store) =
         get_service_clients(&config).await?;
     log_info(String::from("Service clients instantiated"));
 
@@ -191,6 +194,24 @@ pub async fn exec_main(
         tx_results,
     )
     .await?;
+
+    // snapshot the database at the end of the process
+    if perform_snapshot {
+        log_info(String::from("Snapshotting the database"));
+        let unix_timestamp = Utc::now().timestamp();
+        let snapshot_id = format!(
+            "genesis-{}-{}-{}-{}",
+            last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+        );
+        let db_config_graph = config
+            .cpu_database
+            .as_ref()
+            .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+        snapshot_rds(&rds_client, &db_config_graph.url, &snapshot_id).await?;
+        log_info(format!("Snapshot created: {}", snapshot_id));
+    } else {
+        log_info(String::from("Skipping database snapshot as requested"));
+    }
 
     Ok(())
 }
@@ -358,9 +379,16 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
 ///
 async fn get_service_clients(
     config: &Config,
-) -> Result<((S3Client, SQSClient), IrisStore, GraphPg<Aby3Store>), Report> {
+) -> Result<
+    (
+        (S3Client, SQSClient, RDSClient),
+        IrisStore,
+        GraphPg<Aby3Store>,
+    ),
+    Report,
+> {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient) {
+    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient, RDSClient) {
         // Get region from config or use default
         let region = config
             .clone()
@@ -376,7 +404,8 @@ async fn get_service_clients(
             .retry_config(retry_config.clone())
             .build();
         let sqs_client = SQSClient::new(&shared_config);
-        (S3Client::from_conf(s3_config), sqs_client)
+        let rds_client = RDSClient::new(&shared_config);
+        (S3Client::from_conf(s3_config), sqs_client, rds_client)
     }
 
     /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
@@ -432,9 +461,9 @@ async fn get_service_clients(
     }
 
     let pgres_clients = get_pgres_clients(config).await?;
-    let aws_s3_client = get_aws_client(config).await;
+    let aws_clients = get_aws_client(config).await;
 
-    Ok((aws_s3_client, pgres_clients.0, pgres_clients.1))
+    Ok((aws_clients, pgres_clients.0, pgres_clients.1))
 }
 
 /// Build this node's synchronization state, which is compared against the
@@ -488,6 +517,53 @@ async fn get_sync_result(
     let result = GenesisSyncResult::new(my_state.clone(), all_states);
 
     Ok(result)
+}
+
+/// Snapshots the RDS cluster.
+///
+/// # Arguments
+///
+/// * `client` - AWS RDS SDK client.
+/// * `db_instance_id` - RDS instance identifier.
+/// * `snapshot_id` - Snapshot identifier.
+///
+async fn snapshot_rds(
+    client: &RDSClient,
+    db_cluster_endpoint: &str,
+    snapshot_id: &str,
+) -> Result<()> {
+    let url = db_cluster_endpoint
+        .strip_prefix("postgresql://")
+        .ok_or(eyre!("HNSW GENESIS :: Server :: Invalid Postgres URL"))?;
+
+    let at_pos = url
+        .rfind('@')
+        .ok_or(eyre!("HNSW GENESIS :: Server :: No @ found in URL"))?;
+    let host_and_db = &url[at_pos + 1..];
+    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
+    let cluster_endpoint = &host_and_db[..slash_pos];
+
+    let resp = client.describe_db_clusters().send().await?;
+
+    let cluster_id = resp
+        .db_clusters()
+        .iter()
+        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+        .and_then(|cluster| cluster.db_cluster_identifier())
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Cluster ID not found for snapshot"
+        ))?;
+
+    log_info(format!("Creating RDS snapshot for cluster: {}", cluster_id));
+
+    client
+        .create_db_cluster_snapshot()
+        .db_cluster_identifier(cluster_id)
+        .db_cluster_snapshot_identifier(snapshot_id)
+        .send()
+        .await?;
+
+    Ok(())
 }
 
 /// Initializes HNSW graph from data previously persisted to a store.
