@@ -126,6 +126,7 @@ pub async fn exec_main(
     let my_state = get_sync_state(
         &config,
         batch_size,
+        batch_size_error_rate,
         max_indexation_id,
         last_indexed_id,
         &excluded_serial_ids,
@@ -561,6 +562,7 @@ async fn get_service_clients(
 async fn get_sync_state(
     config: &Config,
     batch_size: usize,
+    batch_size_error_rate: usize,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
@@ -569,6 +571,7 @@ async fn get_sync_state(
     let common_config = CommonConfig::from(config.clone());
     let genesis_config = GenesisConfig::new(
         batch_size,
+        batch_size_error_rate,
         excluded_serial_ids.to_vec(),
         last_indexed_id,
         max_indexation_id,
