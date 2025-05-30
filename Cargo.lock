@@ -351,6 +351,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-sdk-rds"
+version = "1.69.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4f32fa128c932318443a7844a15c99c40629026abf4b1b163045dd38d07591b"
+dependencies = [
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-sigv4",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json 0.61.1",
+ "aws-smithy-query",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-types",
+ "aws-smithy-xml",
+ "aws-types",
+ "http 0.2.12",
+ "once_cell",
+ "regex-lite",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "aws-sdk-s3"
 version = "1.65.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2483,9 +2508,9 @@ name = "iris-mpc-upgrade-hawk"
 version = "0.1.0"
 dependencies = [
  "aws-config",
+ "aws-sdk-rds",
  "aws-sdk-s3",
  "aws-sdk-secretsmanager",
- "aws-sdk-sns",
  "aws-sdk-sqs",
  "base64 0.22.1",
  "bytemuck",
@@ -2632,7 +2657,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

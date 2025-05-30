@@ -5,25 +5,37 @@ use serde::{Deserialize, Serialize};
 /// Encpasulates common Genesis specific configuration information.  This is a network level type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
-    pub max_indexation_id: IrisSerialId,
-    pub last_indexed_id: IrisSerialId,
-    pub excluded_serial_ids: Vec<IrisSerialId>,
+    // Size of indexation batch.
     pub batch_size: usize,
+
+    // Set of identifiers of Iris's to be excluded from indexation.
+    pub excluded_serial_ids: Vec<IrisSerialId>,
+
+    // Identifier of last Iris serial ID to have been indexed.
+    pub last_indexed_id: IrisSerialId,
+
+    // Identifier of the last Iris serial ID to be indexed.
+    pub max_indexation_id: IrisSerialId,
+
+    // Identifier of the last modification ID to be indexed.
+    pub max_modification_id: i64,
 }
 
 /// Constructor.
 impl Config {
     pub fn new(
-        max_indexation_id: IrisSerialId,
-        last_indexed_id: IrisSerialId,
-        excluded_serial_ids: Vec<IrisSerialId>,
         batch_size: usize,
+        excluded_serial_ids: Vec<IrisSerialId>,
+        last_indexed_id: IrisSerialId,
+        max_indexation_id: IrisSerialId,
+        max_modification_id: i64,
     ) -> Self {
         Self {
             batch_size,
-            max_indexation_id,
-            last_indexed_id,
             excluded_serial_ids,
+            last_indexed_id,
+            max_indexation_id,
+            max_modification_id,
         }
     }
 }
@@ -90,11 +102,11 @@ mod tests {
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(100, 50, vec![3, 5], 64)
+            Self::new(64, vec![3, 5], 50, 100, 100)
         }
 
         fn new_2() -> Self {
-            Self::new(200, 150, vec![3, 5, 6], 64)
+            Self::new(64, vec![3, 5, 6], 150, 200, 200)
         }
     }
 

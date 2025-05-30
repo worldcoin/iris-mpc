@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 aws-config.workspace = true
-aws-sdk-sns.workspace = true
+aws-sdk-rds = { version = "1.44.0" }
 aws-sdk-sqs.workspace = true
 aws-sdk-s3.workspace = true
 aws-sdk-secretsmanager.workspace = true

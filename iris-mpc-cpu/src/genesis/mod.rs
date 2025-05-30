@@ -8,7 +8,10 @@ pub mod utils;
 pub use batch_generator::{Batch, BatchGenerator, BatchIterator};
 pub use hawk_handle::Handle;
 pub use hawk_job::{Job, JobRequest, JobResult};
-pub use state_accessor::{fetch_iris_deletions, get_last_indexed_id, set_last_indexed_id};
+pub use state_accessor::{
+    fetch_iris_deletions, get_last_indexed_id, get_last_indexed_modification_id,
+    set_last_indexed_id, set_last_indexed_modification_id,
+};
 pub use utils::logger;
 pub use utils::{
     errors::IndexationError,
