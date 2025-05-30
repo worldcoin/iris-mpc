@@ -69,7 +69,7 @@ env:
     value: "true"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
-    value: "5"
+    value: "25"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "false"
