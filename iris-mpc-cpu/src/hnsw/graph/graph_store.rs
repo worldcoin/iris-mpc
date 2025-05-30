@@ -10,18 +10,15 @@ use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
-use sqlx::{
-    error::BoxDynError,
-    postgres::PgRow,
-    types::{Json, Text},
-    PgConnection, Postgres, Row, Transaction,
-};
+use serde::{Deserialize, Serialize};
+use sqlx::{error::BoxDynError, types::Text, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks<V: VectorStore> {
     source_ref: Text<V::VectorRef>,
-    links: Json<SortedEdgeIds<V::VectorRef>>,
+    // this is a serialized SortedEdgeIds<V::VectorRef> (using bincode)
+    links: Vec<u8>,
     layer: i32,
 }
 
@@ -82,7 +79,10 @@ pub struct GraphOps<'a, 'b, V> {
     borrowable_sql: String,
 }
 
-impl<V: VectorStore> GraphOps<'_, '_, V> {
+impl<V: VectorStore> GraphOps<'_, '_, V>
+where
+    V::VectorRef: Sized + Serialize + for<'a> Deserialize<'a>,
+{
     fn entry_table(&self) -> String {
         format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
     }
@@ -138,22 +138,28 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
 
     pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
         let table = self.entry_table();
-        sqlx::query(&format!(
+        let opt = sqlx::query(&format!(
             "SELECT entry_point FROM {table} WHERE graph_id = $1"
         ))
         .bind(self.graph_id())
         .fetch_optional(self.tx())
         .await
-        .map_err(|e| eyre!("Failed to fetch entry point: {e}"))
-        .map(|row| {
-            row.map(|row: PgRow| {
-                let x: Json<EntryPoint<V::VectorRef>> = row.get("entry_point");
-                (x.point.clone(), x.layer)
-            })
-        })
+        .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
+
+        if let Some(row) = opt {
+            let entry_point: Vec<u8> = row.get("entry_point");
+            let x: EntryPoint<V::VectorRef> = bincode::deserialize(&entry_point)
+                .map_err(|e| eyre!("Failed to deserialize entry point: {e}"))?;
+            Ok(Some((x.point, x.layer)))
+        } else {
+            Ok(None)
+        }
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
+        let entry_buf = bincode::serialize(&EntryPoint { point, layer })
+            .map_err(|e| eyre!("Failed to serialize entry point: {e}"))?;
+
         let table = self.entry_table();
         sqlx::query(&format!(
             "
@@ -162,7 +168,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
             DO UPDATE SET entry_point = EXCLUDED.entry_point"
         ))
         .bind(self.graph_id())
-        .bind(Json(&EntryPoint { point, layer }))
+        .bind(entry_buf)
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set entry point: {e}"))?;
@@ -176,7 +182,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         lc: usize,
     ) -> Result<SortedEdgeIds<V::VectorRef>> {
         let table = self.links_table();
-        sqlx::query(&format!(
+        let opt = sqlx::query(&format!(
             "
             SELECT links FROM {table}
             WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
@@ -187,14 +193,14 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(lc as i32)
         .fetch_optional(self.tx())
         .await
-        .map_err(|e| eyre!("Failed to fetch links: {e}"))
-        .map(|row| {
-            row.map(|row: PgRow| {
-                let x: Json<SortedEdgeIds<V::VectorRef>> = row.get("links");
-                x.as_ref().clone()
-            })
-            .unwrap_or_default()
-        })
+        .map_err(|e| eyre!("Failed to fetch links: {e}"))?;
+
+        if let Some(row) = opt {
+            let links: Vec<u8> = row.get("links");
+            bincode::deserialize(&links).map_err(|e| eyre!("Failed to deserialize links: {e}"))
+        } else {
+            Ok(SortedEdgeIds::default())
+        }
     }
 
     pub async fn set_links(
@@ -203,6 +209,9 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         links: SortedEdgeIds<V::VectorRef>,
         lc: usize,
     ) -> Result<()> {
+        let links =
+            bincode::serialize(&links).map_err(|e| eyre!("Failed to serialize links: {e}"))?;
+
         let table = self.links_table();
         sqlx::query(&format!(
             "
@@ -215,7 +224,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
         .bind(self.graph_id())
         .bind(Text(base))
         .bind(lc as i32)
-        .bind(Json(&links))
+        .bind(links)
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set links: {e}"))?;
@@ -226,7 +235,7 @@ impl<V: VectorStore> GraphOps<'_, '_, V> {
 
 impl<V: VectorStore> GraphOps<'_, '_, V>
 where
-    V::VectorRef: Send + Unpin + 'static,
+    V::VectorRef: Serialize + for<'a> Deserialize<'a> + Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
@@ -258,8 +267,9 @@ where
         let mut irises = self.stream_links();
         while let Some(row) = irises.next().await {
             let row = row?;
+            let links = bincode::deserialize(&row.links)?;
             graph_mem
-                .set_links(row.source_ref.0, row.links.0, row.layer as usize)
+                .set_links(row.source_ref.0, links, row.layer as usize)
                 .await;
             count += 1;
             if count % 100000 == 0 {
