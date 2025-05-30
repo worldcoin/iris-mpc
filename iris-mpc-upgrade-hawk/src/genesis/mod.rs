@@ -82,7 +82,7 @@ pub async fn exec_main(
     log_info(String::from("Service clients instantiated"));
 
     // Process: set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed_id(&iris_store).await?;
+    let last_indexed_id = get_last_indexed_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,

@@ -1,4 +1,5 @@
 use super::utils::{errors::IndexationError, logger};
+use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
@@ -162,15 +163,15 @@ pub async fn fetch_iris_modifications(
 ///
 /// # Arguments
 ///
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
 ///
 /// # Returns
 ///
 /// Serial id of the last indexed iris, or 0 if no serial id is recorded.
 ///
-pub async fn get_last_indexed_id(iris_store: &Store) -> Result<IrisSerialId> {
-    let id = iris_store
-        .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
+pub async fn get_last_indexed_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
+    let id = graph_store
+        .get_persistent_state(STATE_KEY_LAST_INDEXED, STATE_KEY_LAST_INDEXED)
         .await?
         .unwrap_or(0);
 
@@ -181,14 +182,14 @@ pub async fn get_last_indexed_id(iris_store: &Store) -> Result<IrisSerialId> {
 ///
 /// # Arguments
 ///
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `graph_store` - Graph PostgreSQL store provider.
 ///
 /// # Returns
 ///
 /// The modification id of the last indexed modification, or 0 if no modification id is recorded.
 ///
-pub async fn get_last_indexed_modification_id(iris_store: &Store) -> Result<i64> {
-    let id = iris_store
+pub async fn get_last_indexed_modification_id(graph_store: &GraphPg<Aby3Store>) -> Result<i64> {
+    let id = graph_store
         .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
         .await?
         .unwrap_or(0);
@@ -221,7 +222,13 @@ pub async fn set_last_indexed_id(
     tx: &mut Transaction<'_, Postgres>,
     value: IrisSerialId,
 ) -> Result<()> {
-    Store::set_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED, &value).await
+    GraphPg::<Aby3Store>::set_persistent_state(
+        tx,
+        STATE_DOMAIN_GENESIS,
+        STATE_KEY_LAST_INDEXED,
+        &value,
+    )
+    .await
 }
 
 /// Sets the last indexed modification id.
@@ -239,7 +246,7 @@ pub async fn set_last_indexed_modification_id(
     tx: &mut Transaction<'_, Postgres>,
     value: i64,
 ) -> Result<()> {
-    Store::set_persistent_state(
+    GraphPg::<Aby3Store>::set_persistent_state(
         tx,
         STATE_DOMAIN_GENESIS,
         STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
@@ -259,7 +266,8 @@ pub async fn set_last_indexed_modification_id(
 /// Result<()> on success
 ///
 pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    Store::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED).await
+    GraphPg::<Aby3Store>::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
+        .await
 }
 
 /// Unsets serial id of last Iris to have been indexed.
@@ -273,7 +281,7 @@ pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result
 /// Result<()> on success
 ///
 pub async fn unset_last_indexed_modification_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
-    Store::delete_persistent_state(
+    GraphPg::<Aby3Store>::delete_persistent_state(
         tx,
         STATE_DOMAIN_GENESIS,
         STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
@@ -290,6 +298,7 @@ mod tests {
         fetch_iris_batch, get_last_indexed_id, get_last_indexed_modification_id,
         set_last_indexed_id, set_last_indexed_modification_id, unset_last_indexed_id,
     };
+    use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
     use eyre::Result;
     use iris_mpc_common::{
         postgres::{AccessMode, PostgresClient, PostgresSchemaName},
@@ -307,11 +316,17 @@ mod tests {
     const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
 
     // Returns a set of test resources.
-    async fn get_resources() -> Result<(IrisStore, PostgresClient, PostgresSchemaName)> {
+    async fn get_resources() -> Result<(
+        IrisStore,
+        GraphPg<Aby3Store>,
+        PostgresClient,
+        PostgresSchemaName,
+    )> {
         // Set PostgreSQL client + store.
         let pg_schema = temporary_name();
         let pg_client =
             PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+        let graph_store = GraphPg::new(&pg_client).await?;
 
         // Set store.
         let iris_store = IrisStore::new(&pg_client).await?;
@@ -326,16 +341,16 @@ mod tests {
             )
             .await?;
 
-        Ok((iris_store, pg_client, pg_schema))
+        Ok((iris_store, graph_store, pg_client, pg_schema))
     }
 
     #[tokio::test]
     async fn test_id_of_last_indexed() -> Result<()> {
         // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
-        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Set -> 10.
@@ -345,7 +360,7 @@ mod tests {
         tx.commit().await?;
 
         // Get -> should be 10.
-        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 10);
 
         // Unset.
@@ -354,7 +369,7 @@ mod tests {
         tx.commit().await?;
 
         // Get -> should be 0.
-        let id_of_last_indexed = get_last_indexed_id(&iris_store).await?;
+        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Unset resources.
@@ -366,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_iris_batch() -> Result<()> {
         // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (iris_store, _graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         let identifiers: Vec<IrisSerialId> = (1..11).collect_vec();
         let data = fetch_iris_batch(&iris_store, identifiers).await.unwrap();
@@ -381,10 +396,11 @@ mod tests {
     #[tokio::test]
     async fn test_modification_id_of_last_indexed() -> Result<()> {
         // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 0);
 
         // Set -> 42.
@@ -394,7 +410,8 @@ mod tests {
         tx.commit().await?;
 
         // Get -> should be 42.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 42);
 
         // Set -> 999.
@@ -404,7 +421,8 @@ mod tests {
         tx.commit().await?;
 
         // Get -> should be 999.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 999);
 
         // Unset.
@@ -413,7 +431,8 @@ mod tests {
         tx.commit().await?;
 
         // Get -> should be 0.
-        let modification_id_of_last_indexed = get_last_indexed_modification_id(&iris_store).await?;
+        let modification_id_of_last_indexed =
+            get_last_indexed_modification_id(&graph_store).await?;
         assert_eq!(modification_id_of_last_indexed, 0);
 
         // Unset resources.
