@@ -26,7 +26,7 @@ use eyre::Result;
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE},
+    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     statistics::BucketStatistics,
 };
 use iris_mpc_common::job::Eye;
@@ -39,6 +39,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
+    RequestType, UniquenessRequest,
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -49,6 +50,7 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Not,
     sync::Arc,
     time::{Duration, Instant},
     vec,
@@ -159,6 +161,10 @@ pub enum Orientation {
     Normal,
     Mirror,
 }
+
+// TODO: Merge with the same in iris-mpc-gpu.
+/// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
+const NON_MATCH_ID: u32 = u32::MAX;
 
 impl std::fmt::Display for StoreId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -736,6 +742,46 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    fn request_types(
+        &self,
+        iris_store: &SharedIrises,
+        orient: Orientation,
+    ) -> VecRequests<RequestType> {
+        use RequestType::*;
+
+        self.batch
+            .request_types
+            .iter()
+            .enumerate()
+            .map(|(i, request_type)| match request_type.as_str() {
+                UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
+                    skip_persistence: self.batch.skip_persistence[i],
+                }),
+                REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
+                    let request_id = &self.batch.request_ids[i];
+
+                    let or_rule = *self
+                        .batch
+                        .reauth_use_or_rule
+                        .get(request_id)
+                        .unwrap_or(&false);
+
+                    self.batch
+                        .reauth_target_indices
+                        .get(request_id)
+                        .map(|&idx| {
+                            let target_id = iris_store.from_0_indices(&[idx])[0];
+                            (target_id, or_rule)
+                        })
+                } else {
+                    None
+                }),
+                RESET_CHECK_MESSAGE_TYPE => ResetCheck,
+                _ => Unsupported,
+            })
+            .collect_vec()
+    }
+
     fn queries(&self, orient: Orientation) -> Arc<BothEyes<VecRequests<VecRots<QueryRef>>>> {
         match orient {
             Orientation::Normal => self.queries.clone(),
@@ -757,34 +803,6 @@ impl HawkRequest {
                 };
 
                 or_rule_ids
-            })
-            .collect_vec()
-    }
-
-    fn reauth_id(
-        &self,
-        iris_store: &SharedIrises,
-        orient: Orientation,
-    ) -> VecRequests<Option<(VectorId, UseOrRule)>> {
-        izip!(&self.batch.request_types, &self.batch.request_ids)
-            .map(|(request_type, request_id)| {
-                if orient == Orientation::Normal && request_type == REAUTH_MESSAGE_TYPE {
-                    let or_rule = *self
-                        .batch
-                        .reauth_use_or_rule
-                        .get(request_id)
-                        .unwrap_or(&false);
-
-                    self.batch
-                        .reauth_target_indices
-                        .get(request_id)
-                        .map(|&idx| {
-                            let target_id = iris_store.from_0_indices(&[idx])[0];
-                            (target_id, or_rule)
-                        })
-                } else {
-                    None
-                }
             })
             .collect_vec()
     }
@@ -813,21 +831,30 @@ impl HawkResult {
         }
     }
 
+    /// For successful uniqueness insertions, return the inserted index.
+    /// For successful reauths, return the index of the updated target.
+    /// Otherwise, return the index of some match.
+    /// In cases with neither insertions nor matches, return the special u32::MAX.
     fn merged_results(&self) -> Vec<u32> {
-        let match_ids = self.select_indices(Filter {
+        let match_indices = self.select_indices(Filter {
             eyes: Both,
             orient: Both,
             intra_batch: true,
         });
 
-        self.connect_plans.0[0]
-            .iter()
+        match_indices
+            .into_iter()
             .enumerate()
-            .map(|(idx, plan)| match plan {
-                Some(plan) => plan.inserted_vector.index(),
-                None => match_ids[idx][0],
+            .map(|(request_i, match_indices)| {
+                if let Some(inserted_id) = self.inserted_id(request_i) {
+                    inserted_id.index()
+                } else if let Some(&match_index) = match_indices.first() {
+                    match_index
+                } else {
+                    NON_MATCH_ID
+                }
             })
-            .collect()
+            .collect_vec()
     }
 
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
@@ -886,7 +913,15 @@ impl HawkResult {
 
         let decisions = self.match_results.decisions();
 
-        let matches = decisions.iter().map(Decision::is_match).collect_vec();
+        let matches = decisions
+            .iter()
+            .map(|&d| matches!(d, UniqueInsert).not())
+            .collect_vec();
+
+        let matches_with_skip_persistence = decisions
+            .iter()
+            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
+            .collect_vec();
 
         let match_ids = self.select_indices(Filter {
             eyes: Both,
@@ -950,7 +985,7 @@ impl HawkResult {
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
-            matches_with_skip_persistence: matches.clone(), // TODO
+            matches_with_skip_persistence,
             matches,
 
             match_ids,
@@ -1086,9 +1121,12 @@ impl HawkHandle {
 
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
-            let (luc_ids, reauth_ids) = {
+            let (luc_ids, request_types) = {
                 let store = hawk_actor.iris_store[LEFT].read().await;
-                (request.luc_ids(&store), request.reauth_id(&store, orient))
+                (
+                    request.luc_ids(&store),
+                    request.request_types(&store, orient),
+                )
             };
 
             let intra_results = intra_batch_is_match(sessions, search_queries).await?;
@@ -1099,7 +1137,7 @@ impl HawkHandle {
                 search::search(sessions, search_queries, hawk_actor.searcher.clone()).await?;
 
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, &reauth_ids);
+                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match = calculate_missing_is_match(
@@ -1175,9 +1213,8 @@ impl HawkHandle {
                 side
             );
             let insert_plans = izip!(search_results, &decisions)
-                .map(|(search_result, &decision)| match decision {
-                    UniqueInsert | ReauthUpdate(_) => Some(search_result.into_center()),
-                    _ => None,
+                .map(|(search_result, &decision)| {
+                    decision.is_mutation().then(|| search_result.into_center())
                 })
                 .collect_vec();
 
@@ -1360,6 +1397,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
+                    skip_persistence: vec![false; batch_size],
 
                     ..BatchQuery::default()
                 };
