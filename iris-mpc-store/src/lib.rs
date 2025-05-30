@@ -173,7 +173,7 @@ impl Store {
     ///
     /// An ordered vector of `DbStoredIris` instances.
     ///
-    pub async fn fetch_iris_batch(
+    pub async fn get_iris_batch(
         &self,
         identifiers: Vec<u32>,
     ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
@@ -763,7 +763,7 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
+// #[cfg(feature = "db_dependent")]
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;

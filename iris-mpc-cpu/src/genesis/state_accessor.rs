@@ -42,7 +42,7 @@ pub async fn fetch_iris_batch(
     );
 
     let data = iris_store
-        .fetch_iris_batch(identifiers)
+        .get_iris_batch(identifiers)
         .await
         .map_err(|err| IndexationError::PostgresFetchIrisBatch(err.to_string()))?;
 
