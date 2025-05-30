@@ -180,6 +180,11 @@ pub enum ReceiveRequestError {
 
     #[error("Failed to join receive handle: {0}")]
     FailedToJoinHandle(#[from] tokio::task::JoinError),
+
+    #[error("Failed to synchronize batch states: {0}")]
+    BatchSyncError(Report),
+    #[error("Batch polling timeout reached after {0} seconds")]
+    BatchPollingTimeout(i32),
 }
 
 impl ReceiveRequestError {
