@@ -758,7 +758,8 @@ impl HawkRequest {
             .enumerate()
             .map(|(i, request_type)| match request_type.as_str() {
                 UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
-                    skip_persistence: self.batch.skip_persistence[i],
+                    // Support for optional skip_persistence.
+                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap_or(&false),
                 }),
                 REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
                     let request_id = &self.batch.request_ids[i];
@@ -1450,7 +1451,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
-                    skip_persistence: vec![false; batch_size],
+                    skip_persistence: vec![], // Unused.
 
                     ..BatchQuery::default()
                 };
