@@ -9,7 +9,10 @@ use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
-    helpers::{shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor},
+    helpers::{
+        shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
+        sync::Modification, task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -17,7 +20,10 @@ use iris_mpc_cpu::{
     execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
     genesis::{
         self,
-        state_accessor::{fetch_iris_deletions, get_last_indexed_id, set_last_indexed_id},
+        state_accessor::{
+            fetch_iris_deletions, fetch_iris_modifications, get_last_indexed_id,
+            get_last_indexed_modification_id, set_last_indexed_id,
+        },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
@@ -26,11 +32,9 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::loader::load_iris_db;
-use iris_mpc_store::Store as IrisStore;
-use std::sync::atomic::AtomicU64;
+use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
 use std::{
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -85,15 +89,31 @@ pub async fn exec_main(
     ));
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
-    let exclusions_all = fetch_iris_deletions(&config, &aws_s3_client).await?;
-    let exclusions = exclusions_all
+    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client)
+        .await
+        .unwrap()
         .iter()
         .filter(|&&x| x <= max_indexation_id)
         .cloned()
         .collect::<Vec<u32>>();
     log_info(format!(
         "Deletions for exclusion count = {}",
-        exclusions.len(),
+        excluded_serial_ids.len(),
+    ));
+
+    // Process: get modifications that need to be applied to the graph.
+    let last_indexed_modification_id = get_last_indexed_modification_id(&iris_store).await?;
+    log_info(format!(
+        "Identifier of last modification to have been indexed = {}",
+        last_indexed_modification_id,
+    ));
+    let (modifications, latest_modification_id) =
+        fetch_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id)
+            .await?;
+    log_info(format!(
+        "Modifications to be applied count = {}. Last modification id = {}",
+        modifications.len(),
+        latest_modification_id
     ));
 
     // Process: Bail if stores are inconsistent.
@@ -107,7 +127,8 @@ pub async fn exec_main(
         batch_size,
         max_indexation_id,
         last_indexed_id,
-        &exclusions,
+        &excluded_serial_ids,
+        latest_modification_id,
     )
     .await?;
     log_info(String::from("Synchronization state initialised"));
@@ -186,12 +207,14 @@ pub async fn exec_main(
         last_indexed_id,
         max_indexation_id,
         batch_size,
-        exclusions,
+        excluded_serial_ids,
         &iris_store,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
         tx_results,
+        modifications,
+        latest_modification_id,
     )
     .await?;
 
@@ -242,10 +265,36 @@ async fn exec_main_loop(
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<JobResult>,
+    modifications: Vec<Modification>,
+    _max_modification_id: i64,
 ) -> Result<()> {
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
+
+    if modifications.is_empty() {
+        log_info(String::from("No modifications to apply"));
+    } else {
+        log_info(format!("Applying {} modifications", modifications.len()));
+        // TODO: implement applying modifications
+        for modification in modifications {
+            log_info(format!(
+                "Applying modification: type={} id={}, serial_id={}",
+                modification.request_type, modification.id, modification.serial_id
+            ));
+            if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
+                // throw an error
+                let msg = log_error(format!(
+                    "HawkActor does not support deletion of identities: modification: {:?}",
+                    modification
+                ));
+                bail!(msg);
+            }
+            // TODO: apply modification to the graph
+        }
+        // TODO: set last indexed modification id
+        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
+    }
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
@@ -477,6 +526,7 @@ async fn get_service_clients(
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexation.
+/// * `max_modification_id` - Maximum modification id to apply after initial indexation.
 ///
 async fn get_sync_state(
     config: &Config,
@@ -484,21 +534,18 @@ async fn get_sync_state(
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
+    max_modification_id: i64,
 ) -> Result<GenesisSyncState> {
     let common_config = CommonConfig::from(config.clone());
-    let excluded_serial_ids = excluded_serial_ids.to_vec();
-
-    let genesis_config = GenesisConfig {
-        max_indexation_id,
-        last_indexed_id,
-        excluded_serial_ids,
+    let genesis_config = GenesisConfig::new(
         batch_size,
-    };
+        excluded_serial_ids.to_vec(),
+        last_indexed_id,
+        max_indexation_id,
+        max_modification_id,
+    );
 
-    Ok(GenesisSyncState {
-        common_config,
-        genesis_config,
-    })
+    Ok(GenesisSyncState::new(common_config, genesis_config))
 }
 
 /// Returns result of performing distributed state synchronization.
