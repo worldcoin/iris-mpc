@@ -480,7 +480,7 @@ WHERE id = $1;
     ///
     /// # Returns
     ///
-    /// An ordered vector of `Modification` instances.
+    /// An ordered vector of `Modification` instances in ascending order of their IDs.
     ///
     pub async fn get_persisted_modifications_after_id(
         &self,
@@ -1458,7 +1458,7 @@ pub mod tests {
             )
             .await?;
 
-        // ID 4: uniqueness (should NOT be included due to request type)
+        // ID 5: uniqueness (should NOT be included due to request type)
         store
             .insert_modification(
                 104,
@@ -1467,7 +1467,7 @@ pub mod tests {
             )
             .await?;
 
-        // ID 5: reset_check (should NOT be included due to request type)
+        // ID 6: reset_check (should NOT be included due to request type)
         store
             .insert_modification(
                 105,
@@ -1476,7 +1476,7 @@ pub mod tests {
             )
             .await?;
 
-        // ID 6: identity_deletion (should NOT be included due to persisted = false)
+        // ID 7: identity_deletion (should NOT be included due to persisted = false)
         let mod6 = store
             .insert_modification(106, IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
@@ -1518,7 +1518,7 @@ pub mod tests {
         );
         assert!(
             request_types[2] == RESET_UPDATE_MESSAGE_TYPE,
-            "Should NOT include persisted reset_update requests"
+            "Should include persisted reset_update requests"
         );
 
         // Test 2: Get persisted modifications with ID > 2 (should exclude the first two)
