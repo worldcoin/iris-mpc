@@ -291,9 +291,9 @@ async fn exec_main_loop(
                 bail!(msg);
             }
             // TODO: apply modification to the graph
+            // TODO: set last indexed modification id
+            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
         }
-        // TODO: set last indexed modification id
-        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
     }
 
     // Set batch generator.
