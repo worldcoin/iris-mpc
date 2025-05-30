@@ -8,6 +8,9 @@ pub struct Config {
     // Size of indexation batch.
     pub batch_size: usize,
 
+    // For Dynamic batch size, this is the error rate for the size calculation.
+    pub batch_size_error_rate: usize,
+
     // Set of identifiers of Iris's to be excluded from indexation.
     pub excluded_serial_ids: Vec<IrisSerialId>,
 
@@ -25,6 +28,7 @@ pub struct Config {
 impl Config {
     pub fn new(
         batch_size: usize,
+        batch_size_error_rate: usize,
         excluded_serial_ids: Vec<IrisSerialId>,
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
@@ -32,6 +36,7 @@ impl Config {
     ) -> Self {
         Self {
             batch_size,
+            batch_size_error_rate,
             excluded_serial_ids,
             last_indexed_id,
             max_indexation_id,
@@ -102,11 +107,11 @@ mod tests {
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(64, vec![3, 5], 50, 100, 100)
+            Self::new(64, 128, vec![3, 5], 50, 100, 100)
         }
 
         fn new_2() -> Self {
-            Self::new(64, vec![3, 5, 6], 150, 200, 200)
+            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200)
         }
     }
 
