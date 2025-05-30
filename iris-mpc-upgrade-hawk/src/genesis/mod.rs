@@ -59,6 +59,7 @@ pub async fn exec_main(
     config: Config,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    batch_size_error_rate: usize,
     perform_snapshot: bool,
 ) -> Result<()> {
     // Process: bail if config is invalid.
@@ -207,6 +208,7 @@ pub async fn exec_main(
         last_indexed_id,
         max_indexation_id,
         batch_size,
+        batch_size_error_rate,
         excluded_serial_ids,
         &iris_store,
         background_tasks,
@@ -259,6 +261,7 @@ async fn exec_main_loop(
     last_indexed_id: IrisSerialId,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    batch_size_error_rate: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
     iris_store: &IrisStore,
     mut task_monitor: TaskMonitor,
@@ -295,8 +298,35 @@ async fn exec_main_loop(
             // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
         }
     }
+    if batch_size == 0 {
+        // If batch size is 0 then calculate dynamic batch size based on the current graph size
 
-    // Set batch generator.
+        // Set batch generator.
+        // Calculate dynamic batch size based on formula: floor(N/(Mr - 1) + 1)
+        // where N is the current graph size (last_indexed_id),
+        // M is the HNSW parameter for nearest neighbors, and
+        // r is a configurable parameter for error rate
+        let r = batch_size_error_rate; // Configurable parameter for error rate
+        let m = config.hnsw_param_M as u64; // HNSW parameter M
+        let n = last_indexed_id as u64; // Current graph size
+
+        // Apply the formula, ensuring we have at least 1
+        let batch_size = if n > 0 {
+            (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
+        } else {
+            // If the graph is empty, use a batch size of 1
+            1
+        };
+
+        log_info(format!(
+            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+            batch_size, n, m, r
+        ));
+    } else {
+        log_info(format!("Using static batch size: {}", batch_size));
+    }
+
+    // Set batch generator with dynamic batch size.
     let mut batch_generator = BatchGenerator::new(
         last_indexed_id + 1,
         max_indexation_id,
