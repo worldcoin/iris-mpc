@@ -248,17 +248,18 @@ pub struct Config {
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
-    // used to fix max batch size to 1 for correctness testing purposes
-    #[serde(default = "default_override_max_batch_size")]
-    pub override_max_batch_size: bool,
+    #[serde(default = "default_batch_polling_timeout_secs")]
+    pub batch_polling_timeout_secs: i32,
+
+    #[serde(default = "default_sqs_long_poll_wait_time")]
+    pub sqs_long_poll_wait_time: usize,
+
+    #[serde(default = "default_batch_sync_polling_timeout_secs")]
+    pub batch_sync_polling_timeout_secs: u64,
 }
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
-}
-
-fn default_override_max_batch_size() -> bool {
-    false
 }
 
 /// Enumeration over set of compute modes.
@@ -410,6 +411,18 @@ fn default_hawk_server_deletions_enabled() -> bool {
     false
 }
 
+fn default_batch_polling_timeout_secs() -> i32 {
+    1
+}
+
+fn default_sqs_long_poll_wait_time() -> usize {
+    10
+}
+
+fn default_batch_sync_polling_timeout_secs() -> u64 {
+    10
+}
+
 impl Config {
     pub fn load_config(prefix: &str) -> Result<Config> {
         let settings = config::Config::builder();
@@ -558,6 +571,9 @@ pub struct CommonConfig {
     cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
+    batch_polling_timeout_secs: i32,
+    sqs_long_poll_wait_time: usize,
+    batch_sync_polling_timeout_secs: u64,
 }
 
 impl From<Config> for CommonConfig {
@@ -634,7 +650,9 @@ impl From<Config> for CommonConfig {
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
-            override_max_batch_size: _, // for testing purposes only
+            batch_polling_timeout_secs,
+            sqs_long_poll_wait_time,
+            batch_sync_polling_timeout_secs,
         } = value;
 
         Self {
@@ -686,6 +704,9 @@ impl From<Config> for CommonConfig {
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
+            batch_polling_timeout_secs,
+            sqs_long_poll_wait_time,
+            batch_sync_polling_timeout_secs,
         }
     }
 }

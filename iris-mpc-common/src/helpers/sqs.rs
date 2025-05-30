@@ -1,10 +1,12 @@
 use crate::config::Config;
 use crate::helpers::smpc_request::SQSMessage;
+use aws_sdk_sqs::error::ProvideErrorMetadata;
 use aws_sdk_sqs::Client;
+use eyre::eyre;
 use eyre::Context;
 use eyre::Result;
 
-/// SQS messages contain a sequence number when they originate from SNS and raw message delivery is enabled.
+/// SQS messages contain a sequence number when they originate from SNS and raw message delivery is disabled.
 /// This function reads the top of the requests SQS queue and returns its sequence number.
 pub async fn get_next_sns_seq_num(config: &Config, sqs_client: &Client) -> Result<Option<u128>> {
     let sqs_snoop_response = sqs_client
@@ -142,4 +144,36 @@ pub async fn delete_messages_until_sequence_num(
     }
 
     Ok(())
+}
+
+/// Fetches the approximate number of visible messages in the SQS queue.
+pub async fn get_approximate_number_of_messages(
+    config: &Config,
+    sqs_client: &Client,
+) -> Result<u32> {
+    let attributes_response = sqs_client
+        .get_queue_attributes()
+        .queue_url(&config.requests_queue_url)
+        .attribute_names(aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+        .send()
+        .await
+        .map_err(|sdk_err| {
+            tracing::error!(
+                "SQS GetQueueAttributes failed. SDK error: {:?},  Message: {:?}",
+                sdk_err,
+                sdk_err.message()
+            );
+            eyre!("Failed to get queue attributes from SQS")
+        })?;
+
+    let num_messages_str = attributes_response
+        .attributes
+        .ok_or_else(|| eyre!("No attributes returned from GetQueueAttributes"))?
+        .get(&aws_sdk_sqs::types::QueueAttributeName::ApproximateNumberOfMessages)
+        .ok_or_else(|| eyre!("ApproximateNumberOfMessages attribute not found"))?
+        .clone();
+
+    num_messages_str
+        .parse::<u32>()
+        .context("Failed to parse ApproximateNumberOfMessages")
 }
