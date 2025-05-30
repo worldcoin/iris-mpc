@@ -15,6 +15,10 @@ struct Args {
     // Batch size for processing.
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
+
+    // Whether to perform a snapshot.
+    #[clap(long("perform-snapshot"), default_value = "true")]
+    perform_snapshot: bool,
 }
 
 #[tokio::main]
@@ -32,14 +36,28 @@ async fn main() -> Result<()> {
     }
     let max_indexation_height_arg = args.max_indexation_height.as_ref().unwrap();
     let height_max: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
-        eprintln!("Error: --max-height argument must be a valid u32.");
-        eyre::eyre!("--max-height argument must be a valid u32.")
+        // print the value that is sent to the function
+        eprintln!(
+            "Error: --max-height argument must be a valid u32. Value: {}",
+            max_indexation_height_arg
+        );
+        eyre::eyre!(
+            "--max-height argument must be a valid u32. Value: {}",
+            max_indexation_height_arg
+        )
     })?;
 
     let batch_size = if args.batch_size.is_some() {
-        args.batch_size.as_ref().unwrap().parse().map_err(|_| {
-            eprintln!("Error: --batch-size argument must be a valid usize.");
-            eyre::eyre!("--batch-size argument must be a valid usize.")
+        let batch_size_arg = args.batch_size.as_ref().unwrap();
+        batch_size_arg.parse().map_err(|_| {
+            eprintln!(
+                "Error: --batch-size argument must be a valid usize. Value: {}",
+                batch_size_arg
+            );
+            eyre::eyre!(
+                "--batch-size argument must be a valid usize. Value: {}",
+                batch_size_arg
+            )
         })?
     } else {
         config.max_batch_size
@@ -56,7 +74,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, height_max, batch_size).await {
+    match exec_main(config, height_max, batch_size, args.perform_snapshot).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }

@@ -33,7 +33,8 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
@@ -42,7 +43,6 @@ use tokio::time::timeout;
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
-pub static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
@@ -63,9 +63,18 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut background_tasks = init_task_monitor();
 
-    let is_ready_flag =
-        start_coordination_server(&config, &mut background_tasks, &shutdown_handler, &my_state)
-            .await;
+    // Initialize shared current_batch_id
+    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
+
+    let is_ready_flag = start_coordination_server(
+        &config,
+        &aws_clients.sqs_client,
+        &mut background_tasks,
+        &shutdown_handler,
+        &my_state,
+        current_batch_id_atomic.clone(),
+    )
+    .await;
 
     background_tasks.check_tasks();
 
@@ -125,6 +134,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         &shutdown_handler,
         hawk_actor,
         tx_results,
+        current_batch_id_atomic.clone(),
     )
     .await?;
 
@@ -166,7 +176,6 @@ fn process_config(config: &Config) {
     }
 
     // Load batch_size config
-    *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 }
 
@@ -180,7 +189,7 @@ fn max_rollback(config: &Config) -> usize {
     config.max_batch_size * 2
 }
 
-/// Returnes initialized PostgreSQL clients for interacting
+/// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let iris_schema_name = format!(
@@ -662,6 +671,7 @@ async fn run_main_server_loop(
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<ServerJobResult>,
+    current_batch_id_atomic: Arc<AtomicU64>,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -692,6 +702,7 @@ async fn run_main_server_loop(
             shutdown_handler.clone(),
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
+            current_batch_id_atomic,
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
