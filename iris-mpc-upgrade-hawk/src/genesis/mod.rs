@@ -89,13 +89,8 @@ pub async fn exec_main(
     ));
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
-    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client)
-        .await
-        .unwrap()
-        .iter()
-        .filter(|&&x| x <= max_indexation_id)
-        .cloned()
-        .collect::<Vec<u32>>();
+    let excluded_serial_ids =
+        fetch_iris_deletions(&config, &aws_s3_client, max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -291,9 +286,9 @@ async fn exec_main_loop(
                 bail!(msg);
             }
             // TODO: apply modification to the graph
-            // TODO: set last indexed modification id
-            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
         }
+        // TODO: set last indexed modification id
+        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
     }
 
     // Set batch generator.
