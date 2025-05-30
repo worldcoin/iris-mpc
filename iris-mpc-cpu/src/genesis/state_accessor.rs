@@ -115,7 +115,7 @@ pub async fn fetch_iris_deletions(
     Ok(s3_object.deleted_serial_ids)
 }
 
-/// Fetch Iris modifications that need to be applied post indexation phase one.
+/// Fetch Iris modifications that need to be applied post indexation phase one. The modifications are returned in ascending order of the serial id.
 ///
 /// # Arguments
 ///
