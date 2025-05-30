@@ -469,8 +469,19 @@ WHERE id = $1;
         let modifications = rows.into_iter().map(Into::into).collect();
         Ok(modifications)
     }
-    // Fetch modifications updated after a certain ID that are less than a serial id.
-    // This is for the genesis protocol to fetch modifications that need to be indexed.
+
+    /// Fetch modifications updated after a certain ID that are less than a serial id.
+    /// This is for the genesis protocol to fetch modifications that need to be indexed.
+    ///
+    /// # Arguments
+    ///
+    /// * `after_modification_id` - Modification identifier from which to filter result.
+    /// * `serial_id_less_than` - Iris serial identifier to which to filter result.
+    ///
+    /// # Returns
+    ///
+    /// An ordered vector of `Modification` instances.
+    ///
     pub async fn get_persisted_modifications_after_id(
         &self,
         after_modification_id: i64,
