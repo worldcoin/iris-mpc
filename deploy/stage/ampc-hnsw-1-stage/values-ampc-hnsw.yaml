@@ -65,6 +65,15 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "false"
 
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_LOOKBACK_RECORDS
+    value: "5"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+    value: "false"
+
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
 
