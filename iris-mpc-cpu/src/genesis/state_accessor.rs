@@ -124,6 +124,7 @@ pub async fn fetch_iris_deletions(
 }
 
 /// Fetch Iris modifications that need to be applied post indexation phase one.
+/// N.B. The modifications are returned in ascending order of the serial id.
 ///
 /// # Arguments
 ///
