@@ -1,7 +1,7 @@
 use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    iris_db::iris::IrisCode,
+    iris_db::{get_dummy_shares_for_deletion, iris::IrisCode},
     job::IrisQueryBatchEntries,
 };
 use itertools::izip;
@@ -22,6 +22,11 @@ impl GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::default_for_party(party_id),
             mask: GaloisRingTrimmedMaskCodeShare::default_for_party(party_id),
         }
+    }
+
+    pub fn dummy_for_party(party_id: usize) -> Self {
+        let (code, mask) = get_dummy_shares_for_deletion(party_id);
+        GaloisRingSharedIris { code, mask }
     }
 
     pub fn from_batch(batch: IrisQueryBatchEntries) -> Vec<Self> {

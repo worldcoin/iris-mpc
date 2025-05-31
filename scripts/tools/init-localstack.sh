@@ -38,11 +38,10 @@ create_bucket "wf-smpcv2-dev-sns-requests"
 create_bucket "wf-smpcv2-dev-sync-protocol"
 
 # Ensure dev_deleted_serial_ids.json exists before uploading
-echo "Creating random dev_deleted_serial_ids.json"
-RANDOM_IDS=$(shuf -i 1-1000 -n 100 | tr '\n' ',' | sed 's/,$//')
+echo "Creating static dev_deleted_serial_ids.json"
 cat > ./dev_deleted_serial_ids.json <<EOF
 {
-    "deleted_serial_ids": [${RANDOM_IDS}]
+    "deleted_serial_ids": [50, 100, 200, 1000]
 }
 EOF
 
@@ -95,4 +94,5 @@ awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_INPUTS_TOPIC_ARN" --protocol s
 awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_INPUTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_INPUTS_PARTICIPANT_2_QUEUE_ARN --region $AWS_REGION
 awslocal sns subscribe --topic-arn "$SNS_IRIS_MPC_RESULTS_TOPIC_ARN" --protocol sqs --notification-endpoint $SQS_IRIS_MPC_RESULTS_QUEUE_ARN --region $AWS_REGION
 
+echo "LocalStack initialization complete"
 echo "LocalStack initialization complete"
