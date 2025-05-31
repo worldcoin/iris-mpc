@@ -1,4 +1,4 @@
-use super::{layered_graph::EntryPoint, neighborhood::SortedEdgeIds};
+use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::StoreId,
     hnsw::{
@@ -8,18 +8,18 @@ use crate::{
 };
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use itertools::izip;
-use serde::{Deserialize, Serialize};
-use sqlx::{error::BoxDynError, types::Text, PgConnection, Postgres, Row, Transaction};
+use sqlx::{error::BoxDynError, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
-pub struct RowLinks<V: VectorStore> {
-    source_ref: Text<V::VectorRef>,
-    // this is a serialized SortedEdgeIds<V::VectorRef> (using bincode)
+pub struct RowLinks {
+    serial_id: i64,
+    version_id: i16,
+    // this is a serialized SortedEdgeIds<VectorId> (using bincode)
     links: Vec<u8>,
-    layer: i32,
+    layer: i16,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -79,10 +79,7 @@ pub struct GraphOps<'a, 'b, V> {
     borrowable_sql: String,
 }
 
-impl<V: VectorStore> GraphOps<'_, '_, V>
-where
-    V::VectorRef: Sized + Serialize + for<'a> Deserialize<'a>,
-{
+impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     fn entry_table(&self) -> String {
         format!("\"{}\".hawk_graph_entry", self.tx.schema_name)
     }
@@ -91,8 +88,8 @@ where
         format!("\"{}\".hawk_graph_links", self.tx.schema_name)
     }
 
-    fn graph_id(&self) -> i32 {
-        self.graph_id as i32
+    fn graph_id(&self) -> i16 {
+        self.graph_id as i16
     }
 
     fn tx(&mut self) -> &mut PgConnection {
@@ -105,13 +102,13 @@ where
         // If required, set vector as new entry point
         if plan.set_ep {
             let insertion_layer = plan.layers.len() - 1;
-            self.set_entry_point(plan.inserted_vector.clone(), insertion_layer)
+            self.set_entry_point(plan.inserted_vector, insertion_layer)
                 .await?;
         }
 
         // Connect the new vector to its neighbors in each layer.
         for (lc, layer_plan) in plan.layers.into_iter().enumerate() {
-            self.connect_apply(plan.inserted_vector.clone(), lc, layer_plan)
+            self.connect_apply(plan.inserted_vector, lc, layer_plan)
                 .await?;
         }
 
@@ -127,7 +124,7 @@ where
     ) -> Result<()> {
         // Connect all n -> q.
         for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(n.clone(), links, lc).await?;
+            self.set_links(*n, links, lc).await?;
         }
 
         // Connect q -> all n.
@@ -139,7 +136,7 @@ where
     pub async fn get_entry_point(&mut self) -> Result<Option<(V::VectorRef, usize)>> {
         let table = self.entry_table();
         let opt = sqlx::query(&format!(
-            "SELECT entry_point FROM {table} WHERE graph_id = $1"
+            "SELECT serial_id, version_id, layer FROM {table} WHERE graph_id = $1"
         ))
         .bind(self.graph_id())
         .fetch_optional(self.tx())
@@ -147,28 +144,32 @@ where
         .map_err(|e| eyre!("Failed to fetch entry point: {e}"))?;
 
         if let Some(row) = opt {
-            let entry_point: Vec<u8> = row.get("entry_point");
-            let x: EntryPoint<V::VectorRef> = bincode::deserialize(&entry_point)
-                .map_err(|e| eyre!("Failed to deserialize entry point: {e}"))?;
-            Ok(Some((x.point, x.layer)))
+            let serial_id: i64 = row.get("serial_id");
+            let version_id: i16 = row.get("version_id");
+            let layer: i16 = row.get("layer");
+
+            Ok(Some((
+                VectorId::new(serial_id as u32, version_id),
+                layer as usize,
+            )))
         } else {
             Ok(None)
         }
     }
 
     pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) -> Result<()> {
-        let entry_buf = bincode::serialize(&EntryPoint { point, layer })
-            .map_err(|e| eyre!("Failed to serialize entry point: {e}"))?;
-
         let table = self.entry_table();
         sqlx::query(&format!(
             "
-            INSERT INTO {table} (graph_id, entry_point)
-            VALUES ($1, $2) ON CONFLICT (graph_id)
-            DO UPDATE SET entry_point = EXCLUDED.entry_point"
+            INSERT INTO {table} (graph_id, serial_id, version_id, layer)
+            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id)
+            DO UPDATE SET (serial_id, version_id, layer) = (EXCLUDED.serial_id, EXCLUDED.version_id, EXCLUDED.layer)
+            "
         ))
         .bind(self.graph_id())
-        .bind(entry_buf)
+        .bind(point.serial_id() as i64)
+        .bind(point.version_id())
+        .bind(layer as i16)
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set entry point: {e}"))?;
@@ -185,12 +186,13 @@ where
         let opt = sqlx::query(&format!(
             "
             SELECT links FROM {table}
-            WHERE graph_id = $1 AND source_ref = $2 AND layer = $3
-        "
+            WHERE graph_id = $1 AND serial_id = $2 AND version_id = $3 AND layer = $4
+            "
         ))
         .bind(self.graph_id())
-        .bind(Text(base))
-        .bind(lc as i32)
+        .bind(base.serial_id() as i64)
+        .bind(base.version_id())
+        .bind(lc as i16)
         .fetch_optional(self.tx())
         .await
         .map_err(|e| eyre!("Failed to fetch links: {e}"))?;
@@ -215,15 +217,16 @@ where
         let table = self.links_table();
         sqlx::query(&format!(
             "
-            INSERT INTO {table} (graph_id, source_ref, layer, links)
-            VALUES ($1, $2, $3, $4) ON CONFLICT (graph_id, source_ref, layer)
+            INSERT INTO {table} (graph_id, serial_id, version_id, layer, links)
+            VALUES ($1, $2, $3, $4, $5) ON CONFLICT (graph_id, serial_id, version_id, layer)
             DO UPDATE SET
             links = EXCLUDED.links
-        "
+            "
         ))
         .bind(self.graph_id())
-        .bind(Text(base))
-        .bind(lc as i32)
+        .bind(base.serial_id() as i64)
+        .bind(base.version_id())
+        .bind(lc as i16)
         .bind(links)
         .execute(self.tx())
         .await
@@ -233,21 +236,20 @@ where
     }
 }
 
-impl<V: VectorStore> GraphOps<'_, '_, V>
+impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V>
 where
-    V::VectorRef: Serialize + for<'a> Deserialize<'a> + Send + Unpin + 'static,
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks<V>>> + '_ {
+    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks>> + '_ {
         let table = self.links_table();
         self.borrowable_sql = format!(
             "
-            SELECT source_ref, links, layer FROM {table}
+            SELECT serial_id, version_id, links, layer FROM {table}
             WHERE graph_id = $1
-        "
+            "
         );
-        sqlx::query_as::<_, RowLinks<V>>(&self.borrowable_sql)
+        sqlx::query_as::<_, RowLinks>(&self.borrowable_sql)
             .bind(self.graph_id())
             .fetch(self.tx.tx.deref_mut())
             .map_err(Into::into)
@@ -268,8 +270,9 @@ where
         while let Some(row) = irises.next().await {
             let row = row?;
             let links = bincode::deserialize(&row.links)?;
+            let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
             graph_mem
-                .set_links(row.source_ref.0, links, row.layer as usize)
+                .set_links(source_ref, links, row.layer as usize)
                 .await;
             count += 1;
             if count % 100000 == 0 {
@@ -343,7 +346,10 @@ mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
-        hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood},
+        hnsw::{
+            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
+            SortedNeighborhood,
+        },
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
