@@ -5,9 +5,8 @@ use iris_mpc_cpu::genesis::{log_error, log_info};
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
 /// Process command line arguments.
-#[derive(Parser)]
+#[derive(Debug, Parser)]
 #[allow(non_snake_case)]
-#[derive(Debug)]
 struct Args {
     // Maximum height of indexation.
     #[clap(long("max-height"))]
@@ -18,8 +17,8 @@ struct Args {
     batch_size: Option<String>,
 
     // Whether to perform a snapshot.
-    #[clap(long("perform-snapshot"), default_value = "true")]
-    perform_snapshot: bool,
+    #[clap(long("perform-snapshot"))]
+    perform_snapshot: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
@@ -104,5 +103,22 @@ fn parse_args(config: &Config) -> Result<(IrisSerialId, usize, bool)> {
         config.max_batch_size
     };
 
-    Ok((height_max, batch_size, args.perform_snapshot))
+    // Parse arg: perform snapshot.
+    let perform_snapshot = if args.perform_snapshot.is_some() {
+        let perform_snapshot_arg = args.perform_snapshot.as_ref().unwrap();
+        perform_snapshot_arg.parse().map_err(|_| {
+            eprintln!(
+                "Error: --perform-snapshot argument must be a valid boolean. Value: {}",
+                perform_snapshot_arg
+            );
+            eyre::eyre!(
+                "--perform-snapshot argument must be a valid boolean. Value: {}",
+                perform_snapshot_arg
+            )
+        })?
+    } else {
+        true
+    };
+
+    Ok((height_max, batch_size, perform_snapshot))
 }

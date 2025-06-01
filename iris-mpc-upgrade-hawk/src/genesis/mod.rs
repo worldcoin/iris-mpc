@@ -27,7 +27,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, JobResult,
+        BatchGenerator, BatchIterator, Handle as HawkHandle, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -197,7 +197,7 @@ pub async fn exec_main(
 
     // Process: execute main loop.
     log_info(String::from("Executing main loop"));
-    exec_main_loop(
+    exec_main_inner(
         &config,
         last_indexed_id,
         max_indexation_id,
@@ -213,6 +213,7 @@ pub async fn exec_main(
     )
     .await?;
 
+    // Process: create dB snapshot.
     if perform_snapshot {
         log_info(String::from("Db snapshot begins"));
         set_db_snapshot(
@@ -245,7 +246,100 @@ pub async fn exec_main(
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
 #[allow(clippy::too_many_arguments)]
-async fn exec_main_loop(
+async fn exec_main_inner(
+    config: &Config,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+    batch_size: usize,
+    excluded_serial_ids: Vec<IrisSerialId>,
+    iris_store: &IrisStore,
+    task_monitor: TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+    hawk_actor: HawkActor,
+    tx_results: Sender<JobResult>,
+    modifications: Vec<Modification>,
+    _max_modification_id: i64,
+) -> Result<()> {
+    // Set Hawk handle.
+    let hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
+    log_info(String::from("Hawk handle initialised"));
+
+    // Phase one: apply modifications.
+    if modifications.is_empty() {
+        log_info(String::from("No modifications to apply"));
+    } else {
+        exec_main_inner_step_one(&hawk_handle, modifications).await?;
+    }
+
+    // Phase one: new indexations.
+    exec_main_inner_step_two(
+        config,
+        last_indexed_id,
+        max_indexation_id,
+        batch_size,
+        excluded_serial_ids,
+        iris_store,
+        task_monitor,
+        shutdown_handler,
+        hawk_handle,
+        tx_results,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Execution step one: apply modiciations since last indexation.
+///
+/// # Arguments
+///
+/// * `hawk_handle` - Handle to a Hawk actor managing indexation & search over an HNSW graph.
+/// * `modifications` - Set of indexation modifications to apply.
+///
+async fn exec_main_inner_step_one(
+    mut _hawk_handle: &HawkHandle,
+    modifications: Vec<Modification>,
+) -> Result<()> {
+    log_info(format!("Applying {} modifications", modifications.len()));
+
+    // TODO: implement applying modifications
+    for modification in modifications {
+        log_info(format!(
+            "Applying modification: type={} id={}, serial_id={}",
+            modification.request_type, modification.id, modification.serial_id
+        ));
+        if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
+            // throw an error
+            let msg = log_error(format!(
+                "HawkActor does not support deletion of identities: modification: {:?}",
+                modification
+            ));
+            bail!(msg);
+        }
+        // TODO: apply modification to the graph
+        // TODO: set last indexed modification id
+        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
+    }
+
+    Ok(())
+}
+
+/// Execution step two: index Iris's from last indexation id.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
+/// * `shutdown_handler` - Handler coordinating process shutdown.
+/// * `hawk_handle` - Handle to a Hawk actor managing indexation & search over an HNSW graph.
+/// * `tx_results` - Channel to send job results to DB persistence thread.
+///
+#[allow(clippy::too_many_arguments)]
+async fn exec_main_inner_step_two(
     config: &Config,
     last_indexed_id: IrisSerialId,
     max_indexation_id: IrisSerialId,
@@ -254,39 +348,9 @@ async fn exec_main_loop(
     iris_store: &IrisStore,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: HawkActor,
+    mut hawk_handle: HawkHandle,
     tx_results: Sender<JobResult>,
-    modifications: Vec<Modification>,
-    _max_modification_id: i64,
 ) -> Result<()> {
-    // Set Hawk handle.
-    let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
-    log_info(String::from("Hawk handle initialised"));
-
-    if modifications.is_empty() {
-        log_info(String::from("No modifications to apply"));
-    } else {
-        log_info(format!("Applying {} modifications", modifications.len()));
-        // TODO: implement applying modifications
-        for modification in modifications {
-            log_info(format!(
-                "Applying modification: type={} id={}, serial_id={}",
-                modification.request_type, modification.id, modification.serial_id
-            ));
-            if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
-                // throw an error
-                let msg = log_error(format!(
-                    "HawkActor does not support deletion of identities: modification: {:?}",
-                    modification
-                ));
-                bail!(msg);
-            }
-            // TODO: apply modification to the graph
-            // TODO: set last indexed modification id
-            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
-        }
-    }
-
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         last_indexed_id + 1,
