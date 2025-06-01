@@ -3,6 +3,18 @@ use thiserror::Error;
 // Encpasulates a non-exhaustive set of errors raised during indexation.
 #[derive(Error, Debug)]
 pub enum IndexationError {
+    #[error("AWS RDS cluster URL is invalid ... check dB configuration")]
+    AwsRdsInvalidClusterURL,
+
+    #[error("AWS RDS cluster ID not found ... snapshotting failed")]
+    AwsRdsClusterIdNotFound,
+
+    #[error("AWS RDS cluster URL is invalid ... check dB configuration")]
+    AwsRdsGetClusterURLs,
+
+    #[error("AWS RDS cluster snapshotting failed: {0}")]
+    AwsRdsCreateSnapshotFailure(String),
+
     #[error("Failed to download AWS S3 object")]
     AwsS3ObjectDownload,
 

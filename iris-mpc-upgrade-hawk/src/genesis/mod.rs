@@ -22,7 +22,7 @@ use iris_mpc_cpu::{
         self,
         state_accessor::{
             fetch_iris_deletions, fetch_iris_modifications, get_last_indexed_id,
-            get_last_indexed_modification_id, set_last_indexed_id,
+            get_last_indexed_modification_id, set_last_indexed_id, set_rds_snapshot,
         },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
@@ -213,23 +213,57 @@ pub async fn exec_main(
     )
     .await?;
 
-    // snapshot the database at the end of the process
     if perform_snapshot {
-        log_info(String::from("Snapshotting the database"));
-        let unix_timestamp = Utc::now().timestamp();
-        let snapshot_id = format!(
-            "genesis-{}-{}-{}-{}",
-            last_indexed_id, max_indexation_id, batch_size, unix_timestamp
-        );
-        let db_config_graph = config
-            .cpu_database
-            .as_ref()
-            .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-        snapshot_rds(&rds_client, &db_config_graph.url, &snapshot_id).await?;
-        log_info(format!("Snapshot created: {}", snapshot_id));
+        log_info(String::from("Db snapshot begins"));
+        set_db_snapshot(
+            &config,
+            &rds_client,
+            batch_size,
+            last_indexed_id,
+            max_indexation_id,
+        )
+        .await?;
     } else {
         log_info(String::from("Skipping database snapshot as requested"));
-    }
+    };
+
+    Ok(())
+}
+
+/// Takes a dB snapshot.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
+/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
+/// * `shutdown_handler` - Handler coordinating process shutdown.
+/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
+/// * `tx_results` - Channel to send job results to DB persistence thread.
+///
+async fn set_db_snapshot(
+    config: &Config,
+    rds_client: &RDSClient,
+    batch_size: usize,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+) -> Result<()> {
+    // Set snapshot ID.
+    let db_config = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+    let unix_timestamp = Utc::now().timestamp();
+    let snapshot_id = format!(
+        "genesis-{}-{}-{}-{}",
+        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+    );
+
+    // Create snapshot.
+    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
 
     Ok(())
 }
@@ -432,7 +466,7 @@ async fn get_service_clients(
     Report,
 > {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient, RDSClient) {
+    async fn get_aws_clients(config: &Config) -> (S3Client, SQSClient, RDSClient) {
         // Get region from config or use default
         let region = config
             .clone()
@@ -449,6 +483,7 @@ async fn get_service_clients(
             .build();
         let sqs_client = SQSClient::new(&shared_config);
         let rds_client = RDSClient::new(&shared_config);
+
         (S3Client::from_conf(s3_config), sqs_client, rds_client)
     }
 
@@ -505,7 +540,7 @@ async fn get_service_clients(
     }
 
     let pgres_clients = get_pgres_clients(config).await?;
-    let aws_clients = get_aws_client(config).await;
+    let aws_clients = get_aws_clients(config).await;
 
     Ok((aws_clients, pgres_clients.0, pgres_clients.1))
 }
@@ -561,53 +596,6 @@ async fn get_sync_result(
     Ok(result)
 }
 
-/// Snapshots the RDS cluster.
-///
-/// # Arguments
-///
-/// * `client` - AWS RDS SDK client.
-/// * `db_instance_id` - RDS instance identifier.
-/// * `snapshot_id` - Snapshot identifier.
-///
-async fn snapshot_rds(
-    client: &RDSClient,
-    db_cluster_endpoint: &str,
-    snapshot_id: &str,
-) -> Result<()> {
-    let url = db_cluster_endpoint
-        .strip_prefix("postgresql://")
-        .ok_or(eyre!("HNSW GENESIS :: Server :: Invalid Postgres URL"))?;
-
-    let at_pos = url
-        .rfind('@')
-        .ok_or(eyre!("HNSW GENESIS :: Server :: No @ found in URL"))?;
-    let host_and_db = &url[at_pos + 1..];
-    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
-    let cluster_endpoint = &host_and_db[..slash_pos];
-
-    let resp = client.describe_db_clusters().send().await?;
-
-    let cluster_id = resp
-        .db_clusters()
-        .iter()
-        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
-        .and_then(|cluster| cluster.db_cluster_identifier())
-        .ok_or(eyre!(
-            "HNSW GENESIS :: Server :: Cluster ID not found for snapshot"
-        ))?;
-
-    log_info(format!("Creating RDS snapshot for cluster: {}", cluster_id));
-
-    client
-        .create_db_cluster_snapshot()
-        .db_cluster_identifier(cluster_id)
-        .db_cluster_snapshot_identifier(snapshot_id)
-        .send()
-        .await?;
-
-    Ok(())
-}
-
 /// Initializes HNSW graph from data previously persisted to a store.
 ///
 /// # Arguments
@@ -624,8 +612,8 @@ async fn init_graph_from_stores(
     hawk_actor: &mut HawkActor,
     shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
-    // ANCHOR: Load the database
     log_info(String::from("⚓️ ANCHOR: Load the database"));
+
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
     let parallelism = config

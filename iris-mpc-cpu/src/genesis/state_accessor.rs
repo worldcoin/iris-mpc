@@ -1,4 +1,5 @@
 use super::utils::{errors::IndexationError, logger};
+use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
@@ -246,6 +247,70 @@ pub async fn set_last_indexed_modification_id(
         &value,
     )
     .await
+}
+
+/// Performs an RDS cluster snapshot.
+///
+/// # Arguments
+///
+/// * `client` - AWS RDS SDK client.
+/// * `db_cluster_endpoint` - RDS cluster endpoint.
+/// * `snapshot_id` - Snapshot identifier.
+///
+pub async fn set_rds_snapshot(
+    client: &RDSClient,
+    db_cluster_endpoint: &str,
+    snapshot_id: &str,
+) -> Result<(), IndexationError> {
+    // Set cluster ID.
+    let url = db_cluster_endpoint
+        .strip_prefix("postgresql://")
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let at_pos = url
+        .rfind('@')
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let host_and_db = &url[at_pos + 1..];
+    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
+    let cluster_endpoint = &host_and_db[..slash_pos];
+    let resp = client
+        .describe_db_clusters()
+        .send()
+        .await
+        .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
+    let cluster_id = resp
+        .db_clusters()
+        .iter()
+        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+        .and_then(|cluster| cluster.db_cluster_identifier())
+        .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
+
+    // Create cluster snapshot.
+    logger::log_info(
+        COMPONENT,
+        format!(
+            "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+            cluster_id, snapshot_id
+        ),
+    );
+    client
+        .create_db_cluster_snapshot()
+        .db_cluster_identifier(cluster_id)
+        .db_cluster_snapshot_identifier(snapshot_id)
+        .send()
+        .await
+        .map_err(|err| {
+            logger::log_error(COMPONENT, format!("Failed to create db snapshot: {}", err));
+            IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
+        })?;
+    logger::log_info(
+        COMPONENT,
+        format!(
+            "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+            cluster_id, snapshot_id
+        ),
+    );
+
+    Ok(())
 }
 
 /// Unsets serial id of last Iris to have been indexed.
