@@ -1,5 +1,6 @@
 use super::{
-    state_accessor as fetcher,
+    hawk_handle::Handle as HawkHandle,
+    state_accessor,
     utils::{errors::IndexationError, logger},
 };
 use eyre::Result;
@@ -174,6 +175,7 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         iris_store: &IrisStore,
+        hawk_handle: &HawkHandle,
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
@@ -188,9 +190,10 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         iris_store: &IrisStore,
+        _hawk_handle: &HawkHandle,
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.next_identifiers() {
-            let data = fetcher::fetch_iris_batch(iris_store, identifiers).await?;
+            let data = state_accessor::fetch_iris_batch(iris_store, identifiers).await?;
             self.batch_count += 1;
             let batch = Batch::new(self.batch_count, data);
             Self::log_info(format!("Generated batch: {}", batch));

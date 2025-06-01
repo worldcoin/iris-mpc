@@ -370,7 +370,7 @@ async fn exec_main_inner_step_two(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+        while let Some(batch) = batch_generator.next_batch(iris_store, &hawk_handle).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
