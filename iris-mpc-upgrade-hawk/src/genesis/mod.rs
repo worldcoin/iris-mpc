@@ -180,7 +180,7 @@ pub async fn exec_main(
 
     // Process: Start thread for persisting indexing results to DB.
     let tx_results =
-        start_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
+        get_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
     background_tasks.check_tasks();
 
     // Coordinator: await network state = ready.
@@ -226,44 +226,6 @@ pub async fn exec_main(
     } else {
         log_info(String::from("Skipping database snapshot as requested"));
     };
-
-    Ok(())
-}
-
-/// Takes a dB snapshot.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
-/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `iris_store` - Iris PostgreSQL store provider.
-/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
-/// * `shutdown_handler` - Handler coordinating process shutdown.
-/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
-/// * `tx_results` - Channel to send job results to DB persistence thread.
-///
-async fn set_db_snapshot(
-    config: &Config,
-    rds_client: &RDSClient,
-    batch_size: usize,
-    last_indexed_id: IrisSerialId,
-    max_indexation_id: IrisSerialId,
-) -> Result<()> {
-    // Set snapshot ID.
-    let db_config = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-    let unix_timestamp = Utc::now().timestamp();
-    let snapshot_id = format!(
-        "genesis-{}-{}-{}-{}",
-        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
-    );
-
-    // Create snapshot.
-    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
 
     Ok(())
 }
@@ -545,6 +507,60 @@ async fn get_service_clients(
     Ok((aws_clients, pgres_clients.0, pgres_clients.1))
 }
 
+/// Spawns thread responsible for persisting results from batch query processing to database.
+///
+/// # Arguments
+///
+/// * `graph_store` - Graph PostgreSQL store provider.
+/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
+/// * `shutdown_handler` - Handler coordinating process shutdown.
+///
+async fn get_results_thread(
+    graph_store: GraphPg<Aby3Store>,
+    task_monitor: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<Sender<JobResult>> {
+    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
+    let shutdown_handler_bg = Arc::clone(shutdown_handler);
+    let _result_sender_abort = task_monitor.spawn(async move {
+        while let Some(JobResult {
+            batch_id,
+            connect_plans,
+            last_serial_id,
+            ..
+        }) = rx.recv().await
+        {
+            log_info(format!("Job Results :: Received: batch-id={}", batch_id));
+
+            let mut graph_tx = graph_store.tx().await?;
+            connect_plans.persist(&mut graph_tx).await?;
+            log_info(format!(
+                "Job Results :: Persisted graph updates: batch-id={}",
+                batch_id
+            ));
+
+            let mut db_tx = graph_tx.tx;
+            set_last_indexed_id(&mut db_tx, last_serial_id).await?;
+            db_tx.commit().await?;
+            log_info(format!(
+                "Job Results :: Persisted last indexed id: batch-id={}",
+                batch_id
+            ));
+
+            log_info(format!(
+                "Job Results :: Persisted to dB: batch-id={}",
+                batch_id
+            ));
+
+            shutdown_handler_bg.decrement_batches_pending_completion();
+        }
+
+        Ok(())
+    });
+
+    Ok(tx)
+}
+
 /// Build this node's synchronization state, which is compared against the
 /// states provided by the other MPC nodes to reconstruct a consistent initial
 /// state for MPC operation.
@@ -647,53 +663,6 @@ async fn init_graph_from_stores(
     Ok(())
 }
 
-/// Spawns thread responsible for persisting results from batch query processing to database.
-async fn start_results_thread(
-    graph_store: GraphPg<Aby3Store>,
-    task_monitor: &mut TaskMonitor,
-    shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<Sender<JobResult>> {
-    let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
-    let shutdown_handler_bg = Arc::clone(shutdown_handler);
-    let _result_sender_abort = task_monitor.spawn(async move {
-        while let Some(JobResult {
-            batch_id,
-            connect_plans,
-            last_serial_id,
-            ..
-        }) = rx.recv().await
-        {
-            log_info(format!("Job Results :: Received: batch-id={}", batch_id));
-
-            let mut graph_tx = graph_store.tx().await?;
-            connect_plans.persist(&mut graph_tx).await?;
-            log_info(format!(
-                "Job Results :: Persisted graph updates: batch-id={}",
-                batch_id
-            ));
-
-            let mut db_tx = graph_tx.tx;
-            set_last_indexed_id(&mut db_tx, last_serial_id).await?;
-            db_tx.commit().await?;
-            log_info(format!(
-                "Job Results :: Persisted last indexed id: batch-id={}",
-                batch_id
-            ));
-
-            log_info(format!(
-                "Job Results :: Persisted to dB: batch-id={}",
-                batch_id
-            ));
-
-            shutdown_handler_bg.decrement_batches_pending_completion();
-        }
-
-        Ok(())
-    });
-
-    Ok(tx)
-}
-
 /// Initializes shutdown handler, which waits for shutdown signals or function
 /// calls and provides a light mechanism for gracefully finishing ongoing query
 /// batches before exiting.
@@ -724,6 +693,40 @@ fn log_info(msg: String) -> String {
 /// Helper: logs & returns a warning message.
 fn log_warn(msg: String) -> String {
     genesis::log_warn("Server", msg)
+}
+
+/// Takes a dB snapshot.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `rds_client` - AWS RDS SDK client.
+/// * `batch_size` - Size of indexation batches.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+///
+async fn set_db_snapshot(
+    config: &Config,
+    rds_client: &RDSClient,
+    batch_size: usize,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+) -> Result<()> {
+    // Set snapshot ID.
+    let db_config = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+    let unix_timestamp = Utc::now().timestamp();
+    let snapshot_id = format!(
+        "genesis-{}-{}-{}-{}",
+        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+    );
+
+    // Create snapshot.
+    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
+
+    Ok(())
 }
 
 /// TODO : implement db sync genesis
