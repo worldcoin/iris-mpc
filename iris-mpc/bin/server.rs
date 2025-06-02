@@ -15,6 +15,7 @@ use iris_mpc::services::processors::result_message::{
 };
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::ReadyProbeResponse;
@@ -41,7 +42,7 @@ use iris_mpc_common::{
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{Modification, SyncResult, SyncState},
+        sync::{Modification, ModificationKey, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
@@ -284,7 +285,9 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if batch_modifications.contains_key(&identity_deletion_request.serial_id) {
+                        if batch_modifications
+                            .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
+                        {
                             tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 identity_deletion_request.serial_id,
@@ -294,13 +297,15 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                identity_deletion_request.serial_id as i64,
+                                Some(identity_deletion_request.serial_id as i64),
                                 IDENTITY_DELETION_MESSAGE_TYPE,
                                 None,
                             )
                             .await?;
-                        batch_modifications
-                            .insert(identity_deletion_request.serial_id, modification);
+                        batch_modifications.insert(
+                            RequestSerialId(identity_deletion_request.serial_id),
+                            modification,
+                        );
 
                         batch_query
                             .deletion_requests_indices
@@ -340,6 +345,19 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+
+                        let modification = store
+                            .insert_modification(
+                                None,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                Some(uniqueness_request.s3_key.as_str()),
+                            )
+                            .await?;
+                        batch_modifications.insert(
+                            RequestId(uniqueness_request.signup_id.clone()),
+                            modification,
+                        );
+
                         if let Some(enable_mirror_attacks) =
                             uniqueness_request.full_face_mirror_attacks_detection_enabled
                         {
@@ -444,7 +462,9 @@ async fn receive_batch(
                                 continue;
                             }
 
-                            if batch_modifications.contains_key(&reauth_request.serial_id) {
+                            if batch_modifications
+                                .contains_key(&RequestSerialId(reauth_request.serial_id))
+                            {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reauth_request.serial_id,
@@ -457,12 +477,13 @@ async fn receive_batch(
 
                             let modification = store
                                 .insert_modification(
-                                    reauth_request.serial_id as i64,
+                                    Some(reauth_request.serial_id as i64),
                                     REAUTH_MESSAGE_TYPE,
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications.insert(reauth_request.serial_id, modification);
+                            batch_modifications
+                                .insert(RequestSerialId(reauth_request.serial_id), modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -631,7 +652,9 @@ async fn receive_batch(
                                 }
                             };
 
-                            if batch_modifications.contains_key(&reset_update_request.serial_id) {
+                            if batch_modifications
+                                .contains_key(&RequestSerialId(reset_update_request.serial_id))
+                            {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reset_update_request.serial_id,
@@ -642,13 +665,15 @@ async fn receive_batch(
 
                             let modification = store
                                 .insert_modification(
-                                    reset_update_request.serial_id as i64,
+                                    Some(reset_update_request.serial_id as i64),
                                     RESET_UPDATE_MESSAGE_TYPE,
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications
-                                .insert(reset_update_request.serial_id, modification);
+                            batch_modifications.insert(
+                                RequestSerialId(reset_update_request.serial_id),
+                                modification,
+                            );
 
                             batch_query
                                 .reset_update_indices
@@ -961,10 +986,12 @@ fn get_iris_shares_parse_task(
     Ok(handle)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn send_last_modifications_to_sns(
     store: &Store,
     sns_client: &SNSClient,
     config: &Config,
+    uniqueness_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
     deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
     reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
@@ -986,6 +1013,7 @@ async fn send_last_modifications_to_sns(
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     let mut reset_update_messages = Vec::new();
+    let mut uniqueness_messages = Vec::new();
     for modification in &last_modifications {
         if modification.result_message_body.is_none() {
             tracing::error!("Missing modification result message body");
@@ -1008,6 +1036,9 @@ async fn send_last_modifications_to_sns(
             RESET_UPDATE_MESSAGE_TYPE => {
                 reset_update_messages.push(body);
             }
+            UNIQUENESS_MESSAGE_TYPE => {
+                uniqueness_messages.push(body);
+            }
             other => {
                 tracing::error!("Unknown message type: {}", other);
             }
@@ -1015,12 +1046,25 @@ async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} deletion, {} reauth, {} reset update",
+        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update",
         last_modifications.len(),
+        uniqueness_messages.len(),
         deletion_messages.len(),
         reauth_messages.len(),
         reset_update_messages.len(),
     );
+
+    if !uniqueness_messages.is_empty() {
+        send_results_to_sns(
+            uniqueness_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            uniqueness_result_attributes,
+            UNIQUENESS_MESSAGE_TYPE,
+        )
+        .await?;
+    }
 
     if !deletion_messages.is_empty() {
         send_results_to_sns(
@@ -1165,16 +1209,6 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-    tracing::info!("Replaying results");
-    send_results_to_sns(
-        store.last_results(max_sync_lookback).await?,
-        &Vec::new(),
-        &aws_clients.sns_client,
-        &config,
-        &uniqueness_result_attributes,
-        UNIQUENESS_MESSAGE_TYPE,
-    )
-    .await?;
 
     let store_len = store.count_irises().await?;
 
@@ -1529,27 +1563,9 @@ async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    if let Some(db_len) = sync_result.must_rollback_storage() {
-        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if db_len + max_rollback < store_len {
-            bail!(
-                "Refusing to rollback so much (from {} to {})",
-                store_len,
-                db_len,
-            );
-        }
-        tracing::warn!(
-            "Rolling back from database length {} to other nodes length {}",
-            store_len,
-            db_len
-        );
-        store.rollback(db_len).await?;
-        metrics::counter!("db.sync.rollback").increment(1);
-    }
-
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
-    // Handle modifications sync (reauth & deletions)
+    // Handle modifications sync
     if config.enable_modifications_sync {
         let (mut to_update, to_delete) = sync_result.compare_modifications();
         tracing::info!(
@@ -1595,7 +1611,7 @@ async fn server_main(config: Config) -> Result<()> {
                     dummy_shares_for_deletions.clone().0,
                     dummy_shares_for_deletions.clone().1,
                 ),
-                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE => {
+                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE | UNIQUENESS_MESSAGE_TYPE => {
                     let (left_shares, right_shares) = get_iris_shares_parse_task(
                         party_id,
                         shares_encryption_key_pair.clone(),
@@ -1612,9 +1628,16 @@ async fn server_main(config: Config) -> Result<()> {
                     panic!("Unknown modification type: {:?}", modification);
                 }
             };
-            store
-                .update_iris(Some(&mut tx), modification.serial_id, &lc, &lm, &rc, &rm)
-                .await?;
+            let iris_ref = StoredIrisRef {
+                id: modification
+                    .serial_id
+                    .ok_or_else(|| eyre!("Modification has no serial_id: {:?}", modification))?,
+                left_code: &lc.coefs,
+                left_mask: &lm.coefs,
+                right_code: &rc.coefs,
+                right_mask: &rm.coefs,
+            };
+            store.insert_irises_overriding(&mut tx, &[iris_ref]).await?;
         }
         tx.commit().await?;
     }
@@ -1625,6 +1648,7 @@ async fn server_main(config: Config) -> Result<()> {
             &store,
             &aws_clients.sns_client,
             &config,
+            &uniqueness_result_attributes,
             &reauth_result_attributes,
             &identity_deletion_result_attributes,
             &reset_update_result_attributes,
@@ -1852,10 +1876,15 @@ async fn server_main(config: Config) -> Result<()> {
                         },
                         full_face_mirror_attack_detected[i],
                     );
-
-                    serde_json::to_string(&result_event).wrap_err("failed to serialize result")
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reauth result");
+                    modifications
+                        .get_mut(&RequestId(request_ids[i].clone()))
+                        .unwrap()
+                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id);
+                    result_string
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -1917,9 +1946,9 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(success, &result_string);
+                        .mark_completed(success, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1933,9 +1962,9 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity deletion result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1984,18 +2013,14 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset update result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
 
             let mut tx = store_bg.tx().await?;
-
-            store_bg
-                .insert_results(&mut tx, &uniqueness_results)
-                .await?;
 
             store_bg
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())

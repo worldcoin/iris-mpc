@@ -108,7 +108,7 @@ impl From<&DbStoredIris> for VectorId {
 #[derive(sqlx::FromRow, Debug, Default)]
 pub struct StoredModification {
     pub id: i64,
-    pub serial_id: i64,
+    pub serial_id: Option<i64>,
     pub request_type: String,
     pub s3_url: Option<String>,
     pub status: String,
@@ -348,36 +348,9 @@ WHERE id = $1;
         Ok(id.0.unwrap_or(0) as usize)
     }
 
-    pub async fn insert_results(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        result_events: &[String],
-    ) -> Result<()> {
-        if result_events.is_empty() {
-            return Ok(());
-        }
-        let mut query = sqlx::QueryBuilder::new("INSERT INTO results (result_event)");
-        query.push_values(result_events, |mut query, result| {
-            query.push_bind(result);
-        });
-
-        query.build().execute(tx.deref_mut()).await?;
-        Ok(())
-    }
-
-    pub async fn last_results(&self, count: usize) -> Result<Vec<String>> {
-        let mut result_events: Vec<String> =
-            sqlx::query_scalar("SELECT result_event FROM results ORDER BY id DESC LIMIT $1")
-                .bind(count as i64)
-                .fetch_all(&self.pool)
-                .await?;
-        result_events.reverse();
-        Ok(result_events)
-    }
-
     pub async fn insert_modification(
         &self,
-        serial_id: i64,
+        serial_id: Option<i64>,
         request_type: &str,
         s3_url: Option<&str>,
     ) -> Result<Modification> {
@@ -500,19 +473,22 @@ WHERE id = $1;
             .iter()
             .map(|m| m.result_message_body.clone())
             .collect();
+        let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
 
         sqlx::query(
             r#"
             UPDATE modifications
             SET status = data.status,
                 persisted = data.persisted,
-                result_message_body = data.result_message_body
+                result_message_body = data.result_message_body,
+                serial_id = data.serial_id
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
                     unnest($3::bool[])    as persisted,
-                    unnest($4::text[])    as result_message_body
+                    unnest($4::text[])    as result_message_body,
+                    unnest($5::bigint[])  as serial_id
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -521,6 +497,7 @@ WHERE id = $1;
         .bind(&statuses)
         .bind(&persisteds)
         .bind(&result_message_bodies)
+        .bind(&serial_ids)
         .execute(tx.deref_mut())
         .await?;
 
@@ -651,7 +628,6 @@ pub mod tests {
     use iris_mpc_common::{
         helpers::{
             smpc_request::{RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-            smpc_response::UniquenessResult,
             sync::ModificationStatus,
         },
         postgres::AccessMode,
@@ -748,7 +724,6 @@ pub mod tests {
         let store = Store::new(&postgres_client).await?;
 
         let mut tx = store.tx().await?;
-        store.insert_results(&mut tx, &[]).await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
 
@@ -779,30 +754,7 @@ pub mod tests {
             codes_and_masks.push(iris);
         }
 
-        let result_event = serde_json::to_string(&UniquenessResult::new(
-            0,
-            Some(1_000_000_000),
-            false,
-            "A".repeat(64),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        ))?;
-        let result_events = vec![result_event; count];
-
         let mut tx = store.tx().await?;
-        store.insert_results(&mut tx, &result_events).await?;
         store.insert_irises(&mut tx, &codes_and_masks).await?;
         tx.commit().await?;
 
@@ -820,9 +772,6 @@ pub mod tests {
             got_par.sort_by_key(|iris| iris.id);
             assert_eq!(got, got_par);
         }
-
-        let got = store.last_results(count).await?;
-        assert_eq!(got, result_events);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
@@ -875,27 +824,6 @@ pub mod tests {
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
         assert_eq!(got.len(), 5);
         assert_contiguous_id(&got);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_results() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        let result_events = vec!["event1".to_string(), "event2".to_string()];
-        let mut tx = store.tx().await?;
-        store.insert_results(&mut tx, &result_events).await?;
-        store.insert_results(&mut tx, &result_events).await?;
-        tx.commit().await?;
-
-        let got = store.last_results(2).await?;
-        assert_eq!(got, vec!["event1", "event2"]);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
@@ -1017,14 +945,14 @@ pub mod tests {
 
         // 1. Insert a new modification
         let inserted = store
-            .insert_modification(42, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(42), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // 2. Check that we got a valid result
         assert_modification(
             &inserted,
             1,
-            42,
+            Some(42),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -1034,14 +962,14 @@ pub mod tests {
 
         // 3. Insert another modification
         let inserted = store
-            .insert_modification(43, REAUTH_MESSAGE_TYPE, Some("https://example.com"))
+            .insert_modification(Some(43), REAUTH_MESSAGE_TYPE, Some("https://example.com"))
             .await?;
 
         // 4. Check that we got a valid result
         assert_modification(
             &inserted,
             2,
-            43,
+            Some(43),
             REAUTH_MESSAGE_TYPE,
             Some("https://example.com".to_string()),
             ModificationStatus::InProgress,
@@ -1065,7 +993,7 @@ pub mod tests {
         // Insert a few modifications
         for serial_id in 11..=15 {
             store
-                .insert_modification(serial_id, IDENTITY_DELETION_MESSAGE_TYPE, None)
+                .insert_modification(Some(serial_id), IDENTITY_DELETION_MESSAGE_TYPE, None)
                 .await?;
         }
 
@@ -1079,7 +1007,7 @@ pub mod tests {
         assert_modification(
             last,
             5,
-            15,
+            Some(15),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -1089,7 +1017,7 @@ pub mod tests {
         assert_modification(
             second_last,
             4,
-            14,
+            Some(14),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -1105,7 +1033,7 @@ pub mod tests {
     fn assert_modification(
         actual: &Modification,
         expected_id: i64,
-        expected_serial_id: i64,
+        expected_serial_id: Option<i64>,
         expected_request_type: &str,
         expected_s3_url: Option<String>,
         expected_status: ModificationStatus,
@@ -1129,23 +1057,35 @@ pub mod tests {
                 .await?;
         let store = Store::new(&postgres_client).await?;
 
-        // Insert three modifications
+        // Insert five modifications
         let mut m1 = store
-            .insert_modification(100, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(100), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
         let mut m2 = store
-            .insert_modification(50, REAUTH_MESSAGE_TYPE, Some("http://example.com/50"))
+            .insert_modification(Some(50), REAUTH_MESSAGE_TYPE, Some("http://example.com/50"))
             .await?;
-        let _m3 = store
-            .insert_modification(150, REAUTH_MESSAGE_TYPE, Some("http://example.com/150"))
+        let mut m3 = store
+            .insert_modification(None, UNIQUENESS_MESSAGE_TYPE, Some("http://example.com/m3"))
+            .await?;
+        let mut m4 = store
+            .insert_modification(None, UNIQUENESS_MESSAGE_TYPE, Some("http://example.com/m4"))
+            .await?;
+        let _m5 = store
+            .insert_modification(
+                Some(150),
+                REAUTH_MESSAGE_TYPE,
+                Some("http://example.com/150"),
+            )
             .await?;
 
-        // Update the status & persisted fields for first two in a single transaction
+        // Update the status & persisted fields for first four in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true, "m1");
-        m2.mark_completed(false, "m2");
+        m1.mark_completed(true, "m1", None);
+        m2.mark_completed(false, "m2", None);
+        m3.mark_completed(true, "m3", Some(101));
+        m4.mark_completed(false, "m4", None);
 
-        let modifications_to_update = vec![&m1, &m2];
+        let modifications_to_update = vec![&m1, &m2, &m3, &m4];
         store
             .update_modifications(&mut tx, &modifications_to_update)
             .await?;
@@ -1153,12 +1093,12 @@ pub mod tests {
         tx.commit().await?;
 
         // Check that the DB is updated
-        let last_three = store.last_modifications(3).await?;
-        assert_eq!(last_three.len(), 3);
+        let last_five = store.last_modifications(5).await?;
+        assert_eq!(last_five.len(), 5);
         assert_modification(
-            &last_three[0],
-            3,
-            150,
+            &last_five[0],
+            5,
+            Some(150),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/150".to_string()),
             ModificationStatus::InProgress,
@@ -1166,9 +1106,29 @@ pub mod tests {
             None,
         );
         assert_modification(
-            &last_three[1],
+            &last_five[1],
+            4,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/m4".to_string()),
+            ModificationStatus::Completed,
+            false,
+            Some("m4".to_string()),
+        );
+        assert_modification(
+            &last_five[2],
+            3,
+            Some(101),
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/m3".to_string()),
+            ModificationStatus::Completed,
+            true,
+            Some("m3".to_string()),
+        );
+        assert_modification(
+            &last_five[3],
             2,
-            50,
+            Some(50),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/50".to_string()),
             ModificationStatus::Completed,
@@ -1176,9 +1136,9 @@ pub mod tests {
             Some("m2".to_string()),
         );
         assert_modification(
-            &last_three[2],
+            &last_five[4],
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -1201,17 +1161,17 @@ pub mod tests {
 
         // Insert three modifications.
         let mut m1 = store
-            .insert_modification(11, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(11), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
         let m2 = store
-            .insert_modification(12, REAUTH_MESSAGE_TYPE, Some("http://example.com/12"))
+            .insert_modification(Some(12), REAUTH_MESSAGE_TYPE, Some("http://example.com/12"))
             .await?;
         let m3 = store
-            .insert_modification(13, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(13), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // mark m1 as completed
-        m1.mark_completed(true, "m1");
+        m1.mark_completed(true, "m1", None);
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&m1]).await?;
         tx.commit().await?;
@@ -1258,18 +1218,22 @@ pub mod tests {
         // Insert a variety of modifications with different request types
         // ID 1: identity_deletion (should be included when persisted = true)
         let mod1 = store
-            .insert_modification(100, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(100), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // ID 2: reauth (should be included when persisted = true)
         let mod2 = store
-            .insert_modification(101, REAUTH_MESSAGE_TYPE, Some("http://example.com/reauth"))
+            .insert_modification(
+                Some(101),
+                REAUTH_MESSAGE_TYPE,
+                Some("http://example.com/reauth"),
+            )
             .await?;
 
         // ID 3: reset_update (should not be included when persisted = false)
         store
             .insert_modification(
-                102,
+                Some(102),
                 RESET_UPDATE_MESSAGE_TYPE,
                 Some("http://example.com/reset"),
             )
@@ -1278,7 +1242,7 @@ pub mod tests {
         // ID 4: reset_update (should be included when persisted = true)
         let mod4 = store
             .insert_modification(
-                103,
+                Some(103),
                 RESET_UPDATE_MESSAGE_TYPE,
                 Some("http://example.com/reset"),
             )
@@ -1287,7 +1251,7 @@ pub mod tests {
         // ID 5: uniqueness (should NOT be included due to request type)
         store
             .insert_modification(
-                104,
+                Some(104),
                 UNIQUENESS_MESSAGE_TYPE,
                 Some("http://example.com/uniqueness"),
             )
@@ -1296,7 +1260,7 @@ pub mod tests {
         // ID 6: reset_check (should NOT be included due to request type)
         store
             .insert_modification(
-                105,
+                Some(105),
                 RESET_CHECK_MESSAGE_TYPE,
                 Some("http://example.com/reset_check"),
             )
@@ -1304,16 +1268,16 @@ pub mod tests {
 
         // ID 7: identity_deletion (should NOT be included due to persisted = false)
         let mod6 = store
-            .insert_modification(106, IDENTITY_DELETION_MESSAGE_TYPE, None)
+            .insert_modification(Some(106), IDENTITY_DELETION_MESSAGE_TYPE, None)
             .await?;
 
         // Make modifications 1, 2, 4 persisted = true
         let mut mod1 = mod1;
         let mut mod2 = mod2;
         let mut mod4 = mod4;
-        mod1.mark_completed(true, "result1");
-        mod2.mark_completed(true, "result2");
-        mod4.mark_completed(true, "result4");
+        mod1.mark_completed(true, "result1", None);
+        mod2.mark_completed(true, "result2", None);
+        mod4.mark_completed(true, "result4", None);
 
         let mut tx = store.tx().await?;
         store
@@ -1366,7 +1330,7 @@ pub mod tests {
 
         // Make mod6 persisted=true
         let mut mod6 = mod6;
-        mod6.mark_completed(true, "result6");
+        mod6.mark_completed(true, "result6", None);
 
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&mod6]).await?;
