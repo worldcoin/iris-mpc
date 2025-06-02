@@ -33,7 +33,7 @@ jobs:
       - name: Collect Workflow telemetry
         uses: catchpoint/workflow-telemetry-action@v1
         with:
-          github_token: ${{ secrets.GIT_HUB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_on_pr: false
           proc_trace_sys_enable: true
       - name: Checkout
