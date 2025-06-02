@@ -7,11 +7,9 @@ use crate::{
     },
 };
 use eyre::{eyre, Result};
-use futures::{Stream, StreamExt, TryStreamExt};
-use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use futures::future::try_join_all;
 use futures::StreamExt;
-use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use itertools::izip;
 use sqlx::{error::BoxDynError, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
@@ -266,7 +264,7 @@ where
         let table = self.links_table();
         let row = sqlx::query(&format!(
             "
-            SELECT COALESCE(MAX(CAST(source_ref AS INTEGER)), 0) as max_id
+            SELECT COALESCE(MAX(serial_id), 0) as max_id
             FROM {table}
             WHERE graph_id = $1
         "
@@ -332,7 +330,7 @@ where
                 let mut conn = pool.acquire().await?;
                 let table = format!("\"{}\".hawk_graph_links", schema_name);
 
-                // Calculate ID range for this partition (similar to stream_irises_par)
+                // Calculate ID range for this partition
                 let start_id = 1 + partition_size * (i as u32);
                 let end_id = start_id + partition_size - 1;
 
@@ -340,18 +338,18 @@ where
                     "
                     SELECT source_ref, links, layer FROM {table}
                     WHERE graph_id = $1
-                    AND CAST(source_ref AS INTEGER) BETWEEN $2 AND $3
-                    ORDER BY source_ref, layer
+                    AND serial_id BETWEEN $2 AND $3
+                    ORDER BY serial_id, layer
                 "
                 );
 
-                let mut rows = sqlx::query_as::<_, RowLinks<V>>(&query_sql)
+                let mut rows = sqlx::query_as::<_, RowLinks>(&query_sql)
                     .bind(graph_id)
                     .bind(start_id as i32)
                     .bind(end_id as i32)
                     .fetch(&mut *conn);
 
-                let mut count = 0;
+                let mut links_loaded = 0;
 
                 while let Some(row) = rows.next().await {
                     let row = row?;
@@ -365,7 +363,7 @@ where
                         .await
                         .map_err(|_| eyre!("Failed to send data to main task"))?;
 
-                    count += 1;
+                    links_loaded += 1;
                 }
 
                 tracing::info!(
@@ -373,10 +371,10 @@ where
                     i,
                     start_id,
                     end_id,
-                    count
+                    links_loaded
                 );
 
-                Ok::<_, eyre::Error>(count)
+                Ok::<_, eyre::Error>(())
             }
         });
 
@@ -391,21 +389,25 @@ where
         while let Some((source_ref, links, layer_idx)) = rx.recv().await {
             graph_mem.set_links(source_ref, links, layer_idx).await;
             total_links_written += 1;
+            if total_links_written % 100000 == 0 {
+                tracing::info!(
+                    "GraphLoader: Loaded {} graph links on graph {}",
+                    total_links_written,
+                    self.graph_id()
+                );
+            }
         }
 
         // Wait for all partition tasks to complete and get their counts
-        let partition_results = try_join_all(partition_handles)
+        try_join_all(partition_handles)
             .await?
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
 
-        let total_count: usize = partition_results.into_iter().sum();
-
         tracing::info!(
-            "GraphLoader: Loaded {} total graph links for graph_id {} (wrote {} links)",
-            total_count,
+            "GraphLoader: Loaded {} total graph links for graph_id {}",
+            total_links_written,
             self.graph_id(),
-            total_links_written
         );
 
         Ok(graph_mem)
