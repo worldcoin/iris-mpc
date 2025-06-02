@@ -25,7 +25,7 @@ RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
     && cargo install cargo-edit
 
-FROM --platform=linux/amd64 build-image AS build-app
+FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
 
