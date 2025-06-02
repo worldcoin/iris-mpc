@@ -208,7 +208,6 @@ pub async fn exec_main(
         hawk_actor,
         tx_results,
         modifications,
-        latest_modification_id,
     )
     .await?;
 
@@ -241,7 +240,6 @@ pub async fn exec_main(
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `iris_store` - Iris PostgreSQL store provider.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
@@ -254,13 +252,11 @@ async fn exec_main_loop(
     max_indexation_id: IrisSerialId,
     batch_size: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
-    // iris_store: &IrisStore,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<JobResult>,
     modifications: Vec<Modification>,
-    _max_modification_id: i64,
 ) -> Result<()> {
     // Set iris store.
     let iris_stores_mem: BothEyes<_> = [

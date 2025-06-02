@@ -266,7 +266,6 @@ mod tests {
     async fn test_iterator() -> Result<()> {
         // Set resources.
         let (iris_stores, db_size) = get_iris_stores();
-        // let (iris_store, pg_client, pg_schema) = get_iris_stores().await.unwrap();
 
         let mut instance = BatchGenerator::new(
             1,
