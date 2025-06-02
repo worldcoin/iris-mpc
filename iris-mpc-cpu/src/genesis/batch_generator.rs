@@ -27,23 +27,6 @@ pub struct Batch {
     pub right_queries: Vec<QueryRef>,
 }
 
-/// Constructor.
-impl Batch {
-    pub fn new(
-        batch_id: usize,
-        vector_ids: Vec<VectorId>,
-        left_queries: Vec<QueryRef>,
-        right_queries: Vec<QueryRef>,
-    ) -> Self {
-        Self {
-            batch_id,
-            vector_ids,
-            left_queries,
-            right_queries,
-        }
-    }
-}
-
 /// Trait: fmt::Display.
 impl fmt::Display for Batch {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -216,7 +199,7 @@ impl BatchIterator for BatchGenerator {
             let right_queries = iris_stores[1].get_queries(vector_ids.iter()).await;
 
             self.batch_count += 1;
-            let batch = Batch::new(self.batch_count, vector_ids, left_queries, right_queries);
+            let batch = Batch { batch_id: self.batch_count, vector_ids, left_queries, right_queries };
             Self::log_info(format!("Generated batch: {}", batch));
             Ok(Some(batch))
         } else {
