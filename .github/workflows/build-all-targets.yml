@@ -46,7 +46,7 @@ jobs:
   build-bins:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-8core
+      labels: ubuntu-22.04-16core
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
