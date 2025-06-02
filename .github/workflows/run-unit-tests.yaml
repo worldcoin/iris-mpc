@@ -15,7 +15,7 @@ jobs:
   unit-tests:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-8core
+      labels: ubuntu-22.04-16core
 
     services:
       postgres:
