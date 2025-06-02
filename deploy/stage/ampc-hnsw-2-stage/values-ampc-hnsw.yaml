@@ -57,12 +57,21 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "10000"
+    value: "512"
 
   - name: SMPC__N_BUCKETS
-    value: "10"
+    value: "16"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+    value: "false"
+
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_LOOKBACK_RECORDS
+    value: "5"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
     value: "false"
 
   - name: SMPC__AWS__REGION
