@@ -12,7 +12,7 @@ use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
 
-/// Type representing stored iris data for a batch.  Tuple represents:
+/// Type representing stored iris data for a batch.  Tuples represent:
 /// - Vector id of iris enrollment
 /// - Left iris code, in query format
 /// - Right iris code, in query format
