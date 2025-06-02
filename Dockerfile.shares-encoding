@@ -28,12 +28,12 @@ RUN cargo install cargo-build-deps \
 FROM build-image AS build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
-RUN cargo build --release --target $(arch)-unknown-linux-gnu --bin shares-encoding
+RUN cargo build --release --bin shares-encoding
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-COPY --from=build-app /src/gpu-iris-mpc/target/$(arch)-unknown-linux-gnu/release/shares-encoding /bin/shares-encoding
+COPY --from=build-app /src/gpu-iris-mpc/target/release/shares-encoding /bin/shares-encoding
 
 USER 65534
 ENTRYPOINT ["/bin/shares-encoding"]
