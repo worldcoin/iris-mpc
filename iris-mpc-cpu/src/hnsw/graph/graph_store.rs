@@ -9,9 +9,13 @@ use crate::{
 use eyre::{eyre, Result};
 use futures::{Stream, StreamExt, TryStreamExt};
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
+use futures::future::try_join_all;
+use futures::StreamExt;
+use iris_mpc_common::postgres::PostgresClient;
 use itertools::izip;
 use sqlx::{error::BoxDynError, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
+use tokio::sync::mpsc;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks {
@@ -44,6 +48,10 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
+    pub fn pool(&self) -> &sqlx::PgPool {
+        &self.pool
+    }
+
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
         Ok(self.tx_wrap(self.pool.begin().await?))
     }
@@ -65,18 +73,13 @@ pub struct GraphTx<'a, V> {
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
     pub fn with_graph<'a>(&'a mut self, graph_id: StoreId) -> GraphOps<'a, 'b, V> {
-        GraphOps {
-            tx: self,
-            graph_id,
-            borrowable_sql: "".to_string(),
-        }
+        GraphOps { tx: self, graph_id }
     }
 }
 
 pub struct GraphOps<'a, 'b, V> {
     tx: &'a mut GraphTx<'b, V>,
     graph_id: StoreId,
-    borrowable_sql: String,
 }
 
 impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
@@ -241,44 +244,169 @@ where
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks>> + '_ {
+    /// Get total row count for this graph_id
+    async fn get_total_row_count(&mut self) -> Result<usize> {
         let table = self.links_table();
-        self.borrowable_sql = format!(
+        let row = sqlx::query(&format!(
             "
-            SELECT serial_id, version_id, links, layer FROM {table}
+            SELECT COUNT(*) as total_count FROM {table}
             WHERE graph_id = $1
-            "
-        );
-        sqlx::query_as::<_, RowLinks>(&self.borrowable_sql)
-            .bind(self.graph_id())
-            .fetch(self.tx.tx.deref_mut())
-            .map_err(Into::into)
+        "
+        ))
+        .bind(self.graph_id())
+        .fetch_one(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to fetch total row count: {e}"))?;
+
+        Ok(row.get::<i64, _>("total_count") as usize)
     }
 
-    pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
+    /// Get the maximum serial ID (source_ref as integer) for this graph_id
+    async fn get_max_serial_id(&mut self) -> Result<u32> {
+        let table = self.links_table();
+        let row = sqlx::query(&format!(
+            "
+            SELECT COALESCE(MAX(CAST(source_ref AS INTEGER)), 0) as max_id
+            FROM {table}
+            WHERE graph_id = $1
+        "
+        ))
+        .bind(self.graph_id())
+        .fetch_one(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to fetch max serial ID: {e}"))?;
+
+        Ok(row.get::<i32, _>("max_id") as u32)
+    }
+
+    /// Load graph data to memory using parallel loading by source_ref ranges.
+    /// This method creates separate connections for each range and loads them in parallel.
+    pub async fn load_to_mem(
+        &mut self,
+        pool: &sqlx::PgPool,
+        parallelism: usize,
+    ) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
 
         let ep = self.get_entry_point().await?;
-
         if let Some((point, layer)) = ep {
             graph_mem.set_entry_point(point, layer).await;
         }
 
-        let mut count = 0;
+        let total_rows = self.get_total_row_count().await?;
 
-        let mut irises = self.stream_links();
-        while let Some(row) = irises.next().await {
-            let row = row?;
-            let links = bincode::deserialize(&row.links)?;
-            let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
-            graph_mem
-                .set_links(source_ref, links, row.layer as usize)
-                .await;
-            count += 1;
-            if count % 100000 == 0 {
-                tracing::info!("GraphLoader: Loaded {} graph links", count);
-            }
+        if total_rows == 0 {
+            tracing::info!(
+                "GraphLoader: No data found for graph_id {}",
+                self.graph_id()
+            );
+            return Ok(graph_mem);
         }
+
+        let max_serial_id = self.get_max_serial_id().await?;
+
+        tracing::info!(
+            "GraphLoader: Loading {} rows using {} parallel partitions. max_serial_id: {} for graph_id {}",
+            total_rows,
+            parallelism,
+            max_serial_id,
+            self.graph_id()
+        );
+
+        // Create channel for sending data from partitions to main task
+        let (tx, mut rx) =
+            mpsc::channel::<(V::VectorRef, SortedEdgeIds<V::VectorRef>, usize)>(1024);
+
+        let schema_name = self.tx.schema_name.clone();
+        let graph_id = self.graph_id();
+
+        // Calculate partition size and create partition tasks
+        let partition_size = max_serial_id.div_ceil(parallelism as u32).max(1);
+
+        let partition_tasks = (0..parallelism).map(|i| {
+            let pool = pool.clone();
+            let schema_name = schema_name.clone();
+            let tx = tx.clone();
+
+            async move {
+                let mut conn = pool.acquire().await?;
+                let table = format!("\"{}\".hawk_graph_links", schema_name);
+
+                // Calculate ID range for this partition (similar to stream_irises_par)
+                let start_id = 1 + partition_size * (i as u32);
+                let end_id = start_id + partition_size - 1;
+
+                let query_sql = format!(
+                    "
+                    SELECT source_ref, links, layer FROM {table}
+                    WHERE graph_id = $1
+                    AND CAST(source_ref AS INTEGER) BETWEEN $2 AND $3
+                    ORDER BY source_ref, layer
+                "
+                );
+
+                let mut rows = sqlx::query_as::<_, RowLinks<V>>(&query_sql)
+                    .bind(graph_id)
+                    .bind(start_id as i32)
+                    .bind(end_id as i32)
+                    .fetch(&mut *conn);
+
+                let mut count = 0;
+
+                while let Some(row) = rows.next().await {
+                    let row = row?;
+                    let layer_idx = row.layer as usize;
+                    let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
+                    let links: SortedEdgeIds<V::VectorRef> = bincode::deserialize(&row.links)
+                        .map_err(|e| eyre!("Failed to deserialize links: {e}"))?;
+
+                    // Send data to main task via channel
+                    tx.send((source_ref, links, layer_idx))
+                        .await
+                        .map_err(|_| eyre!("Failed to send data to main task"))?;
+
+                    count += 1;
+                }
+
+                tracing::info!(
+                    "GraphLoader: Partition {} (IDs {}-{}) loaded {} links",
+                    i,
+                    start_id,
+                    end_id,
+                    count
+                );
+
+                Ok::<_, eyre::Error>(count)
+            }
+        });
+
+        // Start all partition tasks
+        let partition_handles = partition_tasks.map(tokio::spawn).collect::<Vec<_>>();
+
+        // Drop the original sender so rx will close when all partitions finish
+        drop(tx);
+
+        // Collect all data from partitions and write to graph_mem
+        let mut total_links_written = 0;
+        while let Some((source_ref, links, layer_idx)) = rx.recv().await {
+            graph_mem.set_links(source_ref, links, layer_idx).await;
+            total_links_written += 1;
+        }
+
+        // Wait for all partition tasks to complete and get their counts
+        let partition_results = try_join_all(partition_handles)
+            .await?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let total_count: usize = partition_results.into_iter().sum();
+
+        tracing::info!(
+            "GraphLoader: Loaded {} total graph links for graph_id {} (wrote {} links)",
+            total_count,
+            self.graph_id(),
+            total_links_written
+        );
 
         Ok(graph_mem)
     }
@@ -455,7 +583,10 @@ mod tests {
             tx.with_graph(StoreId::Left).insert_apply(plan).await?;
         }
 
-        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await?;
+        let graph_mem2 = tx
+            .with_graph(StoreId::Left)
+            .load_to_mem(graph_pg.pool(), 2)
+            .await?;
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
