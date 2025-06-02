@@ -44,6 +44,8 @@ jobs:
           file: Dockerfile.dev.hawk
           load: true
           tags: hawk-server-local-build:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@8be2d741e891ac9b8ac20825e6f3904149599925
