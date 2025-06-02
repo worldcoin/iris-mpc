@@ -8,7 +8,6 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{IrisSerialId, IrisVectorId};
-use itertools::multiunzip;
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -34,7 +33,7 @@ pub struct JobRequest {
     pub batch_id: usize,
 
     // Incoming batch of iris identifiers for subsequent correlation.
-    pub identifiers: Vec<IrisVectorId>,
+    pub vector_ids: Vec<IrisVectorId>,
 
     /// HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
@@ -42,15 +41,21 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: PartyId, Batch { data, id: batch_id }: Batch) -> Self {
+    pub fn new(
+        party_id: PartyId,
+        Batch {
+            batch_id,
+            vector_ids,
+            left_queries,
+            right_queries,
+        }: Batch,
+    ) -> Self {
         assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
-        assert!(!data.is_empty(), "Invalid batch: is empty");
-
-        let (identifiers, left_queries, right_queries) = multiunzip(data);
+        assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
 
         Self {
             batch_id,
-            identifiers,
+            vector_ids,
             queries: Arc::new([left_queries, right_queries]),
         }
     }
@@ -60,7 +65,7 @@ impl JobRequest {
 impl JobRequest {
     // Incoming batch size.
     pub fn batch_size(&self) -> usize {
-        self.identifiers.len()
+        self.vector_ids.len()
     }
 }
 
@@ -77,7 +82,7 @@ pub struct JobResult {
     pub first_serial_id: IrisSerialId,
 
     /// Set of Iris identifiers being indexed.
-    pub identifiers: Vec<IrisVectorId>,
+    pub vector_ids: Vec<IrisVectorId>,
 
     /// Iris serial id of batch's last element.
     pub last_serial_id: IrisSerialId,
@@ -89,9 +94,9 @@ impl JobResult {
         Self {
             connect_plans,
             batch_id: request.batch_id,
-            first_serial_id: request.identifiers.first().unwrap().serial_id(),
-            identifiers: request.identifiers.clone(),
-            last_serial_id: request.identifiers.last().unwrap().serial_id(),
+            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
+            vector_ids: request.vector_ids.clone(),
+            last_serial_id: request.vector_ids.last().unwrap().serial_id(),
         }
     }
 }
@@ -103,7 +108,7 @@ impl fmt::Display for JobResult {
             f,
             "batch-id={}, batch-size={}, range=({}..{})",
             self.batch_id,
-            self.identifiers.len(),
+            self.vector_ids.len(),
             self.first_serial_id,
             self.last_serial_id
         )

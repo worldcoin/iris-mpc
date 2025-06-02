@@ -6,32 +6,41 @@ use crate::{
 use super::utils::{errors::IndexationError, logger};
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
-use itertools::{izip, Itertools};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
 
-/// Type representing stored iris data for a batch.  Tuples represent:
-/// - Vector id of iris enrollment
-/// - Left iris code, in query format
-/// - Right iris code, in query format
-type BatchData = Vec<(VectorId, QueryRef, QueryRef)>;
-
 /// A batch for upstream indexation.
 #[derive(Debug)]
 pub struct Batch {
-    /// Array of stored iris data for the batch.
-    pub data: BatchData,
-
     /// Ordinal batch identifier scoped by processing context.
-    pub id: usize,
+    pub batch_id: usize,
+
+    /// Array of vector ids of iris enrollments
+    pub vector_ids: Vec<VectorId>,
+
+    /// Array of left iris codes, in query format
+    pub left_queries: Vec<QueryRef>,
+
+    /// Array of right iris codes, in query format
+    pub right_queries: Vec<QueryRef>,
 }
 
 /// Constructor.
 impl Batch {
-    pub fn new(batch_id: usize, data: BatchData) -> Self {
-        Self { data, id: batch_id }
+    pub fn new(
+        batch_id: usize,
+        vector_ids: Vec<VectorId>,
+        left_queries: Vec<QueryRef>,
+        right_queries: Vec<QueryRef>,
+    ) -> Self {
+        Self {
+            batch_id,
+            vector_ids,
+            left_queries,
+            right_queries,
+        }
     }
 }
 
@@ -41,7 +50,7 @@ impl fmt::Display for Batch {
         write!(
             f,
             "id={}, size={}, range=({}..{})",
-            self.id,
+            self.batch_id,
             self.size(),
             self.id_start(),
             self.id_end()
@@ -53,17 +62,17 @@ impl fmt::Display for Batch {
 impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
-        self.data.last().map(|value| value.0.serial_id()).unwrap()
+        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
     }
 
     // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
-        self.data.first().map(|value| value.0.serial_id()).unwrap()
+        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
     }
 
     // Returns size of the batch.
     pub fn size(&self) -> usize {
-        self.data.len()
+        self.vector_ids.len()
     }
 }
 
@@ -193,7 +202,7 @@ impl BatchIterator for BatchGenerator {
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.next_identifiers() {
             // Assumption: ids are the same in both left and right stores, esp. versions
-            let ids = iris_stores[0]
+            let vector_ids = iris_stores[0]
                 .get_vector_ids(&identifiers)
                 .await
                 .into_iter()
@@ -203,12 +212,11 @@ impl BatchIterator for BatchGenerator {
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
 
-            let iris_data_left = iris_stores[0].get_queries(ids.iter()).await;
-            let iris_data_right = iris_stores[1].get_queries(ids.iter()).await;
-            let batch_data = izip!(ids, iris_data_left, iris_data_right).collect_vec();
+            let left_queries = iris_stores[0].get_queries(vector_ids.iter()).await;
+            let right_queries = iris_stores[1].get_queries(vector_ids.iter()).await;
 
             self.batch_count += 1;
-            let batch = Batch::new(self.batch_count, batch_data);
+            let batch = Batch::new(self.batch_count, vector_ids, left_queries, right_queries);
             Self::log_info(format!("Generated batch: {}", batch));
             Ok(Some(batch))
         } else {
