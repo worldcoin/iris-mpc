@@ -199,7 +199,12 @@ impl BatchIterator for BatchGenerator {
             let right_queries = iris_stores[1].get_queries(vector_ids.iter()).await;
 
             self.batch_count += 1;
-            let batch = Batch { batch_id: self.batch_count, vector_ids, left_queries, right_queries };
+            let batch = Batch {
+                batch_id: self.batch_count,
+                vector_ids,
+                left_queries,
+                right_queries,
+            };
             Self::log_info(format!("Generated batch: {}", batch));
             Ok(Some(batch))
         } else {
