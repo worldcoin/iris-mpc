@@ -16,9 +16,9 @@ RUN apt-get update && apt-get install -y \
     wget
 
 RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-ENV RUSTUP_HOME="/root/.rustup"
-ENV CARGO_HOME="/root/.cargo"
+ENV PATH "/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME "/root/.rustup"
+ENV CARGO_HOME "/root/.cargo"
 RUN rustup toolchain install 1.85.0
 RUN rustup default 1.85.0
 RUN rustup component add cargo
