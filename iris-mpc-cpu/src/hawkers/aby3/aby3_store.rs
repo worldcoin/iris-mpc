@@ -146,6 +146,10 @@ impl SharedIrises {
         self.points.reserve(additional);
     }
 
+    pub fn get_current_version(&self, serial_id: SerialId) -> Option<VersionId> {
+        self.points.get(&serial_id).map(|(version, _iris)| *version)
+    }
+
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
         match self.points.get(&vector.serial_id()) {
@@ -219,6 +223,18 @@ impl SharedIrisesRef {
 
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
         self.data.read().await.get_vector(vector)
+    }
+
+    pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
+        let body = self.data.read().await;
+
+        serial_ids
+            .iter()
+            .map(|serial_id| {
+                body.get_current_version(*serial_id)
+                    .map(|version_id| VectorId::new(*serial_id, version_id))
+            })
+            .collect()
     }
 
     pub async fn get_vectors(
@@ -362,10 +378,7 @@ impl VectorStore for Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let vectors = self
-            .storage
-            .get_vectors(pairs.iter().map(|(_, v)| v))
-            .await;
+        let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
             .map(|((q, _), v)| (&q.processed_query, &**v))

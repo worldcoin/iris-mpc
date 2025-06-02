@@ -4,16 +4,16 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
-    hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
-    protocol::shared_iris::GaloisRingSharedIris,
+    hawkers::aby3::aby3_store::QueryRef,
 };
 use eyre::Result;
 use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use itertools::multiunzip;
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
 // Helper type: Aby3 store batch query.
-pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
+pub type Aby3BatchQuery = BothEyes<VecRequests<QueryRef>>;
 
 // Helper type: Aby3 store batch query reference.
 pub type Aby3BatchQueryRef = Arc<Aby3BatchQuery>;
@@ -46,35 +46,12 @@ impl JobRequest {
         assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
         assert!(!data.is_empty(), "Invalid batch: is empty");
 
+        let (identifiers, left_queries, right_queries) = multiunzip(data);
+
         Self {
             batch_id,
-            identifiers: data.iter().map(IrisVectorId::from).collect(),
-            queries: Arc::new([
-                data.iter()
-                    .map(|iris| {
-                        prepare_aby3_query(
-                            GaloisRingSharedIris::try_from_buffers_inner(
-                                party_id,
-                                iris.left_code(),
-                                iris.left_mask(),
-                            )
-                            .unwrap(),
-                        )
-                    })
-                    .collect(),
-                data.iter()
-                    .map(|iris| {
-                        prepare_aby3_query(
-                            GaloisRingSharedIris::try_from_buffers_inner(
-                                party_id,
-                                iris.right_code(),
-                                iris.right_mask(),
-                            )
-                            .unwrap(),
-                        )
-                    })
-                    .collect(),
-            ]),
+            identifiers,
+            queries: Arc::new([left_queries, right_queries]),
         }
     }
 }

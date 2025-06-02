@@ -17,7 +17,7 @@ use iris_mpc_common::{
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
         self,
         state_accessor::{
@@ -203,7 +203,6 @@ pub async fn exec_main(
         max_indexation_id,
         batch_size,
         excluded_serial_ids,
-        &iris_store,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
@@ -255,7 +254,7 @@ async fn exec_main_loop(
     max_indexation_id: IrisSerialId,
     batch_size: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
-    iris_store: &IrisStore,
+    // iris_store: &IrisStore,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
@@ -263,6 +262,12 @@ async fn exec_main_loop(
     modifications: Vec<Modification>,
     _max_modification_id: i64,
 ) -> Result<()> {
+    // Set iris store.
+    let iris_stores_mem: BothEyes<_> = [
+        hawk_actor.iris_store(StoreId::Left),
+        hawk_actor.iris_store(StoreId::Right),
+    ];
+
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
@@ -310,7 +315,7 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+        while let Some(batch) = batch_generator.next_batch(&iris_stores_mem).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
