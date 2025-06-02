@@ -129,6 +129,9 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"  
 
+  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
+    value: "true"
+
   - name: SMPC__ENABLE_REAUTH
     value: "true"
 
