@@ -429,3 +429,184 @@ impl Filter {
         self.intra_batch && self.luc_rule(left, right)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::VectorId;
+    use super::*;
+    use std::collections::HashMap;
+
+    const FILTER_BOTH: Filter = Filter {
+        eyes: Both,
+        orient: Both,
+        intra_batch: false,
+    };
+    const FILTER_LEFT: Filter = Filter {
+        eyes: Only(Left),
+        orient: Both,
+        intra_batch: false,
+    };
+    const FILTER_RIGHT: Filter = Filter {
+        eyes: Only(Right),
+        orient: Both,
+        intra_batch: false,
+    };
+    const FILTER_INTRA: Filter = Filter {
+        eyes: Both,
+        orient: Both,
+        intra_batch: true,
+    };
+
+    #[test]
+    fn test_search_rule() {
+        for x in [false, true] {
+            // Matching from HNSW search: AND rule
+            assert_eq!(FILTER_BOTH.search_rule(true, true), true);
+            assert_eq!(FILTER_BOTH.search_rule(x, false), false);
+            assert_eq!(FILTER_BOTH.search_rule(false, x), false);
+            // Only left
+            assert_eq!(FILTER_LEFT.search_rule(true, x), true);
+            assert_eq!(FILTER_LEFT.search_rule(false, x), false);
+            // Only right
+            assert_eq!(FILTER_RIGHT.search_rule(x, true), true);
+            assert_eq!(FILTER_RIGHT.search_rule(x, false), false);
+        }
+    }
+
+    #[test]
+    fn test_luc_rule() {
+        for x in [false, true] {
+            // Matching from LUC results: OR rule
+            assert_eq!(FILTER_BOTH.luc_rule(false, false), false);
+            assert_eq!(FILTER_BOTH.luc_rule(true, x), true);
+            assert_eq!(FILTER_BOTH.luc_rule(x, true), true);
+            // Only left
+            assert_eq!(FILTER_LEFT.luc_rule(true, x), true);
+            assert_eq!(FILTER_LEFT.luc_rule(false, x), false);
+            // Only right
+            assert_eq!(FILTER_RIGHT.luc_rule(x, true), true);
+            assert_eq!(FILTER_RIGHT.luc_rule(x, false), false);
+        }
+    }
+
+    #[test]
+    fn test_reauth_rule() {
+        let and_rule = false;
+        let or_rule = true;
+        for x in [false, true] {
+            // Reauth with AND rule
+            assert_eq!(FILTER_BOTH.reauth_rule(and_rule, [true, true]), true);
+            assert_eq!(FILTER_BOTH.reauth_rule(and_rule, [x, false]), false);
+            assert_eq!(FILTER_BOTH.reauth_rule(and_rule, [false, x]), false);
+            // Reauth with OR rule
+            assert_eq!(FILTER_BOTH.reauth_rule(or_rule, [true, x]), true);
+            assert_eq!(FILTER_BOTH.reauth_rule(or_rule, [x, true]), true);
+            assert_eq!(FILTER_BOTH.reauth_rule(or_rule, [false, false]), false);
+
+            for either_rule in [and_rule, or_rule] {
+                // Only left
+                assert_eq!(FILTER_LEFT.reauth_rule(either_rule, [true, x]), true);
+                assert_eq!(FILTER_LEFT.reauth_rule(either_rule, [false, x]), false);
+                // Only right
+                assert_eq!(FILTER_RIGHT.reauth_rule(either_rule, [x, true]), true);
+                assert_eq!(FILTER_RIGHT.reauth_rule(either_rule, [x, false]), false);
+            }
+        }
+    }
+
+    #[test]
+    fn test_intra_rule() {
+        for x in [false, true] {
+            // Matching within a batch: OR rule.
+            assert_eq!(FILTER_INTRA.intra_rule(true, x), true);
+            assert_eq!(FILTER_INTRA.intra_rule(x, true), true);
+            assert_eq!(FILTER_INTRA.intra_rule(false, false), false);
+
+            // If intra-batch is not requested, always false.
+            for y in [false, true] {
+                assert_eq!(FILTER_BOTH.intra_rule(x, y), false);
+            }
+        }
+    }
+
+    #[test]
+    fn test_matching() {
+        // A uniqueness request is accepted if there are no matches.
+        let insert = impl_test_matching(false, false);
+        assert_eq!(insert.is_mutation(), true);
+
+        // Uniqueness requests are rejected if is any kind of match.
+        for reject in [
+            impl_test_matching(true, false),
+            impl_test_matching(false, true),
+            impl_test_matching(true, true),
+        ] {
+            assert_eq!(reject.is_mutation(), false);
+        }
+    }
+
+    fn impl_test_matching(with_search_match: bool, with_other_side_match: bool) -> Decision {
+        let n_req = 1; // Just one request.
+        let req_i = 0;
+
+        // Hypothetical search results.
+        // Left matches; right was inspected but does not match.
+        let both_found = VectorId::from_serial_id(1);
+        // Both sides match, when in case `with_search_match`.
+        let both_match = VectorId::from_serial_id(2);
+        // Only left was inspected and it matches.
+        let left_match = VectorId::from_serial_id(3);
+        // Only right was inspected and it matches.
+        let right_match = VectorId::from_serial_id(4);
+        // The request wants us to inspect this ID.
+        let luc_requested = VectorId::from_serial_id(5);
+        // The request wants us to inspect this ID, and it came up in search too.
+        let luc_requested_dup = left_match;
+
+        // Simulate Step1
+        let step1s = vec![Step1 {
+            inner_join: vec![
+                (both_found, [false, true]),
+                (both_match, [true, with_search_match]),
+            ],
+            anti_join: [vec![left_match], vec![right_match]],
+            luc_ids: vec![luc_requested, luc_requested_dup],
+            request_type: RequestType::Uniqueness(UniquenessRequest {
+                skip_persistence: false,
+            }),
+        }];
+        let batch1 = BatchStep1(step1s);
+
+        // Get the other side of partial search results.
+        let missing_ids = batch1.missing_vector_ids();
+        assert_eq!(
+            missing_ids[LEFT][req_i],
+            vec![right_match, luc_requested, luc_requested_dup]
+        );
+        assert_eq!(missing_ids[RIGHT][req_i], vec![left_match, luc_requested]); // No dup.
+
+        // Simulate `calculate_missing_is_match(..)`.
+        // Make it match or not depending on `with_other_side_match`.
+        let mut missing_is_match = [vec![HashMap::new()], vec![HashMap::new()]];
+        for id in &missing_ids[LEFT][req_i] {
+            missing_is_match[LEFT][req_i].insert(*id, with_other_side_match);
+        }
+        for id in &missing_ids[RIGHT][req_i] {
+            missing_is_match[RIGHT][req_i].insert(*id, false);
+        }
+
+        // Simulate `intra_batch_is_match(..)`
+        let intra_matches = vec![vec![]];
+
+        let batch2 = batch1.step2(&missing_is_match, intra_matches);
+
+        // Do the same with mirrored matching. Amazingly, we got exactly the same result in this test.
+        let batch2_mirror = batch2.clone();
+        let batch3 = batch2.step3(batch2_mirror);
+
+        // Return the final decision for the request.
+        let decisions = batch3.decisions();
+        assert_eq!(decisions.len(), n_req);
+        return decisions[req_i];
+    }
+}
