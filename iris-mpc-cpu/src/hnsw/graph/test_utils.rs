@@ -121,7 +121,7 @@ impl DbContext {
         let mut graph_tx = self.graph_pg.tx().await?;
         let mut graph_ops = graph_tx.with_graph(side);
 
-        graph_ops.load_to_mem().await
+        graph_ops.load_to_mem(self.graph_pg.pool(), 2).await
     }
 
     /// helper function to get a BothEyes<GraphMem>

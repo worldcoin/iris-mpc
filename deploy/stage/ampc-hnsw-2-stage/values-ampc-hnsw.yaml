@@ -65,6 +65,12 @@ env:
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "false"
 
+  - name: SMPC__ENABLE_REAUTH
+    value: "true"
+
+  - name: SMPC__ENABLE_RESET
+    value: "true"
+
   - name: SMPC__LUC_ENABLED
     value: "true"
 

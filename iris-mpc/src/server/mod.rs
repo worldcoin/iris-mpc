@@ -599,7 +599,10 @@ async fn load_database(
         download_shutdown_handler,
     );
 
-    let graph_load_future = graph_loader.load_graph_store(graph_store);
+    let graph_load_future = graph_loader.load_graph_store(
+        graph_store,
+        config.cpu_database.as_ref().unwrap().load_parallelism,
+    );
 
     let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
     iris_result.expect("Failed to load iris DB");

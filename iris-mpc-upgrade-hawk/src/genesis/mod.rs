@@ -154,7 +154,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from("Service clients instantiated"));
 
     // Process: set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed_id(&iris_store).await?;
+    let last_indexed_id = get_last_indexed_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
@@ -169,7 +169,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     ));
 
     // Process: get modifications that need to be applied to the graph.
-    let last_indexed_modification_id = get_last_indexed_modification_id(&iris_store).await?;
+    let last_indexed_modification_id = get_last_indexed_modification_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last modification to have been indexed = {}",
         last_indexed_modification_id,
@@ -817,14 +817,23 @@ async fn init_graph_from_stores(
 
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
-    let parallelism = config
+    let iris_db_parallelism = config
         .database
         .as_ref()
-        .ok_or(eyre!("HNSW GENESIS :: Server :: Missing database config"))?
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Missing iris database config"
+        ))?
+        .load_parallelism;
+    let graph_db_parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Missing graph database config"
+        ))?
         .load_parallelism;
     log_info(format!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
+        "Initialize db: Loading from DB with parallelism. iris: {}, graph: {})",
+        iris_db_parallelism, graph_db_parallelism
     ));
 
     // -------------------------------------------------------------------
@@ -836,14 +845,16 @@ async fn init_graph_from_stores(
         &mut iris_loader,
         iris_store,
         store_len,
-        parallelism,
+        iris_db_parallelism,
         config,
         shutdown_handler,
     )
     .await
     .expect("Failed to load DB");
 
-    graph_loader.load_graph_store(graph_store).await?;
+    graph_loader
+        .load_graph_store(graph_store, graph_db_parallelism)
+        .await?;
 
     Ok(())
 }

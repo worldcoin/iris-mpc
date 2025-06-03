@@ -618,18 +618,28 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+    pub async fn load_graph_store(
+        self,
+        graph_store: &GraphStore,
+        parallelism: usize,
+    ) -> Result<()> {
         let now = Instant::now();
 
         // Spawn two independent transactions and load each graph in parallel.
         let (graph_left, graph_right) = join!(
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx.with_graph(StoreId::Left).load_to_mem().await
+                graph_tx
+                    .with_graph(StoreId::Left)
+                    .load_to_mem(graph_store.pool(), parallelism)
+                    .await
             },
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx.with_graph(StoreId::Right).load_to_mem().await
+                graph_tx
+                    .with_graph(StoreId::Right)
+                    .load_to_mem(graph_store.pool(), parallelism)
+                    .await
             }
         );
         let graph_left = graph_left.expect("Could not load left graph");
@@ -1650,7 +1660,7 @@ mod tests_db {
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
-        graph_loader.load_graph_store(&graph_store).await?;
+        graph_loader.load_graph_store(&graph_store, 2).await?;
 
         // Check the loaded graph.
         for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {

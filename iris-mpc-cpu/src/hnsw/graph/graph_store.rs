@@ -7,11 +7,14 @@ use crate::{
     },
 };
 use eyre::{eyre, Result};
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::future::try_join_all;
+use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use itertools::izip;
-use sqlx::{error::BoxDynError, PgConnection, Postgres, Row, Transaction};
+use serde::{de::DeserializeOwned, Serialize};
+use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
+use tokio::sync::mpsc;
 
 #[derive(sqlx::FromRow, Debug, PartialEq, Eq)]
 pub struct RowLinks {
@@ -44,6 +47,10 @@ impl<V: VectorStore> GraphPg<V> {
         })
     }
 
+    pub fn pool(&self) -> &sqlx::PgPool {
+        &self.pool
+    }
+
     pub async fn tx(&self) -> Result<GraphTx<'_, V>> {
         Ok(self.tx_wrap(self.pool.begin().await?))
     }
@@ -55,6 +62,86 @@ impl<V: VectorStore> GraphPg<V> {
             phantom: PhantomData,
         }
     }
+
+    /// Retrieve entry from `persistent_state` table with associated `domain` and `key` identifiers.
+    ///
+    /// Returns `Some(value)` if an entry exists for these identifiers and deserialization to generic
+    /// type `T` succeeds.  If no entry exists, then returns `None`.
+    pub async fn get_persistent_state<T: DeserializeOwned>(
+        &self,
+        domain: &str,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let row = sqlx::query(
+            r#"
+            SELECT "value"
+            FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let value = row.try_get("value")?;
+            let deserialized: T = serde_json::from_value(value)?;
+            Ok(Some(deserialized))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set the entry in the `persistent_state` table for primary key `(domain, key)`.
+    ///
+    /// If an entry already exists for this primary key, this overwrites the existing
+    /// value with the value specified here.
+    pub async fn set_persistent_state<T: Serialize>(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+        value: &T,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO persistent_state (domain, "key", "value")
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain, "key")
+            DO UPDATE SET "value" = EXCLUDED."value"
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .bind(Json(value))
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete an entry in the `persistent_state` table with primary key `(domain, key)`,
+    /// if it exists.
+    pub async fn delete_persistent_state(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+    ) -> Result<()> {
+        // let value_json = Json(value);
+
+        sqlx::query(
+            r#"
+            DELETE FROM persistent_state
+            WHERE domain = $1 AND "key" = $2;
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
 }
 
 pub struct GraphTx<'a, V> {
@@ -65,18 +152,13 @@ pub struct GraphTx<'a, V> {
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
     pub fn with_graph<'a>(&'a mut self, graph_id: StoreId) -> GraphOps<'a, 'b, V> {
-        GraphOps {
-            tx: self,
-            graph_id,
-            borrowable_sql: "".to_string(),
-        }
+        GraphOps { tx: self, graph_id }
     }
 }
 
 pub struct GraphOps<'a, 'b, V> {
     tx: &'a mut GraphTx<'b, V>,
     graph_id: StoreId,
-    borrowable_sql: String,
 }
 
 impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
@@ -241,44 +323,155 @@ where
     BoxDynError: From<<V::VectorRef as FromStr>::Err>,
     V::DistanceRef: Send + Unpin + 'static,
 {
-    fn stream_links(&mut self) -> impl Stream<Item = Result<RowLinks>> + '_ {
+    /// Get total row count for this graph_id
+    async fn get_total_row_count(&mut self) -> Result<usize> {
         let table = self.links_table();
-        self.borrowable_sql = format!(
+        let row = sqlx::query(&format!(
             "
-            SELECT serial_id, version_id, links, layer FROM {table}
+            SELECT COUNT(*) as total_count FROM {table}
             WHERE graph_id = $1
-            "
-        );
-        sqlx::query_as::<_, RowLinks>(&self.borrowable_sql)
-            .bind(self.graph_id())
-            .fetch(self.tx.tx.deref_mut())
-            .map_err(Into::into)
+        "
+        ))
+        .bind(self.graph_id())
+        .fetch_one(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to fetch total row count: {e}"))?;
+
+        Ok(row.get::<i64, _>("total_count") as usize)
     }
 
-    pub async fn load_to_mem(&mut self) -> Result<GraphMem<V>> {
+    /// Load graph data to memory using parallel loading by source_ref ranges.
+    /// This method creates separate connections for each range and loads them in parallel.
+    pub async fn load_to_mem(
+        &mut self,
+        pool: &sqlx::PgPool,
+        parallelism: usize,
+    ) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
+        let schema_name = self.tx.schema_name.clone();
+        let graph_id = self.graph_id();
 
         let ep = self.get_entry_point().await?;
-
         if let Some((point, layer)) = ep {
             graph_mem.set_entry_point(point, layer).await;
         }
 
-        let mut count = 0;
+        let total_rows = self.get_total_row_count().await?;
 
-        let mut irises = self.stream_links();
-        while let Some(row) = irises.next().await {
-            let row = row?;
-            let links = bincode::deserialize(&row.links)?;
-            let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
-            graph_mem
-                .set_links(source_ref, links, row.layer as usize)
-                .await;
-            count += 1;
-            if count % 100000 == 0 {
-                tracing::info!("GraphLoader: Loaded {} graph links", count);
+        if total_rows == 0 {
+            tracing::info!("GraphLoader: No data found for graph_id {}", graph_id);
+            return Ok(graph_mem);
+        }
+
+        tracing::info!(
+            "GraphLoader: Loading {} rows using {} parallel partitions for graph_id {}",
+            total_rows,
+            parallelism,
+            graph_id
+        );
+
+        // Create channel for sending data from partitions to main task
+        let (tx, mut rx) =
+            mpsc::channel::<(V::VectorRef, SortedEdgeIds<V::VectorRef>, usize)>(1024);
+
+        // Calculate partition size and create partition tasks
+        let partition_size = total_rows.div_ceil(parallelism).max(1);
+
+        let partition_tasks = (0..parallelism).map(|i| {
+            let pool = pool.clone();
+            let schema_name = schema_name.clone();
+            let tx = tx.clone();
+
+            async move {
+                let mut conn = pool.acquire().await?;
+                let table = format!("\"{}\".hawk_graph_links", schema_name);
+
+                // Calculate ID range for this partition
+                let start_id = 1 + (partition_size * i);
+                let end_id = start_id + partition_size - 1;
+
+                let query_sql = format!(
+                    "
+                    SELECT serial_id, version_id, links, layer FROM {table}
+                    WHERE graph_id = $1
+                    AND serial_id BETWEEN $2 AND $3
+                    ORDER BY serial_id, layer
+                "
+                );
+
+                let mut rows = sqlx::query_as::<_, RowLinks>(&query_sql)
+                    .bind(graph_id)
+                    .bind(start_id as i32)
+                    .bind(end_id as i32)
+                    .fetch(&mut *conn);
+
+                let mut links_loaded = 0;
+
+                while let Some(row) = rows.next().await {
+                    let row = row?;
+                    let links = bincode::deserialize(&row.links)?;
+                    let layer_idx = row.layer as usize;
+                    let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
+
+                    // Send data to main task via channel
+                    tx.send((source_ref, links, layer_idx))
+                        .await
+                        .map_err(|_| eyre!("Failed to send data to main task"))?;
+
+                    links_loaded += 1;
+                }
+
+                tracing::info!(
+                    "GraphLoader: Partition {} (IDs {}-{}) loaded {} links",
+                    i,
+                    start_id,
+                    end_id,
+                    links_loaded
+                );
+
+                Ok::<_, eyre::Error>(())
+            }
+        });
+
+        // Start all partition tasks
+        let partition_handles = partition_tasks.map(tokio::spawn).collect::<Vec<_>>();
+
+        // Drop the original sender so rx will close when all partitions finish
+        drop(tx);
+
+        // Collect all data from partitions and write to graph_mem
+        let mut total_links_written = 0;
+        while let Some((source_ref, links, layer_idx)) = rx.recv().await {
+            graph_mem.set_links(source_ref, links, layer_idx).await;
+            total_links_written += 1;
+            if total_links_written % 100000 == 0 {
+                tracing::info!(
+                    "GraphLoader: Loaded {} graph links on graph {}",
+                    total_links_written,
+                    self.graph_id()
+                );
             }
         }
+
+        // Wait for all partition tasks to complete and get their counts
+        try_join_all(partition_handles)
+            .await?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if total_links_written != total_rows {
+            return Err(eyre!(
+                "GraphLoader: Not all links were loaded. Expected {}, got {}",
+                total_rows,
+                total_links_written
+            ));
+        }
+
+        tracing::info!(
+            "GraphLoader: Loaded {} total graph links for graph_id {}",
+            total_links_written,
+            self.graph_id(),
+        );
 
         Ok(graph_mem)
     }
@@ -438,7 +631,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        let mut tx = graph_pg.tx().await.unwrap();
+        let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng)?;
             let (neighbors, set_ep) = db
@@ -454,18 +647,87 @@ mod tests {
             graph_mem.insert_apply(plan.clone()).await;
             tx.with_graph(StoreId::Left).insert_apply(plan).await?;
         }
+        tx.tx.commit().await?;
 
-        let graph_mem2 = tx.with_graph(StoreId::Left).load_to_mem().await?;
+        // Test `get_total_row_count`
+        let mut tx = graph_pg.tx().await?;
+        let total_rows = tx.with_graph(StoreId::Left).get_total_row_count().await?;
+        assert_eq!(total_rows, queries1.len() + 1);
+
+        // Load graph using `load_to_mem`
+        let graph_mem2 = tx
+            .with_graph(StoreId::Left)
+            .load_to_mem(graph_pg.pool(), 2)
+            .await?;
         assert_eq!(graph_mem, &graph_mem2);
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = db.search(vector_store, graph_mem, query, 1).await?;
+            let neighbors = db.search(vector_store, &graph_mem2, query, 1).await?;
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
-        tx.tx.commit().await.unwrap();
+        // Clean up
+        tx.tx.commit().await?;
         graph_pg.cleanup().await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persistent_state() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        let domain = "test_domain".to_string();
+        let key = "foo".to_string();
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Insert value at index
+        let set_value = "bar".to_string();
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, &domain, &key, &set_value).await?;
+        tx.commit().await?;
+
+        // Check value is set at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(set_value));
+
+        // Insert new value at index
+        let new_set_value = "bear".to_string();
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, &domain, &key, &new_set_value)
+            .await?;
+        tx.commit().await?;
+
+        // Check value is updated at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(new_set_value));
+
+        // Delete value at index
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Delete value at index again
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check still no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
 
         Ok(())
     }
