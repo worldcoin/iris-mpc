@@ -11,7 +11,8 @@ use futures::future::try_join_all;
 use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use itertools::izip;
-use sqlx::{error::BoxDynError, PgConnection, Postgres, Row, Transaction};
+use serde::{de::DeserializeOwned, Serialize};
+use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut, str::FromStr};
 use tokio::sync::mpsc;
 
@@ -60,6 +61,86 @@ impl<V: VectorStore> GraphPg<V> {
             schema_name: self.schema_name.clone(),
             phantom: PhantomData,
         }
+    }
+
+    /// Retrieve entry from `persistent_state` table with associated `domain` and `key` identifiers.
+    ///
+    /// Returns `Some(value)` if an entry exists for these identifiers and deserialization to generic
+    /// type `T` succeeds.  If no entry exists, then returns `None`.
+    pub async fn get_persistent_state<T: DeserializeOwned>(
+        &self,
+        domain: &str,
+        key: &str,
+    ) -> Result<Option<T>> {
+        let row = sqlx::query(
+            r#"
+            SELECT "value"
+            FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let value = row.try_get("value")?;
+            let deserialized: T = serde_json::from_value(value)?;
+            Ok(Some(deserialized))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Set the entry in the `persistent_state` table for primary key `(domain, key)`.
+    ///
+    /// If an entry already exists for this primary key, this overwrites the existing
+    /// value with the value specified here.
+    pub async fn set_persistent_state<T: Serialize>(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+        value: &T,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO persistent_state (domain, "key", "value")
+            VALUES ($1, $2, $3)
+            ON CONFLICT (domain, "key")
+            DO UPDATE SET "value" = EXCLUDED."value"
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .bind(Json(value))
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Delete an entry in the `persistent_state` table with primary key `(domain, key)`,
+    /// if it exists.
+    pub async fn delete_persistent_state(
+        tx: &mut Transaction<'_, Postgres>,
+        domain: &str,
+        key: &str,
+    ) -> Result<()> {
+        // let value_json = Json(value);
+
+        sqlx::query(
+            r#"
+            DELETE FROM persistent_state
+            WHERE domain = $1 AND "key" = $2;
+            "#,
+        )
+        .bind(domain)
+        .bind(key)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(())
     }
 }
 
@@ -589,6 +670,64 @@ mod tests {
         // Clean up
         tx.tx.commit().await?;
         graph_pg.cleanup().await.unwrap();
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persistent_state() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        let domain = "test_domain".to_string();
+        let key = "foo".to_string();
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Insert value at index
+        let set_value = "bar".to_string();
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, &domain, &key, &set_value).await?;
+        tx.commit().await?;
+
+        // Check value is set at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(set_value));
+
+        // Insert new value at index
+        let new_set_value = "bear".to_string();
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, &domain, &key, &new_set_value)
+            .await?;
+        tx.commit().await?;
+
+        // Check value is updated at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, Some(new_set_value));
+
+        // Delete value at index
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
+
+        // Delete value at index again
+        let graph_tx = store.tx().await?;
+        let mut tx = graph_tx.tx;
+        GraphPg::<PlaintextStore>::delete_persistent_state(&mut tx, &domain, &key).await?;
+        tx.commit().await?;
+
+        // Check still no value at index
+        let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
+        assert_eq!(value, None);
 
         Ok(())
     }
