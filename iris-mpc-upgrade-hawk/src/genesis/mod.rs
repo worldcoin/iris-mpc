@@ -44,7 +44,38 @@ use tokio::{
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
-// Information associated with inner execution context.
+/// Process input arguments typically passed from command line.
+pub struct ExecutionArgs {
+    // Serial idenitifer of maximum indexed Iris.
+    max_indexation_id: IrisSerialId,
+
+    // Batch size for indexing.
+    batch_size: usize,
+
+    // Batch size error rate to be applied.
+    batch_size_error_rate: usize,
+
+    // Flag indicating whether a snapshot is to be taken when inner process completes.
+    perform_snapshot: bool,
+}
+
+impl ExecutionArgs {
+    pub fn new(
+        max_indexation_id: IrisSerialId,
+        batch_size: usize,
+        batch_size_error_rate: usize,
+        perform_snapshot: bool,
+    ) -> Self {
+        Self {
+            max_indexation_id,
+            batch_size,
+            batch_size_error_rate,
+            perform_snapshot,
+        }
+    }
+}
+
+/// Information associated with inner execution context.
 struct ExecutionContextInfo {
     // Serial idenitifer of last indexed Iris.
     last_indexed_id: IrisSerialId,
@@ -91,18 +122,6 @@ impl ExecutionContextInfo {
     }
 }
 
-/// Convertor.
-impl From<&ExecutionContextInfo> for BatchGenerator {
-    fn from(value: &ExecutionContextInfo) -> Self {
-        Self::new(
-            value.last_indexed_id + 1,
-            value.max_indexation_id,
-            value.batch_size,
-            value.excluded_serial_ids.clone(),
-        )
-    }
-}
-
 /// Main logic for initialization and execution of server nodes for genesis
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
@@ -114,13 +133,14 @@ impl From<&ExecutionContextInfo> for BatchGenerator {
 /// * `config` - Application configuration instance.
 /// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
-pub async fn exec_main(
-    config: Config,
-    max_indexation_id: IrisSerialId,
-    batch_size: usize,
-    batch_size_error_rate: usize,
-    perform_snapshot: bool,
-) -> Result<()> {
+pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
+    let ExecutionArgs {
+        max_indexation_id,
+        batch_size,
+        batch_size_error_rate,
+        perform_snapshot,
+    } = args;
+
     // Process: bail if config is invalid.
     validate_config(&config);
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));

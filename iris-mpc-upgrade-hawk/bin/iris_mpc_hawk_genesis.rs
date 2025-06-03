@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
 use iris_mpc_cpu::genesis::{log_error, log_info};
-use iris_mpc_upgrade_hawk::genesis::exec_main;
+use iris_mpc_upgrade_hawk::genesis::{exec_main, ExecutionArgs};
 
 // Default dynamic batch size.
 const DEFAULT_BATCH_SIZE: usize = 0;
@@ -11,7 +11,6 @@ const DEFAULT_BATCH_SIZE: usize = 0;
 const DEFAULT_BATCH_ERROR_RATE: usize = 128;
 
 #[derive(Parser)]
-#[allow(non_snake_case)]
 struct Args {
     // Maximum height of indexation.
     #[clap(long("max-height"))]
@@ -41,7 +40,7 @@ async fn main() -> Result<()> {
 
     // Set args.
     println!("Initialising args");
-    let (height_max, batch_size, batch_size_error_rate, perform_snapshot) = parse_args()?;
+    let args = parse_args()?;
 
     // Set tracing.
     println!("Initialising tracing");
@@ -54,15 +53,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(
-        config,
-        height_max,
-        batch_size,
-        batch_size_error_rate,
-        perform_snapshot,
-    )
-    .await
-    {
+    match exec_main(args, config).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }
@@ -75,10 +66,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parses command line arguments.  Necessary as some typed args need to be
-/// passed as optional strings due to CI/CD environment constraints.
+/// Parses command line arguments.
 ///
-fn parse_args() -> Result<(IrisSerialId, usize, usize, bool)> {
+/// Necessary as within CI/CD environments typed args need to be passed as optional strings.
+fn parse_args() -> Result<ExecutionArgs> {
     let args = Args::parse();
 
     // Arg: max indexation height.
@@ -87,7 +78,7 @@ fn parse_args() -> Result<(IrisSerialId, usize, usize, bool)> {
         bail!("--max-height argument is required.");
     }
     let max_indexation_height_arg = args.max_indexation_height.as_ref().unwrap();
-    let height_max: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
+    let max_indexation_id: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
         // print the value that is sent to the function
         eprintln!(
             "Error: --max-height argument must be a valid u32. Value: {}",
@@ -158,8 +149,8 @@ fn parse_args() -> Result<(IrisSerialId, usize, usize, bool)> {
         true
     };
 
-    Ok((
-        height_max,
+    Ok(ExecutionArgs::new(
+        max_indexation_id,
         batch_size,
         batch_size_error_rate,
         perform_snapshot,
