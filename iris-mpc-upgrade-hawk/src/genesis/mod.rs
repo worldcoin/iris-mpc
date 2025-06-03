@@ -17,7 +17,7 @@ use iris_mpc_common::{
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
         self,
         state_accessor::{
@@ -27,7 +27,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as HawkHandle, JobResult,
+        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -43,6 +43,60 @@ use tokio::{
 };
 
 const DEFAULT_REGION: &str = "eu-north-1";
+
+// Information associated with inner execution context.
+struct ExecutionContextInfo {
+    // Serial idenitifer of last indexed Iris.
+    last_indexed_id: IrisSerialId,
+
+    // Serial idenitifer of maximum indexed Iris.
+    max_indexation_id: IrisSerialId,
+
+    // Batch size for indexing.
+    batch_size: usize,
+
+    // Set identifiers of Iris's to be excluded from indexation.
+    excluded_serial_ids: Vec<IrisSerialId>,
+
+    // Set of modifications to be applied.
+    modifications: Vec<Modification>,
+
+    // Maximum modification id.
+    max_modification_id: i64,
+}
+
+/// Constructor.
+impl ExecutionContextInfo {
+    fn new(
+        last_indexed_id: IrisSerialId,
+        max_indexation_id: IrisSerialId,
+        batch_size: usize,
+        excluded_serial_ids: Vec<IrisSerialId>,
+        modifications: Vec<Modification>,
+        max_modification_id: i64,
+    ) -> Self {
+        Self {
+            last_indexed_id,
+            max_indexation_id,
+            batch_size,
+            excluded_serial_ids,
+            modifications,
+            max_modification_id,
+        }
+    }
+}
+
+/// Convertor.
+impl From<&ExecutionContextInfo> for BatchGenerator {
+    fn from(value: &ExecutionContextInfo) -> Self {
+        Self::new(
+            value.last_indexed_id + 1,
+            value.max_indexation_id,
+            value.batch_size,
+            value.excluded_serial_ids.clone(),
+        )
+    }
+}
 
 /// Main logic for initialization and execution of server nodes for genesis
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
@@ -197,19 +251,22 @@ pub async fn exec_main(
 
     // Process: execute main loop.
     log_info(String::from("Executing main loop"));
-    exec_main_inner(
-        &config,
+    let ctx = ExecutionContextInfo::new(
         last_indexed_id,
         max_indexation_id,
         batch_size,
-        excluded_serial_ids,
+        excluded_serial_ids.clone(),
+        modifications.clone(),
+        latest_modification_id,
+    );
+    exec_main_inner(
+        &config,
+        &ctx,
         &iris_store,
+        hawk_actor,
         background_tasks,
         &shutdown_handler,
-        hawk_actor,
         tx_results,
-        modifications,
-        latest_modification_id,
     )
     .await?;
 
@@ -239,7 +296,7 @@ pub async fn exec_main(
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `modifications` - List of new modifications entries to be processed.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
@@ -248,40 +305,27 @@ pub async fn exec_main(
 #[allow(clippy::too_many_arguments)]
 async fn exec_main_inner(
     config: &Config,
-    last_indexed_id: IrisSerialId,
-    max_indexation_id: IrisSerialId,
-    batch_size: usize,
-    excluded_serial_ids: Vec<IrisSerialId>,
-    iris_store: &IrisStore,
+    ctx: &ExecutionContextInfo,
+    _iris_store: &IrisStore,
+    hawk_actor: HawkActor,
     task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: HawkActor,
     tx_results: Sender<JobResult>,
-    modifications: Vec<Modification>,
-    _max_modification_id: i64,
 ) -> Result<()> {
-    // Set Hawk handle.
-    let hawk_handle = HawkHandle::new(config.party_id, hawk_actor).await?;
-    log_info(String::from("Hawk handle initialised"));
-
     // Phase one: apply modifications.
-    if modifications.is_empty() {
+    if ctx.modifications.is_empty() {
         log_info(String::from("No modifications to apply"));
     } else {
-        exec_main_inner_step_one(&hawk_handle, modifications).await?;
+        exec_main_inner_step_one(ctx).await?;
     }
 
     // Phase one: new indexations.
     exec_main_inner_step_two(
         config,
-        last_indexed_id,
-        max_indexation_id,
-        batch_size,
-        excluded_serial_ids,
-        iris_store,
+        ctx,
+        hawk_actor,
         task_monitor,
         shutdown_handler,
-        hawk_handle,
         tx_results,
     )
     .await?;
@@ -293,13 +337,15 @@ async fn exec_main_inner(
 ///
 /// # Arguments
 ///
-/// * `hawk_handle` - Handle to a Hawk actor managing indexation & search over an HNSW graph.
+/// * `ctx` - Execution context information.
 /// * `modifications` - Set of indexation modifications to apply.
 ///
-async fn exec_main_inner_step_one(
-    mut _hawk_handle: &HawkHandle,
-    modifications: Vec<Modification>,
-) -> Result<()> {
+async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
+    let ExecutionContextInfo {
+        modifications,
+        max_modification_id: _max_modification_id,
+        ..
+    } = ctx;
     log_info(format!("Applying {} modifications", modifications.len()));
 
     // TODO: implement applying modifications
@@ -329,35 +375,33 @@ async fn exec_main_inner_step_one(
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
-/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
+/// * `ctx` - Execution context information.
 /// * `iris_store` - Iris PostgreSQL store provider.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_handle` - Handle to a Hawk actor managing indexation & search over an HNSW graph.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
-#[allow(clippy::too_many_arguments)]
 async fn exec_main_inner_step_two(
     config: &Config,
-    last_indexed_id: IrisSerialId,
-    max_indexation_id: IrisSerialId,
-    batch_size: usize,
-    excluded_serial_ids: Vec<IrisSerialId>,
-    iris_store: &IrisStore,
+    ctx: &ExecutionContextInfo,
+    hawk_actor: HawkActor,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    mut hawk_handle: HawkHandle,
     tx_results: Sender<JobResult>,
 ) -> Result<()> {
+    // Set in memory Iris stores.
+    let iris_stores_mem: BothEyes<_> = [
+        hawk_actor.iris_store(StoreId::Left),
+        hawk_actor.iris_store(StoreId::Right),
+    ];
+
+    // Set Hawk handle.
+    let mut hawk_handle = GenesisHawkHandle::new(config.party_id, hawk_actor).await?;
+    log_info(String::from("Hawk handle initialised"));
+
     // Set batch generator.
-    let mut batch_generator = BatchGenerator::new(
-        last_indexed_id + 1,
-        max_indexation_id,
-        batch_size,
-        excluded_serial_ids,
-    );
+    let mut batch_generator = BatchGenerator::from(ctx);
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set main loop result.
@@ -370,7 +414,7 @@ async fn exec_main_inner_step_two(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(iris_store, &hawk_handle).await? {
+        while let Some(batch) = batch_generator.next_batch(&iris_stores_mem).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -399,7 +443,7 @@ async fn exec_main_inner_step_two(
                     )))
                 })??;
 
-            // Send results to processing thread to persist to database.
+            // Send results to processing thread responsible for persisting to database.
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
         }
@@ -616,6 +660,7 @@ async fn get_results_thread(
                 batch_id
             ));
 
+            // Notify background task responsible for tracking pending batches.
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 

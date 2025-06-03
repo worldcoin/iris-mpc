@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 20
     name: Update Release Draft
     runs-on:
-      labels: ubuntu-22.04-32core
+      labels: ubuntu-latest
 
     permissions:
       contents: write

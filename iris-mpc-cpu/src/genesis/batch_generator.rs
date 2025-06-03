@@ -1,11 +1,10 @@
-use super::{
-    hawk_handle::Handle as HawkHandle,
-    state_accessor,
-    utils::{errors::IndexationError, logger},
+use super::utils::{errors::IndexationError, logger};
+use crate::{
+    execution::hawk_main::BothEyes,
+    hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
 };
 use eyre::Result;
-use iris_mpc_common::IrisSerialId;
-use iris_mpc_store::{DbStoredIris, Store as IrisStore};
+use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// Component name for logging purposes.
@@ -14,18 +13,17 @@ const COMPONENT: &str = "Batch-Generator";
 /// A batch for upstream indexation.
 #[derive(Debug)]
 pub struct Batch {
-    // Array of stored Iris's to be indexed.
-    pub data: Vec<DbStoredIris>,
+    /// Ordinal batch identifier scoped by processing context.
+    pub batch_id: usize,
 
-    // Ordinal batch identifier scoped by processing context.
-    pub id: usize,
-}
+    /// Array of vector ids of iris enrollments
+    pub vector_ids: Vec<VectorId>,
 
-/// Constructor.
-impl Batch {
-    pub fn new(batch_id: usize, data: Vec<DbStoredIris>) -> Self {
-        Self { data, id: batch_id }
-    }
+    /// Array of left iris codes, in query format
+    pub left_queries: Vec<QueryRef>,
+
+    /// Array of right iris codes, in query format
+    pub right_queries: Vec<QueryRef>,
 }
 
 /// Trait: fmt::Display.
@@ -34,7 +32,7 @@ impl fmt::Display for Batch {
         write!(
             f,
             "id={}, size={}, range=({}..{})",
-            self.id,
+            self.batch_id,
             self.size(),
             self.id_start(),
             self.id_end()
@@ -46,23 +44,17 @@ impl fmt::Display for Batch {
 impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
-        self.data
-            .last()
-            .map(|value| value.id() as IrisSerialId)
-            .unwrap()
+        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
     }
 
     // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
-        self.data
-            .first()
-            .map(|value| value.id() as IrisSerialId)
-            .unwrap()
+        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
     }
 
     // Returns size of the batch.
     pub fn size(&self) -> usize {
-        self.data.len()
+        self.vector_ids.len()
     }
 }
 
@@ -174,8 +166,7 @@ pub trait BatchIterator {
     // Iterator over batches of Iris data to be indexed.
     fn next_batch(
         &mut self,
-        iris_store: &IrisStore,
-        hawk_handle: &HawkHandle,
+        iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
@@ -189,14 +180,32 @@ impl BatchIterator for BatchGenerator {
     // Returns next batch of Iris data to be indexed or None if exhausted.
     async fn next_batch(
         &mut self,
-        iris_store: &IrisStore,
-        _hawk_handle: &HawkHandle,
+        iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.next_identifiers() {
-            let data = state_accessor::fetch_iris_batch(iris_store, identifiers).await?;
+            // Assumption: ids are equivalent in both left and right stores, esp. versions.
+            let vector_ids = iris_stores[0]
+                .get_vector_ids(&identifiers)
+                .await
+                .into_iter()
+                .zip(identifiers)
+                .map(|(id_opt, serial_id)| {
+                    id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
+                })
+                .collect::<Result<Vec<_>, IndexationError>>()?;
+
+            let left_queries = iris_stores[0].get_queries(vector_ids.iter()).await;
+            let right_queries = iris_stores[1].get_queries(vector_ids.iter()).await;
+
             self.batch_count += 1;
-            let batch = Batch::new(self.batch_count, data);
+            let batch = Batch {
+                batch_id: self.batch_count,
+                vector_ids,
+                left_queries,
+                right_queries,
+            };
             Self::log_info(format!("Generated batch: {}", batch));
+
             Ok(Some(batch))
         } else {
             Ok(None)
@@ -205,12 +214,19 @@ impl BatchIterator for BatchGenerator {
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
 mod tests {
+    use crate::{
+        execution::hawk_main::StoreId,
+        hawkers::{
+            aby3::test_utils::setup_aby3_shared_iris_stores_with_preloaded_db,
+            plaintext_store::PlaintextStore,
+        },
+    };
+
     use super::*;
+    use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-    use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
+    use rand::SeedableRng;
 
     // Defaults.
     const DEFAULT_RNG_SEED: u64 = 0;
@@ -220,44 +236,27 @@ mod tests {
     const DEFAULT_COUNT_OF_BATCHES: usize = 10;
 
     // Returns a set of test resources.
-    async fn get_resources() -> Result<(IrisStore, PostgresClient, String)> {
-        // Set PostgreSQL client + store.
-        let pg_schema = temporary_name();
-        let pg_client =
-            PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+    fn get_iris_stores() -> (BothEyes<SharedIrisesRef>, usize) {
+        let mut rng = AesRng::seed_from_u64(DEFAULT_RNG_SEED);
+        let iris_stores: BothEyes<SharedIrisesRef> = [StoreId::Left, StoreId::Right].map(|_| {
+            let plaintext_store = PlaintextStore::new_random(&mut rng, DEFAULT_SIZE_OF_IRIS_DB);
+            setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
+                .remove(DEFAULT_PARTY_ID)
+        });
 
-        // Set store.
-        let iris_store = IrisStore::new(&pg_client).await?;
-
-        // Set dB with 100 irises.
-        iris_store
-            .init_db_with_random_shares(
-                DEFAULT_RNG_SEED,
-                DEFAULT_PARTY_ID,
-                DEFAULT_SIZE_OF_IRIS_DB,
-                true,
-            )
-            .await?;
-
-        Ok((iris_store, pg_client, pg_schema))
+        (iris_stores, DEFAULT_SIZE_OF_IRIS_DB)
     }
 
-    /// Test new from range pulled from dB.
+    /// Test new.
     #[tokio::test]
     async fn test_new() -> Result<()> {
-        // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
-
         let instance = BatchGenerator::new(
             1,
-            iris_store.count_irises().await.unwrap() as IrisSerialId,
+            DEFAULT_SIZE_OF_IRIS_DB as IrisSerialId,
             DEFAULT_SIZE_OF_BATCH,
             Vec::new(),
         );
         assert_eq!(*instance.range.end() as usize, DEFAULT_SIZE_OF_IRIS_DB);
-
-        // Unset resources.
-        cleanup(&pg_client, &pg_schema).await?;
 
         Ok(())
     }
@@ -266,23 +265,20 @@ mod tests {
     #[tokio::test]
     async fn test_iterator() -> Result<()> {
         // Set resources.
-        let (iris_store, pg_client, pg_schema) = get_resources().await.unwrap();
+        let (iris_stores, db_size) = get_iris_stores();
 
         let mut instance = BatchGenerator::new(
             1,
-            iris_store.count_irises().await.unwrap() as IrisSerialId,
+            db_size as IrisSerialId,
             DEFAULT_SIZE_OF_BATCH,
             Vec::new(),
         );
 
         // Expecting M batches of N Iris's per batch.
-        while let Some(batch) = instance.next_batch(&iris_store).await? {
+        while let Some(batch) = instance.next_batch(&iris_stores).await? {
             assert_eq!(batch.size(), DEFAULT_SIZE_OF_BATCH);
         }
         assert_eq!(instance.batch_count, DEFAULT_COUNT_OF_BATCHES);
-
-        // Unset resources.
-        cleanup(&pg_client, &pg_schema).await?;
 
         Ok(())
     }

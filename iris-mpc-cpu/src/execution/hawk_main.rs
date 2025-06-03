@@ -355,11 +355,11 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
-    fn graph_store(&self, store_id: StoreId) -> GraphRef {
+    pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
     }
 
