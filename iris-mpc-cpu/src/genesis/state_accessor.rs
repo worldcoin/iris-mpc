@@ -55,6 +55,7 @@ pub async fn fetch_iris_batch(
 ///
 /// * `config` - Application configuration instance.
 /// * `s3_client` - A configured AWS S3 client instance.
+/// * `max_indexation_id` - Maximum Iris serial identifier to be indexed.
 ///
 /// # Returns
 ///
@@ -63,6 +64,7 @@ pub async fn fetch_iris_batch(
 pub async fn fetch_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
+    max_indexation_id: IrisSerialId,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
     #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -104,18 +106,25 @@ pub async fn fetch_iris_deletions(
 
     // Decode S3 object bytes.
     let s3_object_bytes = s3_object_body.into_bytes();
-    let s3_object: S3Object = serde_json::from_slice(&s3_object_bytes).map_err(|err| {
-        logger::log_error(
-            COMPONENT,
-            format!("Failed to deserialize S3 object: {}", err),
-        );
-        IndexationError::AwsS3ObjectDeserialize
-    })?;
+    let S3Object { deleted_serial_ids } =
+        serde_json::from_slice(&s3_object_bytes).map_err(|err| {
+            logger::log_error(
+                COMPONENT,
+                format!("Failed to deserialize S3 object: {}", err),
+            );
+            IndexationError::AwsS3ObjectDeserialize
+        })?;
 
-    Ok(s3_object.deleted_serial_ids)
+    // Return those <= max indexation id.
+    Ok(deleted_serial_ids
+        .iter()
+        .filter(|&&x| x <= max_indexation_id)
+        .cloned()
+        .collect::<Vec<u32>>())
 }
 
-/// Fetch Iris modifications that need to be applied post indexation phase one. The modifications are returned in ascending order of the serial id.
+/// Fetch Iris modifications that need to be applied post indexation phase one.
+/// N.B. The modifications are returned in ascending order of the serial id.
 ///
 /// # Arguments
 ///

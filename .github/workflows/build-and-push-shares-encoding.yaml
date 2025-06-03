@@ -15,8 +15,15 @@ env:
 jobs:
   docker:
     timeout-minutes: 40
-    runs-on:
-      labels: ubuntu-22.04-32core
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - runner: ubuntu-22.04-16core
+            platform: linux/amd64
+          - runner: arm64-ubuntu-22.04-16core
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
     permissions:
       packages: write
       contents: read
@@ -25,8 +32,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+      - name: Set up Docker
+        uses: docker/setup-docker-action@b60f85385d03ac8acfca6d9996982511d8620a19
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@b5ca514318bd6ebac0fb2aedd5d36ec1b5c232a2
       - name: Log in to the Container registry
@@ -43,7 +50,7 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.shares-encoding

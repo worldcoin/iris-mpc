@@ -120,7 +120,7 @@ impl Handle {
             .map(|(queries_side, sessions_side)| {
                 let searcher = actor.searcher();
                 let queries_with_ids =
-                    izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
+                    izip!(queries_side.clone(), request.vector_ids.clone()).collect_vec();
                 let sessions = sessions_side.clone();
 
                 // Per side do searches and insertions
