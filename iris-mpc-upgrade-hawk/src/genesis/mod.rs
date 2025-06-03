@@ -132,7 +132,7 @@ impl ExecutionContextInfo {
 /// * `config` - Application configuration instance.
 /// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
-pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
+pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
@@ -273,8 +273,9 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
         return Ok(());
     }
 
-    // Process: execute main loop.
-    log_info(String::from("Executing main loop"));
+    log_info(String::from("Setup complete.  Executing main logic."));
+
+    // Process: set execution context information.
     let ctx = ExecutionContextInfo::new(
         &args,
         last_indexed_id,
@@ -282,10 +283,18 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
         modifications.clone(),
         latest_modification_id,
     );
-    exec_main_inner(
+
+    // Process: execution phase 1: apply delta ... i.e. modifications.
+    if ctx.modifications.is_empty() {
+        log_info(String::from("No modifications to apply"));
+    } else {
+        exec_delta(&ctx).await?;
+    }
+
+    // Process: execution phase 2: indexation.
+    exec_indexation(
         &config,
         &ctx,
-        &iris_store,
         hawk_actor,
         background_tasks,
         &shutdown_handler,
@@ -293,10 +302,9 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
     )
     .await?;
 
-    // Process: create dB snapshot.
+    // Process: execution phase 3: create dB snapshot.
     if args.perform_snapshot {
-        log_info(String::from("Db snapshot begins"));
-        set_db_snapshot(
+        exec_snapshot(
             &config,
             &rds_client,
             args.batch_size,
@@ -311,55 +319,14 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
     Ok(())
 }
 
-/// Main inner loop that performs actual indexation.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-/// * `ctx` - Execution context information.
-/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
-/// * `shutdown_handler` - Handler coordinating process shutdown.
-/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
-/// * `tx_results` - Channel to send job results to DB persistence thread.
-///
-async fn exec_main_inner(
-    config: &Config,
-    ctx: &ExecutionContextInfo,
-    _iris_store: &IrisStore,
-    hawk_actor: HawkActor,
-    task_monitor: TaskMonitor,
-    shutdown_handler: &Arc<ShutdownHandler>,
-    tx_results: Sender<JobResult>,
-) -> Result<()> {
-    // Phase one: apply modifications.
-    if ctx.modifications.is_empty() {
-        log_info(String::from("No modifications to apply"));
-    } else {
-        exec_main_inner_step_one(ctx).await?;
-    }
-
-    // Phase one: new indexations.
-    exec_main_inner_step_two(
-        config,
-        ctx,
-        hawk_actor,
-        task_monitor,
-        shutdown_handler,
-        tx_results,
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Execution step one: apply modiciations since last indexation.
+/// Apply modiciations since last indexation.
 ///
 /// # Arguments
 ///
 /// * `ctx` - Execution context information.
 /// * `modifications` - Set of indexation modifications to apply.
 ///
-async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
+async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
     let ExecutionContextInfo {
         modifications,
         max_modification_id,
@@ -393,7 +360,7 @@ async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
     Ok(())
 }
 
-/// Execution step two: index Iris's from last indexation id.
+/// Index Iris's from last indexation id.
 ///
 /// # Arguments
 ///
@@ -404,7 +371,7 @@ async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
-async fn exec_main_inner_step_two(
+async fn exec_indexation(
     config: &Config,
     ctx: &ExecutionContextInfo,
     hawk_actor: HawkActor,
@@ -549,6 +516,42 @@ async fn exec_main_inner_step_two(
             task_monitor.check_tasks_finished();
         }
     }
+
+    Ok(())
+}
+
+/// Take a dB snapshot.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration instance.
+/// * `rds_client` - AWS RDS SDK client.
+/// * `batch_size` - Size of indexation batches.
+/// * `last_indexed_id` - Last Iris serial id to have been indexed.
+/// * `max_indexation_id` - Maximum Iris serial id to which to index.
+///
+async fn exec_snapshot(
+    config: &Config,
+    rds_client: &RDSClient,
+    batch_size: usize,
+    last_indexed_id: IrisSerialId,
+    max_indexation_id: IrisSerialId,
+) -> Result<()> {
+    log_info(String::from("Db snapshot begins"));
+
+    // Set snapshot ID.
+    let db_config = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+    let unix_timestamp = Utc::now().timestamp();
+    let snapshot_id = format!(
+        "genesis-{}-{}-{}-{}",
+        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+    );
+
+    // Create snapshot.
+    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
 
     Ok(())
 }
@@ -875,40 +878,6 @@ fn log_info(msg: String) -> String {
 /// Helper: logs & returns a warning message.
 fn log_warn(msg: String) -> String {
     genesis::log_warn("Server", msg)
-}
-
-/// Takes a dB snapshot.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-/// * `rds_client` - AWS RDS SDK client.
-/// * `batch_size` - Size of indexation batches.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
-///
-async fn set_db_snapshot(
-    config: &Config,
-    rds_client: &RDSClient,
-    batch_size: usize,
-    last_indexed_id: IrisSerialId,
-    max_indexation_id: IrisSerialId,
-) -> Result<()> {
-    // Set snapshot ID.
-    let db_config = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-    let unix_timestamp = Utc::now().timestamp();
-    let snapshot_id = format!(
-        "genesis-{}-{}-{}-{}",
-        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
-    );
-
-    // Create snapshot.
-    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
-
-    Ok(())
 }
 
 /// TODO : implement db sync genesis

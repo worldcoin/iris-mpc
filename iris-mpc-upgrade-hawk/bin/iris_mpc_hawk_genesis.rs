@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId};
 use iris_mpc_cpu::genesis::{log_error, log_info};
-use iris_mpc_upgrade_hawk::genesis::{exec_main, ExecutionArgs};
+use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 // Default dynamic batch size.
 const DEFAULT_BATCH_SIZE: usize = 0;
@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(args, config).await {
+    match exec(args, config).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }
