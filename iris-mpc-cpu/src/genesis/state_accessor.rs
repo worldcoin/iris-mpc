@@ -292,6 +292,7 @@ pub async fn set_rds_snapshot(
             cluster_id, snapshot_id
         ),
     );
+
     client
         .create_db_cluster_snapshot()
         .db_cluster_identifier(cluster_id)
@@ -302,6 +303,7 @@ pub async fn set_rds_snapshot(
             logger::log_error(COMPONENT, format!("Failed to create db snapshot: {}", err));
             IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
         })?;
+
     logger::log_info(
         COMPONENT,
         format!(
