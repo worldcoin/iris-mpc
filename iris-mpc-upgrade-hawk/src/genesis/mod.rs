@@ -59,6 +59,7 @@ pub struct ExecutionArgs {
     perform_snapshot: bool,
 }
 
+/// Constructor.
 impl ExecutionArgs {
     pub fn new(
         max_indexation_id: IrisSerialId,
@@ -102,22 +103,20 @@ struct ExecutionContextInfo {
 /// Constructor.
 impl ExecutionContextInfo {
     fn new(
+        args: &ExecutionArgs,
         last_indexed_id: IrisSerialId,
-        max_indexation_id: IrisSerialId,
-        batch_size: usize,
-        batch_size_error_rate: usize,
         excluded_serial_ids: Vec<IrisSerialId>,
         modifications: Vec<Modification>,
         max_modification_id: i64,
     ) -> Self {
         Self {
-            last_indexed_id,
-            max_indexation_id,
-            batch_size,
-            batch_size_error_rate,
             excluded_serial_ids,
-            modifications,
+            last_indexed_id,
             max_modification_id,
+            modifications,
+            batch_size: args.batch_size,
+            batch_size_error_rate: args.batch_size_error_rate,
+            max_indexation_id: args.max_indexation_id,
         }
     }
 }
@@ -134,13 +133,6 @@ impl ExecutionContextInfo {
 /// * `max_indexation_id` - Maximum id to which to index iris codes.
 ///
 pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
-    let ExecutionArgs {
-        max_indexation_id,
-        batch_size,
-        batch_size_error_rate,
-        perform_snapshot,
-    } = args;
-
     // Process: bail if config is invalid.
     validate_config(&config);
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
@@ -170,7 +162,7 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
-        fetch_iris_deletions(&config, &aws_s3_client, max_indexation_id).await?;
+        fetch_iris_deletions(&config, &aws_s3_client, args.max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -192,16 +184,21 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
     ));
 
     // Process: Bail if stores are inconsistent.
-    validate_consistency_of_stores(&config, &iris_store, max_indexation_id, last_indexed_id)
-        .await?;
+    validate_consistency_of_stores(
+        &config,
+        &iris_store,
+        args.max_indexation_id,
+        last_indexed_id,
+    )
+    .await?;
     log_info(String::from("Store consistency checks OK"));
 
     // Coordinator: Await coordination server to start.
     let my_state = get_sync_state(
         &config,
-        batch_size,
-        batch_size_error_rate,
-        max_indexation_id,
+        args.batch_size,
+        args.batch_size_error_rate,
+        args.max_indexation_id,
         last_indexed_id,
         &excluded_serial_ids,
         latest_modification_id,
@@ -279,10 +276,8 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
     // Process: execute main loop.
     log_info(String::from("Executing main loop"));
     let ctx = ExecutionContextInfo::new(
+        &args,
         last_indexed_id,
-        max_indexation_id,
-        batch_size,
-        batch_size_error_rate,
         excluded_serial_ids.clone(),
         modifications.clone(),
         latest_modification_id,
@@ -299,14 +294,14 @@ pub async fn exec_main(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
 
     // Process: create dB snapshot.
-    if perform_snapshot {
+    if args.perform_snapshot {
         log_info(String::from("Db snapshot begins"));
         set_db_snapshot(
             &config,
             &rds_client,
-            batch_size,
+            args.batch_size,
             last_indexed_id,
-            max_indexation_id,
+            args.max_indexation_id,
         )
         .await?;
     } else {
