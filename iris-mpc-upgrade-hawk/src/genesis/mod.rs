@@ -347,10 +347,14 @@ async fn exec_main_inner(
 async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
     let ExecutionContextInfo {
         modifications,
-        max_modification_id: _max_modification_id,
+        max_modification_id,
         ..
     } = ctx;
-    log_info(format!("Applying {} modifications", modifications.len()));
+    log_info(format!(
+        "Applying modifications: count={} :: max-id={}",
+        modifications.len(),
+        max_modification_id
+    ));
 
     // TODO: implement applying modifications
     for modification in modifications {
@@ -396,39 +400,46 @@ async fn exec_main_inner_step_two(
     let ExecutionContextInfo {
         batch_size,
         batch_size_error_rate,
+        excluded_serial_ids,
         last_indexed_id,
         max_indexation_id,
         ..
     } = ctx;
     log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", batch_size, batch_size_error_rate, last_indexed_id, max_indexation_id));
 
-    if *batch_size == 0 {
-        // If batch size is 0 then calculate dynamic batch size based on the current graph size
+    // Set dynamic batch size.
+    // TODO: calculate before 1st batch and at end of each subsequent batch.
+    let batch_size = match batch_size {
+        // If batch size is 0 then calculate dynamic batch size based on the current graph size.
+        0 => {
+            // Set r: configurable parameter for error rate.
+            let r = *batch_size_error_rate;
 
-        // Set batch generator.
-        // Calculate dynamic batch size based on formula: floor(N/(Mr - 1) + 1)
-        // where N is the current graph size (last_indexed_id),
-        // M is the HNSW parameter for nearest neighbors, and
-        // r is a configurable parameter for error rate
-        let r = *batch_size_error_rate; // Configurable parameter for error rate
-        let m = config.hnsw_param_M as u64; // HNSW parameter M
-        let n = *last_indexed_id as u64; // Current graph size
+            // Set m: HNSW parameter for nearest neighbors.
+            let m = config.hnsw_param_M as u64;
 
-        // Apply the formula, ensuring we have at least 1
-        let batch_size = if n > 0 {
-            (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
-        } else {
-            // If the graph is empty, use a batch size of 1
-            1
-        };
+            // Set n: current graph size (last_indexed_id).
+            let n = *last_indexed_id as u64;
 
-        log_info(format!(
-            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-            batch_size, n, m, r
-        ));
-    } else {
-        log_info(format!("Using static batch size: {}", batch_size));
-    }
+            // Apply dynamic batch size formula: floor(N/(Mr - 1) + 1)
+            let batch_size = if n > 0 {
+                (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
+            } else {
+                // Graph is empty therefore use a batch size of 1
+                1
+            };
+
+            log_info(format!(
+                "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+                batch_size, n, m, r
+            ));
+            batch_size
+        }
+        _ => {
+            log_info(format!("Using static batch size: {}", batch_size));
+            *batch_size
+        }
+    };
 
     // Set in memory Iris stores.
     let iris_stores_mem: BothEyes<_> = [
@@ -441,7 +452,12 @@ async fn exec_main_inner_step_two(
     log_info(String::from("Hawk handle initialised"));
 
     // Set batch generator.
-    let mut batch_generator = BatchGenerator::from(ctx);
+    let mut batch_generator = BatchGenerator::new(
+        last_indexed_id + 1,
+        *max_indexation_id,
+        batch_size,
+        excluded_serial_ids.clone(),
+    );
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
     // Set main loop result.
