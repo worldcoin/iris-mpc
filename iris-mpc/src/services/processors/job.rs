@@ -61,7 +61,6 @@ pub async fn process_job_result(
     let now = Instant::now();
 
     let _modifications = modifications;
-    let _full_face_mirror_attack_detected = full_face_mirror_attack_detected;
 
     // returned serial_ids are 0 indexed, but we want them to be 1 indexed
     let uniqueness_results = merged_results
@@ -108,12 +107,15 @@ pub async fn process_job_result(
                     false => Some(partial_match_counters_right[i]),
                     true => None,
                 },
-                None,  // not applicable for hnsw
-                None,  // not applicable for hnsw
-                None,  // not applicable for hnsw
-                None,  // not applicable for hnsw
-                None,  // not applicable for hnsw
-                false, // not applicable for hnsw
+                None, // not applicable for hnsw
+                None, // not applicable for hnsw
+                None, // not applicable for hnsw
+                None, // not applicable for hnsw
+                None, // not applicable for hnsw
+                match full_face_mirror_attack_detected.is_empty() {
+                    false => full_face_mirror_attack_detected[i],
+                    true => false,
+                },
             );
 
             serde_json::to_string(&result_event).wrap_err("failed to serialize result")

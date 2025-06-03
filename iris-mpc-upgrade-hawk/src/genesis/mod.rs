@@ -17,7 +17,7 @@ use iris_mpc_common::{
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
         self,
         state_accessor::{
@@ -90,13 +90,8 @@ pub async fn exec_main(
     ));
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
-    let excluded_serial_ids = fetch_iris_deletions(&config, &aws_s3_client)
-        .await
-        .unwrap()
-        .iter()
-        .filter(|&&x| x <= max_indexation_id)
-        .cloned()
-        .collect::<Vec<u32>>();
+    let excluded_serial_ids =
+        fetch_iris_deletions(&config, &aws_s3_client, max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -211,13 +206,11 @@ pub async fn exec_main(
         batch_size,
         batch_size_error_rate,
         excluded_serial_ids,
-        &iris_store,
+        modifications,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
         tx_results,
-        modifications,
-        latest_modification_id,
     )
     .await?;
 
@@ -250,7 +243,7 @@ pub async fn exec_main(
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `modifications` - List of new modifications entries to be processed.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
@@ -264,14 +257,18 @@ async fn exec_main_loop(
     batch_size: usize,
     batch_size_error_rate: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
-    iris_store: &IrisStore,
+    modifications: Vec<Modification>,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<JobResult>,
-    modifications: Vec<Modification>,
-    _max_modification_id: i64,
 ) -> Result<()> {
+    // Set iris store.
+    let iris_stores_mem: BothEyes<_> = [
+        hawk_actor.iris_store(StoreId::Left),
+        hawk_actor.iris_store(StoreId::Right),
+    ];
+
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
@@ -346,7 +343,7 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+        while let Some(batch) = batch_generator.next_batch(&iris_stores_mem).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));

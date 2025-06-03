@@ -1,9 +1,12 @@
+use std::sync::Arc;
+
 use super::{
     rot::WithoutRot,
     search::{self, SearchParams, SearchQueries, SearchResults},
-    BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT,
+    BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT, RIGHT,
 };
 pub use crate::hawkers::aby3::aby3_store::VectorId;
+use crate::protocol::shared_iris::GaloisRingSharedIris;
 use eyre::Result;
 
 pub struct ResetRequests {
@@ -37,4 +40,23 @@ pub async fn search_to_reset(
         vector_ids: updates.vector_ids,
         search_results: search::search(sessions, &updates.queries, search_params).await?,
     })
+}
+
+pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) -> Result<()> {
+    let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(hawk_actor.party_id));
+
+    let mut stores = [
+        hawk_actor.iris_store[LEFT].write().await,
+        hawk_actor.iris_store[RIGHT].write().await,
+    ];
+
+    // Map the deletion indices to IDs of the iris stores (same left or right).
+    let del_ids = request.deletion_ids(&stores[LEFT]);
+
+    for del_id in del_ids {
+        for store in &mut stores {
+            store.update(del_id, dummy.clone());
+        }
+    }
+    Ok(())
 }

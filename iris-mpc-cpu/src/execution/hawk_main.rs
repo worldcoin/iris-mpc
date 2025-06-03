@@ -43,7 +43,7 @@ use matching::{
 };
 use rand::{thread_rng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use reset::{search_to_reset, ResetPlan, ResetRequests};
+use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
 use siphasher::sip::SipHasher13;
@@ -355,11 +355,11 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
-    fn graph_store(&self, store_id: StoreId) -> GraphRef {
+    pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
     }
 
@@ -758,7 +758,8 @@ impl HawkRequest {
             .enumerate()
             .map(|(i, request_type)| match request_type.as_str() {
                 UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
-                    skip_persistence: self.batch.skip_persistence[i],
+                    // Support for optional skip_persistence.
+                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap_or(&false),
                 }),
                 REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
                     let request_id = &self.batch.request_ids[i];
@@ -836,6 +837,10 @@ impl HawkRequest {
             vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
             queries: Arc::new(queries),
         }
+    }
+
+    fn deletion_ids(&self, iris_store: &SharedIrises) -> Vec<VectorId> {
+        iris_store.from_0_indices(&self.batch.deletion_requests_indices)
     }
 }
 
@@ -1035,7 +1040,7 @@ impl HawkResult {
 
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
-            deleted_ids: vec![], // TODO.
+            deleted_ids: batch.deletion_requests_indices,
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
@@ -1149,6 +1154,9 @@ impl HawkHandle {
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+
+        // Deletions.
+        apply_deletions(hawk_actor, &request).await?;
 
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
@@ -1443,7 +1451,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
-                    skip_persistence: vec![false; batch_size],
+                    skip_persistence: vec![], // Unused.
 
                     ..BatchQuery::default()
                 };
