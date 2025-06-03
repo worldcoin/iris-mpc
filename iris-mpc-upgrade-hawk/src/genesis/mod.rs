@@ -55,6 +55,9 @@ struct ExecutionContextInfo {
     // Batch size for indexing.
     batch_size: usize,
 
+    // Batch size error rate to be applied.
+    batch_size_error_rate: usize,
+
     // Set identifiers of Iris's to be excluded from indexation.
     excluded_serial_ids: Vec<IrisSerialId>,
 
@@ -71,6 +74,7 @@ impl ExecutionContextInfo {
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
         batch_size: usize,
+        batch_size_error_rate: usize,
         excluded_serial_ids: Vec<IrisSerialId>,
         modifications: Vec<Modification>,
         max_modification_id: i64,
@@ -79,6 +83,7 @@ impl ExecutionContextInfo {
             last_indexed_id,
             max_indexation_id,
             batch_size,
+            batch_size_error_rate,
             excluded_serial_ids,
             modifications,
             max_modification_id,
@@ -113,6 +118,7 @@ pub async fn exec_main(
     config: Config,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    batch_size_error_rate: usize,
     perform_snapshot: bool,
 ) -> Result<()> {
     // Process: bail if config is invalid.
@@ -174,6 +180,7 @@ pub async fn exec_main(
     let my_state = get_sync_state(
         &config,
         batch_size,
+        batch_size_error_rate,
         max_indexation_id,
         last_indexed_id,
         &excluded_serial_ids,
@@ -255,6 +262,7 @@ pub async fn exec_main(
         last_indexed_id,
         max_indexation_id,
         batch_size,
+        batch_size_error_rate,
         excluded_serial_ids.clone(),
         modifications.clone(),
         latest_modification_id,
@@ -293,16 +301,12 @@ pub async fn exec_main(
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
-/// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `modifications` - List of new modifications entries to be processed.
+/// * `ctx` - Execution context information.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
-#[allow(clippy::too_many_arguments)]
 async fn exec_main_inner(
     config: &Config,
     ctx: &ExecutionContextInfo,
@@ -376,10 +380,9 @@ async fn exec_main_inner_step_one(ctx: &ExecutionContextInfo) -> Result<()> {
 ///
 /// * `config` - Application configuration instance.
 /// * `ctx` - Execution context information.
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
-/// * `hawk_handle` - Handle to a Hawk actor managing indexation & search over an HNSW graph.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
 async fn exec_main_inner_step_two(
@@ -390,6 +393,43 @@ async fn exec_main_inner_step_two(
     shutdown_handler: &Arc<ShutdownHandler>,
     tx_results: Sender<JobResult>,
 ) -> Result<()> {
+    let ExecutionContextInfo {
+        batch_size,
+        batch_size_error_rate,
+        last_indexed_id,
+        max_indexation_id,
+        ..
+    } = ctx;
+    log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", batch_size, batch_size_error_rate, last_indexed_id, max_indexation_id));
+
+    if *batch_size == 0 {
+        // If batch size is 0 then calculate dynamic batch size based on the current graph size
+
+        // Set batch generator.
+        // Calculate dynamic batch size based on formula: floor(N/(Mr - 1) + 1)
+        // where N is the current graph size (last_indexed_id),
+        // M is the HNSW parameter for nearest neighbors, and
+        // r is a configurable parameter for error rate
+        let r = *batch_size_error_rate; // Configurable parameter for error rate
+        let m = config.hnsw_param_M as u64; // HNSW parameter M
+        let n = *last_indexed_id as u64; // Current graph size
+
+        // Apply the formula, ensuring we have at least 1
+        let batch_size = if n > 0 {
+            (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
+        } else {
+            // If the graph is empty, use a batch size of 1
+            1
+        };
+
+        log_info(format!(
+            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+            batch_size, n, m, r
+        ));
+    } else {
+        log_info(format!("Using static batch size: {}", batch_size));
+    }
+
     // Set in memory Iris stores.
     let iris_stores_mem: BothEyes<_> = [
         hawk_actor.iris_store(StoreId::Left),
@@ -686,6 +726,7 @@ async fn get_results_thread(
 async fn get_sync_state(
     config: &Config,
     batch_size: usize,
+    batch_size_error_rate: usize,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
@@ -694,6 +735,7 @@ async fn get_sync_state(
     let common_config = CommonConfig::from(config.clone());
     let genesis_config = GenesisConfig::new(
         batch_size,
+        batch_size_error_rate,
         excluded_serial_ids.to_vec(),
         last_indexed_id,
         max_indexation_id,

@@ -4,8 +4,13 @@ use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId}
 use iris_mpc_cpu::genesis::{log_error, log_info};
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
-/// Process command line arguments.
-#[derive(Debug, Parser)]
+// Default dynamic batch size.
+const DEFAULT_BATCH_SIZE: usize = 0;
+
+// Default batch error rate.
+const DEFAULT_BATCH_ERROR_RATE: usize = 128;
+
+#[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
     // Maximum height of indexation.
@@ -15,6 +20,10 @@ struct Args {
     // Batch size for processing.
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
+
+    // Batch size error rate.
+    #[clap(long("batch-size-r"))]
+    batch_size_error_rate: Option<String>,
 
     // Whether to perform a snapshot.
     #[clap(long("perform-snapshot"))]
@@ -32,7 +41,7 @@ async fn main() -> Result<()> {
 
     // Set args.
     println!("Initialising args");
-    let (height_max, batch_size, perform_snapshot) = parse_args(&config)?;
+    let (height_max, batch_size, batch_size_error_rate, perform_snapshot) = parse_args()?;
 
     // Set tracing.
     println!("Initialising tracing");
@@ -45,7 +54,15 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, height_max, batch_size, perform_snapshot).await {
+    match exec_main(
+        config,
+        height_max,
+        batch_size,
+        batch_size_error_rate,
+        perform_snapshot,
+    )
+    .await
+    {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }
@@ -58,17 +75,13 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Parses command line arguments: necessary as some typed args need to be
+/// Parses command line arguments.  Necessary as some typed args need to be
 /// passed as optional strings due to CI/CD environment constraints.
 ///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-///
-fn parse_args(config: &Config) -> Result<(IrisSerialId, usize, bool)> {
+fn parse_args() -> Result<(IrisSerialId, usize, usize, bool)> {
     let args = Args::parse();
 
-    // Parse arg: max indexation height.
+    // Arg: max indexation height.
     if args.max_indexation_height.is_none() {
         eprintln!("Error: --max-height argument is required.");
         bail!("--max-height argument is required.");
@@ -86,7 +99,7 @@ fn parse_args(config: &Config) -> Result<(IrisSerialId, usize, bool)> {
         )
     })?;
 
-    // Parse arg: batch size.
+    // Arg: batch size.
     let batch_size = if args.batch_size.is_some() {
         let batch_size_arg = args.batch_size.as_ref().unwrap();
         batch_size_arg.parse().map_err(|_| {
@@ -100,10 +113,35 @@ fn parse_args(config: &Config) -> Result<(IrisSerialId, usize, bool)> {
             )
         })?
     } else {
-        config.max_batch_size
+        eprintln!(
+            "--batch-size argument not provided, defaulting to {} (dynamic batch size).",
+            DEFAULT_BATCH_SIZE
+        );
+        DEFAULT_BATCH_SIZE
     };
 
-    // Parse arg: perform snapshot.
+    // Arg: batch size error rate.
+    let batch_size_error_rate = if args.batch_size_error_rate.is_some() {
+        let batch_size_error_rate_arg = args.batch_size_error_rate.as_ref().unwrap();
+        batch_size_error_rate_arg.parse().map_err(|_| {
+            eprintln!(
+                "Error: --batch-size-r argument must be a valid usize. Value: {}",
+                batch_size_error_rate_arg
+            );
+            eyre::eyre!(
+                "--batch-size-r argument must be a valid usize. Value: {}",
+                batch_size_error_rate_arg
+            )
+        })?
+    } else {
+        eprintln!(
+            "--batch-size-r argument not provided, defaulting to {} (error rate).",
+            DEFAULT_BATCH_ERROR_RATE
+        );
+        DEFAULT_BATCH_ERROR_RATE
+    };
+
+    // Arg: perform snapshot.
     let perform_snapshot = if args.perform_snapshot.is_some() {
         let perform_snapshot_arg = args.perform_snapshot.as_ref().unwrap();
         perform_snapshot_arg.parse().map_err(|_| {
@@ -120,5 +158,10 @@ fn parse_args(config: &Config) -> Result<(IrisSerialId, usize, bool)> {
         true
     };
 
-    Ok((height_max, batch_size, perform_snapshot))
+    Ok((
+        height_max,
+        batch_size,
+        batch_size_error_rate,
+        perform_snapshot,
+    ))
 }
