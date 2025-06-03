@@ -1,3 +1,4 @@
+use iris_mpc_common::IrisSerialId;
 use thiserror::Error;
 
 // Encpasulates a non-exhaustive set of errors raised during indexation.
@@ -11,6 +12,9 @@ pub enum IndexationError {
 
     #[error("Current height of indexation exceeds maximum allowed")]
     IndexationHeightMismatch,
+
+    #[error("Failed to fetch Iris with given serial ID: {0}")]
+    MissingSerialId(IrisSerialId),
 
     #[error("Failed to fetch Iris batch from PostgreSQL dB: {0}")]
     PostgresFetchIrisBatch(String),
