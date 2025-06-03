@@ -43,7 +43,11 @@ pub struct DistanceComparator {
     pub final_results_init_host: Vec<u32>,
     pub match_counters: Vec<CudaSlice<u32>>,
     pub all_matches: Vec<CudaSlice<u32>>,
+    pub match_counters_left: Vec<CudaSlice<u32>>,
+    pub match_counters_right: Vec<CudaSlice<u32>>,
     pub partial_results: Vec<CudaSlice<u32>>,
+    pub partial_results_left: Vec<CudaSlice<u32>>,
+    pub partial_results_right: Vec<CudaSlice<u32>>,
     pub partial_match_counter: Vec<CudaSlice<u32>>,
     pub partial_results_query_indices: Vec<CudaSlice<u32>>,
     pub partial_results_db_indices: Vec<CudaSlice<u32>>,
@@ -63,8 +67,12 @@ impl DistanceComparator {
         let mut opened_results = vec![];
         let mut final_results = vec![];
         let mut match_counters = vec![];
+        let mut match_counters_left = vec![];
+        let mut match_counters_right = vec![];
         let mut all_matches = vec![];
         let mut partial_results = vec![];
+        let mut partial_results_left = vec![];
+        let mut partial_results_right = vec![];
         let mut partial_results_query_indices = vec![];
         let mut partial_results_db_indices = vec![];
         let mut partial_results_rotations = vec![];
@@ -109,12 +117,24 @@ impl DistanceComparator {
             opened_results.push(device.htod_copy(results_init_host.clone()).unwrap());
             final_results.push(device.htod_copy(final_results_init_host.clone()).unwrap());
             match_counters.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
+            match_counters_left.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
+            match_counters_right.push(device.alloc_zeros(query_length / ROTATIONS).unwrap());
             all_matches.push(
                 device
                     .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
                     .unwrap(),
             );
             partial_results.push(device.alloc_zeros(DB_CHUNK_SIZE).unwrap());
+            partial_results_left.push(
+                device
+                    .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
+                    .unwrap(),
+            );
+            partial_results_right.push(
+                device
+                    .alloc_zeros(ALL_MATCHES_LEN * query_length / ROTATIONS)
+                    .unwrap(),
+            );
             partial_results_query_indices
                 .push(device.alloc_zeros(ALL_MATCHES_LEN * query_length).unwrap());
             partial_results_db_indices
@@ -147,8 +167,12 @@ impl DistanceComparator {
             results_init_host,
             final_results_init_host,
             match_counters,
+            match_counters_left,
+            match_counters_right,
             all_matches,
             partial_results,
+            partial_results_left,
+            partial_results_right,
             partial_match_counter,
             partial_results_query_indices,
             partial_results_db_indices,
@@ -396,6 +420,10 @@ impl DistanceComparator {
                             max_db_size,
                             &self.match_counters[i],
                             &self.all_matches[i],
+                            &self.match_counters_left[i],
+                            &self.match_counters_right[i],
+                            &self.partial_results_left[i],
+                            &self.partial_results_right[i],
                             // Additional args
                             &or_policies_bitmap[i],
                             num_devices as u64,
@@ -627,6 +655,10 @@ impl DistanceComparator {
                             num_elements as u64,
                             &self.match_counters[i],
                             &self.all_matches[i],
+                            &self.match_counters_left[i],
+                            &self.match_counters_right[i],
+                            &self.partial_results_left[i],
+                            &self.partial_results_right[i],
                         ),
                     )
                     .unwrap();

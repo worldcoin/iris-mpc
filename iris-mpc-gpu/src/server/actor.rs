@@ -970,15 +970,15 @@ impl ServerActor {
             "Comparing {} eye queries against DB and self",
             self.full_scan_side
         );
-        let (partial_results_with_rotations_side1, partial_match_counters_side1) = self
-            .compare_query_against_db_and_self(
-                &compact_device_queries_side1,
-                &compact_device_sums_side1,
-                &mut events,
-                self.full_scan_side,
-                batch_size,
-                orientation,
-            );
+
+        let partial_results_with_rotations_side1 = self.compare_query_against_db_and_self(
+            &compact_device_queries_side1,
+            &compact_device_sums_side1,
+            &mut events,
+            self.full_scan_side,
+            batch_size,
+            orientation,
+        );
 
         ///////////////////////////////////////////////////////////////////
         // FETCH PARTIAL FULL SCAN PARTIAL RESULTS
@@ -1067,39 +1067,38 @@ impl ServerActor {
             }
         );
 
-        let (partial_results_with_rotations_side2, partial_match_counters_side2) =
-            if partial_matches_side1
-                .iter()
-                .any(|x| x.len() >= DB_CHUNK_SIZE)
-            {
-                tracing::warn!(
-                    "Partial matches {} too large, doing full match: {} > {}",
-                    self.full_scan_side,
-                    partial_matches_side1.len(),
-                    DB_CHUNK_SIZE
-                );
+        let partial_results_with_rotations_side2 = if partial_matches_side1
+            .iter()
+            .any(|x| x.len() >= DB_CHUNK_SIZE)
+        {
+            tracing::warn!(
+                "Partial matches {} too large, doing full match: {} > {}",
+                self.full_scan_side,
+                partial_matches_side1.len(),
+                DB_CHUNK_SIZE
+            );
 
-                tracing::info!("Comparing {} eye queries against DB and self", other_side);
-                self.compare_query_against_db_and_self(
-                    &compact_device_queries_side2,
-                    &compact_device_sums_side2,
-                    &mut events,
-                    other_side,
-                    batch_size,
-                    orientation,
-                )
-            } else {
-                tracing::info!("Comparing {} eye queries against DB subset", other_side);
-                self.compare_query_against_db_subset_and_self(
-                    &compact_device_queries_side2,
-                    &compact_device_sums_side2,
-                    &mut events,
-                    other_side,
-                    batch_size,
-                    &partial_matches_side1,
-                    orientation,
-                )
-            };
+            tracing::info!("Comparing {} eye queries against DB and self", other_side);
+            self.compare_query_against_db_and_self(
+                &compact_device_queries_side2,
+                &compact_device_sums_side2,
+                &mut events,
+                other_side,
+                batch_size,
+                orientation,
+            )
+        } else {
+            tracing::info!("Comparing {} eye queries against DB subset", other_side);
+            self.compare_query_against_db_subset_and_self(
+                &compact_device_queries_side2,
+                &compact_device_sums_side2,
+                &mut events,
+                other_side,
+                batch_size,
+                &partial_matches_side1,
+                orientation,
+            )
+        };
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1215,50 +1214,101 @@ impl ServerActor {
             }
         }
 
-        // Convert the new partial results to the required format
+        // Fetch the partial matches
         let (
             partial_match_ids_left,
-            partial_match_rotation_indices_left,
+            partial_match_counters_left,
             partial_match_ids_right,
-            partial_match_rotation_indices_right,
+            partial_match_counters_right,
         ) = if self.return_partial_results {
-            // Dynamically assign based on which eye is doing the full scan
-            let (
-                (partial_match_ids_full_scan, partial_match_rotation_indices_full_scan),
-                (partial_match_ids_other, partial_match_rotation_indices_other),
-            ) = (
-                self.extract_partial_results_with_rotations(
-                    partial_results_with_rotations_side1,
-                    batch_size,
-                ),
-                self.extract_partial_results_with_rotations(
-                    partial_results_with_rotations_side2,
-                    batch_size,
-                ),
-            );
+            // Transfer the partial results to the host
+            let partial_match_counters_left = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_left)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
+            let partial_match_counters_right = self
+                .distance_comparator
+                .fetch_match_counters(&self.distance_comparator.match_counters_right)
+                .into_iter()
+                .map(|x| x[..batch_size].to_vec())
+                .collect::<Vec<_>>();
 
-            match self.full_scan_side {
-                Eye::Left => (
-                    partial_match_ids_full_scan,
-                    partial_match_rotation_indices_full_scan,
-                    partial_match_ids_other,
-                    partial_match_rotation_indices_other,
-                ),
-                Eye::Right => (
-                    partial_match_ids_other,
-                    partial_match_rotation_indices_other,
-                    partial_match_ids_full_scan,
-                    partial_match_rotation_indices_full_scan,
-                ),
-            }
-        } else {
+            let partial_results_left = self.distance_comparator.fetch_all_match_ids(
+                &partial_match_counters_left,
+                &self.distance_comparator.partial_results_left,
+            );
+            let partial_results_right = self.distance_comparator.fetch_all_match_ids(
+                &partial_match_counters_right,
+                &self.distance_comparator.partial_results_right,
+            );
             (
-                vec![vec![]; batch_size],
-                vec![vec![]; batch_size],
-                vec![vec![]; batch_size],
-                vec![vec![]; batch_size],
+                partial_results_left,
+                partial_match_counters_left,
+                partial_results_right,
+                partial_match_counters_right,
             )
+        } else {
+            (vec![], vec![], vec![], vec![])
         };
+
+        let partial_match_counters_left = partial_match_counters_left.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
+        let partial_match_counters_right = partial_match_counters_right.iter().fold(
+            vec![0usize; batch_size],
+            |mut acc, counters| {
+                for (i, &value) in counters.iter().enumerate() {
+                    acc[i] += value as usize;
+                }
+                acc
+            },
+        );
+
+        // Gather rotation indices of db matches for each query
+        // Format: partial_match_rotation_indices[query_index][db_id][rotation_index]
+        let (partial_match_rotation_indices_left, partial_match_rotation_indices_right) =
+            if self.return_partial_results {
+                let partial_match_rotation_indices_full_scan = self
+                    .map_rotation_indices_to_db_ids_per_query(
+                        partial_results_with_rotations_side1,
+                        match self.full_scan_side {
+                            Eye::Left => &partial_match_ids_left,
+                            Eye::Right => &partial_match_ids_right,
+                        },
+                        batch_size,
+                    );
+                let partial_match_rotation_indices_other = self
+                    .map_rotation_indices_to_db_ids_per_query(
+                        partial_results_with_rotations_side2,
+                        match self.full_scan_side {
+                            Eye::Left => &partial_match_ids_right,
+                            Eye::Right => &partial_match_ids_left,
+                        },
+                        batch_size,
+                    );
+
+                match self.full_scan_side {
+                    Eye::Left => (
+                        partial_match_rotation_indices_full_scan,
+                        partial_match_rotation_indices_other,
+                    ),
+                    Eye::Right => (
+                        partial_match_rotation_indices_other,
+                        partial_match_rotation_indices_full_scan,
+                    ),
+                }
+            } else {
+                (vec![vec![]; batch_size], vec![vec![]; batch_size])
+            };
 
         // Evaluate the results across devices
         // Format: merged_results[query_index]
@@ -1347,8 +1397,8 @@ impl ServerActor {
                     // Basic condition: must be a uniqueness request, with no match, and below supermatcher threshold
                     let basic_condition = batch.request_types[idx] == UNIQUENESS_MESSAGE_TYPE
                         && num == NON_MATCH_ID
-                        && partial_match_counters_side1[idx] <= SUPERMATCH_THRESHOLD
-                        && partial_match_counters_side2[idx] <= SUPERMATCH_THRESHOLD;
+                        && partial_match_counters_left[idx] <= SUPERMATCH_THRESHOLD
+                        && partial_match_counters_right[idx] <= SUPERMATCH_THRESHOLD;
 
                     // When in normal mode and we have mirrored results, only consider that
                     // the entry was unique if it did not match in the mirror orientation as well
@@ -1571,14 +1621,8 @@ impl ServerActor {
             partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
-            partial_match_counters_left: match self.full_scan_side {
-                Eye::Left => partial_match_counters_side1.clone(),
-                Eye::Right => partial_match_counters_side2.clone(),
-            },
-            partial_match_counters_right: match self.full_scan_side {
-                Eye::Left => partial_match_counters_side2,
-                Eye::Right => partial_match_counters_side1,
-            },
+            partial_match_counters_left,
+            partial_match_counters_right,
             full_face_mirror_partial_match_counters_left,
             full_face_mirror_partial_match_counters_right,
             left_iris_requests: batch.left_iris_requests,
@@ -2043,7 +2087,7 @@ impl ServerActor {
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
-    ) -> (PartialResultsWithRotations, Vec<usize>) {
+    ) -> PartialResultsWithRotations {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2058,7 +2102,7 @@ impl ServerActor {
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
         if db_subset_idx.iter().all(|x| x.is_empty()) {
-            return (HashMap::new(), vec![0; batch_size]);
+            return HashMap::new();
         }
 
         // which database are we querying against
@@ -2216,14 +2260,6 @@ impl ServerActor {
             .distance_comparator
             .get_partial_results_with_rotations(&self.streams[0]);
 
-        // Calculate match counters from partial results with rotations
-        let mut match_counters_devices = vec![0usize; batch_size];
-        for (query_idx, db_matches) in &partial_results_with_rotations {
-            if (*query_idx as usize) < batch_size {
-                match_counters_devices[*query_idx as usize] += db_matches.len();
-            }
-        }
-
         // Reset the partial results buffers and counter for re-use
         for dst in [
             &self.distance_comparator.partial_results_query_indices,
@@ -2241,7 +2277,7 @@ impl ServerActor {
             &self.streams[0],
         );
 
-        (partial_results_with_rotations, match_counters_devices)
+        partial_results_with_rotations
     }
 
     fn compare_query_against_db_and_self(
@@ -2252,7 +2288,7 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         orientation: Orientation,
-    ) -> (PartialResultsWithRotations, Vec<usize>) {
+    ) -> PartialResultsWithRotations {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
@@ -2271,6 +2307,8 @@ impl ServerActor {
             Eye::Right => (&self.right_code_db_slices, &self.right_mask_db_slices),
         };
 
+        // partial results, left or right depending on the eye that we are running
+        // it gets filled by the open_results kernel based on the results from the 3 mpc nodes
         let db_match_bitmap = match eye_db {
             Eye::Left => &self.db_match_list_left,
             Eye::Right => &self.db_match_list_right,
@@ -2558,18 +2596,10 @@ impl ServerActor {
         self.device_manager.await_streams(&self.streams[1]);
         tracing::info!(party_id = self.party_id, "db search finished");
 
-        // Retrieve partial results
+        // Retrieve partial results with rotations
         let partial_results_with_rotations = self
             .distance_comparator
             .get_partial_results_with_rotations(&self.streams[0]);
-
-        // Calculate match counters from partial results with rotations
-        let mut match_counters_devices = vec![0usize; batch_size];
-        for (query_idx, db_matches) in &partial_results_with_rotations {
-            if (*query_idx as usize) < batch_size {
-                match_counters_devices[*query_idx as usize] += db_matches.len();
-            }
-        }
 
         // Reset the partial results buffers and counter for re-use
         for dst in [
@@ -2593,7 +2623,7 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
 
-        (partial_results_with_rotations, match_counters_devices)
+        partial_results_with_rotations
     }
 
     fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
@@ -2754,25 +2784,30 @@ impl ServerActor {
         or_policy_bitmap
     }
 
-    /// Extract partial results with rotations from the new flow and convert them to the format needed for ServerJobResult
-    fn extract_partial_results_with_rotations(
+    fn map_rotation_indices_to_db_ids_per_query(
         &self,
         partial_results_with_rotations: PartialResultsWithRotations,
+        partial_match_ids: &[Vec<u32>],
         batch_size: usize,
-    ) -> (Vec<Vec<u32>>, Vec<Vec<Vec<i8>>>) {
-        let mut partial_match_ids = vec![vec![]; batch_size];
+    ) -> Vec<Vec<Vec<i8>>> {
         let mut partial_match_rotation_indices = vec![vec![]; batch_size];
 
-        for (query_idx, db_matches) in partial_results_with_rotations {
-            if (query_idx as usize) < batch_size {
-                for (db_idx, rotations) in db_matches {
-                    partial_match_ids[query_idx as usize].push(db_idx);
-                    partial_match_rotation_indices[query_idx as usize].push(rotations);
+        for query_idx in 0..batch_size {
+            if let Some(db_matches_with_rotations) =
+                partial_results_with_rotations.get(&(query_idx as u32))
+            {
+                let match_ids = &partial_match_ids[query_idx];
+
+                // Create rotation indices mapped to match IDs
+                for &db_id in match_ids {
+                    if let Some(rotations) = db_matches_with_rotations.get(&db_id) {
+                        partial_match_rotation_indices[query_idx].push(rotations.clone());
+                    }
                 }
             }
         }
 
-        (partial_match_ids, partial_match_rotation_indices)
+        partial_match_rotation_indices
     }
 }
 
