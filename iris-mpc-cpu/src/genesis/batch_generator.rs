@@ -180,11 +180,11 @@ impl BatchIterator for BatchGenerator {
     // Returns next batch of Iris data to be indexed or None if exhausted.
     async fn next_batch(
         &mut self,
-        iris_stores: &BothEyes<SharedIrisesRef>,
+        imem_iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
         if let Some(identifiers) = self.next_identifiers() {
             // Assumption: ids are equivalent in both left and right stores, esp. versions.
-            let vector_ids = iris_stores[0]
+            let vector_ids = imem_iris_stores[0]
                 .get_vector_ids(&identifiers)
                 .await
                 .into_iter()
@@ -194,8 +194,8 @@ impl BatchIterator for BatchGenerator {
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
 
-            let left_queries = iris_stores[0].get_queries(vector_ids.iter()).await;
-            let right_queries = iris_stores[1].get_queries(vector_ids.iter()).await;
+            let left_queries = imem_iris_stores[0].get_queries(vector_ids.iter()).await;
+            let right_queries = imem_iris_stores[1].get_queries(vector_ids.iter()).await;
 
             self.batch_count += 1;
             let batch = Batch {

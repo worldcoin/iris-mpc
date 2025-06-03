@@ -45,6 +45,7 @@ use tokio::{
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
+#[derive(Debug, Clone)]
 pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
@@ -78,6 +79,9 @@ impl ExecutionArgs {
 
 /// Information associated with inner execution context.
 struct ExecutionContextInfo {
+    /// Process input args.
+    args: ExecutionArgs,
+
     // Serial idenitifer of last indexed Iris.
     last_indexed_id: IrisSerialId,
 
@@ -110,6 +114,7 @@ impl ExecutionContextInfo {
         max_modification_id: i64,
     ) -> Self {
         Self {
+            args: args.clone(),
             excluded_serial_ids,
             last_indexed_id,
             max_modification_id,
@@ -129,46 +134,104 @@ impl ExecutionContextInfo {
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration instance.
-/// * `max_indexation_id` - Maximum id to which to index iris codes.
+/// * `args` - Process arguments.
+/// * `config` - Process configuration instance.
 ///
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
-    // Process: bail if config is invalid.
-    validate_config(&config);
+    // Phase 0: setup.
+    let (ctx, shutdown_handler, task_monitor_bg, hawk_actor, aws_rds_client, graph_store) =
+        exec_setup(&args, &config).await?;
+    log_info(String::from("Setup complete."));
+
+    // Phase 1: apply delta.
+    if ctx.modifications.is_empty() {
+        log_info(String::from("Delta skipped ... no modifications to apply."));
+    } else {
+        exec_delta(&ctx).await?;
+        log_info(String::from("Delta complete."));
+    }
+
+    // Phase 2: indexation.
+    exec_indexation(
+        &config,
+        &ctx,
+        hawk_actor,
+        graph_store,
+        task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
+    log_info(String::from("Indexation complete."));
+
+    // Phase 3: snapshot.
+    if !args.perform_snapshot {
+        log_info(String::from("Snapshot skipped ... as requested."));
+    } else {
+        exec_snapshot(&config, &ctx, &aws_rds_client).await?;
+        log_info(String::from("Snapshot complete."));
+    };
+
+    Ok(())
+}
+
+/// Execute process setup tasks.
+///
+/// # Arguments
+///
+/// * `args` - Process arguments.
+/// * `config` - Process configuration instance.
+///
+async fn exec_setup(
+    args: &ExecutionArgs,
+    config: &Config,
+) -> Result<(
+    ExecutionContextInfo,
+    Arc<ShutdownHandler>,
+    TaskMonitor,
+    HawkActor,
+    RDSClient,
+    GraphPg<Aby3Store>,
+)> {
+    // Bail if config is invalid.
+    validate_config(config);
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
     log_info(format!(
         "Mode of deployment: {:?}",
         config.mode_of_deployment
     ));
 
-    // Process: set shutdown handler.
-    let shutdown_handler = init_shutdown_handler(&config).await;
+    // Set shutdown handler.
+    let shutdown_handler = init_shutdown_handler(config).await;
 
-    // Coordinator: set task monitor.
-    let mut background_tasks = coordinator::init_task_monitor();
+    // Set background task monitor.
+    let mut task_monitor_bg = coordinator::init_task_monitor();
 
-    // Process: set service clients.
     // Set service clients.
-    let ((aws_s3_client, sqs_client, rds_client), iris_store, graph_store) =
-        get_service_clients(&config).await?;
+    let ((aws_s3_client, aws_sqs_client, aws_rds_client), (iris_store, graph_store)) =
+        get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
 
-    // Process: set serial identifier of last indexed Iris.
+    // Set serial identifier of last indexed Iris.
     let last_indexed_id = get_last_indexed_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
     ));
 
-    // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
+    // Bail if stores are inconsistent.
+    validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
+        .await?;
+    log_info(String::from("Store consistency checks OK"));
+
+    // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
-        fetch_iris_deletions(&config, &aws_s3_client, args.max_indexation_id).await?;
+        fetch_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
     ));
 
-    // Process: get modifications that need to be applied to the graph.
+    // Set modifications that have occurred since last indexation.
     let last_indexed_modification_id = get_last_indexed_modification_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last modification to have been indexed = {}",
@@ -183,19 +246,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         latest_modification_id
     ));
 
-    // Process: Bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        &config,
-        &iris_store,
-        args.max_indexation_id,
-        last_indexed_id,
-    )
-    .await?;
-    log_info(String::from("Store consistency checks OK"));
-
     // Coordinator: Await coordination server to start.
     let my_state = get_sync_state(
-        &config,
+        config,
         args.batch_size,
         args.batch_size_error_rate,
         args.max_indexation_id,
@@ -206,120 +259,86 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
     log_info(String::from("Synchronization state initialised"));
 
+    // Coordinator: await server start.
     let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
-
-    // Coordinator: await server to start.
     let is_ready_flag = coordinator::start_coordination_server(
-        &config,
-        &sqs_client,
-        &mut background_tasks,
+        config,
+        &aws_sqs_client,
+        &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
         current_batch_id_atomic,
     )
     .await;
-    background_tasks.check_tasks();
+    task_monitor_bg.check_tasks();
 
     // Coordinator: await network state = UNREADY.
-    coordinator::wait_for_others_unready(&config).await?;
+    coordinator::wait_for_others_unready(config).await?;
     log_info(String::from("Network status = UNREADY"));
 
     // Coordinator: await network state = HEALTHY.
-    coordinator::init_heartbeat_task(&config, &mut background_tasks, &shutdown_handler).await?;
-    background_tasks.check_tasks();
+    coordinator::init_heartbeat_task(config, &mut task_monitor_bg, &shutdown_handler).await?;
+    task_monitor_bg.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
     // TODO: What should happen here - see Bryan.
     // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
 
     // Coordinator: await network state = SYNCHRONIZED.
-    let sync_result = get_sync_result(&config, &my_state).await?;
+    let sync_result = get_sync_result(config, &my_state).await?;
     sync_result.check_synced_state()?;
     log_info(String::from("Synchronization checks passed"));
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
-        return Ok(());
+        bail!("Shutdown")
+        // return Ok(());
     }
 
-    // Process: initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(&config).await?;
+    // Initialise HNSW graph from previously indexed.
+    let mut hawk_actor = get_hawk_actor(config).await?;
     init_graph_from_stores(
-        &config,
+        config,
         &iris_store,
         &graph_store,
         &mut hawk_actor,
         Arc::clone(&shutdown_handler),
     )
     .await?;
-    background_tasks.check_tasks();
+    task_monitor_bg.check_tasks();
     log_info(String::from("HNSW graph initialised from store"));
-
-    // Process: Start thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut background_tasks, &shutdown_handler).await?;
-    background_tasks.check_tasks();
 
     // Coordinator: await network state = ready.
     coordinator::set_node_ready(is_ready_flag);
-    coordinator::wait_for_others_ready(&config).await?;
-    background_tasks.check_tasks();
+    coordinator::wait_for_others_ready(config).await?;
+    task_monitor_bg.check_tasks();
     log_info(String::from("Network status = READY"));
 
     // Coordinator: escape on shutdown.
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
-        return Ok(());
+        bail!("Shutdown")
+        // return Ok(());
     }
 
-    log_info(String::from("Setup complete.  Executing main logic."));
-
-    // Process: set execution context information.
-    let ctx = ExecutionContextInfo::new(
-        &args,
-        last_indexed_id,
-        excluded_serial_ids.clone(),
-        modifications.clone(),
-        latest_modification_id,
-    );
-
-    // Process: execution phase 1: apply delta ... i.e. modifications.
-    if ctx.modifications.is_empty() {
-        log_info(String::from("No modifications to apply"));
-    } else {
-        exec_delta(&ctx).await?;
-    }
-
-    // Process: execution phase 2: indexation.
-    exec_indexation(
-        &config,
-        &ctx,
-        hawk_actor,
-        background_tasks,
-        &shutdown_handler,
-        tx_results,
-    )
-    .await?;
-
-    // Process: execution phase 3: create dB snapshot.
-    if args.perform_snapshot {
-        exec_snapshot(
-            &config,
-            &rds_client,
-            args.batch_size,
+    Ok((
+        ExecutionContextInfo::new(
+            args,
             last_indexed_id,
-            args.max_indexation_id,
-        )
-        .await?;
-    } else {
-        log_info(String::from("Skipping database snapshot as requested"));
-    };
-
-    Ok(())
+            excluded_serial_ids.clone(),
+            modifications.clone(),
+            latest_modification_id,
+        ),
+        shutdown_handler,
+        task_monitor_bg,
+        hawk_actor,
+        aws_rds_client,
+        graph_store,
+    ))
 }
 
-/// Apply modiciations since last indexation.
+/// Apply modifications since last indexation.
 ///
 /// # Arguments
 ///
@@ -367,7 +386,7 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
 /// * `config` - Application configuration instance.
 /// * `ctx` - Execution context information.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
-/// * `task_monitor` - Tokio task monitor to coordinate with other threads.
+/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
@@ -375,33 +394,30 @@ async fn exec_indexation(
     config: &Config,
     ctx: &ExecutionContextInfo,
     hawk_actor: HawkActor,
-    mut task_monitor: TaskMonitor,
+    graph_store: GraphPg<Aby3Store>,
+    mut task_monitor_bg: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    tx_results: Sender<JobResult>,
 ) -> Result<()> {
-    let ExecutionContextInfo {
-        batch_size,
-        batch_size_error_rate,
-        excluded_serial_ids,
-        last_indexed_id,
-        max_indexation_id,
-        ..
-    } = ctx;
-    log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", batch_size, batch_size_error_rate, last_indexed_id, max_indexation_id));
+    log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", ctx.batch_size, ctx.batch_size_error_rate, ctx.last_indexed_id, ctx.max_indexation_id));
+
+    // Set thread for persisting indexing results to DB.
+    let tx_results =
+        get_results_thread(graph_store, &mut task_monitor_bg, shutdown_handler).await?;
+    task_monitor_bg.check_tasks();
 
     // Set dynamic batch size.
     // TODO: calculate before 1st batch and at end of each subsequent batch.
-    let batch_size = match batch_size {
+    let batch_size = match ctx.batch_size {
         // If batch size is 0 then calculate dynamic batch size based on the current graph size.
         0 => {
             // Set r: configurable parameter for error rate.
-            let r = *batch_size_error_rate;
+            let r = ctx.batch_size_error_rate;
 
             // Set m: HNSW parameter for nearest neighbors.
             let m = config.hnsw_param_M as u64;
 
             // Set n: current graph size (last_indexed_id).
-            let n = *last_indexed_id as u64;
+            let n = ctx.last_indexed_id as u64;
 
             // Apply dynamic batch size formula: floor(N/(Mr - 1) + 1)
             let batch_size = if n > 0 {
@@ -418,13 +434,13 @@ async fn exec_indexation(
             batch_size
         }
         _ => {
-            log_info(format!("Using static batch size: {}", batch_size));
-            *batch_size
+            log_info(format!("Using static batch size: {}", ctx.batch_size));
+            ctx.batch_size
         }
     };
 
     // Set in memory Iris stores.
-    let iris_stores_mem: BothEyes<_> = [
+    let imem_iris_stores: BothEyes<_> = [
         hawk_actor.iris_store(StoreId::Left),
         hawk_actor.iris_store(StoreId::Right),
     ];
@@ -435,16 +451,16 @@ async fn exec_indexation(
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
-        last_indexed_id + 1,
-        *max_indexation_id,
+        ctx.last_indexed_id + 1,
+        ctx.max_indexation_id,
         batch_size,
-        excluded_serial_ids.clone(),
+        ctx.excluded_serial_ids.clone(),
     );
     log_info(format!("Batch generator instantiated: {}", batch_generator));
 
-    // Set main loop result.
+    // Set indexation result.
     let res: Result<()> = async {
-        log_info(String::from("Entering main loop"));
+        log_info(String::from("Entering main indexation loop"));
 
         // Housekeeping.
         let now = Instant::now();
@@ -452,7 +468,7 @@ async fn exec_indexation(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(&iris_stores_mem).await? {
+        while let Some(batch) = batch_generator.next_batch(&imem_iris_stores).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -468,7 +484,7 @@ async fn exec_indexation(
             metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
-            task_monitor.check_tasks();
+            task_monitor_bg.check_tasks();
 
             // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
@@ -511,9 +527,9 @@ async fn exec_indexation(
             // Clean up & shutdown.
             log_info(String::from("Initiating shutdown"));
             drop(hawk_handle);
-            task_monitor.abort_all();
+            task_monitor_bg.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
-            task_monitor.check_tasks_finished();
+            task_monitor_bg.check_tasks_finished();
         }
     }
 
@@ -525,17 +541,15 @@ async fn exec_indexation(
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `rds_client` - AWS RDS SDK client.
+/// * `aws_rds_client` - AWS RDS SDK client.
 /// * `batch_size` - Size of indexation batches.
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 ///
 async fn exec_snapshot(
     config: &Config,
-    rds_client: &RDSClient,
-    batch_size: usize,
-    last_indexed_id: IrisSerialId,
-    max_indexation_id: IrisSerialId,
+    ctx: &ExecutionContextInfo,
+    aws_rds_client: &RDSClient,
 ) -> Result<()> {
     log_info(String::from("Db snapshot begins"));
 
@@ -547,11 +561,11 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+        ctx.last_indexed_id, ctx.max_indexation_id, ctx.args.batch_size, unix_timestamp
     );
 
     // Create snapshot.
-    set_rds_snapshot(rds_client, &db_config.url, &snapshot_id).await?;
+    set_rds_snapshot(aws_rds_client, &db_config.url, &snapshot_id).await?;
 
     Ok(())
 }
@@ -604,14 +618,12 @@ async fn get_service_clients(
 ) -> Result<
     (
         (S3Client, SQSClient, RDSClient),
-        IrisStore,
-        GraphPg<Aby3Store>,
+        (IrisStore, GraphPg<Aby3Store>),
     ),
     Report,
 > {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_clients(config: &Config) -> (S3Client, SQSClient, RDSClient) {
-        // Get region from config or use default
+    async fn get_aws_clients(config: &Config) -> Result<(S3Client, SQSClient, RDSClient)> {
         let region = config
             .clone()
             .aws
@@ -625,68 +637,63 @@ async fn get_service_clients(
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
-        let sqs_client = SQSClient::new(&shared_config);
-        let rds_client = RDSClient::new(&shared_config);
 
-        (S3Client::from_conf(s3_config), sqs_client, rds_client)
+        Ok((
+            S3Client::from_conf(s3_config),
+            SQSClient::new(&shared_config),
+            RDSClient::new(&shared_config),
+        ))
     }
 
-    /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
+    /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.
     async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
-        let iris_schema_name = format!(
-            "{}_{}_{}",
-            config.schema_name, config.environment, config.party_id
-        );
+        async fn get_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
+            let db_schema = format!(
+                "{}_{}_{}",
+                config.schema_name, config.environment, config.party_id
+            );
+            let db_config = config
+                .database
+                .as_ref()
+                .ok_or(eyre!("Missing database config"))?;
+            log_info(format!("Creating new iris store from: {:?}", db_config));
+            let db_client =
+                PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
+                    .await?;
 
-        let hawk_schema_name = format!(
-            "{}{}_{}_{}",
-            config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
-        );
-        // Set config.
-        let db_config_iris = config
-            .database
-            .as_ref()
-            .ok_or(eyre!("Missing database config"))?;
-        let db_config_graph = config
-            .cpu_database
-            .as_ref()
-            .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+            IrisStore::new(&db_client).await
+        }
 
-        // Set postgres clients.
-        let pg_client_iris = PostgresClient::new(
-            &db_config_iris.url,
-            iris_schema_name.as_str(),
-            AccessMode::ReadOnly,
-        )
-        .await?;
-        let pg_client_graph = PostgresClient::new(
-            &db_config_graph.url,
-            hawk_schema_name.as_str(),
-            AccessMode::ReadWrite,
-        )
-        .await?;
+        async fn get_graph_store_client(config: &Config) -> Result<GraphPg<Aby3Store>, Report> {
+            let db_schema = format!(
+                "{}{}_{}_{}",
+                config.schema_name,
+                config.hnsw_schema_name_suffix,
+                config.environment,
+                config.party_id
+            );
+            let db_config = config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+            log_info(format!("Creating new graph store from: {:?}", db_config));
+            let db_client =
+                PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
+                    .await?;
 
-        // Set Iris store - may take time if migrations are performed upon schemas.
-        log_info(format!(
-            "Creating new iris store from: {:?}",
-            db_config_iris,
-        ));
-        let store_iris = IrisStore::new(&pg_client_iris).await?;
+            GraphStore::new(&db_client).await
+        }
 
-        // Set Graph store - may take time if migrations are performed upon schemas.
-        log_info(format!(
-            "Creating new graph store from: {:?}",
-            db_config_graph,
-        ));
-        let store_graph = GraphStore::new(&pg_client_graph).await?;
-
-        Ok((store_iris, store_graph))
+        Ok((
+            get_iris_store_client(config).await?,
+            get_graph_store_client(config).await?,
+        ))
     }
 
-    let pgres_clients = get_pgres_clients(config).await?;
-    let aws_clients = get_aws_clients(config).await;
-
-    Ok((aws_clients, pgres_clients.0, pgres_clients.1))
+    Ok((
+        get_aws_clients(config).await?,
+        get_pgres_clients(config).await?,
+    ))
 }
 
 /// Spawns thread responsible for persisting results from batch query processing to database.
