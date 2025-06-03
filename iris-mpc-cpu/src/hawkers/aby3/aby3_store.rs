@@ -146,6 +146,10 @@ impl SharedIrises {
         self.points.reserve(additional);
     }
 
+    pub fn get_current_version(&self, serial_id: SerialId) -> Option<VersionId> {
+        self.points.get(&serial_id).map(|(version, _iris)| *version)
+    }
+
     fn get_vector(&self, vector: &VectorId) -> IrisRef {
         // TODO: Handle missing vectors.
         match self.points.get(&vector.serial_id()) {
@@ -221,7 +225,19 @@ impl SharedIrisesRef {
         self.data.read().await.get_vector(vector)
     }
 
-    pub async fn iter_vectors(
+    pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
+        let body = self.data.read().await;
+
+        serial_ids
+            .iter()
+            .map(|serial_id| {
+                body.get_current_version(*serial_id)
+                    .map(|version_id| VectorId::new(*serial_id, version_id))
+            })
+            .collect()
+    }
+
+    pub async fn get_vectors(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
     ) -> Vec<IrisRef> {
@@ -230,6 +246,17 @@ impl SharedIrisesRef {
             .into_iter()
             .map(|v| body.get_vector(v))
             .collect_vec()
+    }
+
+    pub async fn get_queries(
+        &self,
+        vector_ids: impl IntoIterator<Item = &VectorId>,
+    ) -> Vec<QueryRef> {
+        self.get_vectors(vector_ids)
+            .await
+            .into_iter()
+            .map(|v| prepare_query((*v).clone()))
+            .collect()
     }
 
     /// Obtain a write lock for the underlying irises data, and insert the given
@@ -319,12 +346,7 @@ impl VectorStore for Aby3Store {
     type DistanceRef = DistanceShare<u32>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        self.storage
-            .iter_vectors(&vectors)
-            .await
-            .into_iter()
-            .map(|v| prepare_query((*v).clone()))
-            .collect()
+        self.storage.get_queries(&vectors).await
     }
 
     async fn only_valid_vectors(
@@ -356,10 +378,7 @@ impl VectorStore for Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let vectors = self
-            .storage
-            .iter_vectors(pairs.iter().map(|(_, v)| v))
-            .await;
+        let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
             .map(|((q, _), v)| (&q.processed_query, &**v))
@@ -378,7 +397,7 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
-        let vectors = self.storage.iter_vectors(vectors).await;
+        let vectors = self.storage.get_vectors(vectors).await;
         let pairs = queries
             .iter()
             .flat_map(|q| vectors.iter().map(|vector| (&q.processed_query, &**vector)))

@@ -1,21 +1,29 @@
 use aws_config::retry::RetryConfig;
+use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
     Client as S3Client,
 };
 use aws_sdk_sqs::Client as SQSClient;
+use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
-    helpers::{shutdown_handler::ShutdownHandler, task_monitor::TaskMonitor},
+    helpers::{
+        shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
+        sync::Modification, task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{GraphStore, HawkActor, HawkArgs},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
         self,
-        state_accessor::{fetch_iris_deletions, get_last_indexed_id, set_last_indexed_id},
+        state_accessor::{
+            fetch_iris_deletions, fetch_iris_modifications, get_last_indexed_id,
+            get_last_indexed_modification_id, set_last_indexed_id,
+        },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
@@ -24,11 +32,9 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::loader::load_iris_db;
-use iris_mpc_store::Store as IrisStore;
-use std::sync::atomic::AtomicU64;
+use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
 use std::{
-    sync::Arc,
+    sync::{atomic::AtomicU64, Arc},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -53,6 +59,8 @@ pub async fn exec_main(
     config: Config,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    batch_size_error_rate: usize,
+    perform_snapshot: bool,
 ) -> Result<()> {
     // Process: bail if config is invalid.
     validate_config(&config);
@@ -70,7 +78,7 @@ pub async fn exec_main(
 
     // Process: set service clients.
     // Set service clients.
-    let ((aws_s3_client, sqs_client), iris_store, graph_store) =
+    let ((aws_s3_client, sqs_client, rds_client), iris_store, graph_store) =
         get_service_clients(&config).await?;
     log_info(String::from("Service clients instantiated"));
 
@@ -82,15 +90,26 @@ pub async fn exec_main(
     ));
 
     // Process: set Iris serial identifiers marked for deletion and thus excluded from indexation.
-    let exclusions_all = fetch_iris_deletions(&config, &aws_s3_client).await?;
-    let exclusions = exclusions_all
-        .iter()
-        .filter(|&&x| x <= max_indexation_id)
-        .cloned()
-        .collect::<Vec<u32>>();
+    let excluded_serial_ids =
+        fetch_iris_deletions(&config, &aws_s3_client, max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
-        exclusions.len(),
+        excluded_serial_ids.len(),
+    ));
+
+    // Process: get modifications that need to be applied to the graph.
+    let last_indexed_modification_id = get_last_indexed_modification_id(&iris_store).await?;
+    log_info(format!(
+        "Identifier of last modification to have been indexed = {}",
+        last_indexed_modification_id,
+    ));
+    let (modifications, latest_modification_id) =
+        fetch_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id)
+            .await?;
+    log_info(format!(
+        "Modifications to be applied count = {}. Last modification id = {}",
+        modifications.len(),
+        latest_modification_id
     ));
 
     // Process: Bail if stores are inconsistent.
@@ -102,9 +121,11 @@ pub async fn exec_main(
     let my_state = get_sync_state(
         &config,
         batch_size,
+        batch_size_error_rate,
         max_indexation_id,
         last_indexed_id,
-        &exclusions,
+        &excluded_serial_ids,
+        latest_modification_id,
     )
     .await?;
     log_info(String::from("Synchronization state initialised"));
@@ -183,14 +204,33 @@ pub async fn exec_main(
         last_indexed_id,
         max_indexation_id,
         batch_size,
-        exclusions,
-        &iris_store,
+        batch_size_error_rate,
+        excluded_serial_ids,
+        modifications,
         background_tasks,
         &shutdown_handler,
         hawk_actor,
         tx_results,
     )
     .await?;
+
+    // snapshot the database at the end of the process
+    if perform_snapshot {
+        log_info(String::from("Snapshotting the database"));
+        let unix_timestamp = Utc::now().timestamp();
+        let snapshot_id = format!(
+            "genesis-{}-{}-{}-{}",
+            last_indexed_id, max_indexation_id, batch_size, unix_timestamp
+        );
+        let db_config_graph = config
+            .cpu_database
+            .as_ref()
+            .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
+        snapshot_rds(&rds_client, &db_config_graph.url, &snapshot_id).await?;
+        log_info(format!("Snapshot created: {}", snapshot_id));
+    } else {
+        log_info(String::from("Skipping database snapshot as requested"));
+    }
 
     Ok(())
 }
@@ -203,7 +243,7 @@ pub async fn exec_main(
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexing.
-/// * `iris_store` - Iris PostgreSQL store provider.
+/// * `modifications` - List of new modifications entries to be processed.
 /// * `task_monitor` - Tokio task monitor to coordinate with other threads.
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
@@ -215,18 +255,76 @@ async fn exec_main_loop(
     last_indexed_id: IrisSerialId,
     max_indexation_id: IrisSerialId,
     batch_size: usize,
+    batch_size_error_rate: usize,
     excluded_serial_ids: Vec<IrisSerialId>,
-    iris_store: &IrisStore,
+    modifications: Vec<Modification>,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<JobResult>,
 ) -> Result<()> {
+    // Set iris store.
+    let iris_stores_mem: BothEyes<_> = [
+        hawk_actor.iris_store(StoreId::Left),
+        hawk_actor.iris_store(StoreId::Right),
+    ];
+
     // Set Hawk handle.
     let mut hawk_handle = genesis::Handle::new(config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
-    // Set batch generator.
+    if modifications.is_empty() {
+        log_info(String::from("No modifications to apply"));
+    } else {
+        log_info(format!("Applying {} modifications", modifications.len()));
+        // TODO: implement applying modifications
+        for modification in modifications {
+            log_info(format!(
+                "Applying modification: type={} id={}, serial_id={}",
+                modification.request_type, modification.id, modification.serial_id
+            ));
+            if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
+                // throw an error
+                let msg = log_error(format!(
+                    "HawkActor does not support deletion of identities: modification: {:?}",
+                    modification
+                ));
+                bail!(msg);
+            }
+            // TODO: apply modification to the graph
+            // TODO: set last indexed modification id
+            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
+        }
+    }
+    if batch_size == 0 {
+        // If batch size is 0 then calculate dynamic batch size based on the current graph size
+
+        // Set batch generator.
+        // Calculate dynamic batch size based on formula: floor(N/(Mr - 1) + 1)
+        // where N is the current graph size (last_indexed_id),
+        // M is the HNSW parameter for nearest neighbors, and
+        // r is a configurable parameter for error rate
+        let r = batch_size_error_rate; // Configurable parameter for error rate
+        let m = config.hnsw_param_M as u64; // HNSW parameter M
+        let n = last_indexed_id as u64; // Current graph size
+
+        // Apply the formula, ensuring we have at least 1
+        let batch_size = if n > 0 {
+            (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
+        } else {
+            // If the graph is empty, use a batch size of 1
+            1
+        };
+
+        log_info(format!(
+            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+            batch_size, n, m, r
+        ));
+    } else {
+        log_info(format!("Using static batch size: {}", batch_size));
+    }
+
+    // Set batch generator with dynamic batch size.
     let mut batch_generator = BatchGenerator::new(
         last_indexed_id + 1,
         max_indexation_id,
@@ -245,7 +343,7 @@ async fn exec_main_loop(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(iris_store).await? {
+        while let Some(batch) = batch_generator.next_batch(&iris_stores_mem).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -358,9 +456,16 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
 ///
 async fn get_service_clients(
     config: &Config,
-) -> Result<((S3Client, SQSClient), IrisStore, GraphPg<Aby3Store>), Report> {
+) -> Result<
+    (
+        (S3Client, SQSClient, RDSClient),
+        IrisStore,
+        GraphPg<Aby3Store>,
+    ),
+    Report,
+> {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient) {
+    async fn get_aws_client(config: &Config) -> (S3Client, SQSClient, RDSClient) {
         // Get region from config or use default
         let region = config
             .clone()
@@ -376,7 +481,8 @@ async fn get_service_clients(
             .retry_config(retry_config.clone())
             .build();
         let sqs_client = SQSClient::new(&shared_config);
-        (S3Client::from_conf(s3_config), sqs_client)
+        let rds_client = RDSClient::new(&shared_config);
+        (S3Client::from_conf(s3_config), sqs_client, rds_client)
     }
 
     /// Returns initialized PostgreSQL clients for Iris share & HNSW graph stores.
@@ -432,9 +538,9 @@ async fn get_service_clients(
     }
 
     let pgres_clients = get_pgres_clients(config).await?;
-    let aws_s3_client = get_aws_client(config).await;
+    let aws_clients = get_aws_client(config).await;
 
-    Ok((aws_s3_client, pgres_clients.0, pgres_clients.1))
+    Ok((aws_clients, pgres_clients.0, pgres_clients.1))
 }
 
 /// Build this node's synchronization state, which is compared against the
@@ -448,28 +554,28 @@ async fn get_service_clients(
 /// * `max_indexation_id` - Maximum Iris serial id to which to index.
 /// * `last_indexed_id` - Last Iris serial id to have been indexed.
 /// * `excluded_serial_ids` - List of serial ids to be excluded from indexation.
+/// * `max_modification_id` - Maximum modification id to apply after initial indexation.
 ///
 async fn get_sync_state(
     config: &Config,
     batch_size: usize,
+    batch_size_error_rate: usize,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
+    max_modification_id: i64,
 ) -> Result<GenesisSyncState> {
     let common_config = CommonConfig::from(config.clone());
-    let excluded_serial_ids = excluded_serial_ids.to_vec();
-
-    let genesis_config = GenesisConfig {
-        max_indexation_id,
-        last_indexed_id,
-        excluded_serial_ids,
+    let genesis_config = GenesisConfig::new(
         batch_size,
-    };
+        batch_size_error_rate,
+        excluded_serial_ids.to_vec(),
+        last_indexed_id,
+        max_indexation_id,
+        max_modification_id,
+    );
 
-    Ok(GenesisSyncState {
-        common_config,
-        genesis_config,
-    })
+    Ok(GenesisSyncState::new(common_config, genesis_config))
 }
 
 /// Returns result of performing distributed state synchronization.
@@ -488,6 +594,53 @@ async fn get_sync_result(
     let result = GenesisSyncResult::new(my_state.clone(), all_states);
 
     Ok(result)
+}
+
+/// Snapshots the RDS cluster.
+///
+/// # Arguments
+///
+/// * `client` - AWS RDS SDK client.
+/// * `db_instance_id` - RDS instance identifier.
+/// * `snapshot_id` - Snapshot identifier.
+///
+async fn snapshot_rds(
+    client: &RDSClient,
+    db_cluster_endpoint: &str,
+    snapshot_id: &str,
+) -> Result<()> {
+    let url = db_cluster_endpoint
+        .strip_prefix("postgresql://")
+        .ok_or(eyre!("HNSW GENESIS :: Server :: Invalid Postgres URL"))?;
+
+    let at_pos = url
+        .rfind('@')
+        .ok_or(eyre!("HNSW GENESIS :: Server :: No @ found in URL"))?;
+    let host_and_db = &url[at_pos + 1..];
+    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
+    let cluster_endpoint = &host_and_db[..slash_pos];
+
+    let resp = client.describe_db_clusters().send().await?;
+
+    let cluster_id = resp
+        .db_clusters()
+        .iter()
+        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+        .and_then(|cluster| cluster.db_cluster_identifier())
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Cluster ID not found for snapshot"
+        ))?;
+
+    log_info(format!("Creating RDS snapshot for cluster: {}", cluster_id));
+
+    client
+        .create_db_cluster_snapshot()
+        .db_cluster_identifier(cluster_id)
+        .db_cluster_snapshot_identifier(snapshot_id)
+        .send()
+        .await?;
+
+    Ok(())
 }
 
 /// Initializes HNSW graph from data previously persisted to a store.

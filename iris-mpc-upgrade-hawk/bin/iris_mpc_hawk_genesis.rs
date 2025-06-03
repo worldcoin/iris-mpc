@@ -4,6 +4,10 @@ use iris_mpc_common::{config::Config, tracing::initialize_tracing, IrisSerialId}
 use iris_mpc_cpu::genesis::{log_error, log_info};
 use iris_mpc_upgrade_hawk::genesis::exec_main;
 
+// Default values for batch processing
+const DEFAULT_BATCH_SIZE: usize = 0; // Dynamic batch size
+const DEFAULT_BATCH_ERROR_RATE: usize = 128; // Default error rate
+
 #[derive(Parser)]
 #[allow(non_snake_case)]
 #[derive(Debug)]
@@ -15,6 +19,14 @@ struct Args {
     // Batch size for processing.
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
+
+    // Batch size for processing.
+    #[clap(long("batch-size-r"))]
+    batch_size_error_rate: Option<String>,
+
+    // Whether to perform a snapshot.
+    #[clap(long("perform-snapshot"), default_value = "true")]
+    perform_snapshot: bool,
 }
 
 #[tokio::main]
@@ -56,7 +68,31 @@ async fn main() -> Result<()> {
             )
         })?
     } else {
-        config.max_batch_size
+        eprintln!(
+            "--batch-size argument not provided, defaulting to {} (dynamic batch size).",
+            DEFAULT_BATCH_SIZE
+        );
+        DEFAULT_BATCH_SIZE
+    };
+
+    let batch_size_error_rate = if args.batch_size_error_rate.is_some() {
+        let batch_size_error_rate_arg = args.batch_size_error_rate.as_ref().unwrap();
+        batch_size_error_rate_arg.parse().map_err(|_| {
+            eprintln!(
+                "Error: --batch-size-r argument must be a valid usize. Value: {}",
+                batch_size_error_rate_arg
+            );
+            eyre::eyre!(
+                "--batch-size-r argument must be a valid usize. Value: {}",
+                batch_size_error_rate_arg
+            )
+        })?
+    } else {
+        eprintln!(
+            "--batch-size-r argument not provided, defaulting to {} (error rate).",
+            DEFAULT_BATCH_ERROR_RATE
+        );
+        DEFAULT_BATCH_ERROR_RATE
     };
 
     // Set tracing.
@@ -70,7 +106,15 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec_main(config, height_max, batch_size).await {
+    match exec_main(
+        config,
+        height_max,
+        batch_size,
+        batch_size_error_rate,
+        args.perform_snapshot,
+    )
+    .await
+    {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }

@@ -29,17 +29,14 @@ use super::aby3_store::{
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
-pub fn setup_local_player_preloaded_db(
-    database: HashMap<VectorId, IrisRef>,
-) -> Result<SharedIrisesRef> {
-    Ok(SharedIrises::new(database).to_arc())
+pub fn setup_local_player_preloaded_db(database: HashMap<VectorId, IrisRef>) -> SharedIrisesRef {
+    SharedIrises::new(database).to_arc()
 }
 
-pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
+pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
-    network_t: NetworkType,
-) -> Result<Vec<Aby3StoreRef>> {
+) -> Vec<SharedIrisesRef> {
     let identities = generate_local_identities();
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
@@ -52,10 +49,18 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         }
     }
 
-    let storages: Vec<SharedIrisesRef> = shared_irises
+    shared_irises
         .into_iter()
         .map(setup_local_player_preloaded_db)
-        .collect::<Result<Vec<_>>>()?;
+        .collect()
+}
+
+pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
+    rng: &mut R,
+    plain_store: &PlaintextStore,
+    network_t: NetworkType,
+) -> Result<Vec<Aby3StoreRef>> {
+    let storages = setup_aby3_shared_iris_stores_with_preloaded_db(rng, plain_store);
     let runtime = LocalRuntime::mock_setup(network_t).await?;
 
     runtime

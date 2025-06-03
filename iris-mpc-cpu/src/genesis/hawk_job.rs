@@ -4,8 +4,7 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
-    hawkers::aby3::aby3_store::{prepare_query as prepare_aby3_query, QueryRef as Aby3QueryRef},
-    protocol::shared_iris::GaloisRingSharedIris,
+    hawkers::aby3::aby3_store::QueryRef,
 };
 use eyre::Result;
 use iris_mpc_common::{IrisSerialId, IrisVectorId};
@@ -13,7 +12,7 @@ use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
 // Helper type: Aby3 store batch query.
-pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3QueryRef>>;
+pub type Aby3BatchQuery = BothEyes<VecRequests<QueryRef>>;
 
 // Helper type: Aby3 store batch query reference.
 pub type Aby3BatchQueryRef = Arc<Aby3BatchQuery>;
@@ -34,7 +33,7 @@ pub struct JobRequest {
     pub batch_id: usize,
 
     // Incoming batch of iris identifiers for subsequent correlation.
-    pub identifiers: Vec<IrisVectorId>,
+    pub vector_ids: Vec<IrisVectorId>,
 
     /// HNSW indexation queries over both eyes.
     pub queries: Aby3BatchQueryRef,
@@ -42,39 +41,22 @@ pub struct JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(party_id: PartyId, Batch { data, id: batch_id }: Batch) -> Self {
+    pub fn new(
+        party_id: PartyId,
+        Batch {
+            batch_id,
+            vector_ids,
+            left_queries,
+            right_queries,
+        }: Batch,
+    ) -> Self {
         assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
-        assert!(!data.is_empty(), "Invalid batch: is empty");
+        assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
 
         Self {
             batch_id,
-            identifiers: data.iter().map(IrisVectorId::from).collect(),
-            queries: Arc::new([
-                data.iter()
-                    .map(|iris| {
-                        prepare_aby3_query(
-                            GaloisRingSharedIris::try_from_buffers_inner(
-                                party_id,
-                                iris.left_code(),
-                                iris.left_mask(),
-                            )
-                            .unwrap(),
-                        )
-                    })
-                    .collect(),
-                data.iter()
-                    .map(|iris| {
-                        prepare_aby3_query(
-                            GaloisRingSharedIris::try_from_buffers_inner(
-                                party_id,
-                                iris.right_code(),
-                                iris.right_mask(),
-                            )
-                            .unwrap(),
-                        )
-                    })
-                    .collect(),
-            ]),
+            vector_ids,
+            queries: Arc::new([left_queries, right_queries]),
         }
     }
 }
@@ -83,7 +65,7 @@ impl JobRequest {
 impl JobRequest {
     // Incoming batch size.
     pub fn batch_size(&self) -> usize {
-        self.identifiers.len()
+        self.vector_ids.len()
     }
 }
 
@@ -100,7 +82,7 @@ pub struct JobResult {
     pub first_serial_id: IrisSerialId,
 
     /// Set of Iris identifiers being indexed.
-    pub identifiers: Vec<IrisVectorId>,
+    pub vector_ids: Vec<IrisVectorId>,
 
     /// Iris serial id of batch's last element.
     pub last_serial_id: IrisSerialId,
@@ -112,9 +94,9 @@ impl JobResult {
         Self {
             connect_plans,
             batch_id: request.batch_id,
-            first_serial_id: request.identifiers.first().unwrap().serial_id(),
-            identifiers: request.identifiers.clone(),
-            last_serial_id: request.identifiers.last().unwrap().serial_id(),
+            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
+            vector_ids: request.vector_ids.clone(),
+            last_serial_id: request.vector_ids.last().unwrap().serial_id(),
         }
     }
 }
@@ -126,7 +108,7 @@ impl fmt::Display for JobResult {
             f,
             "batch-id={}, batch-size={}, range=({}..{})",
             self.batch_id,
-            self.identifiers.len(),
+            self.vector_ids.len(),
             self.first_serial_id,
             self.last_serial_id
         )
