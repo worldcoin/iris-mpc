@@ -663,14 +663,23 @@ async fn init_graph_from_stores(
     log_info(String::from("⚓️ ANCHOR: Load the database"));
     let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
-    let parallelism = config
+    let iris_db_parallelism = config
         .database
         .as_ref()
-        .ok_or(eyre!("HNSW GENESIS :: Server :: Missing database config"))?
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Missing iris database config"
+        ))?
+        .load_parallelism;
+    let graph_db_parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!(
+            "HNSW GENESIS :: Server :: Missing graph database config"
+        ))?
         .load_parallelism;
     log_info(format!(
-        "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
+        "Initialize db: Loading from DB with parallelism. iris: {}, graph: {})",
+        iris_db_parallelism, graph_db_parallelism
     ));
 
     // -------------------------------------------------------------------
@@ -682,14 +691,16 @@ async fn init_graph_from_stores(
         &mut iris_loader,
         iris_store,
         store_len,
-        parallelism,
+        iris_db_parallelism,
         config,
         shutdown_handler,
     )
     .await
     .expect("Failed to load DB");
 
-    graph_loader.load_graph_store(graph_store).await?;
+    graph_loader
+        .load_graph_store(graph_store, graph_db_parallelism)
+        .await?;
 
     Ok(())
 }
