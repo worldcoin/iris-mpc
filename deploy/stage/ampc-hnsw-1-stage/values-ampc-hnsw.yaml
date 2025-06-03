@@ -69,7 +69,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_RESET
-    value: "false"
+    value: "true"
 
   - name: SMPC__LUC_ENABLED
     value: "true"
