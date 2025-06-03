@@ -189,13 +189,6 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
-        Layer {
-            links: HashMap::with_capacity(capacity),
-            set_hash: SetHash::default(),
-        }
-    }
-
     fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
         self.links.get(from).cloned()
     }

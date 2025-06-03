@@ -259,24 +259,6 @@ where
         Ok(row.get::<i64, _>("total_count") as usize)
     }
 
-    /// Get the maximum serial ID (source_ref as integer) for this graph_id
-    async fn get_max_serial_id(&mut self) -> Result<u32> {
-        let table = self.links_table();
-        let row = sqlx::query(&format!(
-            "
-            SELECT COALESCE(MAX(serial_id), 0) as max_id
-            FROM {table}
-            WHERE graph_id = $1
-        "
-        ))
-        .bind(self.graph_id())
-        .fetch_one(self.tx())
-        .await
-        .map_err(|e| eyre!("Failed to fetch max serial ID: {e}"))?;
-
-        Ok(row.get::<i32, _>("max_id") as u32)
-    }
-
     /// Load graph data to memory using parallel loading by source_ref ranges.
     /// This method creates separate connections for each range and loads them in parallel.
     pub async fn load_to_mem(
@@ -285,6 +267,8 @@ where
         parallelism: usize,
     ) -> Result<GraphMem<V>> {
         let mut graph_mem = GraphMem::new();
+        let schema_name = self.tx.schema_name.clone();
+        let graph_id = self.graph_id();
 
         let ep = self.get_entry_point().await?;
         if let Some((point, layer)) = ep {
@@ -294,32 +278,23 @@ where
         let total_rows = self.get_total_row_count().await?;
 
         if total_rows == 0 {
-            tracing::info!(
-                "GraphLoader: No data found for graph_id {}",
-                self.graph_id()
-            );
+            tracing::info!("GraphLoader: No data found for graph_id {}", graph_id);
             return Ok(graph_mem);
         }
 
-        let max_serial_id = self.get_max_serial_id().await?;
-
         tracing::info!(
-            "GraphLoader: Loading {} rows using {} parallel partitions. max_serial_id: {} for graph_id {}",
+            "GraphLoader: Loading {} rows using {} parallel partitions for graph_id {}",
             total_rows,
             parallelism,
-            max_serial_id,
-            self.graph_id()
+            graph_id
         );
 
         // Create channel for sending data from partitions to main task
         let (tx, mut rx) =
             mpsc::channel::<(V::VectorRef, SortedEdgeIds<V::VectorRef>, usize)>(1024);
 
-        let schema_name = self.tx.schema_name.clone();
-        let graph_id = self.graph_id();
-
         // Calculate partition size and create partition tasks
-        let partition_size = max_serial_id.div_ceil(parallelism as u32).max(1);
+        let partition_size = total_rows.div_ceil(parallelism).max(1);
 
         let partition_tasks = (0..parallelism).map(|i| {
             let pool = pool.clone();
@@ -331,12 +306,12 @@ where
                 let table = format!("\"{}\".hawk_graph_links", schema_name);
 
                 // Calculate ID range for this partition
-                let start_id = 1 + partition_size * (i as u32);
+                let start_id = 1 + (partition_size * i);
                 let end_id = start_id + partition_size - 1;
 
                 let query_sql = format!(
                     "
-                    SELECT source_ref, links, layer FROM {table}
+                    SELECT serial_id, version_id, links, layer FROM {table}
                     WHERE graph_id = $1
                     AND serial_id BETWEEN $2 AND $3
                     ORDER BY serial_id, layer
@@ -353,10 +328,9 @@ where
 
                 while let Some(row) = rows.next().await {
                     let row = row?;
+                    let links = bincode::deserialize(&row.links)?;
                     let layer_idx = row.layer as usize;
                     let source_ref = VectorId::new(row.serial_id as u32, row.version_id);
-                    let links: SortedEdgeIds<V::VectorRef> = bincode::deserialize(&row.links)
-                        .map_err(|e| eyre!("Failed to deserialize links: {e}"))?;
 
                     // Send data to main task via channel
                     tx.send((source_ref, links, layer_idx))
@@ -403,6 +377,14 @@ where
             .await?
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
+
+        if total_links_written != total_rows {
+            return Err(eyre!(
+                "GraphLoader: Not all links were loaded. Expected {}, got {}",
+                total_rows,
+                total_links_written
+            ));
+        }
 
         tracing::info!(
             "GraphLoader: Loaded {} total graph links for graph_id {}",
@@ -568,7 +550,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         // Insert the codes.
-        let mut tx = graph_pg.tx().await.unwrap();
+        let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
             let insertion_layer = db.select_layer(rng)?;
             let (neighbors, set_ep) = db
@@ -584,7 +566,14 @@ mod tests {
             graph_mem.insert_apply(plan.clone()).await;
             tx.with_graph(StoreId::Left).insert_apply(plan).await?;
         }
+        tx.tx.commit().await?;
 
+        // Test `get_total_row_count`
+        let mut tx = graph_pg.tx().await?;
+        let total_rows = tx.with_graph(StoreId::Left).get_total_row_count().await?;
+        assert_eq!(total_rows, queries1.len() + 1);
+
+        // Load graph using `load_to_mem`
         let graph_mem2 = tx
             .with_graph(StoreId::Left)
             .load_to_mem(graph_pg.pool(), 2)
@@ -593,11 +582,12 @@ mod tests {
 
         // Search for the same codes and find matches.
         for query in queries1.iter() {
-            let neighbors = db.search(vector_store, graph_mem, query, 1).await?;
+            let neighbors = db.search(vector_store, &graph_mem2, query, 1).await?;
             assert!(db.is_match(vector_store, &[neighbors]).await?);
         }
 
-        tx.tx.commit().await.unwrap();
+        // Clean up
+        tx.tx.commit().await?;
         graph_pg.cleanup().await.unwrap();
 
         Ok(())
