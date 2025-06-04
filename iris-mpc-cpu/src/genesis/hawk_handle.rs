@@ -42,18 +42,15 @@ impl Handle {
             }
 
             // Validate the common state after processing the requests.
-            HawkSession::state_check(&sessions[LEFT][0]).await?;
-            HawkSession::state_check(&sessions[RIGHT][0]).await?;
+            HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
             Ok(())
         }
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        Self::log_info(String::from("Starting State check left"));
-        HawkSession::state_check(&sessions[LEFT][0]).await?;
-        Self::log_info(String::from("Starting State check right"));
-        HawkSession::state_check(&sessions[RIGHT][0]).await?;
+        Self::log_info(String::from("Starting State check"));
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         // Process jobs until health check fails or channel closes.
         let (tx, mut rx) = mpsc::channel::<Job>(1);

@@ -792,8 +792,12 @@ impl ServerActor {
         let tmp_now = Instant::now();
         tracing::info!("Syncing batch entries");
 
-        // Compute hash of the SNS message ids concatenated
-        let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+        // Compute hash of the SNS message ids concatenated + currently used scan side
+        let batch_hash = sha256_bytes(format!(
+            "{}{}",
+            batch.sns_message_ids.join(""),
+            self.full_scan_side
+        ));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
@@ -2622,12 +2626,12 @@ impl ServerActor {
             if &results[i][max_batch_size..] != batch_hash {
                 tracing::error!(
                     party_id = self.party_id,
-                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    "Batch mismatch with node {}. Queues seem to be out of sync (check requests and full scan side).",
                     i
                 );
                 metrics::counter!("batch.mismatch").increment(1);
                 bail!(
-                    "Batch mismatch with node {}. Queues seem to be out of sync.",
+                    "Batch mismatch with node {}. Queues seem to be out of sync (check requests and full scan side).",
                     i
                 );
             }
