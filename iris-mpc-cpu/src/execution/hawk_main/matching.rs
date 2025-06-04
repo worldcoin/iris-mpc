@@ -529,24 +529,50 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Debug)]
+    struct TestCase {
+        search_match: bool,
+        other_side_match: bool,
+        expected_decision: Decision,
+    }
+
     #[test]
     fn test_matching() {
-        // A uniqueness request is accepted if there are no matches.
-        let insert = impl_test_matching(false, false);
-        assert_eq!(insert.is_mutation(), true);
+        let cases = [
+            TestCase {
+                search_match: false,
+                other_side_match: false,
+                expected_decision: Decision::UniqueInsert,
+            },
+            TestCase {
+                search_match: true,
+                other_side_match: false,
+                expected_decision: Decision::NoMutation,
+            },
+            TestCase {
+                search_match: false,
+                other_side_match: true,
+                expected_decision: Decision::NoMutation,
+            },
+            TestCase {
+                search_match: true,
+                other_side_match: true,
+                expected_decision: Decision::NoMutation,
+            },
+        ];
 
-        // Uniqueness requests are rejected if is any kind of match.
-        for reject in [
-            impl_test_matching(true, false),
-            impl_test_matching(false, true),
-            impl_test_matching(true, true),
-        ] {
-            assert_eq!(reject.is_mutation(), false);
+        for case in &cases {
+            let batch_step_3 = run_test_matching(&case);
+            let decisions = batch_step_3.decisions();
+            assert_eq!(
+                decisions,
+                vec![case.expected_decision],
+                "Failed for case: {case:?}",
+            );
         }
     }
 
-    fn impl_test_matching(with_search_match: bool, with_other_side_match: bool) -> Decision {
-        let n_req = 1; // Just one request.
+    fn run_test_matching(tc: &TestCase) -> BatchStep3 {
         let req_i = 0;
 
         // Hypothetical search results.
@@ -567,7 +593,7 @@ mod tests {
         let step1s = vec![Step1 {
             inner_join: vec![
                 (both_found, [false, true]),
-                (both_match, [true, with_search_match]),
+                (both_match, [true, tc.search_match]),
             ],
             anti_join: [vec![left_match], vec![right_match]],
             luc_ids: vec![luc_requested, luc_requested_dup],
@@ -589,7 +615,7 @@ mod tests {
         // Make it match or not depending on `with_other_side_match`.
         let mut missing_is_match = [vec![HashMap::new()], vec![HashMap::new()]];
         for id in &missing_ids[LEFT][req_i] {
-            missing_is_match[LEFT][req_i].insert(*id, with_other_side_match);
+            missing_is_match[LEFT][req_i].insert(*id, tc.other_side_match);
         }
         for id in &missing_ids[RIGHT][req_i] {
             missing_is_match[RIGHT][req_i].insert(*id, false);
@@ -602,11 +628,8 @@ mod tests {
 
         // Do the same with mirrored matching. Amazingly, we got exactly the same result in this test.
         let batch2_mirror = batch2.clone();
-        let batch3 = batch2.step3(batch2_mirror);
 
         // Return the final decision for the request.
-        let decisions = batch3.decisions();
-        assert_eq!(decisions.len(), n_req);
-        return decisions[req_i];
+        batch2.step3(batch2_mirror)
     }
 }
