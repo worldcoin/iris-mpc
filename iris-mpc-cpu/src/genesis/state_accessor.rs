@@ -249,7 +249,7 @@ pub async fn unset_last_indexed_modification_id(tx: &mut Transaction<'_, Postgre
 }
 
 #[cfg(test)]
-// #[cfg(feature = "db_dependent")]
+#[cfg(feature = "db_dependent")]
 mod tests {
     use crate::genesis::state_accessor::unset_last_indexed_modification_id;
 
