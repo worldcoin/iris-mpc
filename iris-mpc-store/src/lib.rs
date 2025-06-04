@@ -162,44 +162,6 @@ impl Store {
         Ok(count.0 as usize)
     }
 
-    /// Fetches an ordered vector of rows from Iris table matched by a set of serial identifiers.
-    ///
-    /// # Arguments
-    ///
-    /// * `identifiers` - Serial identifiers of Irises to be fetched.
-    ///
-    /// # Returns
-    ///
-    /// An ordered vector of `DbStoredIris` instances.
-    ///
-    pub async fn get_iris_batch(
-        &self,
-        identifiers: Vec<u32>,
-    ) -> sqlx::Result<Vec<DbStoredIris>, sqlx::Error> {
-        // TODO: define max batch size constant.
-        assert!(
-            !identifiers.is_empty() && identifiers.len() <= 64,
-            "Invalid identifier set"
-        );
-
-        // Map identifiers - necessary for sql interpolation.
-        let identifiers: Vec<i64> = identifiers.into_iter().map(|x| x as i64).collect();
-
-        // Exec query.
-        let data = sqlx::query_as::<_, DbStoredIris>(
-            r#"
-            SELECT * FROM irises
-            WHERE id = ANY($1)
-            ORDER BY id ASC
-            "#,
-        )
-        .bind(&identifiers)
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(data)
-    }
-
     /// Stream irises in order.
     /// (only for testing) Stream irises in order.
     pub async fn stream_irises(

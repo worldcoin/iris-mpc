@@ -1,4 +1,4 @@
-use super::utils::{errors::IndexationError, logger};
+use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::BothEyes,
     hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
@@ -154,7 +154,7 @@ impl BatchGenerator {
 
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info(COMPONENT, msg);
+        utils::log_info(COMPONENT, msg);
     }
 }
 
