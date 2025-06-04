@@ -50,11 +50,11 @@ pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
+    // Initial batch size for indexing.
+    batch_size: usize,
+
     // Error rate to be applied when calculating dynamic batch sizes.
     batch_size_error_rate: usize,
-
-    // Initial batch size for indexing.
-    batch_size_initial: usize,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
@@ -70,7 +70,7 @@ impl ExecutionArgs {
     ) -> Self {
         Self {
             max_indexation_id,
-            batch_size_initial: batch_size,
+            batch_size,
             batch_size_error_rate,
             perform_snapshot,
         }
@@ -237,7 +237,7 @@ async fn exec_setup(
     // Coordinator: Await coordination server to start.
     let my_state = get_sync_state(
         config,
-        args.batch_size_initial,
+        args.batch_size,
         args.batch_size_error_rate,
         args.max_indexation_id,
         last_indexed_id,
@@ -402,9 +402,9 @@ async fn exec_indexation(
     log_info(String::from("Hawk handle initialised"));
 
     // Set batch size policy.
-    let batch_size_policy = match ctx.args.batch_size_initial {
+    let batch_size_policy = match ctx.args.batch_size {
         0 => BatchSizePolicy::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
-        _ => BatchSizePolicy::new(ctx.args.batch_size_initial),
+        _ => BatchSizePolicy::new(ctx.args.batch_size),
     };
 
     // Set batch generator.
@@ -426,7 +426,11 @@ async fn exec_indexation(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(0, &imem_iris_stores).await? {
+        let mut last_indexed_id = ctx.last_indexed_id;
+        while let Some(batch) = batch_generator
+            .next_batch(last_indexed_id, &imem_iris_stores)
+            .await?
+        {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -443,6 +447,9 @@ async fn exec_indexation(
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
+
+            // Set next last indexed id.
+            last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
@@ -511,10 +518,7 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        ctx.last_indexed_id,
-        ctx.args.max_indexation_id,
-        ctx.args.batch_size_initial,
-        unix_timestamp
+        ctx.last_indexed_id, ctx.args.max_indexation_id, ctx.args.batch_size, unix_timestamp
     );
 
     // Set cluster ID.

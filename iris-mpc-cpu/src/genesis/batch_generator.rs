@@ -27,7 +27,6 @@ pub struct Batch {
 }
 
 /// Generates batches of Iris identifiers for processing.
-#[allow(non_snake_case)]
 pub struct BatchGenerator {
     // Count of generated batches.
     batch_count: usize,
@@ -86,7 +85,6 @@ impl Batch {
 
 /// Constructor.
 impl BatchGenerator {
-    #[allow(non_snake_case)]
     pub fn new(
         start_id: IrisSerialId,
         end_id: IrisSerialId,
@@ -172,6 +170,7 @@ impl Batch {
 /// Methods.
 impl BatchGenerator {
     /// Returns size of next batch of Iris serial identifiers to be indexed.
+    #[allow(non_snake_case)]
     fn next_batch_size(&self, last_indexed_id: IrisSerialId) -> usize {
         match last_indexed_id {
             // Empty graph therefore batch size defaults to 1.
@@ -182,19 +181,19 @@ impl BatchGenerator {
                 1
             }
             _ => match self.batch_size_policy {
-                BatchSizePolicy::Dynamic(r, m) => {
+                BatchSizePolicy::Dynamic(r, M) => {
                     // r: configurable parameter for error rate.
-                    // m: HNSW parameter for nearest neighbors.
+                    // M: HNSW parameter for nearest neighbors.
                     // n: current graph size (last_indexed_id).
-                    let n = last_indexed_id;
+                    let N = last_indexed_id;
 
-                    // Apply dynamic batch size formula: floor(N/(Mr - 1) + 1)
+                    // batch_size: floor(N/(Mr - 1) + 1)
                     let batch_size =
-                        (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize;
+                        (N as f64 / (M as f64 * r as f64 - 1.0) + 1.0).floor() as usize;
 
                     Self::log_info(format!(
                             "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                            batch_size, n, m, r
+                            batch_size, N, M, r
                         ));
 
                     batch_size
