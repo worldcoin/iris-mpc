@@ -24,6 +24,16 @@ pub struct StateChecksum {
     pub graph: u64,
 }
 
+impl StateChecksum {
+    pub fn check_left_vs_right(&self, right: &Self) -> Result<()> {
+        // The checksum of the iris stores cover the vector IDs which should be the same.
+        if self.irises != right.irises {
+            bail!("Left/Right iris stores are inconsistent: left={self:?}, right={right:?}");
+        }
+        Ok(())
+    }
+}
+
 impl NetworkValue {
     fn get_descriptor_byte(&self) -> u8 {
         match self {
