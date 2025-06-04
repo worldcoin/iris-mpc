@@ -427,11 +427,6 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        if !self.config.enable_reauth {
-            tracing::warn!("Reauth processing is disabled, skipping reauth request");
-            return Ok(());
-        }
-
         self.msg_counter += 1;
 
         self.batch_query
