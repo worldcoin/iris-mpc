@@ -1,7 +1,6 @@
 use super::{
-    batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
-    utils::{self, PartyId},
+    utils,
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
@@ -18,16 +17,13 @@ const COMPONENT: &str = "Hawk-Handle";
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
 pub struct Handle {
-    // Identifier of party participating in MPC protocol.
-    party_id: PartyId,
-
     // Queue of indexation jobs for processing.
     job_queue: mpsc::Sender<Job>,
 }
 
 /// Constructors.
 impl Handle {
-    pub async fn new(party_id: PartyId, mut actor: HawkActor) -> Result<Self> {
+    pub async fn new(mut actor: HawkActor) -> Result<Self> {
         /// Performs post job processing health checks:
         /// - resets Hawk sessions upon job failure
         /// - ensures system state is in sync.
@@ -76,10 +72,7 @@ impl Handle {
             }
         });
 
-        Ok(Self {
-            party_id,
-            job_queue: tx,
-        })
+        Ok(Self { job_queue: tx })
     }
 }
 
@@ -111,8 +104,6 @@ impl Handle {
 
         // Use all sessions per iris side to search for insertion indices per
         // batch, number configured by `args.request_parallelism`.
-
-        // TODO implement automatic parallelism scaling
 
         // Iterate per side
         let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
@@ -180,12 +171,12 @@ impl Handle {
         utils::log_info(COMPONENT, msg);
     }
 
-    /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
+    /// Enqueues a job request for the genesis indexer HNSW processing thread. It returns
     /// a future that resolves to the processed results.
     ///
     /// # Arguments
     ///
-    /// * `batch` - A set of `DbStoredIris` records to be processed.
+    /// * `request` - A request to be processed.
     ///
     /// # Returns
     ///
@@ -194,13 +185,16 @@ impl Handle {
     /// # Errors
     ///
     /// This method may return an error if the job queue channel is closed or if the job fails.
-    pub async fn submit_batch(&mut self, batch: Batch) -> impl Future<Output = Result<JobResult>> {
+    pub async fn submit_request(
+        &mut self,
+        request: JobRequest,
+    ) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch),
+            request,
             return_channel: tx,
         };
 

@@ -1,7 +1,4 @@
-use super::{
-    utils::{PartyId, COUNT_OF_MPC_PARTIES},
-    Batch,
-};
+use super::Batch;
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::QueryRef,
@@ -42,7 +39,6 @@ pub struct JobRequest {
 /// Constructor.
 impl JobRequest {
     pub fn new(
-        party_id: PartyId,
         Batch {
             batch_id,
             vector_ids,
@@ -50,7 +46,6 @@ impl JobRequest {
             right_queries,
         }: Batch,
     ) -> Self {
-        assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
         assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
 
         Self {

@@ -27,7 +27,7 @@ use iris_mpc_cpu::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
         utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
-        JobResult,
+        JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -370,6 +370,7 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
             ));
             bail!(msg);
         }
+
         // TODO: apply modification to the graph
         // TODO: set last indexed modification id
         // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
@@ -445,7 +446,7 @@ async fn exec_indexation(
     ];
 
     // Set Hawk handle.
-    let mut hawk_handle = GenesisHawkHandle::new(config.party_id, hawk_actor).await?;
+    let mut hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
     // Set batch generator.
@@ -486,7 +487,8 @@ async fn exec_indexation(
             task_monitor_bg.check_tasks();
 
             // Submit batch to Hawk handle for indexation.
-            let result_future = hawk_handle.submit_batch(batch).await;
+            let request = JobRequest::new(batch);
+            let result_future = hawk_handle.submit_request(request).await;
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
