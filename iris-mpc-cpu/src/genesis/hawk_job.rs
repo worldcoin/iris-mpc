@@ -25,20 +25,23 @@ pub struct Job {
 
 /// An indexation job request.
 #[derive(Clone, Debug)]
-pub struct JobRequest {
-    // Incoming batch identifier.
-    pub batch_id: usize,
+pub enum JobRequest {
+    BatchIndexation {
+        // Incoming batch identifier.
+        batch_id: usize,
 
-    // Incoming batch of iris identifiers for subsequent correlation.
-    pub vector_ids: Vec<IrisVectorId>,
+        // Incoming batch of iris identifiers for subsequent correlation.
+        vector_ids: Vec<IrisVectorId>,
 
-    /// HNSW indexation queries over both eyes.
-    pub queries: Aby3BatchQueryRef,
+        /// HNSW indexation queries over both eyes.
+        queries: Aby3BatchQueryRef,
+    },
+    Modification {},
 }
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(
+    pub fn new_batch_indexation(
         Batch {
             batch_id,
             vector_ids,
@@ -48,19 +51,11 @@ impl JobRequest {
     ) -> Self {
         assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
 
-        Self {
+        Self::BatchIndexation {
             batch_id,
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
         }
-    }
-}
-
-// Methods.
-impl JobRequest {
-    // Incoming batch size.
-    pub fn batch_size(&self) -> usize {
-        self.vector_ids.len()
     }
 }
 
@@ -88,13 +83,19 @@ pub enum JobResult {
 
 /// Constructor.
 impl JobResult {
-    pub(crate) fn new_batch_result(request: &JobRequest, connect_plans: HawkMutation) -> Self {
+    pub(crate) fn new_batch_result(
+        batch_id: usize,
+        vector_ids: Vec<IrisVectorId>,
+        connect_plans: HawkMutation,
+    ) -> Self {
+        let first_serial_id = vector_ids.first().unwrap().serial_id();
+        let last_serial_id = vector_ids.last().unwrap().serial_id();
         Self::BatchIndexation {
             connect_plans,
-            batch_id: request.batch_id,
-            vector_ids: request.vector_ids.clone(),
-            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
-            last_serial_id: request.vector_ids.last().unwrap().serial_id(),
+            batch_id,
+            vector_ids,
+            first_serial_id,
+            last_serial_id,
         }
     }
 

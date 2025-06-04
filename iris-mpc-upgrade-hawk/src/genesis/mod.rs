@@ -487,7 +487,7 @@ async fn exec_indexation(
             task_monitor_bg.check_tasks();
 
             // Submit batch to Hawk handle for indexation.
-            let request = JobRequest::new(batch);
+            let request = JobRequest::new_batch_indexation(batch);
             let result_future = hawk_handle.submit_request(request).await;
             let result = timeout(processing_timeout, result_future)
                 .await

@@ -52,11 +52,15 @@ impl Handle {
         let (tx, mut rx) = mpsc::channel::<Job>(1);
         tokio::spawn(async move {
             // Processing loop.
-            while let Some(job) = rx.recv().await {
-                let job_result = Self::handle_job(&mut actor, &sessions, &job.request).await;
+            while let Some(Job {
+                request,
+                return_channel,
+            }) = rx.recv().await
+            {
+                let job_result = Self::handle_job(&mut actor, &sessions, request).await;
                 let health = do_health_check(&mut actor, &mut sessions, job_result.is_err()).await;
                 let stop = health.is_err();
-                let _ = job.return_channel.send(health.and(job_result));
+                let _ = return_channel.send(health.and(job_result));
                 if stop {
                     Self::log_error(String::from(
                         "HawkActor is in an inconsistent state, therefore stopping.",
@@ -93,72 +97,91 @@ impl Handle {
     pub async fn handle_job(
         actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSessionRef>>,
-        request: &JobRequest,
+        request: JobRequest,
     ) -> Result<JobResult> {
-        Self::log_info(format!(
-            "Hawk Job :: processing batch-id={}; batch-size={}",
-            request.batch_id,
-            request.batch_size()
-        ));
         let _ = Instant::now();
 
-        // Use all sessions per iris side to search for insertion indices per
-        // batch, number configured by `args.request_parallelism`.
+        match request {
+            JobRequest::BatchIndexation {
+                batch_id,
+                vector_ids,
+                queries,
+            } => {
+                Self::log_info(format!(
+                    "Hawk Job :: processing batch-id={}; batch-size={}",
+                    batch_id,
+                    vector_ids.len(),
+                ));
 
-        // Iterate per side
-        let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
-            .map(|(queries_side, sessions_side)| {
-                let searcher = actor.searcher();
-                let queries_with_ids =
-                    izip!(queries_side.clone(), request.vector_ids.clone()).collect_vec();
-                let sessions = sessions_side.clone();
+                // Use all sessions per iris side to search for insertion indices per
+                // batch, number configured by `args.request_parallelism`.
 
-                // Per side do searches and insertions
-                async move {
-                    let n_sessions = sessions.len();
-                    let insert_session =
-                        sessions.first().ok_or_eyre("Sessions for side are empty")?;
-                    let mut connect_plans = Vec::new();
+                // Iterate per side
+                let jobs_per_side = izip!(queries.iter(), sessions.iter())
+                    .map(|(queries_side, sessions_side)| {
+                        let searcher = actor.searcher();
+                        let queries_with_ids =
+                            izip!(queries_side.clone(), vector_ids.clone()).collect_vec();
+                        let sessions = sessions_side.clone();
 
-                    // Process queries in a logical insertion batch for this side
-                    for queries_batch in queries_with_ids.chunks(n_sessions) {
-                        let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
-                            |((query, _id), session)| {
-                                let query = query.clone();
-                                let searcher = searcher.clone();
-                                let session = session.clone();
-                                async move {
-                                    search_single_query_no_match_count(session, query, &searcher)
-                                        .await
-                                }
-                            },
-                        );
+                        // Per side do searches and insertions
+                        async move {
+                            let n_sessions = sessions.len();
+                            let insert_session =
+                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                            let mut connect_plans = Vec::new();
 
-                        let plans = parallelize(search_jobs)
-                            .await?
-                            .into_iter()
-                            .map(Some)
-                            .collect_vec();
+                            // Process queries in a logical insertion batch for this side
+                            for queries_batch in queries_with_ids.chunks(n_sessions) {
+                                let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
+                                    |((query, _id), session)| {
+                                        let query = query.clone();
+                                        let searcher = searcher.clone();
+                                        let session = session.clone();
+                                        async move {
+                                            search_single_query_no_match_count(
+                                                session, query, &searcher,
+                                            )
+                                            .await
+                                        }
+                                    },
+                                );
 
-                        let batch_ids = queries_batch
-                            .iter()
-                            .map(|(_query, id)| Some(*id))
-                            .collect_vec();
+                                let plans = parallelize(search_jobs)
+                                    .await?
+                                    .into_iter()
+                                    .map(Some)
+                                    .collect_vec();
 
-                        // Insert into in-memory store, and return insertion plans for use by DB
-                        let plans = insert(insert_session, &searcher, plans, &batch_ids).await?;
-                        connect_plans.extend(plans);
-                    }
+                                let batch_ids = queries_batch
+                                    .iter()
+                                    .map(|(_query, id)| Some(*id))
+                                    .collect_vec();
 
-                    Ok(connect_plans)
-                }
-            })
-            .collect_vec();
+                                // Insert into in-memory store, and return insertion plans for use by DB
+                                let plans =
+                                    insert(insert_session, &searcher, plans, &batch_ids).await?;
+                                connect_plans.extend(plans);
+                            }
 
-        let results_ = parallelize(jobs_per_side.into_iter()).await?;
-        let results: [_; 2] = results_.try_into().unwrap();
+                            Ok(connect_plans)
+                        }
+                    })
+                    .collect_vec();
 
-        Ok(JobResult::new_batch_result(request, HawkMutation(results)))
+                let results_ = parallelize(jobs_per_side.into_iter()).await?;
+                let results: [_; 2] = results_.try_into().unwrap();
+
+                Ok(JobResult::new_batch_result(
+                    batch_id,
+                    vector_ids,
+                    HawkMutation(results),
+                ))
+            }
+            JobRequest::Modification {} => {
+                todo!()
+            }
+        }
     }
 
     // Helper: component error logging.
