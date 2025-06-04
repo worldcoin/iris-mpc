@@ -19,15 +19,15 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
-        self,
         state_accessor::{
-            fetch_iris_deletions, fetch_iris_modifications, get_last_indexed_id,
-            get_last_indexed_modification_id, set_last_indexed_id, set_rds_snapshot,
+            get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
+            get_last_indexed_modification_id, set_last_indexed_iris_id,
         },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, JobResult,
+        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
+        JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -193,7 +193,7 @@ async fn exec_setup(
     GraphPg<Aby3Store>,
 )> {
     // Bail if config is invalid.
-    validate_config(config);
+    validate_config(config)?;
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
     log_info(format!(
         "Mode of deployment: {:?}",
@@ -212,7 +212,7 @@ async fn exec_setup(
     log_info(String::from("Service clients instantiated"));
 
     // Set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed_id(&graph_store).await?;
+    let last_indexed_id = get_last_indexed_iris_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
@@ -225,7 +225,7 @@ async fn exec_setup(
 
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
-        fetch_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
+        get_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -238,8 +238,7 @@ async fn exec_setup(
         last_indexed_modification_id,
     ));
     let (modifications, latest_modification_id) =
-        fetch_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id)
-            .await?;
+        get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
     log_info(format!(
         "Modifications to be applied count = {}. Last modification id = {}",
         modifications.len(),
@@ -536,36 +535,72 @@ async fn exec_indexation(
     Ok(())
 }
 
-/// Take a dB snapshot.
+/// Takes a dB snapshot.
 ///
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
+/// * `ctx` - Execution context information.
 /// * `aws_rds_client` - AWS RDS SDK client.
-/// * `batch_size` - Size of indexation batches.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
 ///
 async fn exec_snapshot(
     config: &Config,
     ctx: &ExecutionContextInfo,
     aws_rds_client: &RDSClient,
-) -> Result<()> {
+) -> Result<(), IndexationError> {
     log_info(String::from("Db snapshot begins"));
 
     // Set snapshot ID.
-    let db_config = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
         ctx.last_indexed_id, ctx.max_indexation_id, ctx.args.batch_size, unix_timestamp
     );
 
-    // Create snapshot.
-    set_rds_snapshot(aws_rds_client, &db_config.url, &snapshot_id).await?;
+    // Set cluster ID.
+    let db_config = config.cpu_database.as_ref().unwrap();
+    let url = db_config
+        .url
+        .strip_prefix("postgresql://")
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let at_pos = url
+        .rfind('@')
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let host_and_db = &url[at_pos + 1..];
+    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
+    let cluster_endpoint = &host_and_db[..slash_pos];
+    let resp = aws_rds_client
+        .describe_db_clusters()
+        .send()
+        .await
+        .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
+    let cluster_id = resp
+        .db_clusters()
+        .iter()
+        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+        .and_then(|cluster| cluster.db_cluster_identifier())
+        .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
+
+    // Create cluster snapshot.
+    log_info(format!(
+        "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+        cluster_id,
+        snapshot_id.clone()
+    ));
+    aws_rds_client
+        .create_db_cluster_snapshot()
+        .db_cluster_identifier(cluster_id)
+        .db_cluster_snapshot_identifier(snapshot_id.clone())
+        .send()
+        .await
+        .map_err(|err| {
+            log_error(format!("Failed to create db snapshot: {}", err));
+            IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
+        })?;
+    log_info(format!(
+        "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+        cluster_id, snapshot_id
+    ));
 
     Ok(())
 }
@@ -729,7 +764,7 @@ async fn get_results_thread(
             ));
 
             let mut db_tx = graph_tx.tx;
-            set_last_indexed_id(&mut db_tx, last_serial_id).await?;
+            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
             db_tx.commit().await?;
             log_info(format!(
                 "Job Results :: Persisted last indexed id: batch-id={}",
@@ -885,17 +920,17 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 
 /// Helper: logs & returns an error message.
 fn log_error(msg: String) -> String {
-    genesis::log_error("Server", msg)
+    utils::log_error("Server", msg)
 }
 
 /// Helper: logs & returns an information message.
 fn log_info(msg: String) -> String {
-    genesis::log_info("Server", msg)
+    utils::log_info("Server", msg)
 }
 
 /// Helper: logs & returns a warning message.
 fn log_warn(msg: String) -> String {
-    genesis::log_warn("Server", msg)
+    utils::log_warn("Server", msg)
 }
 
 /// TODO : implement db sync genesis
@@ -914,14 +949,14 @@ async fn sync_dbs_genesis(
 ///
 /// * `config` - Application configuration instance.
 ///
-fn validate_config(config: &Config) {
+fn validate_config(config: &Config) -> Result<()> {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
         let msg = log_error(format!(
             "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
         ));
-        panic!("{}", msg);
+        bail!("{}", msg);
     }
 
     // Validate modes of compute/deployment.
@@ -930,8 +965,18 @@ fn validate_config(config: &Config) {
             "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
             config.mode_of_deployment
         ));
-        panic!("{}", msg);
+        bail!("{}", msg);
     }
+
+    // Validate CPU db config.
+    if config.cpu_database.is_none() {
+        bail!(
+            "{}",
+            log_error(String::from("Missing CPU dB config settings"))
+        );
+    }
+
+    Ok(())
 }
 
 /// Validates consistency of PostGres stores.

@@ -9,8 +9,8 @@ pub use batch_generator::{Batch, BatchGenerator, BatchIterator};
 pub use hawk_handle::Handle;
 pub use hawk_job::{Job, JobRequest, JobResult};
 pub use state_accessor::{
-    fetch_iris_deletions, get_last_indexed_id, get_last_indexed_modification_id,
-    set_last_indexed_id, set_last_indexed_modification_id,
+    get_iris_deletions, get_last_indexed_iris_id, get_last_indexed_modification_id,
+    set_last_indexed_iris_id, set_last_indexed_modification_id,
 };
 pub use utils::logger;
 pub use utils::{

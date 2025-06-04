@@ -1,8 +1,7 @@
 use super::{
     batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
-    logger,
-    utils::PartyId,
+    utils::{self, PartyId},
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
@@ -173,12 +172,12 @@ impl Handle {
 
     // Helper: component error logging.
     fn log_error(msg: String) {
-        logger::log_error(COMPONENT, msg);
+        utils::log_error(COMPONENT, msg);
     }
 
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info(COMPONENT, msg);
+        utils::log_info(COMPONENT, msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns

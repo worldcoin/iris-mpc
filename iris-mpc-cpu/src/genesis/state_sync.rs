@@ -129,17 +129,29 @@ mod tests {
         }
     }
 
+    impl SyncResult {
+        fn new_0(states: Vec<SyncState>) -> Self {
+            Self::new(states[0].clone(), states)
+        }
+    }
+
     #[test]
     fn test_check_genesis_config_all_equal() {
-        let states = vec![SyncState::new_1(), SyncState::new_1(), SyncState::new_1()];
-        let result = SyncResult::new(states[0].clone(), states);
+        let result = SyncResult::new_0(vec![
+            SyncState::new_1(),
+            SyncState::new_1(),
+            SyncState::new_1(),
+        ]);
         assert!(result.check_synced_state().is_ok());
     }
 
     #[test]
     fn test_check_genesis_config_not_equal() {
-        let states = vec![SyncState::new_1(), SyncState::new_2(), SyncState::new_2()];
-        let result = SyncResult::new(states[0].clone(), states);
+        let result = SyncResult::new_0(vec![
+            SyncState::new_1(),
+            SyncState::new_2(),
+            SyncState::new_2(),
+        ]);
         assert!(result.check_synced_state().is_err());
     }
 }
