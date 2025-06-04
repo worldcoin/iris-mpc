@@ -187,8 +187,9 @@ impl From<&Args> for HnswParams {
 impl From<&Args> for Rngs {
     fn from(value: &Args) -> Self {
         (
+            // Emulates session construction from `HawkActor::new_sessions` function call
             session_seeded_rng(value.hnsw_prng_seed, StoreId::Left, SessionId(0)),
-            session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(0)),
+            session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(1)),
             <AesRng as rand::SeedableRng>::seed_from_u64(value.aby3_prng_seed),
         )
     }
