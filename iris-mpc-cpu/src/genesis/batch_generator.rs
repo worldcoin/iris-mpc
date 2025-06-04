@@ -10,26 +10,6 @@ use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
 
-/// Policy over batch size calculations.
-#[derive(Debug)]
-pub enum BatchSizePolicy {
-    /// Static batch size.
-    Static(usize),
-    /// Dynamic batch size with size error coefficient & hnsw-m param.
-    Dynamic(usize, usize),
-}
-
-/// Constructors.
-impl BatchSizePolicy {
-    pub fn new(size: usize) -> Self {
-        BatchSizePolicy::Static(size)
-    }
-
-    pub fn new_dynamic(error_rate: usize, hnsw_m: usize) -> Self {
-        BatchSizePolicy::Dynamic(error_rate, hnsw_m)
-    }
-}
-
 /// A batch for upstream indexation.
 #[derive(Debug)]
 pub struct Batch {
@@ -44,38 +24,6 @@ pub struct Batch {
 
     /// Array of vector ids of iris enrollments.
     pub vector_ids: Vec<VectorId>,
-}
-
-/// Trait: fmt::Display.
-impl fmt::Display for Batch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "id={}, size={}, range=({}..{})",
-            self.batch_id,
-            self.size(),
-            self.id_start(),
-            self.id_end()
-        )
-    }
-}
-
-/// Methods.
-impl Batch {
-    // Returns Iris serial id of batch's last element.
-    pub fn id_end(&self) -> IrisSerialId {
-        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
-    }
-
-    // Returns Iris serial id of batch's first element.
-    pub fn id_start(&self) -> IrisSerialId {
-        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
-    }
-
-    // Returns size of the batch.
-    pub fn size(&self) -> usize {
-        self.vector_ids.len()
-    }
 }
 
 /// Generates batches of Iris identifiers for processing.
@@ -97,17 +45,47 @@ pub struct BatchGenerator {
     range_iter: Peekable<RangeInclusive<IrisSerialId>>,
 }
 
+/// Batch iterator.
+pub trait BatchIterator {
+    // Count of generated batches.
+    fn batch_count(&self) -> usize;
+
+    // Iterator over batches of Iris data to be indexed.
+    fn next_batch(
+        &mut self,
+        last_indexed_id: IrisSerialId,
+        iris_stores: &BothEyes<SharedIrisesRef>,
+    ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
+}
+
+/// Policy over batch size calculations.
+#[derive(Debug)]
+pub enum BatchSizePolicy {
+    /// Static batch size.
+    Static(usize),
+    /// Dynamic batch size with size error coefficient & hnsw-m param.
+    Dynamic(usize, usize),
+}
+
+/// Constructor.
+impl Batch {
+    fn new(
+        batch_id: usize,
+        vector_ids: Vec<VectorId>,
+        left_queries: Vec<QueryRef>,
+        right_queries: Vec<QueryRef>,
+    ) -> Self {
+        Self {
+            batch_id,
+            vector_ids,
+            left_queries,
+            right_queries,
+        }
+    }
+}
+
 /// Constructor.
 impl BatchGenerator {
-    /// Create a new `BatchGenerator` with the following properties:
-    ///
-    /// # Arguments
-    ///
-    /// * `start_id` - Identifier of first Iris to be indexed.
-    /// * `end_id` - Identifier of last Iris to be indexed.
-    /// * `batch_size_policy` - Policy to apply when calculating batch size.
-    /// * `exclusions` - Identifier Iris's not to be indexed.
-    ///
     #[allow(non_snake_case)]
     pub fn new(
         start_id: IrisSerialId,
@@ -134,6 +112,31 @@ impl BatchGenerator {
     }
 }
 
+/// Constructor.
+impl BatchSizePolicy {
+    pub fn new(size: usize) -> Self {
+        BatchSizePolicy::Static(size)
+    }
+
+    pub fn new_dynamic(error_rate: usize, hnsw_m: usize) -> Self {
+        BatchSizePolicy::Dynamic(error_rate, hnsw_m)
+    }
+}
+
+/// Trait: fmt::Display.
+impl fmt::Display for Batch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "id={}, size={}, range=({}..{})",
+            self.batch_id,
+            self.size(),
+            self.id_start(),
+            self.id_end()
+        )
+    }
+}
+
 /// Trait: fmt::Display.
 impl fmt::Display for BatchGenerator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -145,6 +148,24 @@ impl fmt::Display for BatchGenerator {
             self.range.start(),
             self.range.end(),
         )
+    }
+}
+
+/// Methods.
+impl Batch {
+    // Returns Iris serial id of batch's last element.
+    pub fn id_end(&self) -> IrisSerialId {
+        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
+    }
+
+    // Returns Iris serial id of batch's first element.
+    pub fn id_start(&self) -> IrisSerialId {
+        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
+    }
+
+    // Returns size of the batch.
+    pub fn size(&self) -> usize {
+        self.vector_ids.len()
     }
 }
 
@@ -215,19 +236,6 @@ impl BatchGenerator {
     }
 }
 
-/// Batch iterator interface.
-pub trait BatchIterator {
-    // Count of generated batches.
-    fn batch_count(&self) -> usize;
-
-    // Iterator over batches of Iris data to be indexed.
-    fn next_batch(
-        &mut self,
-        last_indexed_id: IrisSerialId,
-        iris_stores: &BothEyes<SharedIrisesRef>,
-    ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
-}
-
 /// Batch iterator implementation.
 impl BatchIterator for BatchGenerator {
     // Count of generated batches.
@@ -254,23 +262,15 @@ impl BatchIterator for BatchGenerator {
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
 
-            // Set Iris shares.
-            let left_queries = imem_iris_stores[0].get_queries(vector_ids.iter()).await;
-            let right_queries = imem_iris_stores[1].get_queries(vector_ids.iter()).await;
-
             // Update internal state.
             self.batch_count += 1;
 
-            // Instantiate batch.
-            let batch = Batch {
-                batch_id: self.batch_count,
-                vector_ids,
-                left_queries,
-                right_queries,
-            };
-            Self::log_info(format!("Generated batch: {}", batch));
-
-            Ok(Some(batch))
+            Ok(Some(Batch::new(
+                self.batch_count,
+                vector_ids.clone(),
+                imem_iris_stores[0].get_queries(vector_ids.iter()).await,
+                imem_iris_stores[1].get_queries(vector_ids.iter()).await,
+            )))
         } else {
             Ok(None)
         }
