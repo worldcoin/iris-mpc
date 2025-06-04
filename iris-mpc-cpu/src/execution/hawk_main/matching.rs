@@ -326,7 +326,7 @@ impl Step2 {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum MatchId {
     Search(VectorId),
     Luc(VectorId),
@@ -429,11 +429,12 @@ impl Filter {
         self.intra_batch && self.luc_rule(left, right)
     }
 }
-
 #[cfg(test)]
+#[allow(clippy::bool_assert_comparison)]
 mod tests {
     use iris_mpc_common::ROTATIONS;
 
+    use crate::execution::hawk_main::HawkResult;
     use crate::hawkers::aby3::aby3_store::prepare_query;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
@@ -543,6 +544,7 @@ mod tests {
         other_side_match: bool,
         skip_persistence: bool,
         expected_decision: Decision,
+        expected_matches: Vec<MatchId>,
     }
 
     #[test]
@@ -553,63 +555,87 @@ mod tests {
                 other_side_match: false,
                 skip_persistence: false,
                 expected_decision: Decision::UniqueInsert,
+                expected_matches: vec![],
             },
             TestCase {
                 search_match: false,
                 other_side_match: false,
                 skip_persistence: true,
                 expected_decision: Decision::UniqueInsertSkipped,
+                expected_matches: vec![],
+            },
+            TestCase {
+                search_match: true,
+                other_side_match: false,
+                skip_persistence: false,
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![MatchId::Search(BOTH_MATCH)],
             },
             TestCase {
                 search_match: false,
                 other_side_match: true,
                 skip_persistence: false,
                 expected_decision: Decision::NoMutation,
+                expected_matches: vec![
+                    MatchId::Search(RIGHT_MATCH),
+                    MatchId::Luc(LUC_REQUESTED),
+                    MatchId::Luc(LUC_REQUESTED_DUP),
+                ],
             },
             TestCase {
                 search_match: true,
                 other_side_match: true,
                 skip_persistence: false,
                 expected_decision: Decision::NoMutation,
+                expected_matches: vec![
+                    MatchId::Search(BOTH_MATCH),
+                    MatchId::Search(RIGHT_MATCH),
+                    MatchId::Luc(LUC_REQUESTED),
+                    MatchId::Luc(LUC_REQUESTED_DUP),
+                ],
             },
         ];
 
         for case in &cases {
-            let batch_step_3 = run_test_matching(&case);
+            let batch_step_3 = run_test_matching(case);
             let decisions = batch_step_3.decisions();
             assert_eq!(
                 decisions,
                 vec![case.expected_decision],
                 "Failed for case: {case:?}",
             );
+
+            let match_ids = batch_step_3.select(HawkResult::MATCH_IDS_FILTER);
+            let [match_ids] = match_ids.try_into().unwrap();
+            assert_equal_sets(&match_ids, &case.expected_matches, case);
         }
     }
+
+    // ### Hypothetical search results
+    /// Left matches; right was inspected but does not match.
+    const BOTH_FOUND: VectorId = VectorId::from_serial_id(1);
+    /// Both sides match, when in case `search_match = true`.
+    const BOTH_MATCH: VectorId = VectorId::from_serial_id(2);
+    /// Only left was inspected and it matches.
+    const LEFT_MATCH: VectorId = VectorId::from_serial_id(3);
+    /// Only right was inspected and it matches.
+    const RIGHT_MATCH: VectorId = VectorId::from_serial_id(4);
+    /// The request wants us to inspect this ID.
+    const LUC_REQUESTED: VectorId = VectorId::from_serial_id(5);
+    /// The request wants us to inspect this ID, and it came up in search too.
+    const LUC_REQUESTED_DUP: VectorId = LEFT_MATCH;
 
     fn run_test_matching(tc: &TestCase) -> BatchStep3 {
         let req_i = 0;
         let distance = || DistanceShare::new(Share::default(), Share::default());
 
-        // Hypothetical search results.
-        // Left matches; right was inspected but does not match.
-        let both_found = VectorId::from_serial_id(1);
-        // Both sides match, when in case `search_match = true`.
-        let both_match = VectorId::from_serial_id(2);
-        // Only left was inspected and it matches.
-        let left_match = VectorId::from_serial_id(3);
-        // Only right was inspected and it matches.
-        let right_match = VectorId::from_serial_id(4);
-        // The request wants us to inspect this ID.
-        let luc_requested = VectorId::from_serial_id(5);
-        // The request wants us to inspect this ID, and it came up in search too.
-        let luc_requested_dup = left_match;
-
         // Simulate a search. We found different partial matches on each side.
-        let (mut match_left, non_match_left) = (vec![left_match, both_found], vec![]);
-        let (mut match_right, non_match_right) = (vec![right_match], vec![both_found]);
+        let (mut match_left, non_match_left) = (vec![LEFT_MATCH, BOTH_FOUND], vec![]);
+        let (mut match_right, non_match_right) = (vec![RIGHT_MATCH], vec![BOTH_FOUND]);
         // Make a full left+right match, or not depending on the test case.
         if tc.search_match {
-            match_left.push(both_match);
-            match_right.push(both_match);
+            match_left.push(BOTH_MATCH);
+            match_right.push(BOTH_MATCH);
         }
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
@@ -630,7 +656,7 @@ mod tests {
             vec![search_result(match_left, non_match_left)],
             vec![search_result(match_right, non_match_right)],
         ];
-        let luc_ids = vec![vec![luc_requested, luc_requested_dup]];
+        let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
         let request_types = vec![RequestType::Uniqueness(UniquenessRequest {
             skip_persistence: tc.skip_persistence,
         })];
@@ -639,13 +665,21 @@ mod tests {
         // Get the other side of partial search results.
         let missing_ids = batch1.missing_vector_ids();
 
-        let expect_left = vec![right_match, luc_requested, luc_requested_dup];
-        assert_equal_sets(&missing_ids[LEFT][req_i], &expect_left);
+        let expect_left = vec![RIGHT_MATCH, LUC_REQUESTED, LUC_REQUESTED_DUP];
+        assert_equal_sets(
+            &missing_ids[LEFT][req_i],
+            &expect_left,
+            "Left side missing IDs",
+        );
 
-        let expect_right = vec![left_match, both_found, luc_requested];
-        assert_equal_sets(&missing_ids[RIGHT][req_i], &expect_right);
-        // `luc_requested_dup` is the same as `left_match` and we avoided duplicates.
-        // `both_found` is requested because it was not a match. We could have noticed that
+        let expect_right = vec![LEFT_MATCH, BOTH_FOUND, LUC_REQUESTED];
+        assert_equal_sets(
+            &missing_ids[RIGHT][req_i],
+            &expect_right,
+            "Right side missing IDs",
+        );
+        // `LUC_REQUESTED_DUP` is the same as `LEFT_MATCH` and we avoided duplicates.
+        // `BOTH_FOUND` is requested because it was not a match. We could have noticed that
         // it was already inspected and optimize it away, but we do not.
 
         // Simulate `calculate_missing_is_match(..)`.
@@ -670,12 +704,15 @@ mod tests {
         batch2.step3(batch2_mirror)
     }
 
-    /// Assert that two sets of `VectorId`s are equal, ignoring order, and without duplicates.
-    fn assert_equal_sets(left: &[VectorId], right: &[VectorId]) {
+    /// Assert that two sets are equal, ignoring order, and without duplicates.
+    fn assert_equal_sets<T>(left: &[T], right: &[T], msg: impl std::fmt::Debug)
+    where
+        T: std::hash::Hash + Eq + Clone + std::fmt::Debug,
+    {
         let left_set: std::collections::HashSet<_> = left.iter().cloned().collect();
         let right_set: std::collections::HashSet<_> = right.iter().cloned().collect();
-        assert_eq!(left_set.len(), left.len());
-        assert_eq!(right_set.len(), right.len());
-        assert_eq!(left_set, right_set);
+        assert_eq!(left_set.len(), left.len(), "{msg:?}");
+        assert_eq!(right_set.len(), right.len(), "{msg:?}");
+        assert_eq!(left_set, right_set, "{msg:?}");
     }
 }

@@ -963,6 +963,12 @@ impl HawkResult {
             .collect_vec()
     }
 
+    const MATCH_IDS_FILTER: Filter = Filter {
+        eyes: Both,
+        orient: Only(Orientation::Normal),
+        intra_batch: false,
+    };
+
     fn job_result(self) -> ServerJobResult {
         use Decision::*;
         use Orientation::{Mirror, Normal};
@@ -980,11 +986,7 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
             .collect_vec();
 
-        let match_ids = self.select_indices(Filter {
-            eyes: Both,
-            orient: Only(Normal),
-            intra_batch: false,
-        });
+        let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
