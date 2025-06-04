@@ -1,10 +1,9 @@
 use super::utils::{errors::IndexationError, logger};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
-use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
-use iris_mpc_store::{DbStoredIris, Store};
+use iris_mpc_store::Store;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
@@ -20,37 +19,6 @@ const STATE_KEY_LAST_INDEXED: &str = "id_of_last_indexed";
 /// Key for persistent state store entry for last indexed modification id
 const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "id_of_last_indexed_modification";
 
-/// Fetch a batch of iris data for indexation.
-///
-/// # Arguments
-///
-/// * `iris_store` - Iris PostgreSQL store provider.
-/// * `identifiers` - Set of Iris serial identifiers within batch.
-///
-/// # Returns
-///
-/// Iris data for indexation.
-///
-pub async fn fetch_iris_batch(
-    iris_store: &Store,
-    identifiers: Vec<IrisSerialId>,
-) -> Result<Vec<DbStoredIris>, IndexationError> {
-    logger::log_info(
-        COMPONENT,
-        format!(
-            "Fetching Iris batch for indexation: batch-size={}",
-            identifiers.len()
-        ),
-    );
-
-    let data = iris_store
-        .get_iris_batch(identifiers)
-        .await
-        .map_err(|err| IndexationError::PostgresFetchIrisBatch(err.to_string()))?;
-
-    Ok(data)
-}
-
 /// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
@@ -63,7 +31,7 @@ pub async fn fetch_iris_batch(
 ///
 /// A set of Iris serial identifiers marked as deleted.
 ///
-pub async fn fetch_iris_deletions(
+pub async fn get_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
     max_indexation_id: IrisSerialId,
@@ -75,8 +43,8 @@ pub async fn fetch_iris_deletions(
     }
 
     // Set bucket and key based on environment
-    let s3_bucket = get_s3_bucket_for_iris_deletions(config.environment.clone());
-    let s3_key = get_s3_key_for_iris_deletions(config.environment.clone());
+    let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
+    let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
     logger::log_info(
         COMPONENT,
         format!(
@@ -125,7 +93,7 @@ pub async fn fetch_iris_deletions(
         .collect::<Vec<u32>>())
 }
 
-/// Fetch Iris modifications that need to be applied post indexation phase one.
+/// Retrieves Iris modifications that need to be applied post indexation phase one.
 /// N.B. The modifications are returned in ascending order of the serial id.
 ///
 /// # Arguments
@@ -138,7 +106,7 @@ pub async fn fetch_iris_deletions(
 ///
 /// 2 member tuple: (Modification data, Last modification ID).
 ///
-pub async fn fetch_iris_modifications(
+pub async fn get_iris_modifications(
     iris_store: &Store,
     from_modification_id: i64,
     to_serial_id: u32,
@@ -170,7 +138,7 @@ pub async fn fetch_iris_modifications(
 ///
 /// Serial id of the last indexed iris, or 0 if no serial id is recorded.
 ///
-pub async fn get_last_indexed_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
+pub async fn get_last_indexed_iris_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
     let id = graph_store
         .get_persistent_state(STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
         .await?
@@ -198,16 +166,6 @@ pub async fn get_last_indexed_modification_id(graph_store: &GraphPg<Aby3Store>) 
     Ok(id)
 }
 
-/// Returns computed name of an S3 bucket for fetching iris deletions.
-fn get_s3_bucket_for_iris_deletions(environment: String) -> String {
-    format!("wf-smpcv2-{}-sync-protocol", environment)
-}
-
-/// Returns computed name of an S3 key for fetching iris deletions.
-fn get_s3_key_for_iris_deletions(environment: String) -> String {
-    format!("{}_deleted_serial_ids.json", environment)
-}
-
 /// Sets serial id of last Iris to have been indexed.
 ///
 /// # Arguments
@@ -219,7 +177,7 @@ fn get_s3_key_for_iris_deletions(environment: String) -> String {
 ///
 /// Result<()> on success
 ///
-pub async fn set_last_indexed_id(
+pub async fn set_last_indexed_iris_id(
     tx: &mut Transaction<'_, Postgres>,
     value: IrisSerialId,
 ) -> Result<()> {
@@ -256,72 +214,6 @@ pub async fn set_last_indexed_modification_id(
     .await
 }
 
-/// Performs an RDS cluster snapshot.
-///
-/// # Arguments
-///
-/// * `client` - AWS RDS SDK client.
-/// * `db_cluster_endpoint` - RDS cluster endpoint.
-/// * `snapshot_id` - Snapshot identifier.
-///
-pub async fn set_rds_snapshot(
-    client: &RDSClient,
-    db_cluster_endpoint: &str,
-    snapshot_id: &str,
-) -> Result<(), IndexationError> {
-    // Set cluster ID.
-    let url = db_cluster_endpoint
-        .strip_prefix("postgresql://")
-        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
-    let at_pos = url
-        .rfind('@')
-        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
-    let host_and_db = &url[at_pos + 1..];
-    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
-    let cluster_endpoint = &host_and_db[..slash_pos];
-    let resp = client
-        .describe_db_clusters()
-        .send()
-        .await
-        .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
-    let cluster_id = resp
-        .db_clusters()
-        .iter()
-        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
-        .and_then(|cluster| cluster.db_cluster_identifier())
-        .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
-
-    // Create cluster snapshot.
-    logger::log_info(
-        COMPONENT,
-        format!(
-            "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
-            cluster_id, snapshot_id
-        ),
-    );
-
-    client
-        .create_db_cluster_snapshot()
-        .db_cluster_identifier(cluster_id)
-        .db_cluster_snapshot_identifier(snapshot_id)
-        .send()
-        .await
-        .map_err(|err| {
-            logger::log_error(COMPONENT, format!("Failed to create db snapshot: {}", err));
-            IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
-        })?;
-
-    logger::log_info(
-        COMPONENT,
-        format!(
-            "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
-            cluster_id, snapshot_id
-        ),
-    );
-
-    Ok(())
-}
-
 /// Unsets serial id of last Iris to have been indexed.
 ///
 /// # Arguments
@@ -332,7 +224,7 @@ pub async fn set_rds_snapshot(
 ///
 /// Result<()> on success
 ///
-pub async fn unset_last_indexed_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+pub async fn unset_last_indexed_iris_id(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
     GraphPg::<Aby3Store>::delete_persistent_state(tx, STATE_DOMAIN_GENESIS, STATE_KEY_LAST_INDEXED)
         .await
 }
@@ -357,25 +249,21 @@ pub async fn unset_last_indexed_modification_id(tx: &mut Transaction<'_, Postgre
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
+// #[cfg(feature = "db_dependent")]
 mod tests {
     use crate::genesis::state_accessor::unset_last_indexed_modification_id;
 
     use super::{
-        fetch_iris_batch, get_last_indexed_id, get_last_indexed_modification_id,
-        set_last_indexed_id, set_last_indexed_modification_id, unset_last_indexed_id,
+        get_last_indexed_iris_id, get_last_indexed_modification_id, set_last_indexed_iris_id,
+        set_last_indexed_modification_id, unset_last_indexed_iris_id,
     };
     use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
     use eyre::Result;
-    use iris_mpc_common::{
-        postgres::{AccessMode, PostgresClient, PostgresSchemaName},
-        IrisSerialId,
-    };
+    use iris_mpc_common::postgres::{AccessMode, PostgresClient, PostgresSchemaName};
     use iris_mpc_store::{
         test_utils::{cleanup, temporary_name, test_db_url},
         Store as IrisStore,
     };
-    use itertools::Itertools;
 
     // Defaults.
     const DEFAULT_RNG_SEED: u64 = 0;
@@ -413,33 +301,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_id_of_last_indexed() -> Result<()> {
+    async fn test_last_indexed_iris_id() -> Result<()> {
         // Set resources.
         let (_iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 
         // Get -> should be zero.
-        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
+        let id_of_last_indexed = get_last_indexed_iris_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Set -> 10.
         let id_of_last_indexed = 10_u32;
         let graph_tx = graph_store.tx().await?;
         let mut tx = graph_tx.tx;
-        set_last_indexed_id(&mut tx, id_of_last_indexed).await?;
+        set_last_indexed_iris_id(&mut tx, id_of_last_indexed).await?;
         tx.commit().await?;
 
         // Get -> should be 10.
-        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
+        let id_of_last_indexed = get_last_indexed_iris_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 10);
 
         // Unset.
         let graph_tx = graph_store.tx().await?;
         let mut tx = graph_tx.tx;
-        unset_last_indexed_id(&mut tx).await?;
+        unset_last_indexed_iris_id(&mut tx).await?;
         tx.commit().await?;
 
         // Get -> should be 0.
-        let id_of_last_indexed = get_last_indexed_id(&graph_store).await?;
+        let id_of_last_indexed = get_last_indexed_iris_id(&graph_store).await?;
         assert_eq!(id_of_last_indexed, 0);
 
         // Unset resources.
@@ -449,22 +337,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_iris_batch() -> Result<()> {
-        // Set resources.
-        let (iris_store, _graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
-
-        let identifiers: Vec<IrisSerialId> = (1..11).collect_vec();
-        let data = fetch_iris_batch(&iris_store, identifiers).await.unwrap();
-        assert_eq!(data.len(), 10);
-
-        // Unset resources.
-        cleanup(&pg_client, &pg_schema).await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_modification_id_of_last_indexed() -> Result<()> {
+    async fn test_last_indexed_modificiation_id() -> Result<()> {
         // Set resources.
         let (_iris_store, graph_store, pg_client, pg_schema) = get_resources().await.unwrap();
 

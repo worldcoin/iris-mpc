@@ -21,13 +21,13 @@ use iris_mpc_cpu::{
     genesis::{
         self,
         state_accessor::{
-            fetch_iris_deletions, fetch_iris_modifications, get_last_indexed_id,
-            get_last_indexed_modification_id, set_last_indexed_id, set_rds_snapshot,
+            get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
+            get_last_indexed_modification_id, set_last_indexed_iris_id,
         },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, JobResult,
+        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -212,7 +212,7 @@ async fn exec_setup(
     log_info(String::from("Service clients instantiated"));
 
     // Set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed_id(&graph_store).await?;
+    let last_indexed_id = get_last_indexed_iris_id(&graph_store).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
@@ -225,7 +225,7 @@ async fn exec_setup(
 
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
-        fetch_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
+        get_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
     log_info(format!(
         "Deletions for exclusion count = {}",
         excluded_serial_ids.len(),
@@ -238,8 +238,7 @@ async fn exec_setup(
         last_indexed_modification_id,
     ));
     let (modifications, latest_modification_id) =
-        fetch_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id)
-            .await?;
+        get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
     log_info(format!(
         "Modifications to be applied count = {}. Last modification id = {}",
         modifications.len(),
@@ -570,6 +569,66 @@ async fn exec_snapshot(
     Ok(())
 }
 
+/// Performs an RDS cluster snapshot.
+///
+/// # Arguments
+///
+/// * `client` - AWS RDS SDK client.
+/// * `db_cluster_endpoint` - RDS cluster endpoint.
+/// * `snapshot_id` - Snapshot identifier.
+///
+async fn set_rds_snapshot(
+    client: &RDSClient,
+    db_cluster_endpoint: &str,
+    snapshot_id: &str,
+) -> Result<(), IndexationError> {
+    // Set cluster ID.
+    let url = db_cluster_endpoint
+        .strip_prefix("postgresql://")
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let at_pos = url
+        .rfind('@')
+        .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
+    let host_and_db = &url[at_pos + 1..];
+    let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
+    let cluster_endpoint = &host_and_db[..slash_pos];
+    let resp = client
+        .describe_db_clusters()
+        .send()
+        .await
+        .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
+    let cluster_id = resp
+        .db_clusters()
+        .iter()
+        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+        .and_then(|cluster| cluster.db_cluster_identifier())
+        .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
+
+    // Create cluster snapshot.
+    log_info(format!(
+        "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+        cluster_id, snapshot_id
+    ));
+
+    client
+        .create_db_cluster_snapshot()
+        .db_cluster_identifier(cluster_id)
+        .db_cluster_snapshot_identifier(snapshot_id)
+        .send()
+        .await
+        .map_err(|err| {
+            log_error(format!("Failed to create db snapshot: {}", err));
+            IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
+        })?;
+
+    log_info(format!(
+        "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
+        cluster_id, snapshot_id
+    ));
+
+    Ok(())
+}
+
 /// Factory function to return a configured Hawk actor that manages HNSW graph construction & search.
 ///
 /// # Arguments
@@ -729,7 +788,7 @@ async fn get_results_thread(
             ));
 
             let mut db_tx = graph_tx.tx;
-            set_last_indexed_id(&mut db_tx, last_serial_id).await?;
+            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
             db_tx.commit().await?;
             log_info(format!(
                 "Job Results :: Persisted last indexed id: batch-id={}",
