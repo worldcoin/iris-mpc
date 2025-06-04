@@ -229,6 +229,17 @@ pub struct InsertPlanV<V: VectorStore> {
     set_ep: bool,
 }
 
+impl Clone for InsertPlan {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            links: self.links.clone(),
+            match_count: self.match_count,
+            set_ep: self.set_ep,
+        }
+    }
+}
+
 impl<V: VectorStore> InsertPlanV<V> {
     pub fn match_ids(&self) -> Vec<V::VectorRef> {
         self.links

@@ -432,6 +432,14 @@ impl Filter {
 
 #[cfg(test)]
 mod tests {
+    use iris_mpc_common::ROTATIONS;
+
+    use crate::hawkers::aby3::aby3_store::prepare_query;
+    use crate::hnsw::SortedNeighborhood;
+    use crate::protocol::shared_iris::GaloisRingSharedIris;
+    use crate::shares::share::DistanceShare;
+    use crate::shares::Share;
+
     use super::VectorId;
     use super::*;
     use std::collections::HashMap;
@@ -533,6 +541,7 @@ mod tests {
     struct TestCase {
         search_match: bool,
         other_side_match: bool,
+        skip_persistence: bool,
         expected_decision: Decision,
     }
 
@@ -542,21 +551,25 @@ mod tests {
             TestCase {
                 search_match: false,
                 other_side_match: false,
+                skip_persistence: false,
                 expected_decision: Decision::UniqueInsert,
             },
             TestCase {
-                search_match: true,
+                search_match: false,
                 other_side_match: false,
-                expected_decision: Decision::NoMutation,
+                skip_persistence: true,
+                expected_decision: Decision::UniqueInsertSkipped,
             },
             TestCase {
                 search_match: false,
                 other_side_match: true,
+                skip_persistence: false,
                 expected_decision: Decision::NoMutation,
             },
             TestCase {
                 search_match: true,
                 other_side_match: true,
+                skip_persistence: false,
                 expected_decision: Decision::NoMutation,
             },
         ];
@@ -574,11 +587,12 @@ mod tests {
 
     fn run_test_matching(tc: &TestCase) -> BatchStep3 {
         let req_i = 0;
+        let distance = || DistanceShare::new(Share::default(), Share::default());
 
         // Hypothetical search results.
         // Left matches; right was inspected but does not match.
         let both_found = VectorId::from_serial_id(1);
-        // Both sides match, when in case `with_search_match`.
+        // Both sides match, when in case `search_match = true`.
         let both_match = VectorId::from_serial_id(2);
         // Only left was inspected and it matches.
         let left_match = VectorId::from_serial_id(3);
@@ -589,27 +603,50 @@ mod tests {
         // The request wants us to inspect this ID, and it came up in search too.
         let luc_requested_dup = left_match;
 
-        // Simulate Step1
-        let step1s = vec![Step1 {
-            inner_join: vec![
-                (both_found, [false, true]),
-                (both_match, [true, tc.search_match]),
-            ],
-            anti_join: [vec![left_match], vec![right_match]],
-            luc_ids: vec![luc_requested, luc_requested_dup],
-            request_type: RequestType::Uniqueness(UniquenessRequest {
-                skip_persistence: false,
-            }),
-        }];
-        let batch1 = BatchStep1(step1s);
+        // Simulate a search. We found different partial matches on each side.
+        let (mut match_left, non_match_left) = (vec![left_match, both_found], vec![]);
+        let (mut match_right, non_match_right) = (vec![right_match], vec![both_found]);
+        // Make a full left+right match, or not depending on the test case.
+        if tc.search_match {
+            match_left.push(both_match);
+            match_right.push(both_match);
+        }
+
+        let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
+            let insert_plan = InsertPlan {
+                query: prepare_query(GaloisRingSharedIris::dummy_for_party(0)),
+                match_count: match_ids.len(),
+                links: vec![SortedNeighborhood::from_ascending_vec(
+                    chain!(match_ids, non_match_ids)
+                        .map(|v| (v, distance()))
+                        .collect_vec(),
+                )],
+                set_ep: false,
+            };
+            VecRots::from(vec![insert_plan; ROTATIONS])
+        };
+
+        let search_results = [
+            vec![search_result(match_left, non_match_left)],
+            vec![search_result(match_right, non_match_right)],
+        ];
+        let luc_ids = vec![vec![luc_requested, luc_requested_dup]];
+        let request_types = vec![RequestType::Uniqueness(UniquenessRequest {
+            skip_persistence: tc.skip_persistence,
+        })];
+        let batch1 = BatchStep1::new(&search_results, &luc_ids, request_types);
 
         // Get the other side of partial search results.
         let missing_ids = batch1.missing_vector_ids();
-        assert_eq!(
-            missing_ids[LEFT][req_i],
-            vec![right_match, luc_requested, luc_requested_dup]
-        );
-        assert_eq!(missing_ids[RIGHT][req_i], vec![left_match, luc_requested]); // No dup.
+
+        let expect_left = vec![right_match, luc_requested, luc_requested_dup];
+        assert_equal_sets(&missing_ids[LEFT][req_i], &expect_left);
+
+        let expect_right = vec![left_match, both_found, luc_requested];
+        assert_equal_sets(&missing_ids[RIGHT][req_i], &expect_right);
+        // `luc_requested_dup` is the same as `left_match` and we avoided duplicates.
+        // `both_found` is requested because it was not a match. We could have noticed that
+        // it was already inspected and optimize it away, but we do not.
 
         // Simulate `calculate_missing_is_match(..)`.
         // Make it match or not depending on `with_other_side_match`.
@@ -631,5 +668,14 @@ mod tests {
 
         // Return the final decision for the request.
         batch2.step3(batch2_mirror)
+    }
+
+    /// Assert that two sets of `VectorId`s are equal, ignoring order, and without duplicates.
+    fn assert_equal_sets(left: &[VectorId], right: &[VectorId]) {
+        let left_set: std::collections::HashSet<_> = left.iter().cloned().collect();
+        let right_set: std::collections::HashSet<_> = right.iter().cloned().collect();
+        assert_eq!(left_set.len(), left.len());
+        assert_eq!(right_set.len(), right.len());
+        assert_eq!(left_set, right_set);
     }
 }
