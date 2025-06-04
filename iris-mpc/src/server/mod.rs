@@ -12,7 +12,7 @@ use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    UNIQUENESS_MESSAGE_TYPE,
+    RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
@@ -689,6 +689,7 @@ async fn run_main_server_loop(
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_error_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
     let res: Result<()> = async {
         tracing::info!("Entering main loop");
 
@@ -705,6 +706,7 @@ async fn run_main_server_loop(
             shutdown_handler.clone(),
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
+            reset_error_result_attributes.clone(),
             current_batch_id_atomic,
         );
 
