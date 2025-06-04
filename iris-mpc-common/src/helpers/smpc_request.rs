@@ -185,6 +185,8 @@ pub enum ReceiveRequestError {
     BatchSyncError(Report),
     #[error("Batch polling timeout reached after {0} seconds")]
     BatchPollingTimeout(i32),
+    #[error("Failed to parse shares: {0}")]
+    FailedToProcessIrisShares(Report),
 }
 
 impl ReceiveRequestError {

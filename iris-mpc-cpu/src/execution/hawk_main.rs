@@ -1126,8 +1126,7 @@ impl HawkHandle {
         let mut sessions = hawk_actor.new_sessions().await?;
 
         // Validate the common state before starting.
-        HawkSession::state_check(&sessions[LEFT][0]).await?;
-        HawkSession::state_check(&sessions[RIGHT][0]).await?;
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -1301,10 +1300,7 @@ impl HawkHandle {
         }
 
         // Validate the common state after processing the requests.
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
         Ok(())
     }
 }
