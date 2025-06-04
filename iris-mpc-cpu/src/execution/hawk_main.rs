@@ -364,26 +364,27 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
+        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
+            .map(|_| {
+                let mut new_for_side_future = |store_id: StoreId| {
+                    let session_id = self.consensus.next_session_id();
+                    self.create_session(store_id, session_id)
+                };
+
+                (
+                    new_for_side_future(StoreId::Left),
+                    new_for_side_future(StoreId::Right),
+                )
+            })
+            .unzip();
+
         let (l, r) = try_join!(
-            self.new_sessions_side(self.args.request_parallelism, StoreId::Left),
-            self.new_sessions_side(self.args.request_parallelism, StoreId::Right),
+            parallelize(sessions_left.into_iter()),
+            parallelize(sessions_right.into_iter()),
         )?;
         tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
         Ok([l, r])
-    }
-
-    fn new_sessions_side(
-        &mut self,
-        count: usize,
-        store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<HawkSessionRef>>> {
-        let tasks = (0..count)
-            .map(|_| {
-                let session_id = self.consensus.next_session_id();
-                self.create_session(store_id, session_id)
-            })
-            .collect_vec();
-        parallelize(tasks.into_iter())
     }
 
     fn create_session(
