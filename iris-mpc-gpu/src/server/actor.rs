@@ -49,7 +49,6 @@ use std::{
     sync::Arc,
     time::Instant,
 };
-use rand::Rng;
 use tokio::sync::{mpsc, oneshot};
 
 macro_rules! record_stream_time {
@@ -793,10 +792,8 @@ impl ServerActor {
         let tmp_now = Instant::now();
         tracing::info!("Syncing batch entries");
 
-        let mut rng = rand::thread_rng();
         // Compute hash of the SNS message ids concatenated + currently used scan side
-        let random_number_to_break_batch = rng.gen::<u32>();
-        let batch_hash = sha256_bytes(format!("{}{}{}", batch.sns_message_ids.join(""), self.full_scan_side, random_number_to_break_batch));
+        let batch_hash = sha256_bytes(format!("{}{}", batch.sns_message_ids.join(""), self.full_scan_side));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
