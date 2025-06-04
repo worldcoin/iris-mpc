@@ -158,7 +158,7 @@ impl Handle {
         let results_ = parallelize(jobs_per_side.into_iter()).await?;
         let results: [_; 2] = results_.try_into().unwrap();
 
-        Ok(JobResult::new(request, HawkMutation(results)))
+        Ok(JobResult::new_batch_result(request, HawkMutation(results)))
     }
 
     // Helper: component error logging.

@@ -66,46 +66,67 @@ impl JobRequest {
 
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResult {
-    /// Unique sequential job identifier.
-    pub batch_id: usize,
+pub enum JobResult {
+    BatchIndexation {
+        /// Unique sequential job identifier.
+        batch_id: usize,
 
-    /// Connect plans for updating HNSW graph in DB.
-    pub connect_plans: HawkMutation,
+        /// Connect plans for updating HNSW graph in DB.
+        connect_plans: HawkMutation,
 
-    /// Iris serial id of batch's first element.
-    pub first_serial_id: IrisSerialId,
+        /// Set of Iris identifiers being indexed.
+        vector_ids: Vec<IrisVectorId>,
 
-    /// Set of Iris identifiers being indexed.
-    pub vector_ids: Vec<IrisVectorId>,
+        /// Iris serial id of batch's first element.
+        first_serial_id: IrisSerialId,
 
-    /// Iris serial id of batch's last element.
-    pub last_serial_id: IrisSerialId,
+        /// Iris serial id of batch's last element.
+        last_serial_id: IrisSerialId,
+    },
+    Modification {},
 }
 
 /// Constructor.
 impl JobResult {
-    pub(crate) fn new(request: &JobRequest, connect_plans: HawkMutation) -> Self {
-        Self {
+    pub(crate) fn new_batch_result(request: &JobRequest, connect_plans: HawkMutation) -> Self {
+        Self::BatchIndexation {
             connect_plans,
             batch_id: request.batch_id,
-            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
             vector_ids: request.vector_ids.clone(),
+            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
             last_serial_id: request.vector_ids.last().unwrap().serial_id(),
         }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn new_modification_result() -> Self {
+        Self::Modification {}
     }
 }
 
 /// Trait: fmt::Display.
 impl fmt::Display for JobResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "batch-id={}, batch-size={}, range=({}..{})",
-            self.batch_id,
-            self.vector_ids.len(),
-            self.first_serial_id,
-            self.last_serial_id
-        )
+        match self {
+            JobResult::BatchIndexation {
+                batch_id,
+                vector_ids,
+                first_serial_id,
+                last_serial_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "batch-id={}, batch-size={}, range=({}..{})",
+                    batch_id,
+                    vector_ids.len(),
+                    first_serial_id,
+                    last_serial_id
+                )
+            }
+            JobResult::Modification {} => {
+                write!(f, "modification")
+            }
+        }
     }
 }

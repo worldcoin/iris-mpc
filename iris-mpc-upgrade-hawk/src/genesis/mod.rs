@@ -749,37 +749,43 @@ async fn get_results_thread(
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let _result_sender_abort = task_monitor.spawn(async move {
-        while let Some(JobResult {
-            batch_id,
-            connect_plans,
-            last_serial_id,
-            ..
-        }) = rx.recv().await
-        {
-            log_info(format!("Job Results :: Received: batch-id={}", batch_id));
+        while let Some(result) = rx.recv().await {
+            match result {
+                JobResult::BatchIndexation {
+                    batch_id,
+                    connect_plans,
+                    last_serial_id,
+                    ..
+                } => {
+                    log_info(format!("Job Results :: Received: batch-id={}", batch_id));
 
-            let mut graph_tx = graph_store.tx().await?;
-            connect_plans.persist(&mut graph_tx).await?;
-            log_info(format!(
-                "Job Results :: Persisted graph updates: batch-id={}",
-                batch_id
-            ));
+                    let mut graph_tx = graph_store.tx().await?;
+                    connect_plans.persist(&mut graph_tx).await?;
+                    log_info(format!(
+                        "Job Results :: Persisted graph updates: batch-id={}",
+                        batch_id
+                    ));
 
-            let mut db_tx = graph_tx.tx;
-            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-            db_tx.commit().await?;
-            log_info(format!(
-                "Job Results :: Persisted last indexed id: batch-id={}",
-                batch_id
-            ));
+                    let mut db_tx = graph_tx.tx;
+                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    db_tx.commit().await?;
+                    log_info(format!(
+                        "Job Results :: Persisted last indexed id: batch-id={}",
+                        batch_id
+                    ));
 
-            log_info(format!(
-                "Job Results :: Persisted to dB: batch-id={}",
-                batch_id
-            ));
+                    log_info(format!(
+                        "Job Results :: Persisted to dB: batch-id={}",
+                        batch_id
+                    ));
 
-            // Notify background task responsible for tracking pending batches.
-            shutdown_handler_bg.decrement_batches_pending_completion();
+                    // Notify background task responsible for tracking pending batches.
+                    shutdown_handler_bg.decrement_batches_pending_completion();
+                }
+                JobResult::Modification {} => {
+                    todo!()
+                }
+            }
         }
 
         Ok(())
