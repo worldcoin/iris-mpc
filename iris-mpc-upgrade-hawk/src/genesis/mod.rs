@@ -19,7 +19,6 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
     genesis::{
-        self,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -27,7 +26,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobResult,
+        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
+        JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -920,17 +920,17 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 
 /// Helper: logs & returns an error message.
 fn log_error(msg: String) -> String {
-    genesis::log_error("Server", msg)
+    utils::log_error("Server", msg)
 }
 
 /// Helper: logs & returns an information message.
 fn log_info(msg: String) -> String {
-    genesis::log_info("Server", msg)
+    utils::log_info("Server", msg)
 }
 
 /// Helper: logs & returns a warning message.
 fn log_warn(msg: String) -> String {
-    genesis::log_warn("Server", msg)
+    utils::log_warn("Server", msg)
 }
 
 /// TODO : implement db sync genesis

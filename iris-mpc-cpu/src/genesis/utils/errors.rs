@@ -25,18 +25,18 @@ pub enum IndexationError {
     #[error("Missing CPU db configuration")]
     DbConfigError,
 
+    #[error("Failed to fetch Modification batch from PostgreSQL dB: {0}")]
+    FetchModificationBatch(String),
+
     #[error("Current height of indexation exceeds maximum allowed")]
     IndexationHeightMismatch,
 
     #[error("Failed to fetch Iris with given serial ID: {0}")]
     MissingSerialId(IrisSerialId),
 
-    #[error("Failed to fetch Iris batch from PostgreSQL dB: {0}")]
-    PostgresFetchIrisBatch(String),
+    #[error("Failed to persist genesis Graph indexation state element {0} to PostgreSQL dB: {1}")]
+    PersistIndexationStateElement(String, String),
 
-    #[error("Failed to fetch Modification batch from PostgreSQL dB: {0}")]
-    PostgresFetchModificationBatch(String),
-
-    #[error("Failed to persist genesis Graph indexation state to PostgreSQL dB: {0}")]
-    PostgresPersistIndexationState(String),
+    #[error("Failed to unset genesis Graph indexation state element {0} to PostgreSQL dB: {1}")]
+    UnsetIndexationStateElement(String, String),
 }
