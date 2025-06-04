@@ -25,8 +25,8 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 use iris_mpc_common::helpers::smpc_request::{ReceiveRequestError, RESET_CHECK_MESSAGE_TYPE};
 use iris_mpc_common::helpers::smpc_response::{
-    ReAuthResult, ResetCheckResult, ResetUpdateAckResult, UniquenessResult,
-    ERROR_FAILED_TO_PROCESS_IRIS_SHARES, SMPC_MESSAGE_TYPE_ATTRIBUTE,
+    ReAuthResult, ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+    SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use std::collections::HashMap;
@@ -342,6 +342,10 @@ impl<'a> BatchProcessor<'a> {
             }
             RESET_CHECK_MESSAGE_TYPE => {
                 self.process_reset_check_request(&message, batch_metadata, &sqs_message)
+                    .await
+            }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                self.process_reset_update_request(&message, batch_metadata, &sqs_message)
                     .await
             }
             _ => {
