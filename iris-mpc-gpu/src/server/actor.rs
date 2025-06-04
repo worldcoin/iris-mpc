@@ -793,7 +793,11 @@ impl ServerActor {
         tracing::info!("Syncing batch entries");
 
         // Compute hash of the SNS message ids concatenated + currently used scan side
-        let batch_hash = sha256_bytes(format!("{}{}", batch.sns_message_ids.join(""), self.full_scan_side));
+        let batch_hash = sha256_bytes(format!(
+            "{}{}",
+            batch.sns_message_ids.join(""),
+            self.full_scan_side
+        ));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
