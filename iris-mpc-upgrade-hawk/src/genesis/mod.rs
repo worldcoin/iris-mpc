@@ -193,7 +193,7 @@ async fn exec_setup(
     GraphPg<Aby3Store>,
 )> {
     // Bail if config is invalid.
-    validate_config(config);
+    validate_config(config)?;
     log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
     log_info(format!(
         "Mode of deployment: {:?}",
@@ -535,55 +535,32 @@ async fn exec_indexation(
     Ok(())
 }
 
-/// Take a dB snapshot.
+/// Takes a dB snapshot.
 ///
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
+/// * `ctx` - Execution context information.
 /// * `aws_rds_client` - AWS RDS SDK client.
-/// * `batch_size` - Size of indexation batches.
-/// * `last_indexed_id` - Last Iris serial id to have been indexed.
-/// * `max_indexation_id` - Maximum Iris serial id to which to index.
 ///
 async fn exec_snapshot(
     config: &Config,
     ctx: &ExecutionContextInfo,
     aws_rds_client: &RDSClient,
-) -> Result<()> {
+) -> Result<(), IndexationError> {
     log_info(String::from("Db snapshot begins"));
 
     // Set snapshot ID.
-    let db_config = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
         ctx.last_indexed_id, ctx.max_indexation_id, ctx.args.batch_size, unix_timestamp
     );
 
-    // Create snapshot.
-    set_rds_snapshot(aws_rds_client, &db_config.url, &snapshot_id).await?;
-
-    Ok(())
-}
-
-/// Performs an RDS cluster snapshot.
-///
-/// # Arguments
-///
-/// * `client` - AWS RDS SDK client.
-/// * `db_cluster_endpoint` - RDS cluster endpoint.
-/// * `snapshot_id` - Snapshot identifier.
-///
-async fn set_rds_snapshot(
-    client: &RDSClient,
-    db_cluster_endpoint: &str,
-    snapshot_id: &str,
-) -> Result<(), IndexationError> {
     // Set cluster ID.
-    let url = db_cluster_endpoint
+    let db_config = config.cpu_database.as_ref().unwrap();
+    let url = db_config
+        .url
         .strip_prefix("postgresql://")
         .ok_or(IndexationError::AwsRdsInvalidClusterURL)?;
     let at_pos = url
@@ -592,7 +569,7 @@ async fn set_rds_snapshot(
     let host_and_db = &url[at_pos + 1..];
     let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
     let cluster_endpoint = &host_and_db[..slash_pos];
-    let resp = client
+    let resp = aws_rds_client
         .describe_db_clusters()
         .send()
         .await
@@ -607,20 +584,19 @@ async fn set_rds_snapshot(
     // Create cluster snapshot.
     log_info(format!(
         "Creating RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
-        cluster_id, snapshot_id
+        cluster_id,
+        snapshot_id.clone()
     ));
-
-    client
+    aws_rds_client
         .create_db_cluster_snapshot()
         .db_cluster_identifier(cluster_id)
-        .db_cluster_snapshot_identifier(snapshot_id)
+        .db_cluster_snapshot_identifier(snapshot_id.clone())
         .send()
         .await
         .map_err(|err| {
             log_error(format!("Failed to create db snapshot: {}", err));
             IndexationError::AwsRdsCreateSnapshotFailure(err.to_string())
         })?;
-
     log_info(format!(
         "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
         cluster_id, snapshot_id
@@ -973,14 +949,14 @@ async fn sync_dbs_genesis(
 ///
 /// * `config` - Application configuration instance.
 ///
-fn validate_config(config: &Config) {
+fn validate_config(config: &Config) -> Result<()> {
     // Validate modes of compute/deployment.
     if config.mode_of_compute != ModeOfCompute::Cpu {
         let msg = log_error(format!(
             "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
         ));
-        panic!("{}", msg);
+        bail!("{}", msg);
     }
 
     // Validate modes of compute/deployment.
@@ -989,8 +965,18 @@ fn validate_config(config: &Config) {
             "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
             config.mode_of_deployment
         ));
-        panic!("{}", msg);
+        bail!("{}", msg);
     }
+
+    // Validate CPU db config.
+    if config.cpu_database.is_none() {
+        bail!(
+            "{}",
+            log_error(String::from("Missing CPU dB config settings"))
+        );
+    }
+
+    Ok(())
 }
 
 /// Validates consistency of PostGres stores.

@@ -454,16 +454,21 @@ impl Config {
     }
 }
 
+/// Encapsulates database configuration settings.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct DbConfig {
+    /// Connection string for database.
     pub url: String,
 
+    /// Flag indicating whether to migrate database schema.
     #[serde(default)]
     pub migrate: bool,
 
+    /// Flag indicating whether to create database schema.
     #[serde(default)]
     pub create: bool,
 
+    /// Degree of parallelism for loading data.
     #[serde(default = "default_load_parallelism")]
     pub load_parallelism: usize,
 }
