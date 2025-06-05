@@ -315,23 +315,21 @@ mod tests {
     use eyre::Result;
     use rand::{Rng, SeedableRng};
 
-    const DEFAULT_BATCH_SIZE_STATIC: usize = 10;
-    const DEFAULT_BATCH_SIZE_INITIAL: usize = 10;
     const DEFAULT_BATCH_SIZE_ERROR_RATE: usize = 128;
-    const DEFAULT_COUNT_OF_BATCHES: usize = 10;
     const DEFAULT_HNSW_PARAM_M: usize = 256;
     const DEFAULT_INDEXATION_END_ID: IrisSerialId = 100;
     const DEFAULT_INDEXATION_START_ID: IrisSerialId = 1;
     const DEFAULT_PARTY_ID: usize = 0;
     const DEFAULT_RNG_SEED: u64 = 0;
     const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
+    const DEFAULT_STATIC_BATCH_SIZE: usize = 10;
     const LAST_INDEXED_IDS: [IrisSerialId; 10] = [
         0, 2312177, 6983790, 7110281, 7859739, 10174686, 10270291, 11961225, 12317574, 14277641,
     ];
 
     impl BatchSize {
         fn new_1() -> Self {
-            Self::Static(DEFAULT_BATCH_SIZE_STATIC)
+            Self::Static(DEFAULT_STATIC_BATCH_SIZE)
         }
         fn new_2() -> Self {
             Self::Static(1)
@@ -368,16 +366,16 @@ mod tests {
                 assert_eq!(batch_size, 1);
             }
             11 => {
-                assert_eq!(batch_size, DEFAULT_BATCH_SIZE_STATIC - 1);
+                assert_eq!(batch_size, DEFAULT_STATIC_BATCH_SIZE - 1);
             }
             _ => {
-                assert_eq!(batch_size, DEFAULT_BATCH_SIZE_STATIC);
+                assert_eq!(batch_size, DEFAULT_STATIC_BATCH_SIZE);
             }
         }
     }
 
-    // Returns a set of test resources.
-    fn get_iris_stores() -> (BothEyes<SharedIrisesRef>, usize) {
+    // Returns a test imem Iris store.
+    fn get_iris_imem_stores() -> (BothEyes<SharedIrisesRef>, usize) {
         let mut rng = AesRng::seed_from_u64(DEFAULT_RNG_SEED);
         let iris_stores: BothEyes<SharedIrisesRef> = [StoreId::Left, StoreId::Right].map(|_| {
             let plaintext_store = PlaintextStore::new_random(&mut rng, DEFAULT_SIZE_OF_IRIS_DB);
@@ -388,7 +386,7 @@ mod tests {
         (iris_stores, DEFAULT_SIZE_OF_IRIS_DB)
     }
 
-    // Returns set of last indexed identifiers from 0 .. 15_000_000.
+    // Returns a set of last indexed identifiers from 0 .. 15_000_000.
     fn get_last_indexed_identifiers() -> Vec<IrisSerialId> {
         let mut rng = rand::thread_rng();
         let mut random_vec: Vec<u32> = (0..10)
@@ -400,21 +398,39 @@ mod tests {
         random_vec
     }
 
-    /// Test that new instances are created correctly.
     #[test]
     #[allow(non_snake_case)]
-    fn test_new() {
-        for instance in [BatchGenerator::new_1(), BatchGenerator::new_3()] {
-            assert_eq!(*instance.range.start(), DEFAULT_INDEXATION_START_ID as u32);
-            assert_eq!(*instance.range.end(), DEFAULT_SIZE_OF_IRIS_DB as u32);
-            assert_eq!(instance.batch_count, 0);
-            assert_eq!(instance.exclusions.len(), 0);
-            match instance.batch_size {
-                BatchSize::Static(size) => assert_eq!(size, DEFAULT_BATCH_SIZE_STATIC),
+    fn test_new_generator() {
+        fn assert_0(generator: &BatchGenerator) {
+            assert_eq!(*generator.range.start(), DEFAULT_INDEXATION_START_ID as u32);
+            assert_eq!(*generator.range.end(), DEFAULT_SIZE_OF_IRIS_DB as u32);
+            assert_eq!(generator.batch_count, 0);
+            assert_eq!(generator.exclusions.len(), 0);
+        }
+
+        for (generator, size_) in [
+            (BatchGenerator::new_1(), DEFAULT_STATIC_BATCH_SIZE),
+            (BatchGenerator::new_2(), 1),
+        ] {
+            assert_0(&generator);
+            match generator.batch_size {
+                BatchSize::Dynamic(_, _) => panic!("Invalid batch size"),
+                BatchSize::Static(size) => assert_eq!(size, size_),
+            }
+        }
+
+        for (generator, error_, hnsw_M_) in [(
+            BatchGenerator::new_3(),
+            DEFAULT_BATCH_SIZE_ERROR_RATE,
+            DEFAULT_HNSW_PARAM_M,
+        )] {
+            assert_0(&generator);
+            match generator.batch_size {
                 BatchSize::Dynamic(error, hnsw_M) => {
-                    assert_eq!(error, DEFAULT_BATCH_SIZE_ERROR_RATE);
-                    assert_eq!(hnsw_M, DEFAULT_HNSW_PARAM_M);
+                    assert_eq!(error, error_);
+                    assert_eq!(hnsw_M, hnsw_M_);
                 }
+                BatchSize::Static(_) => panic!("Invalid batch size"),
             }
         }
     }
@@ -430,7 +446,7 @@ mod tests {
                     assert_eq!(instance.next(last_indexed_id), 1);
                 }
                 _ => {
-                    assert_eq!(instance.next(last_indexed_id), DEFAULT_BATCH_SIZE_STATIC);
+                    assert_eq!(instance.next(last_indexed_id), DEFAULT_STATIC_BATCH_SIZE);
                 }
             }
         }
@@ -448,7 +464,7 @@ mod tests {
                 }
                 _ => {
                     // TODO: assert against precise expected value.
-                    assert!(instance.next(last_indexed_id) >= DEFAULT_BATCH_SIZE_STATIC);
+                    assert!(instance.next(last_indexed_id) >= DEFAULT_STATIC_BATCH_SIZE);
                 }
             }
         }
@@ -466,7 +482,7 @@ mod tests {
                 }
                 _ => {
                     // TODO: how to correctly assert against precise expected value.
-                    assert!(instance.next(last_indexed_id) >= DEFAULT_BATCH_SIZE_STATIC);
+                    assert!(instance.next(last_indexed_id) >= DEFAULT_STATIC_BATCH_SIZE);
                 }
             }
         }
@@ -511,7 +527,7 @@ mod tests {
     ///   batch-11 -> 9;
     #[tokio::test]
     async fn test_next_batch_1() -> Result<()> {
-        let (iris_stores, _) = get_iris_stores();
+        let (iris_stores, _) = get_iris_imem_stores();
         let mut generator = BatchGenerator::new_1();
         let mut last_indexed_id = 0 as IrisSerialId;
 
@@ -527,7 +543,7 @@ mod tests {
     /// Expecting 100 batches of size 1.
     #[tokio::test]
     async fn test_next_batch_2() -> Result<()> {
-        let (iris_stores, _) = get_iris_stores();
+        let (iris_stores, _) = get_iris_imem_stores();
         let mut batch_id = 0;
         let mut generator = BatchGenerator::new_2();
         let mut last_indexed_id = 0 as IrisSerialId;
@@ -541,25 +557,6 @@ mod tests {
 
         Ok(())
     }
-
-    // /// Test iteration.
-    // #[tokio::test]
-    // async fn test_next_identifiers() -> Result<()> {
-    // Set resources.
-    // let (iris_stores, db_size) = get_iris_stores();
-
-    //     let instance = BatchGenerator::new_01();
-    //     instance.next_identifiers(last_indexed_id)
-
-    //     // Expecting M batches of N Iris's per batch.
-    //     // let mut instance = BatchGenerator::new_01();
-    // while let Some(batch) = instance.next_batch(0, &iris_stores).await? {
-    //     assert_eq!(batch.size(), DEFAULT_BATCH_SIZE_INITIAL);
-    // }
-    //     // assert_eq!(instance.batch_count, DEFAULT_COUNT_OF_BATCHES);
-
-    //     Ok(())
-    // }
 
     // #[test]
     // fn test_exclusions() -> Result<()> {
