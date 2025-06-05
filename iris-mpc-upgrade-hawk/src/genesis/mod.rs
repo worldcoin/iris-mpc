@@ -199,6 +199,11 @@ async fn exec_setup(
         "Mode of deployment: {:?}",
         config.mode_of_deployment
     ));
+    if config.hawk_prng_seed.is_none() {
+        bail!("Hawk PRNG seed is not set in the configuration");
+    } else {
+        log_info(format!("Hawk PRNG seed: {:?}", config.hawk_prng_seed));
+    }
 
     // Set shutdown handler.
     let shutdown_handler = init_shutdown_handler(config).await;
