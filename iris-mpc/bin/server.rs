@@ -1909,7 +1909,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .mark_completed(success, &result_string);
+                        .mark_completed(success, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1925,7 +1925,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1976,7 +1976,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&serial_id)
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None);
                     result_string
                 })
                 .collect::<Vec<String>>();

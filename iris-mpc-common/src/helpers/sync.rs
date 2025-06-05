@@ -57,7 +57,12 @@ pub struct Modification<A = ()> {
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool, result_message_body: &str) {
+    pub fn mark_completed(
+        &mut self,
+        persisted: bool,
+        result_message_body: &str,
+        graph_mutation: Option<Vec<u8>>,
+    ) {
         self.status = ModificationStatus::Completed.to_string();
         self.result_message_body = Some(result_message_body.to_string());
         self.persisted = persisted;
