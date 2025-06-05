@@ -56,7 +56,7 @@ Application can be completely configured via environment variables. To see the l
 **Important!**
 Please note that there is a dist file per an instance of MPC node. Before running, please make sure to rename the correct dist file to `.env`.
 
-For now the environment variables are read in via a `dotenvy` crate for the ease of development.
+For now the environment variables are read in via a `dotenvy` crate for ease of development.
 
 #### CLI arguments
 
