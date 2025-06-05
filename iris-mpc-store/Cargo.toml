@@ -22,6 +22,7 @@ serde_json.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 rand.workspace = true
+bincode = "1.3.3"
 
 [dev-dependencies]
 rand.workspace = true

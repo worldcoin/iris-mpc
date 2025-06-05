@@ -10,6 +10,8 @@ use iris_mpc_common::helpers::smpc_request::{
 use iris_mpc_common::helpers::smpc_response::{
     IdentityDeletionResult, ReAuthResult, UniquenessResult,
 };
+use iris_mpc_common::helpers::sync::Modification;
+use iris_mpc_common::helpers::sync::ModificationKey::RequestSerialId;
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -53,14 +55,12 @@ pub async fn process_job_result(
         successful_reauths,
         reauth_target_indices,
         reauth_or_rule_used,
-        modifications,
+        mut modifications,
         actor_data: hawk_mutation,
         full_face_mirror_attack_detected,
         ..
     } = job_result;
     let now = Instant::now();
-
-    let _modifications = modifications;
 
     // returned serial_ids are 0 indexed, but we want them to be 1 indexed
     let uniqueness_results = merged_results
@@ -154,15 +154,26 @@ pub async fn process_job_result(
         .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
         .map(|(i, _)| {
             let reauth_id = request_ids[i].clone();
+            let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
+            let success = successful_reauths[i];
             let result_event = ReAuthResult::new(
                 reauth_id.clone(),
                 party_id,
-                reauth_target_indices.get(&reauth_id).unwrap() + 1,
-                successful_reauths[i],
+                serial_id,
+                success,
                 match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                 *reauth_or_rule_used.get(&reauth_id).unwrap(),
             );
-            serde_json::to_string(&result_event).wrap_err("failed to serialize reauth result")
+            let result_string = serde_json::to_string(&result_event)
+                .wrap_err("failed to serialize reauth result")?;
+
+            // Update the modification with graph mutation
+            if let Some(modification) = modifications.get_mut(&(RequestSerialId(serial_id))) {
+                // TODO: add graph mutation
+                modification.mark_completed(success, &result_string, None, None);
+            }
+
+            Ok(result_string)
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -212,7 +223,74 @@ pub async fn process_job_result(
         }
     }
 
+    // Extract graph mutations for reauth requests before moving hawk_mutation to persist
+    let mut graph_mutations_for_reauth = Vec::new();
+    for (i, request_type) in request_types.iter().enumerate() {
+        if request_type == REAUTH_MESSAGE_TYPE {
+            let graph_mutation = hawk_mutation.get_single_mutation(i);
+            let graph_mutation_bytes = bincode::serialize(&graph_mutation)
+                .wrap_err("failed to serialize graph mutation")?;
+            graph_mutations_for_reauth.push((i, graph_mutation_bytes));
+        }
+    }
+
     persist(iris_tx, graph_store, hawk_mutation, config).await?;
+
+    // Now update modifications in the database after persist
+    let mut modifications_with_graph_mutations = Vec::new();
+    let mut reauth_index = 0;
+    for (i, request_type) in request_types.iter().enumerate() {
+        if request_type == REAUTH_MESSAGE_TYPE {
+            let reauth_id = &request_ids[i];
+            let serial_id = *reauth_target_indices.get(reauth_id).unwrap() + 1;
+
+            if let Some(original_modification) = modifications.get(&(RequestSerialId(serial_id))) {
+                if original_modification.status == "COMPLETED" {
+                    let (_, graph_mutation_bytes) = &graph_mutations_for_reauth[reauth_index];
+
+                    // Create a new modification with the graph mutation
+                    let modification_with_mutation = Modification {
+                        id: original_modification.id,
+                        serial_id: original_modification.serial_id,
+                        request_type: original_modification.request_type.clone(),
+                        s3_url: original_modification.s3_url.clone(),
+                        status: original_modification.status.clone(),
+                        persisted: original_modification.persisted,
+                        result_message_body: original_modification.result_message_body.clone(),
+                        graph_mutation: Some(graph_mutation_bytes.clone()),
+                    };
+                    modifications_with_graph_mutations.push(modification_with_mutation);
+                }
+            }
+            reauth_index += 1;
+        }
+    }
+
+    // Update regular modifications (deletions) and modifications with graph mutations (reauths)
+    let completed_basic_modifications: Vec<&Modification> = modifications
+        .values()
+        .filter(|m| m.status == "COMPLETED")
+        .collect();
+
+    if !completed_basic_modifications.is_empty() || !modifications_with_graph_mutations.is_empty() {
+        let mut tx = store.tx().await?;
+
+        // Update basic modifications first (deletions)
+        if !completed_basic_modifications.is_empty() {
+            store
+                .update_modifications(&mut tx, &completed_basic_modifications)
+                .await?;
+        }
+
+        // Update modifications with graph mutations (reauths)
+        if !modifications_with_graph_mutations.is_empty() {
+            let refs: Vec<&Modification<Vec<u8>>> =
+                modifications_with_graph_mutations.iter().collect();
+            store.update_modifications(&mut tx, &refs).await?;
+        }
+
+        tx.commit().await?;
+    }
 
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id);
@@ -244,10 +322,18 @@ pub async fn process_job_result(
     // handling identity deletion results
     let identity_deletion_results = deleted_ids
         .iter()
-        .map(|&serial_id| {
-            let result_event = IdentityDeletionResult::new(party_id, serial_id + 1, true);
-            serde_json::to_string(&result_event)
-                .wrap_err("failed to serialize identity deletion result")
+        .map(|&idx| {
+            let serial_id = idx + 1;
+            let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
+            let result_string = serde_json::to_string(&result_event)
+                .wrap_err("failed to serialize identity deletion result")?;
+
+            if let Some(modification) = modifications.get_mut(&RequestSerialId(serial_id)) {
+                // TODO: add graph mutation
+                modification.mark_completed(true, &result_string, None, None);
+            }
+
+            Ok(result_string)
         })
         .collect::<Result<Vec<_>>>()?;
 

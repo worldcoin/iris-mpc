@@ -24,6 +24,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
+use serde::de::DeserializeOwned;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
@@ -114,9 +115,10 @@ pub struct StoredModification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
+    pub graph_mutation: Option<Vec<u8>>,
 }
 
-impl From<StoredModification> for Modification {
+impl<A: DeserializeOwned> From<StoredModification> for Modification<A> {
     fn from(stored: StoredModification) -> Self {
         Self {
             id: stored.id,
@@ -126,6 +128,13 @@ impl From<StoredModification> for Modification {
             status: stored.status,
             persisted: stored.persisted,
             result_message_body: stored.result_message_body,
+            graph_mutation: stored.graph_mutation.and_then(|bytes| {
+                if bytes.is_empty() {
+                    return None;
+                }
+                // TODO: consider propagating the error to the caller instead of panic
+                Some(bincode::deserialize(&bytes).expect("Failed to deserialize graph mutation"))
+            }),
         }
     }
 }
@@ -366,7 +375,8 @@ WHERE id = $1;
                 s3_url,
                 status,
                 persisted,
-                result_message_body
+                result_message_body,
+                graph_mutation
             "#,
         )
         .bind(serial_id)
@@ -390,7 +400,8 @@ WHERE id = $1;
                 s3_url,
                 status,
                 persisted,
-                result_message_body
+                result_message_body,
+                graph_mutation
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -436,7 +447,8 @@ WHERE id = $1;
                 s3_url,
                 status,
                 persisted,
-                result_message_body
+                result_message_body,
+                graph_mutation
             FROM modifications
             WHERE id > $1
               AND request_type = ANY($2)
@@ -457,10 +469,10 @@ WHERE id = $1;
 
     /// Update the status, persisted flag, and result_message_body of the
     /// modifications based on their id.
-    pub async fn update_modifications(
+    pub async fn update_modifications<A: serde::Serialize>(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        modifications: &[&Modification],
+        modifications: &[&Modification<A>],
     ) -> Result<(), sqlx::Error> {
         if modifications.is_empty() {
             return Ok(());
@@ -474,6 +486,14 @@ WHERE id = $1;
             .map(|m| m.result_message_body.clone())
             .collect();
         let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
+        let graph_mutations: Vec<Option<Vec<u8>>> = modifications
+            .iter()
+            .map(|m| {
+                m.graph_mutation
+                    .as_ref()
+                    .and_then(|gm| bincode::serialize(gm).ok())
+            })
+            .collect();
 
         sqlx::query(
             r#"
@@ -481,14 +501,16 @@ WHERE id = $1;
             SET status = data.status,
                 persisted = data.persisted,
                 result_message_body = data.result_message_body,
-                serial_id = data.serial_id
+                serial_id = data.serial_id,
+                graph_mutation = data.graph_mutation
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
                     unnest($3::bool[])    as persisted,
                     unnest($4::text[])    as result_message_body,
-                    unnest($5::bigint[])  as serial_id
+                    unnest($5::bigint[])  as serial_id,
+                    unnest($6::bytea[])   as graph_mutation
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -498,6 +520,7 @@ WHERE id = $1;
         .bind(&persisteds)
         .bind(&result_message_bodies)
         .bind(&serial_ids)
+        .bind(&graph_mutations)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1080,10 +1103,10 @@ pub mod tests {
 
         // Update the status & persisted fields for first four in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true, "m1", None);
-        m2.mark_completed(false, "m2", None);
-        m3.mark_completed(true, "m3", Some(101));
-        m4.mark_completed(false, "m4", None);
+        m1.mark_completed(true, "m1", None, None);
+        m2.mark_completed(false, "m2", None, None);
+        m3.mark_completed(true, "m3", Some(101), None);
+        m4.mark_completed(false, "m4", None, None);
 
         let modifications_to_update = vec![&m1, &m2, &m3, &m4];
         store
@@ -1171,7 +1194,7 @@ pub mod tests {
             .await?;
 
         // mark m1 as completed
-        m1.mark_completed(true, "m1", None);
+        m1.mark_completed(true, "m1", None, None);
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&m1]).await?;
         tx.commit().await?;
@@ -1275,9 +1298,9 @@ pub mod tests {
         let mut mod1 = mod1;
         let mut mod2 = mod2;
         let mut mod4 = mod4;
-        mod1.mark_completed(true, "result1", None);
-        mod2.mark_completed(true, "result2", None);
-        mod4.mark_completed(true, "result4", None);
+        mod1.mark_completed(true, "result1", None, None);
+        mod2.mark_completed(true, "result2", None, None);
+        mod4.mark_completed(true, "result4", None, None);
 
         let mut tx = store.tx().await?;
         store
@@ -1330,7 +1353,7 @@ pub mod tests {
 
         // Make mod6 persisted=true
         let mut mod6 = mod6;
-        mod6.mark_completed(true, "result6", None);
+        mod6.mark_completed(true, "result6", None, None);
 
         let mut tx = store.tx().await?;
         store.update_modifications(&mut tx, &[&mod6]).await?;

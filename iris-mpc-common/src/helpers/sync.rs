@@ -53,7 +53,7 @@ impl FromStr for ModificationStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Modification {
+pub struct Modification<A = ()> {
     pub id: i64,
     pub serial_id: Option<i64>,
     pub request_type: String,
@@ -61,9 +61,10 @@ pub struct Modification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
+    pub graph_mutation: Option<A>,
 }
 
-impl Modification {
+impl<A> Modification<A> {
     /// Marks the modification as completed, setting the status to "COMPLETED", updating the result message body and persisted flag.
     ///
     /// If `updated_serial_id` is provided, it updates the serial_id field as well.
@@ -73,6 +74,7 @@ impl Modification {
         persisted: bool,
         result_message_body: &str,
         updated_serial_id: Option<u32>,
+        graph_mutation: Option<A>,
     ) {
         self.status = ModificationStatus::Completed.to_string();
         self.result_message_body = Some(result_message_body.to_string());
@@ -80,6 +82,7 @@ impl Modification {
         if let Some(serial_id) = updated_serial_id {
             self.serial_id = Some(serial_id as i64);
         }
+        self.graph_mutation = graph_mutation;
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
@@ -283,6 +286,7 @@ mod tests {
             status: status.to_string(),
             persisted,
             result_message_body: None,
+            graph_mutation: None,
         }
     }
 
@@ -750,7 +754,7 @@ mod tests {
         let serialized_reauth = serde_json::to_string(&original_reauth_result).unwrap();
 
         // Create a modification with the serialized result
-        let mut modification = Modification {
+        let mut modification: Modification<()> = Modification {
             id: 1,
             serial_id: Some(123),
             request_type: REAUTH_MESSAGE_TYPE.to_string(),
@@ -758,6 +762,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
+            graph_mutation: None,
         };
 
         // Update the node_id in the serialized message
@@ -794,7 +799,7 @@ mod tests {
         let serialized_deletion = serde_json::to_string(&original_deletion_result).unwrap();
 
         // Create a modification with the serialized result
-        let mut modification = Modification {
+        let mut modification: Modification<()> = Modification {
             id: 2,
             serial_id: Some(456),
             request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
@@ -802,6 +807,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),
+            graph_mutation: None,
         };
 
         // Update the node_id in the serialized message

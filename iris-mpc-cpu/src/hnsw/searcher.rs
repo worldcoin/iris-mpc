@@ -183,7 +183,7 @@ pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
@@ -198,7 +198,7 @@ pub struct ConnectPlan<Vector> {
 
 /// Represents the state updates required for insertion of a new node into a single layer of
 /// an HNSW hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectPlanLayer<Vector> {
     /// The neighbors of the inserted vector
     pub neighbors: SortedEdgeIds<Vector>,

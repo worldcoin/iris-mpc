@@ -46,6 +46,7 @@ use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
+use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
@@ -1090,10 +1091,20 @@ impl HawkResult {
 
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
+// TODO: let this guy use SingleHawkMutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SingleHawkMutation(pub BothEyes<Option<ConnectPlan>>);
+
 impl HawkMutation {
+    pub fn get_single_mutation(&self, idx: usize) -> SingleHawkMutation {
+        let left = &self.0[LEFT][idx];
+        let right = &self.0[RIGHT][idx];
+        SingleHawkMutation([left.clone(), right.clone()])
+    }
+
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
         for (side, plans) in izip!(STORE_IDS, self.0) {
             tracing::info!("Hawk Main :: Persisting Hawk mutations: side={}", side);
