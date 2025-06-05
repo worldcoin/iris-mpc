@@ -80,6 +80,7 @@ use crate::protocol::ops::{
     compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,
 };
 use crate::shares::share::DistanceShare;
+use crate::shares::share::Share;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
 
@@ -465,8 +466,7 @@ impl HawkActor {
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-            let mut session = sessions[side][0].write().await;
-            self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
+            self.fill_anonymized_statistics_buckets(sessions, side)
                 .await?;
         }
         Ok(())
@@ -492,40 +492,83 @@ impl HawkActor {
                         .map(|(_, distance)| distance.clone())
                 })
             });
+        self.distances_cache[side].extend(distances.clone());
         tracing::info!(
             "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
-            distances.clone().count(),
+            distances.count(),
             search_results.len(),
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances);
     }
 
-    async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
+    async fn compute_buckets(
+        &self,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        side: usize,
+    ) -> Result<VecBuckets> {
         let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
-        let bucket_result_shares = compare_threshold_buckets(
-            session,
-            translated_thresholds.as_slice(),
-            self.distances_cache[side].as_slice(),
-        )
-        .await?;
+        let n_sessions = sessions[side].len();
+        let distances = self.distances_cache[side].as_slice();
+        let chunk_size = distances.len() / n_sessions;
+        let remainder = distances.len() % n_sessions;
 
-        let buckets = open_ring(session, &bucket_result_shares).await?;
-        Ok(buckets)
+        let mut start = 0;
+        let mut slices_data = Vec::with_capacity(n_sessions);
+        for i in 0..n_sessions {
+            let size = chunk_size + (i < remainder) as usize;
+            let end = start + size;
+            slices_data.push(distances[start..end].to_vec());
+            start = end;
+        }
+
+        // Run threshold comparisons in parallel, collecting shares in order
+        let tasks = sessions[side]
+            .iter()
+            .cloned()
+            .zip(slices_data.into_iter())
+            .map(|(session_ref, slice)| {
+                let thresholds = translated_thresholds.clone();
+                async move {
+                    let mut session = session_ref.write().await;
+                    compare_threshold_buckets(
+                        &mut session.aby3_store.session,
+                        thresholds.as_slice(),
+                        &slice,
+                    )
+                    .await
+                }
+            });
+        let shares_acc = parallelize(tasks).await?;
+
+        // Aggregate shares before opening
+        let n_buckets = translated_thresholds.len();
+        let mut bucket_result_shares: Vec<Share<u32>> = vec![Share::default(); n_buckets];
+        for shares in shares_acc {
+            for (i, share) in shares.into_iter().enumerate() {
+                bucket_result_shares[i] += share;
+            }
+        }
+        let mut session0 = sessions[side][0].write().await;
+        let opened = open_ring(&mut session0.aby3_store.session, &bucket_result_shares).await?;
+        Ok(opened)
     }
 
     async fn fill_anonymized_statistics_buckets(
         &mut self,
-        session: &mut Session,
+        sessions: &BothEyes<Vec<HawkSessionRef>>,
         side: usize,
     ) -> Result<()> {
+        tracing::info!(
+            "have {} distances for side {side}",
+            self.distances_cache[side].len()
+        );
         if self.distances_cache[side].len() > self.args.match_distances_buffer_size {
             tracing::info!(
                 "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
                 self.distances_cache[side].len()
             );
-            let buckets = self.compute_buckets(session, side).await?;
+            let buckets = self.compute_buckets(sessions, side).await?;
             self.anonymized_bucket_statistics[side].fill_buckets(
                 &buckets,
                 MATCH_THRESHOLD_RATIO,
