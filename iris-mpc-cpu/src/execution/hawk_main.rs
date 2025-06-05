@@ -228,7 +228,7 @@ pub struct InsertPlanV<V: VectorStore> {
     match_count: usize,
     set_ep: bool,
 }
-
+// Manual implementation of Clone for InsertPlan, since derive(Clone) does not propagate the nested Clone bounds on V::QueryRef via TransientRef.
 impl Clone for InsertPlan {
     fn clone(&self) -> Self {
         Self {
