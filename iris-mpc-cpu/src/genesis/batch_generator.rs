@@ -1,6 +1,6 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
-    execution::hawk_main::BothEyes,
+    execution::hawk_main::{BothEyes, LEFT, RIGHT},
     hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
 };
 use eyre::Result;
@@ -32,7 +32,7 @@ pub struct BatchGenerator {
     batch_count: usize,
 
     // Policy to apply when calculating batch sizes.
-    batch_size_policy: BatchSizePolicy,
+    batch_size: BatchSize,
 
     // Set of Iris serial identifiers to exclude from indexing.
     exclusions: Vec<IrisSerialId>,
@@ -46,10 +46,20 @@ pub struct BatchGenerator {
 
 /// Batch iterator.
 pub trait BatchIterator {
-    // Count of generated batches.
+    /// Count of generated batches.
     fn batch_count(&self) -> usize;
 
-    // Iterator over batches of Iris data to be indexed.
+    /// Iterator over batches of Iris data to be indexed.
+    ///
+    /// # Arguments
+    ///
+    /// * `last_indexed_id` - Last Iris serial identifier indexed.
+    /// * `iris_stores` - In memory cache of Iris shares data.
+    ///
+    /// # Returns
+    ///
+    /// Future that resolves to maybe a Batch or an IndexationError.
+    ///
     fn next_batch(
         &mut self,
         last_indexed_id: IrisSerialId,
@@ -59,7 +69,7 @@ pub trait BatchIterator {
 
 /// Policy over batch size calculations.
 #[derive(Debug)]
-pub enum BatchSizePolicy {
+pub enum BatchSize {
     /// Static batch size.
     Static(usize),
     /// Dynamic batch size with size error coefficient & hnsw-m param.
@@ -88,7 +98,7 @@ impl BatchGenerator {
     pub fn new(
         start_id: IrisSerialId,
         end_id: IrisSerialId,
-        batch_size_policy: BatchSizePolicy,
+        batch_size: BatchSize,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
         assert!(
@@ -101,7 +111,7 @@ impl BatchGenerator {
         let range = start_id..=end_id;
 
         Self {
-            batch_size_policy,
+            batch_size,
             exclusions,
             batch_count: 0,
             range: range.clone(),
@@ -111,13 +121,14 @@ impl BatchGenerator {
 }
 
 /// Constructor.
-impl BatchSizePolicy {
+impl BatchSize {
     pub fn new(size: usize) -> Self {
-        BatchSizePolicy::Static(size)
+        BatchSize::Static(size)
     }
 
-    pub fn new_dynamic(error_rate: usize, hnsw_m: usize) -> Self {
-        BatchSizePolicy::Dynamic(error_rate, hnsw_m)
+    #[allow(non_snake_case)]
+    pub fn new_dynamic(error_rate: usize, hnsw_M: usize) -> Self {
+        BatchSize::Dynamic(error_rate, hnsw_M)
     }
 }
 
@@ -149,6 +160,23 @@ impl fmt::Display for BatchGenerator {
     }
 }
 
+/// Trait: fmt::Display.
+impl fmt::Display for BatchSize {
+    #[allow(non_snake_case)]
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            BatchSize::Static(size) => write!(f, "Static(size={})", size),
+            BatchSize::Dynamic(error_correction, hnsw_M) => {
+                write!(
+                    f,
+                    "Dynamic(error-correction={}, hnsw-M={})",
+                    error_correction, hnsw_M
+                )
+            }
+        }
+    }
+}
+
 /// Methods.
 impl Batch {
     // Returns Iris serial id of batch's last element.
@@ -169,47 +197,13 @@ impl Batch {
 
 /// Methods.
 impl BatchGenerator {
-    /// Returns size of next batch of Iris serial identifiers to be indexed.
-    #[allow(non_snake_case)]
-    fn next_batch_size(&self, last_indexed_id: IrisSerialId) -> usize {
-        match last_indexed_id {
-            // Empty graph therefore batch size defaults to 1.
-            0 => {
-                Self::log_info(String::from(
-                    "Using static batch size of 1 as graph is empty",
-                ));
-                1
-            }
-            _ => match self.batch_size_policy {
-                BatchSizePolicy::Dynamic(r, M) => {
-                    // r: configurable parameter for error rate.
-                    // M: HNSW parameter for nearest neighbors.
-                    // n: current graph size (last_indexed_id).
-                    let N = last_indexed_id;
-
-                    // batch_size: floor(N/(Mr - 1) + 1)
-                    let batch_size =
-                        (N as f64 / (M as f64 * r as f64 - 1.0) + 1.0).floor() as usize;
-
-                    Self::log_info(format!(
-                            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                            batch_size, N, M, r
-                        ));
-
-                    batch_size
-                }
-                BatchSizePolicy::Static(size) => {
-                    Self::log_info(format!("Using static batch size: {}", size));
-                    size
-                }
-            },
-        }
-    }
-
     /// Returns next batch of Iris serial identifiers to be indexed.
-    fn next_identifiers(&mut self, batch_size: usize) -> Option<Vec<IrisSerialId>> {
+    fn next_identifiers(&mut self, last_indexed_id: IrisSerialId) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
+
+        // Calculate batch size.
+        let batch_size = self.batch_size.next(last_indexed_id);
 
         // Construct next batch.
         let mut identifiers = Vec::<IrisSerialId>::new();
@@ -218,7 +212,7 @@ impl BatchGenerator {
             if !self.exclusions.contains(&next_id) {
                 identifiers.push(next_id);
             } else {
-                Self::log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
+                log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
             }
         }
 
@@ -227,11 +221,6 @@ impl BatchGenerator {
         } else {
             Some(identifiers)
         }
-    }
-
-    // Helper: component logging.
-    fn log_info(msg: String) {
-        utils::log_info(COMPONENT, msg);
     }
 }
 
@@ -248,10 +237,9 @@ impl BatchIterator for BatchGenerator {
         last_indexed_id: IrisSerialId,
         imem_iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
-        let batch_size = self.next_batch_size(last_indexed_id);
-        if let Some(identifiers) = self.next_identifiers(batch_size) {
-            // Set vector identifiers - assumes equivalence in both stores.
-            let vector_ids = imem_iris_stores[0]
+        if let Some(identifiers) = self.next_identifiers(last_indexed_id) {
+            // Set vector identifiers - assumes left/right store equivalence.
+            let vector_ids = imem_iris_stores[LEFT]
                 .get_vector_ids(&identifiers)
                 .await
                 .into_iter()
@@ -267,13 +255,59 @@ impl BatchIterator for BatchGenerator {
             Ok(Some(Batch::new(
                 self.batch_count,
                 vector_ids.clone(),
-                imem_iris_stores[0].get_queries(vector_ids.iter()).await,
-                imem_iris_stores[1].get_queries(vector_ids.iter()).await,
+                imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
+                imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
             )))
         } else {
             Ok(None)
         }
     }
+}
+
+impl BatchSize {
+    /// Calculates size of next batch to be indexed.
+    #[allow(non_snake_case)]
+    fn next(&self, last_indexed_id: IrisSerialId) -> usize {
+        log_info(format!("Caluclating batch size: {}", last_indexed_id));
+
+        match last_indexed_id {
+            // Empty graph therefore batch size defaults to 1.
+            0 => {
+                log_info(String::from(
+                    "Using static batch size of 1 as graph is empty",
+                ));
+                1
+            }
+            _ => match self {
+                BatchSize::Dynamic(r, M) => {
+                    // r: configurable parameter for error rate.
+                    // M: HNSW parameter for nearest neighbors.
+                    // n: current graph size (last_indexed_id).
+                    let N = last_indexed_id;
+
+                    // batch_size: floor(N/(Mr - 1) + 1)
+                    let batch_size =
+                        (N as f64 / (*M as f64 * *r as f64 - 1.0) + 1.0).floor() as usize;
+
+                    log_info(format!(
+                            "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+                            batch_size, N, M, r
+                        ));
+
+                    batch_size
+                }
+                BatchSize::Static(size) => {
+                    log_info(format!("Using static batch size: {}", size));
+                    *size
+                }
+            },
+        }
+    }
+}
+
+// Helper: component logging.
+fn log_info(msg: String) {
+    utils::log_info(COMPONENT, msg);
 }
 
 // #[cfg(test)]

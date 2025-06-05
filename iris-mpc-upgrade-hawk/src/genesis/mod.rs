@@ -26,7 +26,7 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, BatchSizePolicy, Handle as GenesisHawkHandle,
+        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
         IndexationError, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
@@ -401,17 +401,17 @@ async fn exec_indexation(
     let mut hawk_handle = GenesisHawkHandle::new(ctx.config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
-    // Set batch size policy.
-    let batch_size_policy = match ctx.args.batch_size {
-        0 => BatchSizePolicy::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
-        _ => BatchSizePolicy::new(ctx.args.batch_size),
+    // Set batch size.
+    let batch_size = match ctx.args.batch_size {
+        0 => BatchSize::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
+        _ => BatchSize::new(ctx.args.batch_size),
     };
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
         ctx.args.max_indexation_id,
-        batch_size_policy,
+        batch_size,
         ctx.excluded_serial_ids.clone(),
     );
     log_info(format!("Batch generator instantiated: {}", batch_generator));

@@ -137,7 +137,7 @@ pub async fn get_iris_modifications(
 ///
 /// # Returns
 ///
-/// Serial id of the last indexed iris, or 0 if no serial id is recorded.
+/// The serial id of last iris to have been indexed, or 0 if none has been recorded.
 ///
 pub async fn get_last_indexed_iris_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_IRIS_ID).await
@@ -151,23 +151,13 @@ pub async fn get_last_indexed_iris_id(graph_store: &GraphPg<Aby3Store>) -> Resul
 ///
 /// # Returns
 ///
-/// The modification id of the last indexed modification, or 0 if no modification id is recorded.
+/// The modification id of the last indexed modification, or 0 if none has been recorded.
 ///
 pub async fn get_last_indexed_modification_id(graph_store: &GraphPg<Aby3Store>) -> Result<i64> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_MODIFICATION_ID).await
 }
 
 /// Gets a state element value from remote store.
-///
-/// # Arguments
-///
-/// * `graph_store` - Graph PostgreSQL store provider.
-/// * `key` - Key of state element to be persisted.
-///
-/// # Returns
-///
-/// The value of a state element otherwise a default value based upon type.
-///
 async fn get_state_element<T: DeserializeOwned + Default>(
     graph_store: &GraphPg<Aby3Store>,
     key: &str,
@@ -222,17 +212,6 @@ pub async fn set_last_indexed_modification_id(
 }
 
 /// Persists a state element to remote store.
-///
-/// # Arguments
-///
-/// * `tx` - PostgreSQL transaction to use for operation scope.
-/// * `key` - Key of state element to be persisted.
-/// * `value` - Value of state element to be persisted.
-///
-/// # Returns
-///
-/// Result<()> on success
-///
 async fn set_state_element<T: Serialize + Debug>(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,
