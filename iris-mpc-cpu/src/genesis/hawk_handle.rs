@@ -6,7 +6,8 @@ use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
 };
-use eyre::{OptionExt, Result};
+use eyre::{bail, OptionExt, Result};
+use iris_mpc_common::helpers::smpc_request::IDENTITY_DELETION_MESSAGE_TYPE;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -178,20 +179,29 @@ impl Handle {
                     HawkMutation(results),
                 ))
             }
-            JobRequest::Modification {} => {
+            JobRequest::Modification { modification } => {
+                if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
+                    // throw an error
+                    let msg = Self::log_error(format!(
+                        "HawkActor does not support deletion of identities: modification: {:?}",
+                        modification
+                    ));
+                    bail!(msg);
+                }
+
                 todo!()
             }
         }
     }
 
     // Helper: component error logging.
-    fn log_error(msg: String) {
-        utils::log_error(COMPONENT, msg);
+    fn log_error(msg: String) -> String {
+        utils::log_error(COMPONENT, msg)
     }
 
     // Helper: component logging.
-    fn log_info(msg: String) {
-        utils::log_info(COMPONENT, msg);
+    fn log_info(msg: String) -> String {
+        utils::log_info(COMPONENT, msg)
     }
 
     /// Enqueues a job request for the genesis indexer HNSW processing thread. It returns

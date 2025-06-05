@@ -9,10 +9,7 @@ use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
-    helpers::{
-        shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
-        sync::Modification, task_monitor::TaskMonitor,
-    },
+    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -29,7 +26,7 @@ use iris_mpc_cpu::{
         utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
         JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::Aby3Store,
+    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
@@ -139,15 +136,31 @@ impl ExecutionContextInfo {
 ///
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Phase 0: setup.
-    let (ctx, shutdown_handler, task_monitor_bg, hawk_actor, aws_rds_client, graph_store) =
-        exec_setup(&args, &config).await?;
+    let (
+        ctx,
+        shutdown_handler,
+        mut task_monitor_bg,
+        aws_rds_client,
+        imem_iris_stores,
+        mut hawk_handle,
+        tx_results,
+    ) = exec_setup(&args, &config).await?;
     log_info(String::from("Setup complete."));
 
     // Phase 1: apply delta.
     if ctx.modifications.is_empty() {
         log_info(String::from("Delta skipped ... no modifications to apply."));
     } else {
-        exec_delta(&ctx).await?;
+        hawk_handle = exec_delta(
+            &config,
+            &ctx,
+            &imem_iris_stores,
+            hawk_handle,
+            &tx_results,
+            &mut task_monitor_bg,
+            &shutdown_handler,
+        )
+        .await?;
         log_info(String::from("Delta complete."));
     }
 
@@ -155,8 +168,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     exec_indexation(
         &config,
         &ctx,
-        hawk_actor,
-        graph_store,
+        &imem_iris_stores,
+        hawk_handle,
+        &tx_results,
         task_monitor_bg,
         &shutdown_handler,
     )
@@ -188,9 +202,10 @@ async fn exec_setup(
     ExecutionContextInfo,
     Arc<ShutdownHandler>,
     TaskMonitor,
-    HawkActor,
     RDSClient,
-    GraphPg<Aby3Store>,
+    BothEyes<SharedIrisesRef>,
+    GenesisHawkHandle,
+    Sender<JobResult>,
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
@@ -321,19 +336,35 @@ async fn exec_setup(
         // return Ok(());
     }
 
+    // Set in memory Iris stores.
+    let imem_iris_stores: BothEyes<_> = [
+        hawk_actor.iris_store(StoreId::Left),
+        hawk_actor.iris_store(StoreId::Right),
+    ];
+
+    // Set Hawk handle.
+    let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
+    log_info(String::from("Hawk handle initialised"));
+
+    // Set thread for persisting indexing results to DB.
+    let tx_results =
+        get_results_thread(graph_store, &mut task_monitor_bg, &shutdown_handler).await?;
+    task_monitor_bg.check_tasks();
+
     Ok((
         ExecutionContextInfo::new(
             args,
             last_indexed_id,
-            excluded_serial_ids.clone(),
-            modifications.clone(),
+            excluded_serial_ids,
+            modifications,
             latest_modification_id,
         ),
         shutdown_handler,
         task_monitor_bg,
-        hawk_actor,
         aws_rds_client,
-        graph_store,
+        imem_iris_stores,
+        hawk_handle,
+        tx_results,
     ))
 }
 
@@ -344,39 +375,89 @@ async fn exec_setup(
 /// * `ctx` - Execution context information.
 /// * `modifications` - Set of indexation modifications to apply.
 ///
-async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
+async fn exec_delta(
+    config: &Config,
+    ctx: &ExecutionContextInfo,
+    _imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    mut hawk_handle: GenesisHawkHandle,
+    tx_results: &Sender<JobResult>,
+    task_monitor_bg: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<GenesisHawkHandle> {
     let ExecutionContextInfo {
         modifications,
         max_modification_id,
         ..
     } = ctx;
-    log_info(format!(
-        "Applying modifications: count={} :: max-id={}",
-        modifications.len(),
-        max_modification_id
-    ));
-
-    // TODO: implement applying modifications
-    for modification in modifications {
+    let res: Result<()> = async {
         log_info(format!(
-            "Applying modification: type={} id={}, serial_id={}",
-            modification.request_type, modification.id, modification.serial_id
+            "Applying modifications: count={} :: max-id={}",
+            modifications.len(),
+            max_modification_id
         ));
-        if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
-            // throw an error
-            let msg = log_error(format!(
-                "HawkActor does not support deletion of identities: modification: {:?}",
-                modification
+
+        let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+
+        for modification in modifications {
+            log_info(format!(
+                "Applying modification: type={} id={}, serial_id={}",
+                modification.request_type, modification.id, modification.serial_id
             ));
-            bail!(msg);
+
+            // Submit modification to Hawk handle for processing.
+            let request = JobRequest::new_modification(modification.clone());
+            let result_future = hawk_handle.submit_request(request).await;
+            let result = timeout(processing_timeout, result_future)
+                .await
+                .map_err(|err| {
+                    eyre!(log_error(format!(
+                        "HawkActor processing timeout: {:?}",
+                        err
+                    )))
+                })??;
+
+            // Send results to processing thread responsible for persisting to database.
+            tx_results.send(result).await?;
+            shutdown_handler.increment_batches_pending_completion();
+
+            // TODO: apply modification to the graph
+            // TODO: set last indexed modification id
+            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
         }
 
-        // TODO: apply modification to the graph
-        // TODO: set last indexed modification id
-        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
+        Ok(())
     }
+    .await;
 
-    Ok(())
+    // Process delta result:
+    match res {
+        // Success.
+        Ok(_) => {
+            log_info(String::from(
+                "Waiting for last delta modifications to be processed...",
+            ));
+            shutdown_handler.wait_for_pending_batches_completion().await;
+            log_info(String::from("All delta modifications have been processed"));
+
+            Ok(hawk_handle)
+        }
+        // Error.
+        Err(err) => {
+            log_error(format!(
+                "HawkActor processing error while applying delta modifications: {:?}",
+                err
+            ));
+
+            // Clean up & shutdown.
+            log_info(String::from("Initiating shutdown"));
+            drop(hawk_handle);
+            task_monitor_bg.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            task_monitor_bg.check_tasks_finished();
+
+            Err(err)
+        }
+    }
 }
 
 /// Index Iris's from last indexation id.
@@ -393,17 +474,13 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
 async fn exec_indexation(
     config: &Config,
     ctx: &ExecutionContextInfo,
-    hawk_actor: HawkActor,
-    graph_store: GraphPg<Aby3Store>,
+    imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    mut hawk_handle: GenesisHawkHandle,
+    tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<()> {
     log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", ctx.batch_size, ctx.batch_size_error_rate, ctx.last_indexed_id, ctx.max_indexation_id));
-
-    // Set thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut task_monitor_bg, shutdown_handler).await?;
-    task_monitor_bg.check_tasks();
 
     // Set dynamic batch size.
     // TODO: calculate before 1st batch and at end of each subsequent batch.
@@ -439,16 +516,6 @@ async fn exec_indexation(
         }
     };
 
-    // Set in memory Iris stores.
-    let imem_iris_stores: BothEyes<_> = [
-        hawk_actor.iris_store(StoreId::Left),
-        hawk_actor.iris_store(StoreId::Right),
-    ];
-
-    // Set Hawk handle.
-    let mut hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
-    log_info(String::from("Hawk handle initialised"));
-
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
@@ -468,7 +535,7 @@ async fn exec_indexation(
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(&imem_iris_stores).await? {
+        while let Some(batch) = batch_generator.next_batch(imem_iris_stores).await? {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -520,6 +587,8 @@ async fn exec_indexation(
                 "All batches have been processed, \
                  shutting down...",
             ));
+
+            Ok(())
         }
         // Error.
         Err(err) => {
@@ -531,10 +600,10 @@ async fn exec_indexation(
             task_monitor_bg.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
             task_monitor_bg.check_tasks_finished();
+
+            Err(err)
         }
     }
-
-    Ok(())
 }
 
 /// Takes a dB snapshot.

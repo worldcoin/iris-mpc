@@ -4,7 +4,7 @@ use crate::{
     hawkers::aby3::aby3_store::QueryRef,
 };
 use eyre::Result;
-use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -36,7 +36,10 @@ pub enum JobRequest {
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
     },
-    Modification {},
+    Modification {
+        // Modification entry for processing
+        modification: Modification,
+    },
 }
 
 /// Constructor.
@@ -56,6 +59,10 @@ impl JobRequest {
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
         }
+    }
+
+    pub fn new_modification(modification: Modification) -> Self {
+        Self::Modification { modification }
     }
 }
 
