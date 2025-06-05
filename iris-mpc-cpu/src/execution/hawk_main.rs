@@ -224,8 +224,8 @@ pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     query: V::QueryRef,
-    links: Vec<SortedNeighborhoodV<V>>,
-    match_count: usize,
+    links: Vec<SortedNeighborhoodV<V>>, // includes both matches and non-matches
+    match_count: usize,                 // first match_count entries in `links` are the matches
     set_ep: bool,
 }
 
@@ -481,8 +481,18 @@ impl HawkActor {
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+        /*
+        
+            queries -> (iris_code)
+                rotations -> (iris_code rotated into 31 positions)
+                    plans ->  
+                        links -> 
+                            neighbors -> (vecId, distance)
+        
+         */
         let distances = search_results
             .iter() // All requests.
+<<<<<<< Updated upstream
             .flat_map(|rots| {
                 // tracing::error!("Number of rotations: {}", rots.len());
                 rots.iter().enumerate()
@@ -498,13 +508,32 @@ impl HawkActor {
                 //     rotation_index,
                 //     plan.match_count
                 // );
+=======
+            .flat_map(|rotationIndex, rots| rots.iter()) // All rotations.
+            .flat_map(|plan| {
+>>>>>>> Stashed changes
                 plan.links.first().into_iter().flat_map(move |neighbors| {
                     neighbors
                         .iter()
                         .take(plan.match_count)
-                        .map(|(_, distance)| distance.clone())
+                        .map(|(vecId, distance)| distance.clone()) // here group by `vecId` -> gets all the distances of different rotations, and then find the smallest one,
+                    A -> Distance
+                    A -> Distance
+                    B -> Distance,
+                    B -> Distance,
+                    B -> Distance,
+                    C -> Distance,
+                    C -> Distance,
+                    C -> Distance,
+                    A -> Distance
+                    A -> Distance
+                    B -> Distance,
+                    C -> Distance,
                 })
             });
+        
+        // needs to be parallelised, the comparisons are very high latency, this is wh 
+        
         tracing::info!(
             "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
             distances.clone().count(),
@@ -512,6 +541,7 @@ impl HawkActor {
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
+        
         self.distances_cache[side].extend(distances);
     }
 
@@ -525,7 +555,11 @@ impl HawkActor {
         .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
+<<<<<<< Updated upstream
         tracing::error!("Buckets: {:?}", buckets);
+=======
+        
+>>>>>>> Stashed changes
         Ok(buckets)
     }
 

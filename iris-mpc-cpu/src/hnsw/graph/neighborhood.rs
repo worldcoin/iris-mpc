@@ -51,7 +51,7 @@ impl<V> DerefMut for SortedEdgeIds<V> {
 
 pub type SortedNeighborhoodV<V> =
     SortedNeighborhood<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
-
+// SortedNeighborhood<Aby3Store::VectorRef, Aby3Store::DistanceRef>;
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
 /// graph edges for an HNSW graph which are stored in increasing order of edge
 /// weights. Each edge is stored as a vector id representing the target of the
