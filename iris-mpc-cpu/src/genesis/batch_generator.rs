@@ -68,7 +68,7 @@ pub trait BatchIterator {
 }
 
 /// Policy over batch size calculations.
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum BatchSize {
     /// Static batch size.
     Static(usize),
@@ -315,35 +315,35 @@ mod tests {
     use eyre::Result;
     use rand::{Rng, SeedableRng};
 
-    const DEFAULT_BATCH_SIZE_ERROR_RATE: usize = 128;
-    const DEFAULT_HNSW_PARAM_M: usize = 256;
-    const DEFAULT_INDEXATION_END_ID: IrisSerialId = 100;
-    const DEFAULT_INDEXATION_START_ID: IrisSerialId = 1;
-    const DEFAULT_PARTY_ID: usize = 0;
-    const DEFAULT_RNG_SEED: u64 = 0;
-    const DEFAULT_SIZE_OF_IRIS_DB: usize = 100;
-    const DEFAULT_STATIC_BATCH_SIZE: usize = 10;
+    const BATCH_SIZE_ERROR_RATE: usize = 128;
+    const HNSW_PARAM_M: usize = 256;
+    const INDEXATION_END_ID: IrisSerialId = 100;
+    const INDEXATION_START_ID: IrisSerialId = 1;
     const LAST_INDEXED_IDS: [IrisSerialId; 10] = [
         0, 2312177, 6983790, 7110281, 7859739, 10174686, 10270291, 11961225, 12317574, 14277641,
     ];
+    const PARTY_ID: usize = 0;
+    const RNG_SEED: u64 = 0;
+    const SIZE_OF_IRIS_DB: usize = 100;
+    const STATIC_BATCH_SIZE: usize = 10;
 
     impl BatchSize {
         fn new_1() -> Self {
-            Self::Static(DEFAULT_STATIC_BATCH_SIZE)
+            Self::Static(STATIC_BATCH_SIZE)
         }
         fn new_2() -> Self {
             Self::Static(1)
         }
         fn new_3() -> Self {
-            Self::Dynamic(DEFAULT_BATCH_SIZE_ERROR_RATE, DEFAULT_HNSW_PARAM_M)
+            Self::Dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M)
         }
     }
 
     impl BatchGenerator {
         fn new_0(batch_size: BatchSize) -> Self {
             Self::new(
-                DEFAULT_INDEXATION_START_ID,
-                DEFAULT_INDEXATION_END_ID,
+                INDEXATION_START_ID,
+                INDEXATION_END_ID,
                 batch_size,
                 Vec::new(),
             )
@@ -359,31 +359,16 @@ mod tests {
         }
     }
 
-    fn assert_batch_1(batch_id: usize, batch_size: usize) {
-        assert!(batch_size > 0);
-        match batch_id {
-            1 => {
-                assert_eq!(batch_size, 1);
-            }
-            11 => {
-                assert_eq!(batch_size, DEFAULT_STATIC_BATCH_SIZE - 1);
-            }
-            _ => {
-                assert_eq!(batch_size, DEFAULT_STATIC_BATCH_SIZE);
-            }
-        }
-    }
-
     // Returns a test imem Iris store.
     fn get_iris_imem_stores() -> (BothEyes<SharedIrisesRef>, usize) {
-        let mut rng = AesRng::seed_from_u64(DEFAULT_RNG_SEED);
+        let mut rng = AesRng::seed_from_u64(RNG_SEED);
         let iris_stores: BothEyes<SharedIrisesRef> = [StoreId::Left, StoreId::Right].map(|_| {
-            let plaintext_store = PlaintextStore::new_random(&mut rng, DEFAULT_SIZE_OF_IRIS_DB);
+            let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
             setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
-                .remove(DEFAULT_PARTY_ID)
+                .remove(PARTY_ID)
         });
 
-        (iris_stores, DEFAULT_SIZE_OF_IRIS_DB)
+        (iris_stores, SIZE_OF_IRIS_DB)
     }
 
     // Returns a set of last indexed identifiers from 0 .. 15_000_000.
@@ -399,60 +384,44 @@ mod tests {
     }
 
     #[test]
-    #[allow(non_snake_case)]
     fn test_new_generator() {
-        fn assert_0(generator: &BatchGenerator) {
-            assert_eq!(*generator.range.start(), DEFAULT_INDEXATION_START_ID as u32);
-            assert_eq!(*generator.range.end(), DEFAULT_SIZE_OF_IRIS_DB as u32);
+        for (generator, size) in [
+            (BatchGenerator::new_1(), BatchSize::new_1()),
+            (BatchGenerator::new_2(), BatchSize::new_2()),
+            (BatchGenerator::new_3(), BatchSize::new_3()),
+        ] {
+            assert_eq!(*generator.range.start(), INDEXATION_START_ID as u32);
+            assert_eq!(*generator.range.end(), SIZE_OF_IRIS_DB as u32);
             assert_eq!(generator.batch_count, 0);
             assert_eq!(generator.exclusions.len(), 0);
-        }
-
-        for (generator, size_) in [
-            (BatchGenerator::new_1(), DEFAULT_STATIC_BATCH_SIZE),
-            (BatchGenerator::new_2(), 1),
-        ] {
-            assert_0(&generator);
-            match generator.batch_size {
-                BatchSize::Dynamic(_, _) => panic!("Invalid batch size"),
-                BatchSize::Static(size) => assert_eq!(size, size_),
-            }
-        }
-
-        for (generator, error_, hnsw_M_) in [(
-            BatchGenerator::new_3(),
-            DEFAULT_BATCH_SIZE_ERROR_RATE,
-            DEFAULT_HNSW_PARAM_M,
-        )] {
-            assert_0(&generator);
-            match generator.batch_size {
-                BatchSize::Dynamic(error, hnsw_M) => {
-                    assert_eq!(error, error_);
-                    assert_eq!(hnsw_M, hnsw_M_);
-                }
-                BatchSize::Static(_) => panic!("Invalid batch size"),
-            }
+            assert_eq!(size, generator.batch_size);
         }
     }
 
-    /// Test static batch size iteration.
+    /// Test batch size iteration against sets of last indexed ids.
     #[test]
     fn test_batch_size_1() {
-        let instance = BatchSize::new_1();
-        for last_indexed_id in LAST_INDEXED_IDS {
-            match last_indexed_id {
-                0 => {
-                    // Graph is empty therefore batch size is 1.
-                    assert_eq!(instance.next(last_indexed_id), 1);
-                }
-                _ => {
-                    assert_eq!(instance.next(last_indexed_id), DEFAULT_STATIC_BATCH_SIZE);
+        for (instance, size) in [
+            (BatchSize::new_1(), STATIC_BATCH_SIZE),
+            (BatchSize::new_2(), 1),
+        ] {
+            for identifiers in [LAST_INDEXED_IDS.to_vec(), get_last_indexed_identifiers()] {
+                for last_indexed_id in identifiers {
+                    match last_indexed_id {
+                        0 => {
+                            // Graph is empty therefore batch size is 1.
+                            assert_eq!(instance.next(last_indexed_id), 1);
+                        }
+                        _ => {
+                            assert_eq!(instance.next(last_indexed_id), size);
+                        }
+                    }
                 }
             }
         }
     }
 
-    /// Test dynamic batch size iteration against static set of last indexed ids.
+    /// Test dynamic batch size iteration against a set of known last indexed ids.
     #[test]
     fn test_batch_size_2() {
         let instance = BatchSize::new_3();
@@ -463,26 +432,8 @@ mod tests {
                     assert_eq!(instance.next(last_indexed_id), 1);
                 }
                 _ => {
-                    // TODO: assert against precise expected value.
-                    assert!(instance.next(last_indexed_id) >= DEFAULT_STATIC_BATCH_SIZE);
-                }
-            }
-        }
-    }
-
-    /// Test dynamic batch size iteration against random set of last indexed ids.
-    #[test]
-    fn test_batch_size_3() {
-        let instance = BatchSize::new_3();
-        for last_indexed_id in get_last_indexed_identifiers() {
-            match last_indexed_id {
-                0 => {
-                    // Graph is empty therefore batch size is 1.
-                    assert_eq!(instance.next(last_indexed_id), 1);
-                }
-                _ => {
                     // TODO: how to correctly assert against precise expected value.
-                    assert!(instance.next(last_indexed_id) >= DEFAULT_STATIC_BATCH_SIZE);
+                    assert!(instance.next(last_indexed_id) >= STATIC_BATCH_SIZE);
                 }
             }
         }
@@ -498,26 +449,40 @@ mod tests {
         let mut batch_id: usize = 0;
         let mut generator = BatchGenerator::new_1();
         let mut last_indexed_id = 0 as IrisSerialId;
+
         while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
             batch_id += 1;
-            assert_batch_1(batch_id, identifiers.len());
+            assert!(identifiers.len() > 0);
+            match batch_id {
+                1 => {
+                    assert_eq!(identifiers.len(), 1);
+                }
+                11 => {
+                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE - 1);
+                }
+                _ => {
+                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE);
+                }
+            }
             last_indexed_id += identifiers.len() as IrisSerialId;
         }
+        assert_eq!(batch_id, 11);
     }
 
     /// Test batch identifiers iteration against static set of last indexed ids.
     /// Expecting 100 batches of size 1.
     #[test]
     fn test_next_identifiers_2() {
+        let mut batch_id: usize = 0;
         let mut generator = BatchGenerator::new_2();
         let mut last_indexed_id = 0 as IrisSerialId;
-        let mut last_batch_id: usize = 0;
+
         while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
+            batch_id += 1;
             assert_eq!(identifiers.len(), 1);
-            last_batch_id += 1;
             last_indexed_id += 1;
         }
-        assert_eq!(last_batch_id, 100);
+        assert_eq!(batch_id, 100);
     }
 
     /// Test batch generation against iris store with 100 Irises.
@@ -532,7 +497,18 @@ mod tests {
         let mut last_indexed_id = 0 as IrisSerialId;
 
         while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
-            assert_batch_1(batch.batch_id, batch.size());
+            assert!(batch.size() > 0);
+            match batch.batch_id {
+                1 => {
+                    assert_eq!(batch.size(), 1);
+                }
+                11 => {
+                    assert_eq!(batch.size(), STATIC_BATCH_SIZE - 1);
+                }
+                _ => {
+                    assert_eq!(batch.size(), STATIC_BATCH_SIZE);
+                }
+            }
             last_indexed_id += batch.size() as IrisSerialId;
         }
 
