@@ -29,9 +29,6 @@ use tracing::{info, warn};
 
 use eyre::Result;
 
-/// Number of MPC parties.
-const N_PARTIES: usize = 3;
-
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
 
@@ -142,6 +139,10 @@ struct Args {
     #[clap(long, default_value = "1")]
     aby3_prng_seed: u64,
 
+    /// Allows for writing only to a db for a specified party. 0-based
+    #[clap(long)]
+    party_idx: Option<usize>,
+
     /// Skip creation of the HNSW graph. When set to true, only the iris codes
     /// are processed and persisted, without building the HNSW graph.
     #[clap(long, default_value = "false")]
@@ -151,20 +152,33 @@ struct Args {
 impl Args {
     /// Postgres dB schema names.
     fn db_schemas(&self) -> Vec<String> {
-        vec![
+        let v = vec![
             self.db_schema_party1.clone(),
             self.db_schema_party2.clone(),
             self.db_schema_party3.clone(),
-        ]
+        ];
+
+        if let Some(party_idx) = self.party_idx {
+            info!("Running for writes only for party id {party_idx}");
+            vec![v[party_idx].clone()]
+        } else {
+            v
+        }
     }
 
     /// Postgres dB server addresses.
     fn db_urls(&self) -> Vec<String> {
-        vec![
+        let v = vec![
             self.db_url_party1.clone(),
             self.db_url_party2.clone(),
             self.db_url_party3.clone(),
-        ]
+        ];
+
+        if let Some(party_idx) = self.party_idx {
+            vec![v[party_idx].clone()]
+        } else {
+            v
+        }
     }
 }
 
@@ -194,6 +208,11 @@ impl From<&Args> for Rngs {
         )
     }
 }
+
+const N_PARTIES: usize = 1;
+
+/// Number of secret-shared iris code pairs to persist to Postgres per transaction.
+// const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
 #[allow(non_snake_case)]
 #[tokio::main]
@@ -267,6 +286,11 @@ async fn main() -> Result<()> {
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
             let right_shares =
                 GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
+
+            let left_shares: [GaloisRingSharedIris; 1] =
+                [left_shares[args.party_idx.unwrap()].clone()];
+            let right_shares: [GaloisRingSharedIris; 1] =
+                [right_shares[args.party_idx.unwrap()].clone()];
 
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
                 batch[party].push((shares_l, shares_r));
