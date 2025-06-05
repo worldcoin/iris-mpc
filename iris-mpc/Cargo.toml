@@ -51,6 +51,11 @@ default = []
 name = "iris-mpc-gpu"
 path = "bin/server.rs"
 
+[[bench]]
+name = "hawk"
+harness = false
+
+
 [[bin]]
 name = "iris-mpc-hawk"
 path = "bin/server/iris_mpc_hawk.rs"
