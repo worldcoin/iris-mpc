@@ -41,10 +41,10 @@ pub async fn get_own_batch_sync_state(
 ) -> Result<BatchSyncState> {
     let approximate_visible_messages =
         get_approximate_number_of_messages(config, &sqs_client.clone()).await?;
-    tracing::info!(
-        "fetching approximate_visible_messages: {}",
-        approximate_visible_messages
-    );
+    // tracing::info!(
+    //     "fetching approximate_visible_messages: {}",
+    //     approximate_visible_messages
+    // );
 
     let batch_sync_state = BatchSyncState {
         approximate_visible_messages,

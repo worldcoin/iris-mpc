@@ -195,23 +195,23 @@ impl<'a> BatchProcessor<'a> {
             let num_to_poll =
                 std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
 
-            tracing::info!(
-                "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
-                current_batch_id,
-                num_to_poll,
-                max_visible_messages,
-                self.config.max_batch_size
-            );
+            // tracing::info!(
+            //     "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
+            //     current_batch_id,
+            //     num_to_poll,
+            //     max_visible_messages,
+            //     self.config.max_batch_size
+            // );
 
             // Poll the determined number of messages
             if num_to_poll > 0 {
                 self.poll_exact_messages(num_to_poll).await?;
                 break;
             } else {
-                tracing::info!(
-                    "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
-                    current_batch_id
-                );
+                // tracing::info!(
+                //     "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
+                //     current_batch_id
+                // );
                 if self.shutdown_handler.is_shutting_down() {
                     tracing::info!(
                         "Stopping batch receive during polling wait due to shutdown signal..."

@@ -12,7 +12,7 @@ if [ "$2" == "--init-servers" ]; then
   INIT_SERVERS=true
 fi
 
-export RUST_LOG=info
+export RUST_LOG=error
 export SMPC__DATABASE__URL="postgres://postgres:postgres@localhost:5432/SMPC_dev_${NODE_ID}"
 export SMPC__CPU_DATABASE__URL="postgres://postgres:postgres@localhost:5432/SMPC_dev_${NODE_ID}"
 export SMPC__CPU_DATABASE__MIGRATE=true

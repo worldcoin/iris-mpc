@@ -483,8 +483,21 @@ impl HawkActor {
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
         let distances = search_results
             .iter() // All requests.
-            .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| {
+            .flat_map(|rots| {
+                // tracing::error!("Number of rotations: {}", rots.len());
+                rots.iter().enumerate()
+            }) // All rotations.
+            .flat_map(|(rotation_index, plan)| {
+                // tracing::error!(
+                //     "Rotation index: {}, plan links: {:?}",
+                //     rotation_index,
+                //     plan.links
+                // );
+                // tracing::error!(
+                //     "Rotation index: {}, plan match_count: {:?}",
+                //     rotation_index,
+                //     plan.match_count
+                // );
                 plan.links.first().into_iter().flat_map(move |neighbors| {
                     neighbors
                         .iter()
@@ -512,6 +525,7 @@ impl HawkActor {
         .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
+        tracing::error!("Buckets: {:?}", buckets);
         Ok(buckets)
     }
 
@@ -520,8 +534,13 @@ impl HawkActor {
         session: &mut Session,
         side: usize,
     ) -> Result<()> {
+        tracing::error!(
+            "Distances cache size: {}, match distances buffer size: {}",
+            self.distances_cache[side].len(),
+            self.args.match_distances_buffer_size
+        );
         if self.distances_cache[side].len() > self.args.match_distances_buffer_size {
-            tracing::info!(
+            tracing::error!(
                 "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
                 self.distances_cache[side].len()
             );
@@ -1216,7 +1235,7 @@ impl HawkHandle {
         hawk_actor
             .update_anon_stats(sessions, &search_results)
             .await?;
-        tracing::info!("Updated anonymized statistics.");
+        tracing::error!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
         let resets = search_to_reset(hawk_actor, sessions, &request).await?;
