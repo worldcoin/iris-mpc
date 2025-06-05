@@ -228,6 +228,17 @@ pub struct InsertPlanV<V: VectorStore> {
     match_count: usize,
     set_ep: bool,
 }
+// Manual implementation of Clone for InsertPlan, since derive(Clone) does not propagate the nested Clone bounds on V::QueryRef via TransientRef.
+impl Clone for InsertPlan {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            links: self.links.clone(),
+            match_count: self.match_count,
+            set_ep: self.set_ep,
+        }
+    }
+}
 
 impl<V: VectorStore> InsertPlanV<V> {
     pub fn match_ids(&self) -> Vec<V::VectorRef> {
@@ -953,6 +964,12 @@ impl HawkResult {
             .collect_vec()
     }
 
+    const MATCH_IDS_FILTER: Filter = Filter {
+        eyes: Both,
+        orient: Only(Orientation::Normal),
+        intra_batch: false,
+    };
+
     fn job_result(self) -> ServerJobResult {
         use Decision::*;
         use Orientation::{Mirror, Normal};
@@ -970,11 +987,7 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
             .collect_vec();
 
-        let match_ids = self.select_indices(Filter {
-            eyes: Both,
-            orient: Only(Normal),
-            intra_batch: false,
-        });
+        let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
