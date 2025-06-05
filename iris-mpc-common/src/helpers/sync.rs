@@ -45,7 +45,7 @@ impl FromStr for ModificationStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Modification {
+pub struct Modification<A = ()> {
     pub id: i64,
     pub serial_id: i64,
     pub request_type: String,
@@ -53,6 +53,7 @@ pub struct Modification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
+    pub graph_mutation: Option<A>,
 }
 
 impl Modification {
@@ -313,6 +314,7 @@ mod tests {
             status: status.to_string(),
             persisted,
             result_message_body: None,
+            graph_mutation: None,
         }
     }
 
@@ -715,6 +717,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
+            graph_mutation: None,
         };
 
         // Update the node_id in the serialized message
@@ -759,6 +762,7 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),
+            graph_mutation: None,
         };
 
         // Update the node_id in the serialized message

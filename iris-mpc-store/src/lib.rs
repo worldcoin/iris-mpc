@@ -24,6 +24,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
+use serde::de::DeserializeOwned;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
@@ -114,9 +115,10 @@ pub struct StoredModification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
+    pub graph_mutation: Option<Vec<u8>>,
 }
 
-impl From<StoredModification> for Modification {
+impl<A: DeserializeOwned> From<StoredModification> for Modification<A> {
     fn from(stored: StoredModification) -> Self {
         Self {
             id: stored.id,
@@ -126,6 +128,13 @@ impl From<StoredModification> for Modification {
             status: stored.status,
             persisted: stored.persisted,
             result_message_body: stored.result_message_body,
+            graph_mutation: stored.graph_mutation.and_then(|bytes| {
+                if bytes.is_empty() {
+                    return None;
+                }
+                // TODO: consider propagating the error to the caller instead of panic
+                Some(bincode::deserialize(&bytes).expect("Failed to deserialize graph mutation"))
+            }),
         }
     }
 }

@@ -2461,6 +2461,7 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
+ "bincode",
  "bytemuck",
  "dotenvy",
  "eyre",

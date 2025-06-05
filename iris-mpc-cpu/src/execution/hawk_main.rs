@@ -46,6 +46,7 @@ use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
+use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
@@ -1075,7 +1076,7 @@ impl HawkResult {
 
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
 
 impl HawkMutation {
