@@ -139,7 +139,7 @@ pub struct HawkActor {
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
-    distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
+    distances_cache: BothEyes<Vec<((u32, u32), DistanceShare<u32>)>>,
 
     // ---- My network setup ----
     networking: GrpcHandle,
@@ -491,26 +491,40 @@ impl HawkActor {
             .collect::<Vec<_>>()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
-        let distances = search_results
-            .iter() // All requests.
-            .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| {
+
+    fn cache_distances(
+        &mut self,
+        side: usize,
+        search_results: &[VecRots<InsertPlan>],
+    ) {
+        let distances_with_ids = search_results
+            .iter()
+            .enumerate() // All requests.
+            .flat_map(|(query_id, rots)| {
+                rots.iter()
+                    .enumerate()
+                    .map(move |(rotation_index, plan)| (query_id, rotation_index, plan))
+            }) // All rotations.
+            .flat_map(|(query_id, rotation_index, plan)| {
                 plan.links.first().into_iter().flat_map(move |neighbors| {
                     neighbors
                         .iter()
                         .take(plan.match_count)
-                        .map(|(_, distance)| distance.clone())
+                        .map(move |(_, distance)| {
+                            ((query_id as u32, rotation_index as u32), distance.clone())
+                        })
                 })
-            });
+            })
+            .collect::<Vec<_>>();
+        
         tracing::info!(
-            "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
-            distances.clone().count(),
+            "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
+            // distances.clone().count(),
             search_results.len(),
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances);
+        self.distances_cache[side].extend(distances_with_ids);
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
