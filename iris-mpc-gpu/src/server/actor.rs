@@ -635,6 +635,16 @@ impl ServerActor {
                     }
                 }
             }
+
+            self.anonymized_bucket_statistics_left.buckets.clear();
+            self.anonymized_bucket_statistics_right.buckets.clear();
+            self.anonymized_bucket_statistics_left_mirror
+                .buckets
+                .clear();
+            self.anonymized_bucket_statistics_right_mirror
+                .buckets
+                .clear();
+
             tracing::info!(
                 "Full batch duration took:  {:?}",
                 now.elapsed().as_secs_f64()
@@ -1597,15 +1607,6 @@ impl ServerActor {
             actor_data: (),
             full_face_mirror_attack_detected,
         };
-
-        self.anonymized_bucket_statistics_left.buckets.clear();
-        self.anonymized_bucket_statistics_right.buckets.clear();
-        self.anonymized_bucket_statistics_left_mirror
-            .buckets
-            .clear();
-        self.anonymized_bucket_statistics_right_mirror
-            .buckets
-            .clear();
 
         // Reset the results buffers for reuse
         for dst in [
