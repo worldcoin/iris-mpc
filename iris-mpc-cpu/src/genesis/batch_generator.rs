@@ -177,6 +177,11 @@ impl Batch {
         self.vector_ids.first().map(|id| id.serial_id()).unwrap()
     }
 
+    // Returns serial identifiers within batch.
+    pub fn serial_ids(&self) -> Vec<IrisSerialId> {
+        self.vector_ids.iter().map(|id| id.serial_id()).collect()
+    }
+
     // Returns size of the batch.
     pub fn size(&self) -> usize {
         self.vector_ids.len()
@@ -191,11 +196,11 @@ impl BatchGenerator {
         self.range_iter.peek()?;
 
         // Calculate batch size.
-        let batch_size = self.batch_size.next(last_indexed_id);
+        let batch_size_max = self.batch_size.next_max(last_indexed_id);
 
         // Construct next batch.
         let mut identifiers = Vec::<IrisSerialId>::new();
-        while self.range_iter.peek().is_some() && identifiers.len() < batch_size {
+        while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
             if !self.exclusions.contains(&next_id) {
                 identifiers.push(next_id);
@@ -253,9 +258,9 @@ impl BatchIterator for BatchGenerator {
 }
 
 impl BatchSize {
-    /// Calculates size of next batch to be indexed.
+    /// Calculates maximum size of next batch to be indexed.
     #[allow(non_snake_case)]
-    fn next(&self, last_indexed_id: IrisSerialId) -> usize {
+    fn next_max(&self, last_indexed_id: IrisSerialId) -> usize {
         log_info(format!(
             "Calculating max batch size: last-indexed-id={} :: {}",
             last_indexed_id, self
@@ -316,8 +321,10 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     const BATCH_SIZE_ERROR_RATE: usize = 128;
+    const EXCLUSIONS: [IrisSerialId; 9] = [3, 7, 12, 15, 22, 30, 70, 84, 92];
     const HNSW_PARAM_M: usize = 256;
     const INDEXATION_END_ID: IrisSerialId = 100;
+    const INDEXATION_END_ID_MAX: IrisSerialId = 15_000_000;
     const INDEXATION_START_ID: IrisSerialId = 1;
     const LAST_INDEXED_IDS: [IrisSerialId; 10] = [
         0, 2312177, 6983790, 7110281, 7859739, 10174686, 10270291, 11961225, 12317574, 14277641,
@@ -325,14 +332,15 @@ mod tests {
     const PARTY_ID: usize = 0;
     const RNG_SEED: u64 = 0;
     const SIZE_OF_IRIS_DB: usize = 100;
-    const STATIC_BATCH_SIZE: usize = 10;
+    const STATIC_BATCH_SIZE_1: usize = 1;
+    const STATIC_BATCH_SIZE_10: usize = 10;
 
     impl BatchSize {
         fn new_1() -> Self {
-            Self::Static(STATIC_BATCH_SIZE)
+            Self::Static(STATIC_BATCH_SIZE_10)
         }
         fn new_2() -> Self {
-            Self::Static(1)
+            Self::Static(STATIC_BATCH_SIZE_1)
         }
         fn new_3() -> Self {
             Self::Dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M)
@@ -340,22 +348,25 @@ mod tests {
     }
 
     impl BatchGenerator {
-        fn new_0(batch_size: BatchSize) -> Self {
+        fn new_0(batch_size: BatchSize, exclusions: Vec<IrisSerialId>) -> Self {
             Self::new(
                 INDEXATION_START_ID,
                 INDEXATION_END_ID,
                 batch_size,
-                Vec::new(),
+                exclusions,
             )
         }
         fn new_1() -> Self {
-            Self::new_0(BatchSize::new_1())
+            Self::new_0(BatchSize::new_1(), Vec::new())
         }
         fn new_2() -> Self {
-            Self::new_0(BatchSize::new_2())
+            Self::new_0(BatchSize::new_2(), Vec::new())
         }
         fn new_3() -> Self {
-            Self::new_0(BatchSize::new_3())
+            Self::new_0(BatchSize::new_3(), Vec::new())
+        }
+        fn new_4() -> Self {
+            Self::new_0(BatchSize::new_1(), Vec::from(EXCLUSIONS))
         }
     }
 
@@ -371,11 +382,11 @@ mod tests {
         (iris_stores, SIZE_OF_IRIS_DB)
     }
 
-    // Returns a set of last indexed identifiers from 0 .. 15_000_000.
+    // Returns a random ordered set of last indexed identifiers.
     fn get_last_indexed_identifiers() -> Vec<IrisSerialId> {
         let mut rng = rand::thread_rng();
         let mut random_vec: Vec<u32> = (0..10)
-            .map(|_| rng.gen_range(2 as IrisSerialId..=15_000_000 as IrisSerialId))
+            .map(|_| rng.gen_range(2 as IrisSerialId..=INDEXATION_END_ID_MAX as IrisSerialId))
             .collect();
         random_vec.sort();
         random_vec.insert(0, 0);
@@ -385,15 +396,20 @@ mod tests {
 
     #[test]
     fn test_new_generator() {
-        for (generator, size) in [
-            (BatchGenerator::new_1(), BatchSize::new_1()),
-            (BatchGenerator::new_2(), BatchSize::new_2()),
-            (BatchGenerator::new_3(), BatchSize::new_3()),
+        for (generator, size, exclusions) in [
+            (BatchGenerator::new_1(), BatchSize::new_1(), Vec::new()),
+            (BatchGenerator::new_2(), BatchSize::new_2(), Vec::new()),
+            (BatchGenerator::new_3(), BatchSize::new_3(), Vec::new()),
+            (
+                BatchGenerator::new_4(),
+                BatchSize::new_1(),
+                Vec::from(EXCLUSIONS),
+            ),
         ] {
-            assert_eq!(*generator.range.start(), INDEXATION_START_ID as u32);
-            assert_eq!(*generator.range.end(), SIZE_OF_IRIS_DB as u32);
+            assert_eq!(*generator.range.start(), INDEXATION_START_ID);
+            assert_eq!(*generator.range.end(), INDEXATION_END_ID);
             assert_eq!(generator.batch_count, 0);
-            assert_eq!(generator.exclusions.len(), 0);
+            assert_eq!(generator.exclusions, exclusions);
             assert_eq!(size, generator.batch_size);
         }
     }
@@ -402,18 +418,18 @@ mod tests {
     #[test]
     fn test_batch_size_1() {
         for (instance, size) in [
-            (BatchSize::new_1(), STATIC_BATCH_SIZE),
-            (BatchSize::new_2(), 1),
+            (BatchSize::new_1(), STATIC_BATCH_SIZE_10),
+            (BatchSize::new_2(), STATIC_BATCH_SIZE_1),
         ] {
             for identifiers in [LAST_INDEXED_IDS.to_vec(), get_last_indexed_identifiers()] {
                 for last_indexed_id in identifiers {
                     match last_indexed_id {
                         0 => {
                             // Graph is empty therefore batch size is 1.
-                            assert_eq!(instance.next(last_indexed_id), 1);
+                            assert_eq!(instance.next_max(last_indexed_id), 1);
                         }
                         _ => {
-                            assert_eq!(instance.next(last_indexed_id), size);
+                            assert_eq!(instance.next_max(last_indexed_id), size);
                         }
                     }
                 }
@@ -429,11 +445,11 @@ mod tests {
             match last_indexed_id {
                 0 => {
                     // Graph is empty therefore batch size is 1.
-                    assert_eq!(instance.next(last_indexed_id), 1);
+                    assert_eq!(instance.next_max(last_indexed_id), 1);
                 }
                 _ => {
                     // TODO: how to correctly assert against precise expected value.
-                    assert!(instance.next(last_indexed_id) >= STATIC_BATCH_SIZE);
+                    assert!(instance.next_max(last_indexed_id) >= STATIC_BATCH_SIZE_10);
                 }
             }
         }
@@ -452,16 +468,16 @@ mod tests {
 
         while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
             batch_id += 1;
-            assert!(identifiers.len() > 0);
+            assert!(!identifiers.is_empty());
             match batch_id {
                 1 => {
                     assert_eq!(identifiers.len(), 1);
                 }
                 11 => {
-                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE - 1);
+                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10 - 1);
                 }
                 _ => {
-                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE);
+                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10);
                 }
             }
             last_indexed_id += identifiers.len() as IrisSerialId;
@@ -469,8 +485,7 @@ mod tests {
         assert_eq!(batch_id, 11);
     }
 
-    /// Test batch identifiers iteration against static set of last indexed ids.
-    /// Expecting 100 batches of size 1.
+    /// Test next identifiers: batch-size=1.
     #[test]
     fn test_next_identifiers_2() {
         let mut batch_id: usize = 0;
@@ -485,15 +500,11 @@ mod tests {
         assert_eq!(batch_id, 100);
     }
 
-    /// Test batch generation against iris store with 100 Irises.
-    /// Expecting 11 batches with following sizes:
-    ///   batch-01 -> 1;
-    ///   batch-(02-10) -> 10;
-    ///   batch-11 -> 9;
+    /// Test batch generation: store length=100 :: batch-size=10.
     #[tokio::test]
     async fn test_next_batch_1() -> Result<()> {
-        let (iris_stores, _) = get_iris_imem_stores();
         let mut generator = BatchGenerator::new_1();
+        let (iris_stores, _) = get_iris_imem_stores();
         let mut last_indexed_id = 0 as IrisSerialId;
 
         while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
@@ -503,10 +514,10 @@ mod tests {
                     assert_eq!(batch.size(), 1);
                 }
                 11 => {
-                    assert_eq!(batch.size(), STATIC_BATCH_SIZE - 1);
+                    assert_eq!(batch.size(), 9);
                 }
                 _ => {
-                    assert_eq!(batch.size(), STATIC_BATCH_SIZE);
+                    assert_eq!(batch.size(), 10);
                 }
             }
             last_indexed_id += batch.size() as IrisSerialId;
@@ -519,9 +530,9 @@ mod tests {
     /// Expecting 100 batches of size 1.
     #[tokio::test]
     async fn test_next_batch_2() -> Result<()> {
-        let (iris_stores, _) = get_iris_imem_stores();
         let mut batch_id = 0;
         let mut generator = BatchGenerator::new_2();
+        let (iris_stores, _) = get_iris_imem_stores();
         let mut last_indexed_id = 0 as IrisSerialId;
 
         while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
@@ -534,30 +545,34 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_exclusions() -> Result<()> {
-    //     let mut instance = BatchGenerator::new(
-    //         1 as IrisSerialId,
-    //         30 as IrisSerialId,
-    //         DEFAULT_BATCH_SIZE_ERROR_RATE,
-    //         DEFAULT_BATCH_SIZE_INITIAL,
-    //         DEFAULT_HNSW_PARAM_M,
-    //         vec![3, 7, 12, 15, 22, 30, 70],
-    //     );
+    #[tokio::test]
+    async fn test_exclusions() -> Result<()> {
+        let mut batches = Vec::new();
+        let mut generator = BatchGenerator::new_4();
+        let (iris_stores, _) = get_iris_imem_stores();
+        let mut last_indexed_id = 0 as IrisSerialId;
 
-    //     let mut batches = Vec::new();
-    //     while let Some(batch) = instance.next_identifiers(DEFAULT_BATCH_SIZE_INITIAL) {
-    //         batches.push(batch);
-    //     }
-    //     assert_eq!(
-    //         batches,
-    //         vec![
-    //             vec![1, 2, 4, 5, 6, 8, 9, 10, 11, 13],
-    //             vec![14, 16, 17, 18, 19, 20, 21, 23, 24, 25],
-    //             vec![26, 27, 28, 29],
-    //         ]
-    //     );
+        while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
+            batches.push(batch.serial_ids());
+            last_indexed_id = batch.id_end();
+        }
 
-    //     Ok(())
-    // }
+        assert_eq!(
+            batches,
+            vec![
+                vec![1],
+                vec![2, 4, 5, 6, 8, 9, 10, 11, 13, 14],
+                vec![16, 17, 18, 19, 20, 21, 23, 24, 25, 26],
+                vec![27, 28, 29, 31, 32, 33, 34, 35, 36, 37],
+                vec![38, 39, 40, 41, 42, 43, 44, 45, 46, 47],
+                vec![48, 49, 50, 51, 52, 53, 54, 55, 56, 57],
+                vec![58, 59, 60, 61, 62, 63, 64, 65, 66, 67],
+                vec![68, 69, 71, 72, 73, 74, 75, 76, 77, 78],
+                vec![79, 80, 81, 82, 83, 85, 86, 87, 88, 89],
+                vec![90, 91, 93, 94, 95, 96, 97, 98, 99, 100],
+            ]
+        );
+
+        Ok(())
+    }
 }
