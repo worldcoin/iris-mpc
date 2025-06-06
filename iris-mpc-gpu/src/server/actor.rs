@@ -1661,6 +1661,10 @@ impl ServerActor {
         for dst in [
             &self.distance_comparator.all_matches,
             &self.distance_comparator.match_counters,
+            &self.distance_comparator.match_counters_left,
+            &self.distance_comparator.match_counters_right,
+            &self.distance_comparator.partial_results_left,
+            &self.distance_comparator.partial_results_right,
         ] {
             reset_slice(self.device_manager.devices(), dst, 0, &self.streams[0]);
         }
