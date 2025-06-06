@@ -192,6 +192,9 @@ pub struct Config {
     #[serde(default)]
     pub hnsw_schema_name_suffix: String,
 
+    #[serde(default)]
+    pub gpu_schema_name_suffix: String,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
