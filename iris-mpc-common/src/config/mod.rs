@@ -192,6 +192,9 @@ pub struct Config {
     #[serde(default)]
     pub hnsw_schema_name_suffix: String,
 
+    #[serde(default)]
+    pub gpu_schema_name_suffix: String,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 
@@ -573,6 +576,7 @@ pub struct CommonConfig {
     hawk_server_reauths_enabled: bool,
     schema_name: String,
     hnsw_schema_name_suffix: String,
+    gpu_schema_name_suffix: String,
     cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
@@ -652,6 +656,7 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
+            gpu_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
@@ -706,6 +711,7 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
+            gpu_schema_name_suffix,
             cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,

@@ -193,8 +193,8 @@ fn max_rollback(config: &Config) -> usize {
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let iris_schema_name = format!(
-        "{}_{}_{}",
-        config.schema_name, config.environment, config.party_id
+        "{}{}_{}_{}",
+        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
     );
 
     let hawk_schema_name = format!(
