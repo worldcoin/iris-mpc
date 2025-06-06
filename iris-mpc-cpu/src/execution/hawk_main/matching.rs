@@ -542,50 +542,69 @@ mod tests {
     struct TestCase {
         search_match: bool,
         other_side_match: bool,
-        skip_persistence: bool,
+        reauth_match: bool,
         expected_decision: Decision,
         expected_matches: Vec<MatchId>,
+        request_type: RequestType,
+    }
+
+    impl Default for TestCase {
+        fn default() -> Self {
+            Self {
+                search_match: false,
+                other_side_match: false,
+                reauth_match: false,
+                expected_decision: NoMutation,
+                expected_matches: vec![],
+                request_type: RequestType::Uniqueness(UniquenessRequest {
+                    skip_persistence: false,
+                }),
+            }
+        }
     }
 
     #[test]
     fn test_matching() {
         let cases = [
+            // ### Uniqueness requests
             TestCase {
                 search_match: false,
                 other_side_match: false,
-                skip_persistence: false,
                 expected_decision: Decision::UniqueInsert,
                 expected_matches: vec![],
+                ..TestCase::default()
             },
             TestCase {
                 search_match: false,
                 other_side_match: false,
-                skip_persistence: true,
+                request_type: RequestType::Uniqueness(UniquenessRequest {
+                    skip_persistence: true,
+                }),
                 expected_decision: Decision::UniqueInsertSkipped,
                 expected_matches: vec![],
+                ..TestCase::default()
             },
             TestCase {
                 search_match: true,
                 other_side_match: false,
-                skip_persistence: false,
                 expected_decision: Decision::NoMutation,
                 expected_matches: vec![MatchId::Search(BOTH_MATCH)],
+                ..TestCase::default()
             },
             TestCase {
                 search_match: false,
                 other_side_match: true,
-                skip_persistence: false,
                 expected_decision: Decision::NoMutation,
                 expected_matches: vec![
                     MatchId::Search(RIGHT_MATCH),
                     MatchId::Luc(LUC_REQUESTED),
                     MatchId::Luc(LUC_REQUESTED_DUP),
                 ],
+                ..TestCase::default()
             },
             TestCase {
                 search_match: true,
                 other_side_match: true,
-                skip_persistence: false,
                 expected_decision: Decision::NoMutation,
                 expected_matches: vec![
                     MatchId::Search(BOTH_MATCH),
@@ -593,6 +612,22 @@ mod tests {
                     MatchId::Luc(LUC_REQUESTED),
                     MatchId::Luc(LUC_REQUESTED_DUP),
                 ],
+                ..TestCase::default()
+            },
+            // ### Reauth requests
+            TestCase {
+                request_type: RequestType::Reauth(Some((REAUTH, false as UseOrRule))),
+                reauth_match: true,
+                expected_decision: Decision::ReauthUpdate(REAUTH),
+                expected_matches: vec![MatchId::Reauth(REAUTH)],
+                ..TestCase::default()
+            },
+            TestCase {
+                request_type: RequestType::Reauth(Some((REAUTH, false as UseOrRule))),
+                reauth_match: false,
+                expected_decision: Decision::NoMutation,
+                expected_matches: vec![],
+                ..TestCase::default()
             },
         ];
 
@@ -624,6 +659,8 @@ mod tests {
     const LUC_REQUESTED: VectorId = VectorId::from_serial_id(5);
     /// The request wants us to inspect this ID, and it came up in search too.
     const LUC_REQUESTED_DUP: VectorId = LEFT_MATCH;
+    /// The request wants us to reauthenticate this ID.
+    const REAUTH: VectorId = VectorId::from_serial_id(6);
 
     fn run_test_matching(tc: &TestCase) -> BatchStep3 {
         let req_i = 0;
@@ -657,30 +694,34 @@ mod tests {
             vec![search_result(match_right, non_match_right)],
         ];
         let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
-        let request_types = vec![RequestType::Uniqueness(UniquenessRequest {
-            skip_persistence: tc.skip_persistence,
-        })];
+        let request_types = vec![tc.request_type];
         let batch1 = BatchStep1::new(&search_results, &luc_ids, request_types);
 
-        // Get the other side of partial search results.
         let missing_ids = batch1.missing_vector_ids();
 
-        let expect_left = vec![RIGHT_MATCH, LUC_REQUESTED, LUC_REQUESTED_DUP];
+        // We will inspect the other side of partial search results.
+        let mut expect_left = vec![RIGHT_MATCH, LUC_REQUESTED, LUC_REQUESTED_DUP];
+        let mut expect_right = vec![LEFT_MATCH, BOTH_FOUND, LUC_REQUESTED];
+        // `LUC_REQUESTED_DUP` is the same as `LEFT_MATCH` and we avoided duplicates.
+        // `BOTH_FOUND` is requested because it was not a match. We could have noticed that
+        // it was already inspected and optimize it away, but we do not.
+
+        // For a reauth request, we will inspect the reauth target vector.
+        if matches!(tc.request_type, RequestType::Reauth(_)) {
+            expect_left.push(REAUTH);
+            expect_right.push(REAUTH);
+        }
+
         assert_equal_sets(
             &missing_ids[LEFT][req_i],
             &expect_left,
             "Left side missing IDs",
         );
-
-        let expect_right = vec![LEFT_MATCH, BOTH_FOUND, LUC_REQUESTED];
         assert_equal_sets(
             &missing_ids[RIGHT][req_i],
             &expect_right,
             "Right side missing IDs",
         );
-        // `LUC_REQUESTED_DUP` is the same as `LEFT_MATCH` and we avoided duplicates.
-        // `BOTH_FOUND` is requested because it was not a match. We could have noticed that
-        // it was already inspected and optimize it away, but we do not.
 
         // Simulate `calculate_missing_is_match(..)`.
         // Make it match or not depending on `with_other_side_match`.
@@ -690,6 +731,12 @@ mod tests {
         }
         for id in &missing_ids[RIGHT][req_i] {
             missing_is_match[RIGHT][req_i].insert(*id, false);
+        }
+
+        // Make the reauth request match.
+        if matches!(tc.request_type, RequestType::Reauth(_)) {
+            *missing_is_match[LEFT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
+            *missing_is_match[RIGHT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
         }
 
         // Simulate `intra_batch_is_match(..)`
