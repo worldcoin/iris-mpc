@@ -1281,6 +1281,16 @@ impl HawkHandle {
         for (side, sessions, search_results, reset_results) in
             izip!(&STORE_IDS, sessions, search_results, resets.search_results)
         {
+            let unique_insertions_persistence_skipped = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsertSkipped))
+                .collect_vec();
+
+            let unique_insertions = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsert))
+                .collect_vec();
+
             // The accepted insertions for uniqueness, reauth, and resets.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
@@ -1288,8 +1298,17 @@ impl HawkHandle {
                 search_results.len(),
                 side
             );
+
+            tracing::info!(
+                "Unique insertions: {}, persistence skipped: {}",
+                unique_insertions.len(),
+                unique_insertions_persistence_skipped.len()
+            );
+
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| {
+                    // If the decision is a mutation, return the insertion plan.
+
                     decision.is_mutation().then(|| search_result.into_center())
                 })
                 .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
