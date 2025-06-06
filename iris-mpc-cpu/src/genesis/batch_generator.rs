@@ -5,10 +5,20 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
-use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
+use std::{
+    fmt,
+    future::Future,
+    iter::Peekable,
+    ops::RangeInclusive,
+    sync::{Once, OnceLock},
+};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "Batch-Generator";
+
+/// Synchronization mechanism for batch size initialization.
+static BATCH_SIZE_INIT: Once = Once::new();
+static BATCH_SIZE_VALUE: OnceLock<usize> = OnceLock::new();
 
 /// A batch for upstream indexation.
 #[derive(Debug)]
@@ -190,17 +200,28 @@ impl Batch {
 
 /// Methods.
 impl BatchGenerator {
+    /// Returns maximum size of next batch.
+    /// TODO: currently wrapped in a once - verify when can be invoked each iteration.
+    fn next_batch_size_max(&self, last_indexed_id: IrisSerialId) -> &'static usize {
+        BATCH_SIZE_INIT.call_once(|| {
+            let value = self.batch_size.next_max(last_indexed_id);
+            BATCH_SIZE_VALUE.set(value).unwrap();
+        });
+
+        BATCH_SIZE_VALUE.get().unwrap()
+    }
+
     /// Returns next batch of Iris serial identifiers to be indexed.
     fn next_identifiers(&mut self, last_indexed_id: IrisSerialId) -> Option<Vec<IrisSerialId>> {
         // Escape if exhausted.
         self.range_iter.peek()?;
 
         // Calculate batch size.
-        let batch_size_max = self.batch_size.next_max(last_indexed_id);
+        let batch_size_max = self.next_batch_size_max(last_indexed_id);
 
         // Construct next batch.
         let mut identifiers = Vec::<IrisSerialId>::new();
-        while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
+        while self.range_iter.peek().is_some() && identifiers.len() < *batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
             if !self.exclusions.contains(&next_id) {
                 identifiers.push(next_id);
