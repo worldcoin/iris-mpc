@@ -28,19 +28,15 @@ impl<T: IntRing2k> Share<T> {
         }
     }
 
-    pub fn get_a(self) -> RingElement<T> {
+    pub fn get_a(&self) -> RingElement<T> {
         self.a
     }
 
-    pub fn get_b(self) -> RingElement<T> {
+    pub fn get_b(&self) -> RingElement<T> {
         self.b
     }
 
-    pub fn get_ab(self) -> (RingElement<T>, RingElement<T>) {
-        (self.a, self.b)
-    }
-
-    pub fn get_ab_ref(&self) -> (RingElement<T>, RingElement<T>) {
+    pub fn get_ab(&self) -> (RingElement<T>, RingElement<T>) {
         (self.a, self.b)
     }
 }
