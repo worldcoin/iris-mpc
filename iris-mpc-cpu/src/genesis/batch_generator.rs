@@ -26,6 +26,37 @@ pub struct Batch {
     pub vector_ids: Vec<VectorId>,
 }
 
+/// Constructor.
+impl Batch {
+    fn new(
+        batch_id: usize,
+        vector_ids: Vec<VectorId>,
+        left_queries: Vec<QueryRef>,
+        right_queries: Vec<QueryRef>,
+    ) -> Self {
+        Self {
+            batch_id,
+            vector_ids,
+            left_queries,
+            right_queries,
+        }
+    }
+}
+
+/// Trait: fmt::Display.
+impl fmt::Display for Batch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "id={}, size={}, range=({}..{})",
+            self.batch_id,
+            self.size(),
+            self.id_start(),
+            self.id_end()
+        )
+    }
+}
+
 /// Generates batches of Iris identifiers for processing.
 pub struct BatchGenerator {
     // Count of generated batches.
@@ -42,6 +73,47 @@ pub struct BatchGenerator {
 
     // Iterator over range of Iris serial identifiers to be indexed.
     range_iter: Peekable<RangeInclusive<IrisSerialId>>,
+}
+
+/// Constructor.
+impl BatchGenerator {
+    pub fn new(
+        start_id: IrisSerialId,
+        end_id: IrisSerialId,
+        batch_size: BatchSize,
+        exclusions: Vec<IrisSerialId>,
+    ) -> Self {
+        assert!(
+            end_id > start_id,
+            "Invalid indexation range: {}..{}.",
+            start_id,
+            end_id
+        );
+
+        let range = start_id..=end_id;
+
+        Self {
+            batch_size,
+            exclusions,
+            batch_count: 0,
+            range: range.clone(),
+            range_iter: range.peekable(),
+        }
+    }
+}
+
+/// Trait: fmt::Display.
+impl fmt::Display for BatchGenerator {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "current-batch-id={}, count-of-exclusions={}, range-of-iris-ids=({}..{})",
+            self.batch_count,
+            self.exclusions.len(),
+            self.range.start(),
+            self.range.end(),
+        )
+    }
 }
 
 /// Batch iterator.
@@ -74,78 +146,6 @@ pub enum BatchSize {
     Static(usize),
     /// Dynamic batch size with size error coefficient & hnsw-m param.
     Dynamic(usize, usize),
-}
-
-/// Constructor.
-impl Batch {
-    fn new(
-        batch_id: usize,
-        vector_ids: Vec<VectorId>,
-        left_queries: Vec<QueryRef>,
-        right_queries: Vec<QueryRef>,
-    ) -> Self {
-        Self {
-            batch_id,
-            vector_ids,
-            left_queries,
-            right_queries,
-        }
-    }
-}
-
-/// Constructor.
-impl BatchGenerator {
-    pub fn new(
-        start_id: IrisSerialId,
-        end_id: IrisSerialId,
-        batch_size: BatchSize,
-        exclusions: Vec<IrisSerialId>,
-    ) -> Self {
-        assert!(
-            end_id > start_id,
-            "Invalid indexation range: {}..{}.",
-            start_id,
-            end_id
-        );
-
-        let range = start_id..=end_id;
-
-        Self {
-            batch_size,
-            exclusions,
-            batch_count: 0,
-            range: range.clone(),
-            range_iter: range.peekable(),
-        }
-    }
-}
-
-/// Trait: fmt::Display.
-impl fmt::Display for Batch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "id={}, size={}, range=({}..{})",
-            self.batch_id,
-            self.size(),
-            self.id_start(),
-            self.id_end()
-        )
-    }
-}
-
-/// Trait: fmt::Display.
-impl fmt::Display for BatchGenerator {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "current-batch-id={}, count-of-exclusions={}, range-of-iris-ids=({}..{})",
-            self.batch_count,
-            self.exclusions.len(),
-            self.range.start(),
-            self.range.end(),
-        )
-    }
 }
 
 /// Trait: fmt::Display.
@@ -217,7 +217,7 @@ impl BatchGenerator {
     }
 }
 
-/// Batch iterator implementation.
+/// Methods.
 impl BatchIterator for BatchGenerator {
     // Count of generated batches.
     fn batch_count(&self) -> usize {
@@ -257,6 +257,7 @@ impl BatchIterator for BatchGenerator {
     }
 }
 
+/// Methods.
 impl BatchSize {
     /// Calculates maximum size of next batch to be indexed.
     #[allow(non_snake_case)]
