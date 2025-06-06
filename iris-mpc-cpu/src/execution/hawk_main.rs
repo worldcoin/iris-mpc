@@ -1489,7 +1489,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
-                    skip_persistence: vec![], // Unused.
+                    skip_persistence:vec![false; batch_size],
 
                     ..BatchQuery::default()
                 };
