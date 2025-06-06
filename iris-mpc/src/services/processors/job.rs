@@ -321,30 +321,11 @@ async fn persist(
         }
         return Ok(());
     }
-
-    // In normal (non‐ShadowReadOnly) mode, handle each exclusive persistence setting:
-    match (config.cpu_disable_persistence, config.disable_persistence) {
-        // If *both* are disabled, do nothing with either DB:
-        (true, true) => {}
-
-        // If only CPU persistence is disabled => we commit iris changes only:
-        (true, false) => {
-            iris_tx.commit().await?;
-        }
-
-        // If only “base” (iris) persistence is disabled => we commit the graph:
-        (false, true) => {
-            let mut graph_tx = graph_store.tx().await?;
-            hawk_mutation.persist(&mut graph_tx).await?;
-            graph_tx.tx.commit().await?;
-        }
-
-        // If *both* are enabled => wrap iris_tx so commits go to both DBs:
-        (false, false) => {
-            let mut graph_tx = graph_store.tx_wrap(iris_tx);
-            hawk_mutation.persist(&mut graph_tx).await?;
-            graph_tx.tx.commit().await?;
-        }
+    // simply persist or not both iris and graph changes
+    if !config.cpu_disable_persistence {
+        let mut graph_tx = graph_store.tx_wrap(iris_tx);
+        hawk_mutation.persist(&mut graph_tx).await?;
+        graph_tx.tx.commit().await?;
     }
 
     Ok(())
