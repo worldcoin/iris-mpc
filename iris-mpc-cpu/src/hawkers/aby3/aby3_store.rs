@@ -480,7 +480,7 @@ mod tests {
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
 
-        let stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
+        let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
 
         let mut jobs = JoinSet::new();
         for store in stores.iter() {
@@ -538,7 +538,7 @@ mod tests {
     async fn test_gr_premade_hnsw() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let database_size = 10;
-        let network_t = NetworkType::LocalChannel;
+        let network_t = NetworkType::Local;
         let (mut cleartext_data, secret_data) =
             lazy_random_setup(&mut rng, database_size, network_t.clone()).await?;
 
@@ -629,7 +629,7 @@ mod tests {
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
-        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_dim)
@@ -730,7 +730,7 @@ mod tests {
             .iter()
             .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
             .collect();
-        let mut local_stores = setup_local_store_aby3_players(NetworkType::LocalChannel).await?;
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_size)
@@ -811,7 +811,7 @@ mod tests {
         let database_size = 2;
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut vectors_and_graphs =
-            shared_random_setup(&mut rng, database_size, NetworkType::LocalChannel)
+            shared_random_setup(&mut rng, database_size, NetworkType::Local)
                 .await
                 .unwrap();
 
