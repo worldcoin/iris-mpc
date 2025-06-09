@@ -252,30 +252,14 @@ async fn manage_connection(
     // on disconnect, reconnect automatically. tear down and stand up the forwarders.
     // when new sessions are requested, also tear down and stand up the forwarders.
     loop {
-        // clone the Arcs to pass to the forwarders
-        let reader2 = reader.clone();
-        let writer2 = writer.clone();
-        let inbound2 = inbound_forwarder.clone();
-        let outbound2 = outbound_rx.clone();
+        let mut set = spawn_forwarders(
+            reader.clone(),
+            writer.clone(),
+            inbound_forwarder.clone(),
+            outbound_rx.clone(),
+            num_sessions,
+        );
 
-        // spawn the forwarders
-        let mut set = JoinSet::new();
-        set.spawn(async move {
-            let mut writer = writer2.lock().await;
-            let mut outbound_rx = outbound2.lock().await;
-            let r =
-                handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions)
-                    .await;
-            tracing::debug!("handle_outbound_traffic exited: {r:?}");
-        });
-        set.spawn(async move {
-            let mut reader = reader2.lock().await;
-            let inbound_forwarder = inbound2.lock().await;
-            let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound_forwarder).await;
-            tracing::debug!("handle_inbound_traffic exited: {r:?}");
-        });
-
-        // wait for an event
         enum Evt {
             Cmd(Cmd),
             Disconnected,
@@ -310,39 +294,79 @@ async fn manage_connection(
                 }
                 #[cfg(test)]
                 Cmd::TestReconnect { rsp } => {
-                    let w = writer.lock().await.take().unwrap();
-                    let br = reader.lock().await.take().unwrap();
-                    let r = br.into_inner();
-                    drop(w);
-                    drop(r);
-                    let stream = match reconnector.reconnect(peer.clone(), stream_id).await {
-                        Ok(r) => r,
-                        Err(e) => {
-                            rsp.send(Err(e)).unwrap();
-                            return;
-                        }
-                    };
-                    let (r, w) = stream.into_split();
-                    reader.lock().await.replace(BufReader::new(r));
-                    writer.lock().await.replace(w);
+                    if let Err(e) =
+                        reconnect_and_replace(&reconnector, &peer, stream_id, &reader, &writer)
+                            .await
+                    {
+                        tracing::error!("reconnect failed: {e:?}");
+                        return;
+                    }
                     rsp.send(Ok(())).unwrap();
                 }
             },
             Evt::Disconnected => {
                 tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
-                let stream = match reconnector.reconnect(peer.clone(), stream_id).await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::error!("reconnection failed: {e:?}");
-                        return;
-                    }
-                };
-                let (r, w) = stream.into_split();
-                reader.lock().await.replace(BufReader::new(r));
-                writer.lock().await.replace(w);
+                if let Err(e) =
+                    reconnect_and_replace(&reconnector, &peer, stream_id, &reader, &writer).await
+                {
+                    tracing::error!("reconnect failed: {e:?}");
+                    return;
+                }
             }
         }
     }
+}
+
+fn spawn_forwarders(
+    reader: Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
+    writer: Arc<Mutex<Option<OwnedWriteHalf>>>,
+    inbound_forwarder: Arc<Mutex<HashMap<SessionId, UnboundedSender<Vec<u8>>>>>,
+    outbound_rx: Arc<Mutex<UnboundedReceiver<(SessionId, Vec<u8>)>>>,
+    num_sessions: usize,
+) -> JoinSet<()> {
+    let mut join_set = JoinSet::new();
+
+    let writer = writer.clone();
+    let outbound_rx = outbound_rx.clone();
+    join_set.spawn(async move {
+        let mut writer = writer.lock().await;
+        let mut outbound_rx = outbound_rx.lock().await;
+        let r =
+            handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions).await;
+        tracing::debug!("handle_outbound_traffic exited: {r:?}");
+    });
+
+    let reader = reader.clone();
+    let inbound_forwarder = inbound_forwarder.clone();
+    join_set.spawn(async move {
+        let mut reader = reader.lock().await;
+        let inbound = inbound_forwarder.lock().await;
+        let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound).await;
+        tracing::debug!("handle_inbound_traffic exited: {r:?}");
+    });
+
+    join_set
+}
+
+async fn reconnect_and_replace(
+    reconnector: &Reconnector,
+    peer: &Identity,
+    stream_id: StreamId,
+    reader: &Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
+    writer: &Arc<Mutex<Option<OwnedWriteHalf>>>,
+) -> Result<(), eyre::Report> {
+    let old_writer = writer.lock().await.take();
+    let old_reader = reader.lock().await.take().map(|br| br.into_inner());
+    drop(old_writer);
+    drop(old_reader);
+
+    let stream = reconnector.reconnect(peer.clone(), stream_id).await?;
+    let (r, w) = stream.into_split();
+
+    reader.lock().await.replace(BufReader::new(r));
+    writer.lock().await.replace(w);
+
+    Ok(())
 }
 
 /// Outbound: send messages from rx to the socket.

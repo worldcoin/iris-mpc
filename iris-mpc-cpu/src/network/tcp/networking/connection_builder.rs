@@ -140,6 +140,8 @@ struct Worker {
     pending_tx: UnboundedSender<TcpConnection>,
     pending_rx: UnboundedReceiver<TcpConnection>,
 
+    // after State::Connect, requested_connections is used
+    // to determine which incoming connections are allowed.
     requested_connections: HashMap<Identity, HashSet<StreamId>>,
     connect_rsp: Option<oneshot::Sender<Result<PeerConnections>>>,
 
