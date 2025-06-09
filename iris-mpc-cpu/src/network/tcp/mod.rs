@@ -139,6 +139,7 @@ mod tests {
 
     use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
+    use crate::network::tcp::data::StreamId;
     use crate::network::value::NetworkValue;
     use crate::network::{tcp::session::TcpSession, NetworkType, Networking};
     use rand::Rng;
@@ -153,6 +154,43 @@ mod tests {
         NetworkValue::PrfKey(key)
     }
 
+    async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<TcpSession>) {
+        let mut tasks = JoinSet::new();
+        let message_to_next = get_prf().to_network();
+        let message_to_prev = get_prf().to_network();
+
+        for (player_id, session) in sessions.into_iter().enumerate() {
+            let role = Role::new(player_id);
+            let next = role.next(3).index();
+            let prev = role.prev(3).index();
+
+            let next_id = identities[next].clone();
+            let prev_id = identities[prev].clone();
+            let message_to_next = message_to_next.clone();
+            let message_to_prev = message_to_prev.clone();
+
+            let mut session = session;
+            tasks.spawn(async move {
+                // Sending
+                session
+                    .send(message_to_next.clone(), &next_id)
+                    .await
+                    .unwrap();
+                session
+                    .send(message_to_prev.clone(), &prev_id)
+                    .await
+                    .unwrap();
+
+                // Receiving
+                let received_message_from_prev = session.receive(&prev_id).await.unwrap();
+                assert_eq!(received_message_from_prev, message_to_next);
+                let received_message_from_next = session.receive(&next_id).await.unwrap();
+                assert_eq!(received_message_from_next, message_to_prev);
+            });
+        }
+        tasks.join_all().await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_tcp_comms_correct() -> Result<()> {
@@ -163,8 +201,6 @@ mod tests {
             NetworkType::default_stream_parallelism(),
         )
         .await?;
-
-        println!("created sessions");
         sleep(Duration::from_millis(500)).await;
 
         let num_sessions = sessions[0].len();
@@ -210,48 +246,10 @@ mod tests {
                     assert_eq!(alice_prf, rx_msg);
                 });
                 let _ = tokio::try_join!(task1, task2).unwrap();
-                println!("test 1 passed");
             });
         }
 
         // Multiple parties sending messages to each other
-        let all_parties_talk = |identities: Vec<Identity>, sessions: Vec<TcpSession>| async move {
-            let mut tasks = JoinSet::new();
-            let message_to_next = get_prf().to_network();
-            let message_to_prev = get_prf().to_network();
-
-            for (player_id, session) in sessions.into_iter().enumerate() {
-                let role = Role::new(player_id);
-                let next = role.next(3).index();
-                let prev = role.prev(3).index();
-
-                let next_id = identities[next].clone();
-                let prev_id = identities[prev].clone();
-                let message_to_next = message_to_next.clone();
-                let message_to_prev = message_to_prev.clone();
-
-                let mut session = session;
-                tasks.spawn(async move {
-                    // Sending
-                    session
-                        .send(message_to_next.clone(), &next_id)
-                        .await
-                        .unwrap();
-                    session
-                        .send(message_to_prev.clone(), &prev_id)
-                        .await
-                        .unwrap();
-
-                    // Receiving
-                    let received_message_from_prev = session.receive(&prev_id).await.unwrap();
-                    assert_eq!(received_message_from_prev, message_to_next);
-                    let received_message_from_next = session.receive(&next_id).await.unwrap();
-                    assert_eq!(received_message_from_next, message_to_prev);
-                });
-            }
-            tasks.join_all().await;
-        };
-
         let players = session_list.next().unwrap();
         // Each party sending and receiving messages to each other
         {
@@ -267,12 +265,55 @@ mod tests {
         {
             // Test that parties can send and receive messages
             all_parties_talk(identities, players).await;
-            println!("test 3 passed");
         }
 
         jobs.join_all().await;
-        println!("test 2 passed");
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_tcp_comms_reconnect() -> Result<()> {
+        let identities = generate_local_identities();
+        let (managers, mut sessions) = setup_local_tcp_networking(
+            identities.clone(),
+            3,
+            NetworkType::default_stream_parallelism(),
+        )
+        .await?;
+        sleep(Duration::from_millis(500)).await;
+
+        let num_sessions = sessions[0].len();
+        assert_eq!(num_sessions, 3);
+
+        let mut iters = vec![];
+        for session in sessions.iter_mut() {
+            iters.push(session.drain(..));
+        }
+
+        let mut session_list = vec![];
+        for _ in 0..num_sessions {
+            let mut s = vec![];
+            for x in iters.iter_mut() {
+                s.push(x.next().unwrap());
+            }
+            session_list.push(s);
+        }
+        let mut session_list = session_list.drain(..);
+
+        all_parties_talk(identities.clone(), session_list.next().unwrap()).await;
+        tracing::debug!("all_parties_talk works. testing reconnect");
+
+        // this will disconnect from the other party. the other party will reconnect without
+        // exercising any test code.
+        managers[0]
+            .test_reconnect(identities[1].clone(), StreamId::from(0))
+            .await
+            .unwrap();
+
+        tracing::debug!("reconnect successful. testing all_parties_talk again");
+        all_parties_talk(identities, session_list.next().unwrap()).await;
         Ok(())
     }
 }

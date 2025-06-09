@@ -23,6 +23,9 @@ use tokio::{
     time::{self},
 };
 
+#[cfg(test)]
+use tokio::sync::oneshot;
+
 const FLUSH_INTERVAL_MS: u64 = 2;
 const BUFFER_CAPACITY: usize = 64 * 1024;
 const READ_BUF_SIZE: usize = 8 * 1024;
@@ -39,14 +42,18 @@ struct SessionChannels {
 /// connections has y sessions, of the same session id)
 pub struct TcpNetworkHandle {
     peers: Vec<Identity>,
-    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<NewSessions>>>,
+    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
     reconnector: Reconnector,
     config: GrpcConfig,
 }
 
-struct NewSessions {
-    inbound_forwarder: HashMap<SessionId, OutStream>,
-    outbound_rx: UnboundedReceiver<OutboundMsg>,
+enum Cmd {
+    NewSessions {
+        inbound_forwarder: HashMap<SessionId, OutStream>,
+        outbound_rx: UnboundedReceiver<OutboundMsg>,
+    },
+    #[cfg(test)]
+    TestReconnect { rsp: oneshot::Sender<Result<()>> },
 }
 
 impl TcpNetworkHandle {
@@ -77,11 +84,24 @@ impl TcpNetworkHandle {
             config,
         }
     }
+
     pub async fn make_sessions(&self) -> Result<Vec<TcpSession>> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config);
         Ok(self.make_sessions_inner(sc))
+    }
+
+    #[cfg(test)]
+    pub async fn test_reconnect(&self, peer: Identity, stream_id: StreamId) -> Result<()> {
+        let ch = self
+            .ch_map
+            .get(&peer)
+            .and_then(|m| m.get(&stream_id))
+            .unwrap();
+        let (rsp_tx, rsp_rx) = oneshot::channel();
+        ch.send(Cmd::TestReconnect { rsp: rsp_tx }).unwrap();
+        rsp_rx.await?
     }
 
     fn make_sessions_inner(&self, mut sc: SessionChannels) -> Vec<TcpSession> {
@@ -114,7 +134,7 @@ impl TcpNetworkHandle {
                 }
 
                 let ch = self.ch_map.get(peer_id).unwrap().get(&stream_id).unwrap();
-                ch.send(NewSessions {
+                ch.send(Cmd::NewSessions {
                     inbound_forwarder,
                     outbound_rx,
                 })
@@ -197,7 +217,7 @@ async fn manage_connection(
     connection: TcpConnection,
     reconnector: Reconnector,
     num_sessions: usize,
-    mut cmd_ch: UnboundedReceiver<NewSessions>,
+    mut cmd_ch: UnboundedReceiver<Cmd>,
 ) {
     let TcpConnection {
         peer,
@@ -206,15 +226,21 @@ async fn manage_connection(
     } = connection;
 
     let (reader, writer) = stream.into_split();
-    let reader = Arc::new(Mutex::new(BufReader::new(reader)));
-    let writer = Arc::new(Mutex::new(writer));
+    // these are made so that the stream can be dropped for testing purposes.
+    let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
+    let writer = Arc::new(Mutex::new(Some(writer)));
 
     // We enter the loop only after receiving the first NewSessions
-    let NewSessions {
-        inbound_forwarder,
-        outbound_rx,
-    } = match cmd_ch.recv().await {
-        Some(cmd) => cmd,
+    let (inbound_forwarder, outbound_rx) = match cmd_ch.recv().await {
+        Some(Cmd::NewSessions {
+            inbound_forwarder,
+            outbound_rx,
+        }) => (inbound_forwarder, outbound_rx),
+        #[cfg(test)]
+        Some(_) => {
+            tracing::error!("invalid command received. expected NewSessions");
+            return;
+        }
         None => {
             tracing::debug!("cmd channel closed before first session assignment");
             return;
@@ -237,32 +263,34 @@ async fn manage_connection(
         set.spawn(async move {
             let mut writer = writer2.lock().await;
             let mut outbound_rx = outbound2.lock().await;
-            let r = handle_outbound_traffic(&mut writer, &mut outbound_rx, num_sessions).await;
+            let r =
+                handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions)
+                    .await;
             tracing::debug!("handle_outbound_traffic exited: {r:?}");
         });
         set.spawn(async move {
             let mut reader = reader2.lock().await;
             let inbound_forwarder = inbound2.lock().await;
-            let r = handle_inbound_traffic(&mut reader, &inbound_forwarder).await;
+            let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound_forwarder).await;
             tracing::debug!("handle_inbound_traffic exited: {r:?}");
         });
 
         // wait for an event
-        enum ConnectionEvent {
-            NewSessions(NewSessions),
+        enum Evt {
+            Cmd(Cmd),
             Disconnected,
         }
         let event = tokio::select! {
             maybe_cmd = cmd_ch.recv() => {
                 match maybe_cmd {
-                    Some(cmd) => ConnectionEvent::NewSessions(cmd),
+                    Some(cmd) => Evt::Cmd(cmd),
                     None => {
                         tracing::debug!("cmd channel closed");
                         return;
                     }
                 }
             }
-            _ = set.join_next() => ConnectionEvent::Disconnected,
+            _ = set.join_next() => Evt::Disconnected,
         };
 
         // shut down the forwarders
@@ -270,13 +298,37 @@ async fn manage_connection(
 
         // update the Arcs depending on the event. wait for reconnect if needed.
         match event {
-            ConnectionEvent::NewSessions(cmd) => {
-                tracing::debug!("updating sessions for {:?}: {:?}", peer, session_id);
-                *inbound_forwarder.lock().await = cmd.inbound_forwarder;
-                *outbound_rx.lock().await = cmd.outbound_rx;
-                continue;
-            }
-            ConnectionEvent::Disconnected => {
+            Evt::Cmd(cmd) => match cmd {
+                Cmd::NewSessions {
+                    inbound_forwarder: tx,
+                    outbound_rx: rx,
+                } => {
+                    tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
+                    *inbound_forwarder.lock().await = tx;
+                    *outbound_rx.lock().await = rx;
+                    continue;
+                }
+                #[cfg(test)]
+                Cmd::TestReconnect { rsp } => {
+                    let w = writer.lock().await.take().unwrap();
+                    let br = reader.lock().await.take().unwrap();
+                    let r = br.into_inner();
+                    drop(w);
+                    drop(r);
+                    let stream = match reconnector.reconnect(peer.clone(), stream_id).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            rsp.send(Err(e)).unwrap();
+                            return;
+                        }
+                    };
+                    let (r, w) = stream.into_split();
+                    reader.lock().await.replace(BufReader::new(r));
+                    writer.lock().await.replace(w);
+                    rsp.send(Ok(())).unwrap();
+                }
+            },
+            Evt::Disconnected => {
                 tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
                 let stream = match reconnector.reconnect(peer.clone(), stream_id).await {
                     Ok(r) => r,
@@ -286,8 +338,8 @@ async fn manage_connection(
                     }
                 };
                 let (r, w) = stream.into_split();
-                *reader.lock().await = BufReader::new(r);
-                *writer.lock().await = w;
+                reader.lock().await.replace(BufReader::new(r));
+                writer.lock().await.replace(w);
             }
         }
     }
