@@ -78,6 +78,7 @@ impl TcpNetworkHandle {
         }
     }
     pub async fn make_sessions(&self) -> Result<Vec<TcpSession>> {
+        tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config);
         Ok(self.make_sessions_inner(sc))
@@ -208,8 +209,6 @@ async fn manage_connection(
     let reader = Arc::new(Mutex::new(BufReader::new(reader)));
     let writer = Arc::new(Mutex::new(writer));
 
-    tracing::debug!("manage_connection started");
-
     // We enter the loop only after receiving the first NewSessions
     let NewSessions {
         inbound_forwarder,
@@ -272,13 +271,13 @@ async fn manage_connection(
         // update the Arcs depending on the event. wait for reconnect if needed.
         match event {
             ConnectionEvent::NewSessions(cmd) => {
-                tracing::debug!("manage_connection updating session state");
+                tracing::debug!("updating sessions for {:?}: {:?}", peer, session_id);
                 *inbound_forwarder.lock().await = cmd.inbound_forwarder;
                 *outbound_rx.lock().await = cmd.outbound_rx;
                 continue;
             }
             ConnectionEvent::Disconnected => {
-                tracing::debug!("manage_connection reconnecting to peer {:?}", peer);
+                tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
                 let stream = match reconnector.reconnect(peer.clone(), stream_id).await {
                     Ok(r) => r,
                     Err(e) => {
@@ -316,9 +315,9 @@ async fn handle_outbound_traffic(
                         buf.extend_from_slice(&msg);
                         if buf.len() >= BUFFER_CAPACITY || buffered_msgs == num_sessions {
                             if buf.len() >= BUFFER_CAPACITY {
-                                metrics::counter!("network.flush_reason.buf_len").increment(1);
+                                metrics::counter!("network::flush_reason::buf_len").increment(1);
                             } else if buffered_msgs == num_sessions {
-                                metrics::counter!("network.flush_reason.msg_count").increment(1);
+                                metrics::counter!("network::flush_reason::msg_count").increment(1);
                             }
                             ticker.reset();
                             if let Err(e) = flush_buf(stream, &mut buf, &mut buffered_msgs).await {
@@ -342,7 +341,7 @@ async fn handle_outbound_traffic(
             }
             _ = ticker.tick() => {
                 if !buf.is_empty() {
-                    metrics::counter!("network.flush_reason.timeout").increment(1);
+                    metrics::counter!("network::flush_reason::timeout").increment(1);
                     if let Err(e) = flush_buf(stream, &mut buf, &mut buffered_msgs).await {
                         tracing::error!(error=%e, "Failed to flush buffer on tick()");
                        return Err(e);
@@ -422,9 +421,8 @@ async fn flush_buf(
     buf: &mut BytesMut,
     buffered_msgs: &mut usize,
 ) -> io::Result<()> {
-    // todo: change the string for the metrics
-    metrics::histogram!("network.buffered_msgs").record(*buffered_msgs as f64);
-    metrics::histogram!("network.bytes_flushed").record(buf.len() as f64);
+    metrics::histogram!("network::buffered_msgs").record(*buffered_msgs as f64);
+    metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
     *buffered_msgs = 0;
     writer.write_all(buf).await?;
     writer.flush().await?;

@@ -64,10 +64,6 @@ async fn run_jobs(
 }
 
 fn bench_is_match_batch_tcp(c: &mut Criterion) {
-    /*tracing_subscriber::fmt()
-    .with_ansi(false)
-    .with_env_filter("trace")
-    .init();*/
     let mut group = c.benchmark_group("is_match_batch_tcp");
     group.sample_size(10);
 

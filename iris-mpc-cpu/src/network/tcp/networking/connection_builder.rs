@@ -106,7 +106,6 @@ impl PeerConnectionBuilder {
 
 impl Reconnector {
     pub async fn wait_for_reconnections(&self) -> Result<()> {
-        tracing::debug!("wait_for_reconnections");
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(Cmd::WaitForReconnections { rsp: tx })
