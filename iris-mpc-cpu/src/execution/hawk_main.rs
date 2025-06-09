@@ -139,7 +139,7 @@ pub struct HawkActor {
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
-    distances_cache: BothEyes<Vec<((u32, u32), DistanceShare<u32>)>>,
+    distances_cache: BothEyes<Vec<((u32, u32), Vec<DistanceShare<u32>>)>>,
 
     // ---- My network setup ----
     networking: GrpcHandle,
@@ -259,7 +259,7 @@ impl HawkActor {
             [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
             [(); 2].map(|_| SharedIrises::default()),
         )
-        .await
+            .await
     }
 
     pub async fn from_cli_with_graph_and_store(
@@ -402,7 +402,7 @@ impl HawkActor {
         &self,
         store_id: StoreId,
         session_id: SessionId,
-    ) -> impl Future<Output = Result<HawkSessionRef>> {
+    ) -> impl Future<Output=Result<HawkSessionRef>> {
         let networking = self.networking.clone();
         let role_assignments = self.role_assignments.clone();
         let storage = self.iris_store(store_id);
@@ -491,32 +491,27 @@ impl HawkActor {
             .collect::<Vec<_>>()
     }
 
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+        let mut distances_with_ids: Vec<((u32, u32), Vec<DistanceShare<u32>>)> = vec![];
+        let _ = search_results
+            .iter() // iterator over &VecRots<_>
+            .enumerate() // (index, &VecRots<_>)
+            .map(|(query_idx, v)| (query_idx, v.clone()))
+            .enumerate()
+            .map(|(rotations_idx, (query_idx, insert_plan))| {
+                let _ = insert_plan.iter().enumerate().map(|(rotation_index, insert_plan)| {
+                    let helper = insert_plan.links.first();
 
-    fn cache_distances(
-        &mut self,
-        side: usize,
-        search_results: &[VecRots<InsertPlan>],
-    ) {
-        let distances_with_ids = search_results
-            .iter()
-            .enumerate() // All requests.
-            .flat_map(|(query_id, rots)| {
-                rots.iter()
-                    .enumerate()
-                    .map(move |(rotation_index, plan)| (query_id, rotation_index, plan))
-            }) // All rotations.
-            .flat_map(|(query_id, rotation_index, plan)| {
-                plan.links.first().into_iter().flat_map(move |neighbors| {
-                    neighbors
-                        .iter()
-                        .take(plan.match_count)
-                        .map(move |(_, distance)| {
-                            ((query_id as u32, rotation_index as u32), distance.clone())
-                        })
-                })
-            })
-            .collect::<Vec<_>>();
-        
+                    let distances_for_a_rotation: Vec<DistanceShare<u32>> = helper.into_iter().flat_map(|neighbors| {
+                        neighbors
+                            .iter()
+                            .take(insert_plan.match_count)
+                            .map(move |(_, distance)| distance.clone())
+                    }).collect();
+                    distances_with_ids.push(((query_idx as u32, rotation_index as u32), distances_for_a_rotation));
+                });
+            });
+
         tracing::info!(
             "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
             // distances.clone().count(),
@@ -534,7 +529,7 @@ impl HawkActor {
             translated_thresholds.as_slice(),
             self.distances_cache[side].as_slice(),
         )
-        .await?;
+            .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
         Ok(buckets)
@@ -1129,7 +1124,7 @@ impl JobSubmissionHandle for HawkHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output = Result<ServerJobResult>> {
+    ) -> impl Future<Output=Result<ServerJobResult>> {
         let request = HawkRequest::from(batch);
         let (tx, rx) = oneshot::channel();
         let job = HawkJob {
@@ -1225,7 +1220,7 @@ impl HawkHandle {
                     step1.missing_vector_ids(),
                     sessions,
                 )
-                .await?;
+                    .await?;
 
                 step1.step2(&missing_is_match, intra_results)
             };
@@ -1541,7 +1536,7 @@ mod tests {
                 mirrored_share.code,
                 mirrored_share.mask,
             )
-            .unwrap();
+                .unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);

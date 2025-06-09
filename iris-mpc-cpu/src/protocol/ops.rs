@@ -25,7 +25,9 @@ use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
 use rand::SeedableRng;
 use std::array;
+use std::collections::HashMap;
 use tracing::instrument;
+use tracing_subscriber::fmt;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
 pub(crate) const B_BITS: u64 = 16;
@@ -36,7 +38,12 @@ pub(crate) const A: u64 = ((1. - 2. * MATCH_THRESHOLD_RATIO) * B as f64) as u64;
 /// Each party sends to the next party a random seed.
 /// At the end, each party will hold two seeds which are the basis of the
 /// replicated protocols.
-#[instrument(level = "trace", target = "searcher::network", fields(party = ?session.own_role), skip_all)]
+#[instrument(
+    level = "trace",
+    target = "searcher::network",
+    fields(party = ?session.own_role),
+    skip_all
+)]
 pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<Prf> {
     // send my_seed to the next party
     session
@@ -106,33 +113,79 @@ pub fn translate_threshold_a(t: f64) -> u32 {
     );
     ((1. - 2. * t) * (B as f64)) as u32
 }
+
+/// Converts distances from the format [((query_id, rotation_id), Vec<T>)]
+/// to Vec<Vec<Vec<T>>> where outer Vec represents queries grouped by query_id,
+/// middle Vec represents rotations ordered by rotation_id within each query,
+/// and inner Vec represents distance shares for each rotation.
+fn convert_distances_to_query_grouped<T: Clone>(
+    distances: &[((u32, u32), Vec<T>)],
+) -> Vec<Vec<Vec<T>>> {
+    use std::collections::BTreeMap;
+
+    // Group by query_id and collect into a BTreeMap to maintain order
+    let mut query_map: BTreeMap<u32, BTreeMap<u32, Vec<T>>> = BTreeMap::new();
+
+    for ((query_id, rotation_id), values) in distances {
+        query_map
+            .entry(*query_id)
+            .or_default()
+            .insert(*rotation_id, values.clone());
+    }
+
+    // Convert to the desired format: Vec<Vec<Vec<T>>>
+    query_map
+        .into_values()
+        .map(|rotation_map| rotation_map.into_values().collect())
+        .collect()
+}
+
 /// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
 /// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
 pub async fn compare_threshold_buckets(
     session: &mut Session,
     threshold_a_terms: &[u32],
-    distances: &[DistanceShare<u32>],
+    distances: &[((u32, u32), Vec<DistanceShare<u32>>)],
 ) -> Result<Vec<Share<u32>>> {
-    let diffs = threshold_a_terms
-        .iter()
-        .flat_map(|a| {
-            distances.iter().map(|d| {
-                let x = d.mask_dot.clone() * *a;
-                let y = d.code_dot.clone() * B as u32;
-                x - y
-            })
-        })
-        .collect_vec();
-
-    tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
-    let msbs = extract_msb_u32_batch(session, &diffs).await?;
-    let msbs = VecShare::new_vec(msbs);
-    tracing::info!("msbs extracted, now bit_injecting");
-    // bit_inject all MSBs into u32 to be able to add them up
-    let sums = bit_inject_ot_2round(session, msbs).await?;
-    tracing::info!("bit_inject done, now summing");
-    // add them up, bucket-wise, with each bucket corresponding to a threshold and containing len(distances) results
-    let buckets = sums
+    let per_query_per_rotation_distances = convert_distances_to_query_grouped(distances);
+    
+    let per_query_multiplied_distances = per_query_per_rotation_distances.iter().enumerate().map(
+        |(query_index, per_rotation_distance_shares)| {
+            let per_rotation_shares = per_rotation_distance_shares
+                .iter()
+                .enumerate()
+                .map(|(rotation_index, distance_shares)| {
+                    let shares_per_rotation = threshold_a_terms
+                        .iter()
+                        .flat_map(|a| {
+                            distance_shares.iter().map(|distance_share| {
+                                let x = distance_share.mask_dot.clone() * *a;
+                                let y = distance_share.code_dot.clone() * B as u32;
+                                x - y
+                            })
+                        })
+                        .collect_vec();
+                    shares_per_rotation
+                },
+            ).collect_vec();
+            
+            per_rotation_shares.iter().map(async |per_rotation_shares| {
+                tracing::info!("compare_threshold_buckets diffs length: {}", per_rotation_shares.len());
+                let msbs = extract_msb_u32_batch(session, &per_rotation_shares).await;
+                let msbs = VecShare::new_vec(msbs.unwrap());
+                
+                // bit_inject all MSBs into u32 to be able to add them up
+                let sums = bit_inject_ot_2round(session, msbs).await;
+            }).collect_vec();
+            
+            // perform multiplication on per_rotation_shares (code will come from dkales)
+            let multiplied_per_rotation_shares: Vec<Share<u32>> = vec![];
+            multiplied_per_rotation_shares
+        },
+    ).collect_vec();
+    
+    let buckets = per_query_multiplied_distances
+        
         .into_iter()
         .chunks(distances.len())
         .into_iter()
@@ -513,18 +566,18 @@ mod tests {
     async fn test_replicated_cross_mul_lift() {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let four_items = vec![1, 2, 3, 4];
-
+    
         let four_shares = create_array_sharing(&mut rng, &four_items);
-
+    
         let num_parties = 3;
         let identities = generate_local_identities();
-
+    
         let four_share_map = HashMap::from([
             (identities[0].clone(), four_shares.p0),
             (identities[1].clone(), four_shares.p1),
             (identities[2].clone(), four_shares.p2),
         ]);
-
+    
         let mut seeds = Vec::new();
         for i in 0..num_parties {
             let mut seed = [0_u8; 16];
@@ -534,13 +587,13 @@ mod tests {
         let runtime = LocalRuntime::new(identities.clone(), seeds.clone())
             .await
             .unwrap();
-
+    
         let sessions: Vec<Arc<Mutex<Session>>> = runtime
             .sessions
             .into_iter()
             .map(|s| Arc::new(Mutex::new(s)))
             .collect();
-
+    
         let mut jobs = JoinSet::new();
         for session in sessions {
             let session_lock = session.lock().await;
@@ -570,7 +623,7 @@ mod tests {
                 .await
                 .unwrap()[0]
                     .clone();
-
+    
                 open_single(&mut session, out_shared).await.unwrap()
             });
         }
@@ -636,10 +689,10 @@ mod tests {
                 let mut session = session.lock().await;
                 let distances = shares[..]
                     .chunks_exact(2)
-                    .map(|x| DistanceShare {
+                    .map(|x| ((1, 1), DistanceShare {
                         code_dot: x[0].clone(),
                         mask_dot: x[1].clone(),
-                    })
+                    }))
                     .collect_vec();
 
                 let bucket_result_shares =
@@ -752,5 +805,57 @@ mod tests {
 
         assert_eq!(output0.1[0], plain_d1 as u16);
         assert_eq!(output0.1[1], plain_d2);
+    }
+
+    #[test]
+    fn test_convert_distances_to_query_grouped_usize() {
+        // Create test data with multiple queries and rotations using usize
+        let distances = vec![
+            // Query 0, Rotation 0: distances [10, 20, 30]
+            ((0, 0), vec![10usize, 20, 30]),
+            // Query 0, Rotation 2: distances [40, 50] (intentionally skipping rotation 1 to test ordering)
+            ((0, 2), vec![40usize, 50]),
+            // Query 0, Rotation 1: distances [60] (will be ordered correctly despite being added later)
+            ((0, 1), vec![60usize]),
+            // Query 1, Rotation 0: distances [100, 200, 300, 400]
+            ((1, 0), vec![100usize, 200, 300, 400]),
+            // Query 2, Rotation 1: distances [500, 600]
+            ((2, 1), vec![500usize, 600]),
+            // Query 2, Rotation 0: distances [700] (will be ordered before rotation 1)
+            ((2, 0), vec![700usize]),
+        ];
+
+        let result = convert_distances_to_query_grouped(&distances);
+
+        // Expected structure:
+        // Query 0: [
+        //   Rotation 0: [10, 20, 30],
+        //   Rotation 1: [60],
+        //   Rotation 2: [40, 50]
+        // ]
+        // Query 1: [
+        //   Rotation 0: [100, 200, 300, 400]
+        // ]
+        // Query 2: [
+        //   Rotation 0: [700],
+        //   Rotation 1: [500, 600]
+        // ]
+
+        assert_eq!(result.len(), 3); // 3 queries
+
+        // Query 0 checks
+        assert_eq!(result[0].len(), 3); // 3 rotations
+        assert_eq!(result[0][0], vec![10, 20, 30]); // rotation 0
+        assert_eq!(result[0][1], vec![60]); // rotation 1
+        assert_eq!(result[0][2], vec![40, 50]); // rotation 2
+
+        // Query 1 checks
+        assert_eq!(result[1].len(), 1); // 1 rotation
+        assert_eq!(result[1][0], vec![100, 200, 300, 400]); // rotation 0
+
+        // Query 2 checks
+        assert_eq!(result[2].len(), 2); // 2 rotations
+        assert_eq!(result[2][0], vec![700]); // rotation 0
+        assert_eq!(result[2][1], vec![500, 600]); // rotation 1
     }
 }
