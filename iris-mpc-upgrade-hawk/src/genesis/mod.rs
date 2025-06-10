@@ -345,7 +345,7 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
     // TODO: implement applying modifications
     for modification in modifications {
         log_info(format!(
-            "Applying modification: type={} id={}, serial_id={}",
+            "Applying modification: type={} id={}, serial_id={:?}",
             modification.request_type, modification.id, modification.serial_id
         ));
         if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
