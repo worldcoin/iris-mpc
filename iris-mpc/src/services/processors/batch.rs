@@ -381,9 +381,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.delete_message(sqs_message).await?;
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
-        self.msg_counter += 1;
         Ok(())
     }
 
@@ -597,8 +594,6 @@ impl<'a> BatchProcessor<'a> {
                 code_right: right_shares.code,
                 mask_right: right_shares.mask,
             });
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
 
         Ok(())
     }
