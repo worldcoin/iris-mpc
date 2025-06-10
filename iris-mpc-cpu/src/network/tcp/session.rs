@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::{InStream, OutboundMsg};
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::{grpc::GrpcConfig, Networking},
+    network::{tcp::TcpConfig, Networking},
 };
 use eyre::{eyre, Result};
 use tokio::{sync::mpsc::UnboundedSender, time::timeout};
@@ -12,10 +12,10 @@ use tracing::trace;
 
 #[derive(Debug)]
 pub struct TcpSession {
-    pub session_id: SessionId,
+    session_id: SessionId,
     tx: HashMap<Identity, UnboundedSender<OutboundMsg>>,
     rx: HashMap<Identity, InStream>,
-    config: GrpcConfig,
+    config: TcpConfig,
 }
 
 impl TcpSession {
@@ -23,7 +23,7 @@ impl TcpSession {
         session_id: SessionId,
         tx: HashMap<Identity, UnboundedSender<OutboundMsg>>,
         rx: HashMap<Identity, InStream>,
-        config: GrpcConfig,
+        config: TcpConfig,
     ) -> Self {
         Self {
             session_id,
@@ -31,6 +31,10 @@ impl TcpSession {
             rx,
             config,
         }
+    }
+
+    pub fn id(&self) -> SessionId {
+        self.session_id
     }
 }
 

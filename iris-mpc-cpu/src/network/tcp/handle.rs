@@ -5,7 +5,8 @@ use super::{
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
-        grpc::GrpcConfig, tcp::networking::connection_builder::Reconnector, value::DescriptorByte,
+        tcp::{networking::connection_builder::Reconnector, TcpConfig},
+        value::DescriptorByte,
     },
 };
 use bytes::BytesMut;
@@ -17,14 +18,11 @@ use tokio::{
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
-        Mutex,
+        oneshot, Mutex,
     },
     task::JoinSet,
     time::{self},
 };
-
-#[cfg(test)]
-use tokio::sync::oneshot;
 
 const FLUSH_INTERVAL_MS: u64 = 2;
 const BUFFER_CAPACITY: usize = 64 * 1024;
@@ -44,20 +42,21 @@ pub struct TcpNetworkHandle {
     peers: Vec<Identity>,
     ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
     reconnector: Reconnector,
-    config: GrpcConfig,
+    config: TcpConfig,
 }
 
 enum Cmd {
     NewSessions {
         inbound_forwarder: HashMap<SessionId, OutStream>,
         outbound_rx: UnboundedReceiver<OutboundMsg>,
+        rsp: oneshot::Sender<()>,
     },
     #[cfg(test)]
     TestReconnect { rsp: oneshot::Sender<Result<()>> },
 }
 
 impl TcpNetworkHandle {
-    pub fn new(reconnector: Reconnector, connections: PeerConnections, config: GrpcConfig) -> Self {
+    pub fn new(reconnector: Reconnector, connections: PeerConnections, config: TcpConfig) -> Self {
         let peers = connections.keys().cloned().collect();
         let sessions_per_connection = config.stream_parallelism;
         let mut ch_map = HashMap::new();
@@ -89,7 +88,7 @@ impl TcpNetworkHandle {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config);
-        Ok(self.make_sessions_inner(sc))
+        Ok(self.make_sessions_inner(sc).await)
     }
 
     #[cfg(test)]
@@ -104,7 +103,7 @@ impl TcpNetworkHandle {
         rsp_rx.await?
     }
 
-    fn make_sessions_inner(&self, mut sc: SessionChannels) -> Vec<TcpSession> {
+    async fn make_sessions_inner(&self, mut sc: SessionChannels) -> Vec<TcpSession> {
         let sessions_per_connection = self.config.stream_parallelism;
         // spawn the forwarders
         for peer_id in &self.peers {
@@ -134,11 +133,15 @@ impl TcpNetworkHandle {
                 }
 
                 let ch = self.ch_map.get(peer_id).unwrap().get(&stream_id).unwrap();
+
+                let (rsp_tx, rsp_rx) = oneshot::channel();
                 ch.send(Cmd::NewSessions {
                     inbound_forwarder,
                     outbound_rx,
+                    rsp: rsp_tx,
                 })
                 .unwrap();
+                rsp_rx.await.unwrap();
             }
         }
 
@@ -180,7 +183,7 @@ impl TcpNetworkHandle {
     }
 }
 
-fn make_channels(peers: &[Identity], config: &GrpcConfig) -> SessionChannels {
+fn make_channels(peers: &[Identity], config: &TcpConfig) -> SessionChannels {
     let mut sc = SessionChannels::default();
     for peer_id in peers {
         let mut outbound_tx = HashMap::new();
@@ -235,7 +238,11 @@ async fn manage_connection(
         Some(Cmd::NewSessions {
             inbound_forwarder,
             outbound_rx,
-        }) => (inbound_forwarder, outbound_rx),
+            rsp,
+        }) => {
+            let _ = rsp.send(());
+            (inbound_forwarder, outbound_rx)
+        }
         #[cfg(test)]
         Some(_) => {
             tracing::error!("invalid command received. expected NewSessions");
@@ -286,10 +293,12 @@ async fn manage_connection(
                 Cmd::NewSessions {
                     inbound_forwarder: tx,
                     outbound_rx: rx,
+                    rsp,
                 } => {
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     *inbound_forwarder.lock().await = tx;
                     *outbound_rx.lock().await = rx;
+                    let _ = rsp.send(());
                     continue;
                 }
                 #[cfg(test)]
@@ -317,6 +326,7 @@ async fn manage_connection(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn spawn_forwarders(
     reader: Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
     writer: Arc<Mutex<Option<OwnedWriteHalf>>>,

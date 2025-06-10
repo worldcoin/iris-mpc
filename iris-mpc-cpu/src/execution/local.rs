@@ -176,7 +176,7 @@ impl LocalRuntime {
                     .into_iter()
                     .enumerate()
                     .map(|(id, session)| NetworkSession {
-                        session_id: session.session_id,
+                        session_id: session.id(),
                         role_assignments: Arc::new(role_assignments.clone()),
                         networking: Box::new(session),
                         own_role: Role::new(id % seeds.len()),

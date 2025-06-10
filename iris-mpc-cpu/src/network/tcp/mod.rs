@@ -1,10 +1,12 @@
+use std::time::Duration;
+
 use crate::execution::session::SessionId;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 mod data;
-mod handle;
-mod networking;
-mod session;
+pub mod handle;
+pub mod networking;
+pub mod session;
 
 use data::*;
 
@@ -13,6 +15,15 @@ type NetworkMsg = Vec<u8>;
 type OutboundMsg = (SessionId, NetworkMsg);
 type OutStream = UnboundedSender<NetworkMsg>;
 type InStream = UnboundedReceiver<NetworkMsg>;
+
+#[derive(Default, Clone, Debug)]
+pub struct TcpConfig {
+    pub timeout_duration: Duration,
+    // number of tcp connections to create
+    pub connection_parallelism: usize,
+    // number of sessions per connection
+    pub stream_parallelism: usize,
+}
 
 pub mod testing {
     use eyre::Result;
@@ -23,12 +34,11 @@ pub mod testing {
 
     use crate::{
         execution::player::Identity,
-        network::{
-            grpc::GrpcConfig,
-            tcp::{
-                handle, handle::TcpNetworkHandle,
-                networking::connection_builder::PeerConnectionBuilder, session::TcpSession,
-            },
+        network::tcp::{
+            handle::{self, TcpNetworkHandle},
+            networking::connection_builder::PeerConnectionBuilder,
+            session::TcpSession,
+            TcpConfig,
         },
     };
 
@@ -57,7 +67,7 @@ pub mod testing {
     ) -> Result<(Vec<handle::TcpNetworkHandle>, Vec<Vec<TcpSession>>)> {
         assert_eq!(parties.len(), 3);
 
-        let config = GrpcConfig {
+        let config = TcpConfig {
             timeout_duration: Duration::from_secs(5),
             connection_parallelism,
             stream_parallelism,

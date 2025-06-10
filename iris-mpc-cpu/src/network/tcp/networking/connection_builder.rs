@@ -1,11 +1,9 @@
 use crate::{
     execution::player::Identity,
-    network::{
-        grpc::GrpcConfig,
-        tcp::{
-            data::{PeerConnections, StreamId, TcpConnection},
-            networking::handshake,
-        },
+    network::tcp::{
+        data::{PeerConnections, StreamId, TcpConnection},
+        networking::handshake,
+        TcpConfig,
     },
 };
 use eyre::{eyre, Result};
@@ -29,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 /// TcpNetworkHandle
 pub struct PeerConnectionBuilder {
     id: Identity,
-    config: GrpcConfig,
+    config: TcpConfig,
     cmd_tx: UnboundedSender<Cmd>,
 }
 
@@ -67,7 +65,7 @@ enum State {
 }
 
 impl PeerConnectionBuilder {
-    pub async fn new(id: Identity, addr: SocketAddr, config: GrpcConfig) -> Result<Self> {
+    pub async fn new(id: Identity, addr: SocketAddr, config: TcpConfig) -> Result<Self> {
         let cmd_tx = Worker::spawn(id.clone(), addr).await?;
         Ok(Self { id, config, cmd_tx })
     }
