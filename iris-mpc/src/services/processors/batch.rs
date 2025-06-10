@@ -381,9 +381,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.delete_message(sqs_message).await?;
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
-        self.msg_counter += 1;
         Ok(())
     }
 
@@ -584,9 +581,6 @@ impl<'a> BatchProcessor<'a> {
             .push(sns_message_id.clone());
         self.batch_query.metadata.push(batch_metadata);
         self.batch_query
-            .request_types
-            .push(RESET_UPDATE_MESSAGE_TYPE.to_string());
-        self.batch_query
             .reset_update_request_ids
             .push(reset_update_request.reset_id);
         self.batch_query
@@ -597,9 +591,6 @@ impl<'a> BatchProcessor<'a> {
                 code_right: right_shares.code,
                 mask_right: right_shares.mask,
             });
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
-
         Ok(())
     }
 
