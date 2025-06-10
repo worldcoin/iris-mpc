@@ -64,6 +64,10 @@ pub struct Modification {
 }
 
 impl Modification {
+    /// Marks the modification as completed, setting the status to "COMPLETED", updating the result message body and persisted flag.
+    ///
+    /// If `updated_serial_id` is provided, it updates the serial_id field as well.
+    /// It is used when the modification is a uniqueness request and the serial id is assigned after the protocol.
     pub fn mark_completed(
         &mut self,
         persisted: bool,
