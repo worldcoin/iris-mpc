@@ -381,7 +381,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.delete_message(sqs_message).await?;
-        self.msg_counter += 1;
         Ok(())
     }
 
