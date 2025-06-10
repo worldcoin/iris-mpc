@@ -2,7 +2,6 @@ use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
-use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::types::MessageAttributeValue;
 
 use eyre::{bail, eyre, Report, Result};
@@ -55,7 +54,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair = get_shares_encryption_key_pair(&config, &aws_clients).await?;
-    let sns_attributes_maps = init_sns(&config, &aws_clients, &iris_store).await?;
+    let sns_attributes_maps = init_sns_attributes_maps()?;
 
     maybe_seed_random_shares(&config, &iris_store).await?;
     check_store_consistency(&config, &iris_store).await?;
@@ -87,7 +86,6 @@ pub async fn server_main(config: Config) -> Result<()> {
     sync_result.check_common_config()?;
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
-    sync_dbs_rollback(&config, &sync_result, &iris_store).await?;
 
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
@@ -184,17 +182,12 @@ fn max_sync_lookback(config: &Config) -> usize {
     config.max_batch_size * 2
 }
 
-/// Returns computed maximum rollback size.
-fn max_rollback(config: &Config) -> usize {
-    config.max_batch_size * 2
-}
-
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
     let iris_schema_name = format!(
-        "{}_{}_{}",
-        config.schema_name, config.environment, config.party_id
+        "{}{}_{}_{}",
+        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
     );
 
     let hawk_schema_name = format!(
@@ -350,30 +343,13 @@ struct SnsAttributesMaps {
 }
 
 /// Returns a set of attribute maps used to interact with AWS SNS.
-///
-/// Also replays recent SNS results to ensure delivery occurred in case of previous server failure.
-async fn init_sns(
-    config: &Config,
-    aws_clients: &AwsClients,
-    store: &Store,
-) -> Result<SnsAttributesMaps> {
+fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-
-    tracing::info!("Replaying results");
-    send_results_to_sns(
-        store.last_results(max_sync_lookback(config)).await?,
-        &Vec::new(),
-        &aws_clients.sns_client,
-        config,
-        &uniqueness_result_attributes,
-        UNIQUENESS_MESSAGE_TYPE,
-    )
-    .await?;
 
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
@@ -481,44 +457,6 @@ async fn sync_sqs_queues(
         max_sqs_sequence_num,
     )
     .await?;
-
-    Ok(())
-}
-
-/// Synchronize iris databases if needed by rolling back to smallest height
-/// among the MPC parties.  Rollback fails if number of rolled back entries
-/// is greater than a fixed maximum rollback amount determined by the
-/// configuration parameters.
-async fn sync_dbs_rollback(
-    config: &Config,
-    sync_result: &SyncResult,
-    iris_store: &Store,
-) -> Result<()> {
-    let my_db_len = iris_store.count_irises().await?;
-
-    tracing::info!("Database store length is: {}", my_db_len);
-
-    if let Some(min_db_len) = sync_result.must_rollback_storage() {
-        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if min_db_len + max_rollback(config) < my_db_len {
-            bail!(
-                "Refusing to rollback so much (from {} to {})",
-                my_db_len,
-                min_db_len,
-            );
-        }
-        tracing::warn!(
-            "Rolling back from database length {} to other nodes length {}",
-            my_db_len,
-            min_db_len
-        );
-        iris_store.rollback(min_db_len).await?;
-        metrics::counter!("db.sync.rollback").increment(1);
-    }
-
-    // refetch store_len in case we rolled back
-    let store_len = iris_store.count_irises().await?;
-    tracing::info!("Size of the database after sync: {}", store_len);
 
     Ok(())
 }

@@ -1038,6 +1038,7 @@ impl HawkResult {
             .collect_vec();
 
         let batch = self.batch;
+        let batch_size = batch.request_ids.len();
 
         ServerJobResult {
             merged_results,
@@ -1053,6 +1054,8 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            partial_match_rotation_indices_left: vec![vec![]; batch_size],
+            partial_match_rotation_indices_right: vec![vec![]; batch_size],
 
             full_face_mirror_match_ids,
             full_face_mirror_partial_match_ids_left,
