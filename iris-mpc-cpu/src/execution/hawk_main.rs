@@ -286,8 +286,8 @@ impl HawkActor {
 
         let tcp_config = TcpConfig::new(
             Duration::from_secs(10),
-            args.connection_parallelism * 2,
-            args.request_parallelism * 2,
+            args.connection_parallelism,
+            args.request_parallelism,
         );
         tracing::debug!("{:?}", tcp_config);
 

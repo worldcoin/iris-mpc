@@ -21,6 +21,8 @@ pub struct TcpConfig {
     pub timeout_duration: Duration,
     // number of tcp connections to create
     pub connection_parallelism: usize,
+    // the number of requests processed at once
+    pub request_parallelism: usize,
     // number of sessions per connection
     pub stream_parallelism: usize,
 }
@@ -31,9 +33,12 @@ impl TcpConfig {
         connection_parallelism: usize,
         request_parallelism: usize,
     ) -> Self {
+        // x2 for both eyes
+        let request_parallelism = request_parallelism * 2;
         Self {
             timeout_duration,
             connection_parallelism,
+            request_parallelism,
             stream_parallelism: std::cmp::max(request_parallelism / connection_parallelism, 1),
         }
     }

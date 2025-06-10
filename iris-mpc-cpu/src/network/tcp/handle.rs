@@ -24,7 +24,7 @@ use tokio::{
     time::{self},
 };
 
-const FLUSH_INTERVAL_MS: u64 = 2;
+const FLUSH_INTERVAL_US: u64 = 500;
 const BUFFER_CAPACITY: usize = 64 * 1024;
 const READ_BUF_SIZE: usize = 8 * 1024;
 
@@ -57,8 +57,8 @@ enum Cmd {
 
 impl TcpNetworkHandle {
     pub fn new(reconnector: Reconnector, connections: PeerConnections, config: TcpConfig) -> Self {
+        tracing::info!("TcpNetworkHandle with config: {:?}", config);
         let peers = connections.keys().cloned().collect();
-        let sessions_per_connection = config.stream_parallelism;
         let mut ch_map = HashMap::new();
         for (peer_id, connections) in connections {
             let mut m = HashMap::new();
@@ -70,7 +70,7 @@ impl TcpNetworkHandle {
                 tokio::spawn(manage_connection(
                     connection,
                     rc,
-                    sessions_per_connection,
+                    config.stream_parallelism,
                     cmd_rx,
                 ));
             }
@@ -104,10 +104,11 @@ impl TcpNetworkHandle {
     }
 
     async fn make_sessions_inner(&self, mut sc: SessionChannels) -> Vec<TcpSession> {
+        let connection_parallelism = self.config.connection_parallelism;
         let sessions_per_connection = self.config.stream_parallelism;
         // spawn the forwarders
         for peer_id in &self.peers {
-            for tcp_stream in 0..self.config.connection_parallelism {
+            for tcp_stream in 0..connection_parallelism {
                 let stream_id = StreamId::from(tcp_stream as u32);
                 let outbound_rx = sc
                     .outbound_rx
@@ -147,7 +148,7 @@ impl TcpNetworkHandle {
 
         // create the sessions
         let mut sessions = vec![];
-        for tcp_stream in 0..self.config.connection_parallelism {
+        for tcp_stream in 0..connection_parallelism {
             let stream_id = StreamId::from(tcp_stream as u32);
             for session_idx in 0..sessions_per_connection {
                 let mut tx_map = HashMap::new();
@@ -179,6 +180,7 @@ impl TcpNetworkHandle {
                 sessions.push(session);
             }
         }
+        assert_eq!(self.config.request_parallelism, sessions.len());
         sessions
     }
 }
@@ -285,6 +287,7 @@ async fn manage_connection(
         };
 
         // shut down the forwarders
+        tracing::info!("shutting down tasks for {:?}: {:?}", peer, stream_id);
         set.shutdown().await;
 
         // update the Arcs depending on the event. wait for reconnect if needed.
@@ -314,7 +317,7 @@ async fn manage_connection(
                 }
             },
             Evt::Disconnected => {
-                tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
+                tracing::info!("reconnecting to {:?}: {:?}", peer, stream_id);
                 if let Err(e) =
                     reconnect_and_replace(&reconnector, &peer, stream_id, &reader, &writer).await
                 {
@@ -388,7 +391,7 @@ async fn handle_outbound_traffic(
 ) -> io::Result<()> {
     let mut buffered_msgs = 0;
     let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
-    let mut ticker = time::interval(Duration::from_millis(FLUSH_INTERVAL_MS));
+    let mut ticker = time::interval(Duration::from_micros(FLUSH_INTERVAL_US));
     ticker.reset();
 
     loop {
@@ -448,7 +451,7 @@ async fn handle_inbound_traffic(
     loop {
         let mut buf_offset = 0;
 
-        // first read the session id. this does not get passes to the next layer.
+        // first read the session id. this does not get passed to the next layer.
         let mut session_id_buf = [0u8; 4];
         reader.read_exact(&mut session_id_buf).await?;
         let session_id = u32::from_le_bytes(session_id_buf);
