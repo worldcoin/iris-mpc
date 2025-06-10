@@ -289,6 +289,7 @@ impl HawkActor {
             args.connection_parallelism * 2,
             args.request_parallelism * 2,
         );
+        tracing::debug!("{:?}", tcp_config);
 
         let connection_builder = PeerConnectionBuilder::new(
             my_identity,

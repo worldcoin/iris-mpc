@@ -34,7 +34,7 @@ impl TcpConfig {
         Self {
             timeout_duration,
             connection_parallelism,
-            stream_parallelism: request_parallelism / connection_parallelism,
+            stream_parallelism: std::cmp::max(request_parallelism / connection_parallelism, 1),
         }
     }
 }
