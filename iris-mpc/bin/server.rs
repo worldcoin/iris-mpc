@@ -1161,8 +1161,8 @@ async fn server_main(config: Config) -> Result<()> {
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
-        "{}_{}_{}",
-        config.schema_name, config.environment, config.party_id
+        "{}{}_{}_{}",
+        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
     );
     let db_config = config
         .database
