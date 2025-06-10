@@ -168,10 +168,6 @@ pub async fn process_job_result(
 
     let mut iris_tx = store.tx().await?;
 
-    store
-        .insert_results(&mut iris_tx, &uniqueness_results)
-        .await?;
-
     // TODO: update modifications table to store reauth and deletion results
 
     if !codes_and_masks.is_empty() && !config.disable_persistence {

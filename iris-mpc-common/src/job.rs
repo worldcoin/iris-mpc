@@ -1,6 +1,9 @@
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    helpers::{statistics::BucketStatistics, sync::Modification},
+    helpers::{
+        statistics::BucketStatistics,
+        sync::{Modification, ModificationKey},
+    },
 };
 use core::fmt;
 use eyre::Result;
@@ -88,9 +91,9 @@ pub struct BatchQuery {
     pub deletion_requests_indices: Vec<u32>, // 0-indexed indices of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
 
-    // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
+    // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
     // Used for roll forward in the case of needing to r-run mutations
-    pub modifications: HashMap<u32, Modification>,
+    pub modifications: HashMap<ModificationKey, Modification>,
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
@@ -162,9 +165,9 @@ pub struct ServerJobResult<A = ()> {
     pub successful_reauths: Vec<bool>, // true if request type is reauth and it's successful
     pub reauth_target_indices: HashMap<String, u32>,
     pub reauth_or_rule_used: HashMap<String, bool>,
-    // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
+    // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
     // Used for roll forward in the case of needing to r-run mutations
-    pub modifications: HashMap<u32, Modification>,
+    pub modifications: HashMap<ModificationKey, Modification>,
     // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
     // Reset Update specific fields
