@@ -95,9 +95,6 @@ pub struct HawkArgs {
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
-    #[clap(short, long, default_value_t = 1)]
-    pub stream_parallelism: usize,
-
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
@@ -287,11 +284,11 @@ impl HawkActor {
         let my_identity = identities[my_index].clone();
         let my_address = &args.addresses[my_index];
 
-        let tcp_config = TcpConfig {
-            timeout_duration: Duration::from_secs(10),
-            connection_parallelism: args.connection_parallelism * 2,
-            stream_parallelism: args.stream_parallelism * 2,
-        };
+        let tcp_config = TcpConfig::new(
+            Duration::from_secs(10),
+            args.connection_parallelism * 2,
+            args.request_parallelism * 2,
+        );
 
         let connection_builder = PeerConnectionBuilder::new(
             my_identity,
@@ -1357,6 +1354,7 @@ mod tests {
     };
     use rand::SeedableRng;
     use std::ops::Not;
+    use tokio::task::JoinSet;
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -1652,7 +1650,6 @@ mod tests_db {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
-            stream_parallelism: 2,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,

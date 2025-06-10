@@ -25,6 +25,20 @@ pub struct TcpConfig {
     pub stream_parallelism: usize,
 }
 
+impl TcpConfig {
+    pub fn new(
+        timeout_duration: Duration,
+        connection_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Self {
+        Self {
+            timeout_duration,
+            connection_parallelism,
+            stream_parallelism: request_parallelism / connection_parallelism,
+        }
+    }
+}
+
 pub mod testing {
     use eyre::Result;
 
@@ -63,15 +77,15 @@ pub mod testing {
     pub async fn setup_local_tcp_networking(
         parties: Vec<Identity>,
         connection_parallelism: usize,
-        stream_parallelism: usize,
+        request_parallelism: usize,
     ) -> Result<(Vec<handle::TcpNetworkHandle>, Vec<Vec<TcpSession>>)> {
         assert_eq!(parties.len(), 3);
 
-        let config = TcpConfig {
-            timeout_duration: Duration::from_secs(5),
+        let config = TcpConfig::new(
+            Duration::from_secs(5),
             connection_parallelism,
-            stream_parallelism,
-        };
+            request_parallelism,
+        );
 
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
@@ -208,7 +222,7 @@ mod tests {
         let (_managers, mut sessions) = setup_local_tcp_networking(
             identities.clone(),
             3,
-            NetworkType::default_stream_parallelism(),
+            NetworkType::default_request_parallelism(),
         )
         .await?;
         sleep(Duration::from_millis(500)).await;
@@ -289,7 +303,7 @@ mod tests {
         let (managers, mut sessions) = setup_local_tcp_networking(
             identities.clone(),
             3,
-            NetworkType::default_stream_parallelism(),
+            NetworkType::default_request_parallelism(),
         )
         .await?;
         sleep(Duration::from_millis(500)).await;

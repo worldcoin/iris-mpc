@@ -23,7 +23,7 @@ pub enum NetworkType {
     },
     Tcp {
         connection_parallelism: usize,
-        stream_parallelism: usize,
+        request_parallelism: usize,
     },
 }
 

@@ -82,7 +82,7 @@ fn bench_is_match_batch_tcp(c: &mut Criterion) {
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
             let sessions = rt
-                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp / cp).await })
+                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp).await })
                 .unwrap();
 
             let num_parties = 3;

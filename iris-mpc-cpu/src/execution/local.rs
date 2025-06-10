@@ -154,12 +154,12 @@ impl LocalRuntime {
             }
             NetworkType::Tcp {
                 connection_parallelism,
-                stream_parallelism,
+                request_parallelism,
             } => {
                 let (handles, sessions) = setup_local_tcp_networking(
                     identities.clone(),
                     connection_parallelism,
-                    stream_parallelism,
+                    request_parallelism,
                 )
                 .await?;
                 // the TcpNetworkHandle needs to live as long as its sessions do. the GrpcHandle
@@ -245,11 +245,11 @@ impl LocalRuntime {
 
     pub async fn mock_sessions_with_tcp(
         connection_parallelism: usize,
-        stream_parallelism: usize,
+        request_parallelism: usize,
     ) -> Result<Vec<SessionRef>> {
         Self::mock_sessions(NetworkType::Tcp {
             connection_parallelism,
-            stream_parallelism,
+            request_parallelism,
         })
         .await
     }
