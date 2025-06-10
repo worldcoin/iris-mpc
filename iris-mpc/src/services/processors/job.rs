@@ -107,6 +107,8 @@ pub async fn process_job_result(
                     false => Some(partial_match_counters_right[i]),
                     true => None,
                 },
+                None, // partial_match_rotation_indices_left - not applicable for CPU
+                None, // partial_match_rotation_indices_right - not applicable for CPU
                 None, // not applicable for hnsw
                 None, // not applicable for hnsw
                 None, // not applicable for hnsw
