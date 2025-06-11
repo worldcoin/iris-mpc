@@ -648,8 +648,11 @@ async fn get_service_clients(
     async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
         async fn get_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
             let db_schema = format!(
-                "{}_{}_{}",
-                config.schema_name, config.environment, config.party_id
+                "{}{}_{}_{}",
+                config.schema_name,
+                config.gpu_schema_name_suffix,
+                config.environment,
+                config.party_id
             );
             let db_config = config
                 .database

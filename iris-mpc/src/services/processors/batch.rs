@@ -381,7 +381,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.delete_message(sqs_message).await?;
-        self.msg_counter += 1;
         Ok(())
     }
 
@@ -411,6 +410,17 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query.metadata.push(batch_metadata);
 
         self.add_iris_shares_task(uniqueness_request.s3_key)?;
+        // skip_persistence is only used for uniqueness requests
+        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
+            tracing::info!(
+                "Setting skip_persistence to {} for request id {}",
+                skip_persistence,
+                uniqueness_request.signup_id
+            );
+            self.batch_query.skip_persistence.push(skip_persistence);
+        } else {
+            self.batch_query.skip_persistence.push(false);
+        }
 
         Ok(())
     }
@@ -470,6 +480,8 @@ impl<'a> BatchProcessor<'a> {
 
         self.batch_query.or_rule_indices.push(or_rule_indices);
         self.add_iris_shares_task(reauth_request.s3_key)?;
+        // skip_persistence is only used for uniqueness requests
+        self.batch_query.skip_persistence.push(false);
 
         Ok(())
     }
@@ -569,9 +581,6 @@ impl<'a> BatchProcessor<'a> {
             .push(sns_message_id.clone());
         self.batch_query.metadata.push(batch_metadata);
         self.batch_query
-            .request_types
-            .push(RESET_UPDATE_MESSAGE_TYPE.to_string());
-        self.batch_query
             .reset_update_request_ids
             .push(reset_update_request.reset_id);
         self.batch_query
@@ -582,7 +591,6 @@ impl<'a> BatchProcessor<'a> {
                 code_right: right_shares.code,
                 mask_right: right_shares.mask,
             });
-
         Ok(())
     }
 
