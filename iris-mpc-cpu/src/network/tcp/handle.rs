@@ -42,6 +42,7 @@ pub struct TcpNetworkHandle {
     ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
     reconnector: Reconnector,
     config: TcpConfig,
+    next_session_id: usize,
 }
 
 enum Cmd {
@@ -80,13 +81,14 @@ impl TcpNetworkHandle {
             ch_map,
             reconnector,
             config,
+            next_session_id: 0,
         }
     }
 
-    pub async fn make_sessions(&self) -> Result<Vec<TcpSession>> {
+    pub async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
-        let sc = make_channels(&self.peers, &self.config);
+        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
         Ok(self.make_sessions_inner(sc).await)
     }
 
@@ -102,7 +104,7 @@ impl TcpNetworkHandle {
         rsp_rx.await?
     }
 
-    async fn make_sessions_inner(&self, mut sc: SessionChannels) -> Vec<TcpSession> {
+    async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
         let connection_parallelism = self.config.connection_parallelism;
         let sessions_per_connection = self.config.stream_parallelism;
         // spawn the forwarders
@@ -120,7 +122,8 @@ impl TcpNetworkHandle {
                 let mut inbound_forwarder = HashMap::new();
                 for session_idx in 0..sessions_per_connection {
                     let session_id = SessionId::from(
-                        (tcp_stream * sessions_per_connection + session_idx) as u32,
+                        (tcp_stream * sessions_per_connection + session_idx + self.next_session_id)
+                            as u32,
                     );
                     let inbound_tx = sc
                         .inbound_tx
@@ -179,12 +182,25 @@ impl TcpNetworkHandle {
                 sessions.push(session);
             }
         }
+
+        // ensures that if new sessions are created, the setup process (which requires communication with peers) isn't
+        // interfered with by communications from old sessions.
+        self.next_session_id = self
+            .next_session_id
+            .saturating_add(connection_parallelism * sessions_per_connection);
+        if self.next_session_id > 1 << 30 {
+            self.next_session_id = 0;
+        }
         assert_eq!(self.config.request_parallelism, sessions.len());
         sessions
     }
 }
 
-fn make_channels(peers: &[Identity], config: &TcpConfig) -> SessionChannels {
+fn make_channels(
+    peers: &[Identity],
+    config: &TcpConfig,
+    next_session_id: usize,
+) -> SessionChannels {
     let mut sc = SessionChannels::default();
     for peer_id in peers {
         let mut outbound_tx = HashMap::new();
@@ -201,8 +217,9 @@ fn make_channels(peers: &[Identity], config: &TcpConfig) -> SessionChannels {
 
             // insert one pair of inbound channels per stream_parallelism
             for session_idx in 0..config.stream_parallelism {
-                let session_id =
-                    SessionId::from((tcp_stream * config.stream_parallelism + session_idx) as u32);
+                let session_id = SessionId::from(
+                    (tcp_stream * config.stream_parallelism + session_idx + next_session_id) as u32,
+                );
                 let (tx, rx) = mpsc::unbounded_channel::<NetworkMsg>();
                 inbound_tx.insert(session_id, tx);
                 inbound_rx.insert(session_id, rx);

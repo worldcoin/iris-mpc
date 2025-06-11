@@ -132,7 +132,7 @@ pub mod testing {
 
         tracing::debug!("waiting for make_sessions to complete");
         let mut sessions = vec![];
-        for h in &handles {
+        for h in handles.iter_mut() {
             sessions.push(h.make_sessions().await?);
         }
 

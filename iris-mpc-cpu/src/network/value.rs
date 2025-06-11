@@ -343,7 +343,7 @@ impl NetworkInt for u64 {
 
 fn get_vec_ring_len(idx: usize, end_idx: usize, serialized: &[u8]) -> Result<usize> {
     if end_idx < idx + 5 {
-        bail!("Invalid length for VecRing64: can't parse vector length");
+        bail!("Invalid length for VecRing: can't parse vector length");
     }
     let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[idx + 1..idx + 5])?) as usize;
     Ok(5 + len)
