@@ -4,10 +4,10 @@ use super::{
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT, STORE_IDS,
 };
-use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::helpers::smpc_request::IDENTITY_DELETION_MESSAGE_TYPE;
+use eyre::{bail, eyre, OptionExt, Result};
+use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -180,16 +180,67 @@ impl Handle {
                 ))
             }
             JobRequest::Modification { modification } => {
-                if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
-                    // throw an error
-                    let msg = Self::log_error(format!(
-                        "HawkActor does not support deletion of identities: modification: {:?}",
-                        modification
-                    ));
-                    bail!(msg);
-                }
+                let serial_id = modification.serial_id.ok_or(eyre!(
+                    "Genesis received modification with empty serial_id field"
+                ))? as u32;
 
-                todo!()
+                let jobs_per_side =
+                    izip!(sessions.iter(), STORE_IDS).map(|(sessions_side, store_id)| {
+                        let sessions = sessions_side.clone();
+                        let vector = actor.iris_store(store_id);
+                        let modification = modification.clone();
+                        let searcher = actor.searcher();
+
+                        async move {
+                            let vector_id_ = vector.get_vector_id(serial_id).await;
+
+                            let session = sessions
+                                .first()
+                                .ok_or_eyre("Sessions for side are empty")?;
+
+                            match modification.request_type.as_str() {
+                                smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
+                                    let vector_id = vector_id_.ok_or_eyre("Expected vector serial id of update is missing from store")?;
+
+                                    // TODO remove any prior versions of this vector id from graph
+
+                                    let query = vector.get_query(&vector_id).await;
+                                    let insert_plan_ = search_single_query_no_match_count(
+                                                session.clone(), query, &searcher,
+                                        )
+                                        .await?;
+                                    let plans = vec![Some(insert_plan_)];
+                                    let ids = vec![Some(vector_id)];
+
+                                    let connect_plan = insert(session, &searcher, plans, &ids).await?;
+
+                                    Ok(connect_plan)
+                                },
+                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                                    let msg = Self::log_error(format!(
+                                        "HawkActor does not support deletion of identities: modification: {:?}",
+                                        modification
+                                    ));
+                                    bail!(msg);
+                                },
+                                _ => {
+                                    let msg = Self::log_error(format!(
+                                        "Invalid modification type received: {:?}",
+                                        modification,
+                                    ));
+                                    bail!(msg);
+                                }
+                            }
+                        }
+                    });
+
+                let results_ = parallelize(jobs_per_side.into_iter()).await?;
+                let results: [_; 2] = results_.try_into().unwrap();
+
+                Ok(JobResult::new_modification_result(
+                    modification.id,
+                    HawkMutation(results),
+                ))
             }
         }
     }

@@ -85,7 +85,13 @@ pub enum JobResult {
         /// Iris serial id of batch's last element.
         last_serial_id: IrisSerialId,
     },
-    Modification {},
+    Modification {
+        /// Modification id of associated modifications table entry
+        modification_id: i64,
+
+        /// Connect plans for updating HNSW graph in DB.
+        connect_plans: HawkMutation,
+    },
 }
 
 /// Constructor.
@@ -107,8 +113,14 @@ impl JobResult {
     }
 
     #[allow(dead_code)]
-    pub(crate) fn new_modification_result() -> Self {
-        Self::Modification {}
+    pub(crate) fn new_modification_result(
+        modification_id: i64,
+        connect_plans: HawkMutation,
+    ) -> Self {
+        Self::Modification {
+            modification_id,
+            connect_plans,
+        }
     }
 }
 
@@ -132,8 +144,10 @@ impl fmt::Display for JobResult {
                     last_serial_id
                 )
             }
-            JobResult::Modification {} => {
-                write!(f, "modification")
+            JobResult::Modification {
+                modification_id, ..
+            } => {
+                write!(f, "modification-id={}", modification_id)
             }
         }
     }

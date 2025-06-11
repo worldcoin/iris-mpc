@@ -854,7 +854,7 @@ async fn get_results_thread(
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
-                JobResult::Modification {} => {
+                JobResult::Modification { .. } => {
                     todo!()
                 }
             }
