@@ -145,7 +145,28 @@ pub enum BatchSize {
     /// Static batch size.
     Static(usize),
     /// Dynamic batch size with size error coefficient & hnsw-m param.
-    Dynamic(usize, usize),
+    #[allow(non_snake_case)]
+    Dynamic {
+        error_correction: usize,
+        hnsw_M: usize,
+    },
+}
+
+/// Constructor.
+impl BatchSize {
+    #[allow(non_snake_case)]
+    pub fn new_dynamic(error_correction: usize, hnsw_M: usize) -> Self {
+        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        BatchSize::Dynamic {
+            error_correction,
+            hnsw_M,
+        }
+    }
+
+    pub fn new_static(size: usize) -> Self {
+        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        BatchSize::Static(size)
+    }
 }
 
 /// Trait: fmt::Display.
@@ -154,7 +175,10 @@ impl fmt::Display for BatchSize {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             BatchSize::Static(size) => write!(f, "Static(size={})", size),
-            BatchSize::Dynamic(error_correction, hnsw_M) => {
+            BatchSize::Dynamic {
+                error_correction,
+                hnsw_M,
+            } => {
                 write!(
                     f,
                     "Dynamic(error-correction={}, hnsw-M={})",
@@ -282,7 +306,10 @@ impl BatchSize {
                         log_info(format!("Using static max batch size: {}", size));
                         *size
                     }
-                    BatchSize::Dynamic(r, M) => {
+                    BatchSize::Dynamic {
+                        error_correction: r,
+                        hnsw_M: M,
+                    } => {
                         // r: configurable parameter for error rate.
                         // M: HNSW parameter for nearest neighbors.
                         // n: current graph size (last_indexed_id).
@@ -341,13 +368,13 @@ mod tests {
 
     impl BatchSize {
         fn new_1() -> Self {
-            Self::Static(STATIC_BATCH_SIZE_10)
+            Self::new_static(STATIC_BATCH_SIZE_10)
         }
         fn new_2() -> Self {
-            Self::Static(STATIC_BATCH_SIZE_1)
+            Self::new_static(STATIC_BATCH_SIZE_1)
         }
         fn new_3() -> Self {
-            Self::Dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M)
+            Self::new_dynamic(BATCH_SIZE_ERROR_RATE, HNSW_PARAM_M)
         }
     }
 

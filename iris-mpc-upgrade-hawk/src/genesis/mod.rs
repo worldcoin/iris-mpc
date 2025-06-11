@@ -403,8 +403,8 @@ async fn exec_indexation(
 
     // Set batch size.
     let batch_size = match ctx.args.batch_size {
-        0 => BatchSize::Dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
-        _ => BatchSize::Static(ctx.args.batch_size),
+        0 => BatchSize::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
+        _ => BatchSize::new_static(ctx.args.batch_size),
     };
 
     // Set batch generator.
