@@ -417,6 +417,7 @@ impl Filter {
     /// Decide if this is a successful reauth based on left and right matches.
     /// Use the OR or AND rule as specified in the reauth request.
     fn reauth_rule(&self, or_rule: UseOrRule, [left, right]: BothEyes<bool>) -> bool {
+        tracing::info!("left: {left}, right: {right}, or_rule: {or_rule}");
         match self.eyes {
             Only(Left) => left,
             Only(Right) => right,

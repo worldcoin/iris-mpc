@@ -1037,6 +1037,13 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
+        tracing::info!(
+            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            successful_reauths,
+            matches,
+            matches_with_skip_persistence
+        );
+
         let batch = self.batch;
         let batch_size = batch.request_ids.len();
 
@@ -1276,6 +1283,8 @@ impl HawkHandle {
             })
             .chain(resets.vector_ids.into_iter().map(Some))
             .collect_vec();
+
+        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
         let mut connect_plans = HawkMutation([vec![], vec![]]);
 
