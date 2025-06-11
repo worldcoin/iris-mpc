@@ -228,6 +228,8 @@ impl Worker {
     }
 
     fn handle_pending_connection(&mut self, c: TcpConnection) {
+        c.stream.set_nodelay(true).unwrap();
+
         if self
             .pending_connections
             .get(&c.peer_id())

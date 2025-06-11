@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{cmp, time::Duration};
 
 use crate::execution::session::SessionId;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -33,13 +33,16 @@ impl TcpConfig {
         connection_parallelism: usize,
         request_parallelism: usize,
     ) -> Self {
+        // don't allow fewer requests than connections...
+        let connection_parallelism = cmp::min(connection_parallelism, request_parallelism);
         // x2 for both eyes
         let request_parallelism = request_parallelism * 2;
+
         Self {
             timeout_duration,
             connection_parallelism,
             request_parallelism,
-            stream_parallelism: std::cmp::max(request_parallelism / connection_parallelism, 1),
+            stream_parallelism: request_parallelism / connection_parallelism,
         }
     }
 }

@@ -82,7 +82,7 @@ fn bench_is_match_batch_tcp(c: &mut Criterion) {
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
             let sessions = rt
-                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp).await })
+                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp / 2).await })
                 .unwrap();
 
             let num_parties = 3;
@@ -124,7 +124,7 @@ fn bench_is_match_batch_grpc(c: &mut Criterion) {
         .unwrap();
 
     for nj in [1024] {
-        for (cp, sp, rp) in [(8, 1, 512), (8, 8, 512), (8, 16, 512)] {
+        for (cp, sp, rp) in [(1, 32, 32)] {
             let mut rng = AesRng::seed_from_u64(0_u64);
             let d1 = create_random_sharing(&mut rng, 10_u16);
             let d2 = create_random_sharing(&mut rng, 10_u16);

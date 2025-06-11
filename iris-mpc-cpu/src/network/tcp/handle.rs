@@ -11,13 +11,13 @@ use crate::{
 };
 use bytes::BytesMut;
 use eyre::Result;
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Instant};
 use std::{io, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader},
     net::tcp::{OwnedReadHalf, OwnedWriteHalf},
     sync::{
-        mpsc::{self, UnboundedReceiver, UnboundedSender},
+        mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
         oneshot, Mutex,
     },
     task::JoinSet,
@@ -25,8 +25,8 @@ use tokio::{
 };
 
 const FLUSH_INTERVAL_US: u64 = 500;
-const BUFFER_CAPACITY: usize = 64 * 1024;
-const READ_BUF_SIZE: usize = 8 * 1024;
+const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
+const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
 
 #[derive(Default)]
 struct SessionChannels {
@@ -391,54 +391,57 @@ async fn handle_outbound_traffic(
 ) -> io::Result<()> {
     let mut buffered_msgs = 0;
     let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
-    let mut ticker = time::interval(Duration::from_micros(FLUSH_INTERVAL_US));
-    ticker.reset();
+    while let Some((session_id, msg)) = outbound_rx.recv() {
+        let wakeup_time = Instant::now();
+        buffered_msgs += 1;
+        buf.extend_from_slice(&session_id.0.to_le_bytes());
+        buf.extend_from_slice(&msg);
 
-    loop {
-        tokio::select! {
-            maybe_msg = outbound_rx.recv() => {
-                match maybe_msg {
-                    Some((session_id, msg)) => {
-                        buffered_msgs += 1;
-                        buf.extend_from_slice(&session_id.0.to_le_bytes());
-                        buf.extend_from_slice(&msg);
-                        if buf.len() >= BUFFER_CAPACITY || buffered_msgs == num_sessions {
-                            if buf.len() >= BUFFER_CAPACITY {
-                                metrics::counter!("network::flush_reason::buf_len").increment(1);
-                            } else if buffered_msgs == num_sessions {
-                                metrics::counter!("network::flush_reason::msg_count").increment(1);
-                            }
-                            ticker.reset();
-                            if let Err(e) = flush_buf(stream, &mut buf, &mut buffered_msgs).await {
-                                tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
-                                return Err(e);
-                            }
-                        }
-                    }
-                    None => {
-                        if !buf.is_empty() {
-                            if let Err(e) = flush_buf(stream, &mut buf, &mut buffered_msgs).await {
-                                tracing::error!(error=%e, "Failed to flush buffer when outbound_rx closed");
-                                return Err(e);
-                            }
-                        }
-                        // the channel will not receive any more commands
-                       tracing::debug!("outbound_rx closed");
-                       return Ok(());
+        let loop_start_time = Instant::now();
+        while buffered_msgs < num_sessions {
+            match outbound_rx.try_recv() {
+                Ok((session_id, msg)) => {
+                    buffered_msgs += 1;
+                    buf.extend_from_slice(&session_id.0.to_le_bytes());
+                    buf.extend_from_slice(&msg);
+                    if buf.len() >= BUFFER_CAPACITY {
+                        break;
                     }
                 }
-            }
-            _ = ticker.tick() => {
-                if !buf.is_empty() {
-                    metrics::counter!("network::flush_reason::timeout").increment(1);
-                    if let Err(e) = flush_buf(stream, &mut buf, &mut buffered_msgs).await {
-                        tracing::error!(error=%e, "Failed to flush buffer on tick()");
-                       return Err(e);
+                Err(TryRecvError::Empty) => {
+                    if loop_start_time.elapsed() >= Duration::from_micros(FLUSH_INTERVAL_US) {
+                        break;
                     }
+                    tokio::task::yield_now().await;
                 }
+                Err(_) => break,
             }
         }
+
+        if buf.len() >= BUFFER_CAPACITY {
+            metrics::counter!("network::flush_reason::buf_len").increment(1);
+        } else if buffered_msgs >= num_sessions {
+            metrics::counter!("network::flush_reason::msg_count").increment(1);
+        } else {
+            metrics::counter!("network::flush_reason::timeout").increment(1);
+        }
+        if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
+            tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
+            return Err(e);
+        }
+        let elapsed = wakeup_time.elapsed().as_micros();
+        metrics::histogram!("network::outbound::tx_time_us").record(elapsed as f64);
     }
+
+    if !buf.is_empty() {
+        if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
+            tracing::error!(error=%e, "Failed to flush buffer when outbound_rx closed");
+            return Err(e);
+        }
+    }
+    // the channel will not receive any more commands
+    tracing::debug!("outbound_rx closed");
+    Ok(())
 }
 
 /// Inbound: read from the socket and send to tx.
@@ -454,6 +457,7 @@ async fn handle_inbound_traffic(
         // first read the session id. this does not get passed to the next layer.
         let mut session_id_buf = [0u8; 4];
         reader.read_exact(&mut session_id_buf).await?;
+        let start = Instant::now();
         let session_id = u32::from_le_bytes(session_id_buf);
 
         // then read the descriptor byte
@@ -487,6 +491,9 @@ async fn handle_inbound_traffic(
         }
         reader.read_exact(&mut buf[buf_offset..total_len]).await?;
 
+        let elapsed = start.elapsed().as_micros();
+        metrics::histogram!("network::inbound::rx_time_us").record(elapsed as f64);
+
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
             if ch.send(buf[..total_len].to_vec()).is_err() {
@@ -505,7 +512,7 @@ async fn handle_inbound_traffic(
 }
 
 /// Helper to write & flush, then clear the buffer
-async fn flush_buf(
+async fn write_buf(
     writer: &mut OwnedWriteHalf,
     buf: &mut BytesMut,
     buffered_msgs: &mut usize,
@@ -514,7 +521,6 @@ async fn flush_buf(
     metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
     *buffered_msgs = 0;
     writer.write_all(buf).await?;
-    writer.flush().await?;
     buf.clear();
     Ok(())
 }
