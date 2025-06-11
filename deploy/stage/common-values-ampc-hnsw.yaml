@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:5b95a7e689fa7d655f85258de71777d61957794f"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:43e81129f20ae3235bbc3b6bdac9105af452ddc9"
 
 environment: stage
 replicaCount: 1
