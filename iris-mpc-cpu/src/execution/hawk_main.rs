@@ -1190,6 +1190,14 @@ impl HawkHandle {
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;
 
+        tracing::info!(
+            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
+            request.batch.request_types,
+            request.batch.reauth_target_indices,
+            request.batch.skip_persistence,
+            request.batch.reauth_use_or_rule,
+        );
+
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {

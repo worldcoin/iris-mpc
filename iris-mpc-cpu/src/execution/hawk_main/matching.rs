@@ -155,6 +155,15 @@ impl Step1 {
             .collect_vec();
 
         let reauth_result = self.reauth_id().map(|(id, or_rule)| {
+            tracing::info!("Reauth ID: {id}, or_rule: {or_rule}");
+            tracing::info!(
+                "Left match: {}",
+                missing_is_match[LEFT].get(&id).unwrap_or(&false)
+            );
+            tracing::info!(
+                "Right match: {}",
+                missing_is_match[RIGHT].get(&id).unwrap_or(&false)
+            );
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
             (id, or_rule, is_match)
@@ -226,6 +235,10 @@ impl BatchStep3 {
     /// Emulate the behavior of inserting entries one by one. Intra-batch matches
     /// only count if they are being inserted themselves.
     pub fn decisions(&self) -> VecRequests<Decision> {
+        tracing::info!(
+            "Calculating decisions for batch of {} requests",
+            self.0.len()
+        );
         use Decision::*;
 
         let filter = Filter {
@@ -237,6 +250,11 @@ impl BatchStep3 {
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
         for request in &self.0 {
+            tracing::info!(
+                "Processing request type normal: {:?} mirror {:?}",
+                request.normal.request_type,
+                request.mirror.request_type,
+            );
             let decision = match request.normal.request_type {
                 RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
                     let is_match = request.select(filter).any(|id| match id {
@@ -271,7 +289,7 @@ impl BatchStep3 {
                 // Unsupported request. Nothing to do.
                 RequestType::Unsupported => NoMutation,
             };
-
+            tracing::info!("Pushing decision: {decision:?}");
             decisions.push(decision);
         }
         decisions
