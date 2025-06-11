@@ -53,7 +53,7 @@ use std::{
     collections::HashMap,
     future::Future,
     hash::{Hash, Hasher},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     ops::Not,
     sync::Arc,
     time::{Duration, Instant},
@@ -302,8 +302,14 @@ impl HawkActor {
         for (identity, address) in
             izip!(&identities, &args.addresses).filter(|(_, address)| address != &my_address)
         {
+            let socket_addr = address
+                .clone()
+                .to_socket_addrs()?
+                .into_iter()
+                .next()
+                .ok_or(eyre::eyre!("invalid peer address"))?;
             connection_builder
-                .include_peer(identity.clone(), address.parse::<SocketAddr>()?)
+                .include_peer(identity.clone(), socket_addr)
                 .await?;
         }
 
