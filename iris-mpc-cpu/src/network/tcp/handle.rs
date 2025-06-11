@@ -391,7 +391,7 @@ async fn handle_outbound_traffic(
     let mut buffered_msgs = 0;
     let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
     while let Some((session_id, msg)) = outbound_rx.recv().await {
-        let wakeup_time = Instant::now();
+        let _wakeup_time = Instant::now();
         buffered_msgs += 1;
         buf.extend_from_slice(&session_id.0.to_le_bytes());
         buf.extend_from_slice(&msg);
@@ -417,19 +417,27 @@ async fn handle_outbound_traffic(
             }
         }
 
-        if buf.len() >= BUFFER_CAPACITY {
-            metrics::counter!("network::flush_reason::buf_len").increment(1);
-        } else if buffered_msgs >= num_sessions {
-            metrics::counter!("network::flush_reason::msg_count").increment(1);
-        } else {
-            metrics::counter!("network::flush_reason::timeout").increment(1);
+        #[cfg(feature = "networking_metrics")]
+        {
+            if buf.len() >= BUFFER_CAPACITY {
+                metrics::counter!("network::flush_reason::buf_len").increment(1);
+            } else if buffered_msgs >= num_sessions {
+                metrics::counter!("network::flush_reason::msg_count").increment(1);
+            } else {
+                metrics::counter!("network::flush_reason::timeout").increment(1);
+            }
         }
+
         if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
             tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
             return Err(e);
         }
-        let elapsed = wakeup_time.elapsed().as_micros();
-        metrics::histogram!("network::outbound::tx_time_us").record(elapsed as f64);
+
+        #[cfg(feature = "networking_metrics")]
+        {
+            let elapsed = _wakeup_time.elapsed().as_micros();
+            metrics::histogram!("network::outbound::tx_time_us").record(elapsed as f64);
+        }
     }
 
     if !buf.is_empty() {
@@ -516,8 +524,11 @@ async fn write_buf(
     buf: &mut BytesMut,
     buffered_msgs: &mut usize,
 ) -> io::Result<()> {
-    metrics::histogram!("network::buffered_msgs").record(*buffered_msgs as f64);
-    metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
+    #[cfg(feature = "networking_metrics")]
+    {
+        metrics::histogram!("network::buffered_msgs").record(*buffered_msgs as f64);
+        metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
+    }
     *buffered_msgs = 0;
     writer.write_all(buf).await?;
     buf.clear();
