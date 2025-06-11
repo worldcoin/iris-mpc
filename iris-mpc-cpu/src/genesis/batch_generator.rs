@@ -291,42 +291,29 @@ impl BatchSize {
             last_indexed_id, self
         ));
 
-        match last_indexed_id {
-            // Empty graph therefore batch size defaults to 1.
-            0 => {
-                log_info(String::from(
-                    "Using static max batch size of 1 as graph is empty",
-                ));
-                1
+        match self {
+            BatchSize::Static(size) => {
+                log_info(format!("Using static max batch size: {}", size));
+                *size
             }
-            _ => {
-                log_info(String::from("123456"));
-                match self {
-                    BatchSize::Static(size) => {
-                        log_info(format!("Using static max batch size: {}", size));
-                        *size
-                    }
-                    BatchSize::Dynamic {
-                        error_correction: r,
-                        hnsw_M: M,
-                    } => {
-                        // r: configurable parameter for error rate.
-                        // M: HNSW parameter for nearest neighbors.
-                        // n: current graph size (last_indexed_id).
-                        let N = last_indexed_id;
+            BatchSize::Dynamic {
+                error_correction: r,
+                hnsw_M: M,
+            } => {
+                // r: configurable parameter for error rate.
+                // M: HNSW parameter for nearest neighbors.
+                // n: current graph size (last_indexed_id).
+                let N = last_indexed_id;
 
-                        // batch_size: floor(N/(Mr - 1) + 1)
-                        let batch_size =
-                            (N as f64 / (*M as f64 * *r as f64 - 1.0) + 1.0).floor() as usize;
+                // batch_size: floor(N/(Mr - 1) + 1)
+                let batch_size = (N as usize).div_euclid(*M * *r - 1) + 1;
 
-                        log_info(format!(
-                            "Dynamic max batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                            batch_size, N, M, r
-                        ));
+                log_info(format!(
+                    "Dynamic max batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+                    batch_size, N, M, r
+                ));
 
-                        batch_size
-                    }
-                }
+                batch_size
             }
         }
     }
@@ -454,15 +441,7 @@ mod tests {
         ] {
             for identifiers in [LAST_INDEXED_IDS.to_vec(), get_last_indexed_identifiers()] {
                 for last_indexed_id in identifiers {
-                    match last_indexed_id {
-                        0 => {
-                            // Graph is empty therefore batch size is 1.
-                            assert_eq!(instance.next_max(last_indexed_id), 1);
-                        }
-                        _ => {
-                            assert_eq!(instance.next_max(last_indexed_id), size);
-                        }
-                    }
+                    assert_eq!(instance.next_max(last_indexed_id), size);
                 }
             }
         }
@@ -499,28 +478,10 @@ mod tests {
 
         while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
             batch_id += 1;
-            println!(
-                "{:?} :: {} :: {} :: {}",
-                generator.batch_size,
-                batch_id,
-                last_indexed_id,
-                identifiers.len()
-            );
-            assert!(!identifiers.is_empty());
-            match batch_id {
-                1 => {
-                    assert_eq!(identifiers.len(), 1);
-                }
-                11 => {
-                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10 - 1);
-                }
-                _ => {
-                    assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10);
-                }
-            }
+            assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10);
             last_indexed_id += identifiers.len() as IrisSerialId;
         }
-        assert_eq!(batch_id, 11);
+        assert_eq!(batch_id, 10);
     }
 
     /// Test next identifiers: batch-size=1.
@@ -546,25 +507,7 @@ mod tests {
         let mut last_indexed_id = 0 as IrisSerialId;
 
         while let Some(batch) = generator.next_batch(last_indexed_id, &iris_stores).await? {
-            assert!(batch.size() > 0);
-            println!(
-                "{:?} :: {} :: {} :: {}",
-                generator.batch_size,
-                batch.batch_id,
-                last_indexed_id,
-                batch.size()
-            );
-            match batch.batch_id {
-                1 => {
-                    assert_eq!(batch.size(), 1);
-                }
-                11 => {
-                    assert_eq!(batch.size(), 9);
-                }
-                _ => {
-                    assert_eq!(batch.size(), 10);
-                }
-            }
+            assert_eq!(batch.size(), 10);
             last_indexed_id += batch.size() as IrisSerialId;
         }
 
@@ -605,16 +548,16 @@ mod tests {
         assert_eq!(
             batches,
             vec![
-                vec![1],
-                vec![2, 4, 5, 6, 8, 9, 10, 11, 13, 14],
-                vec![16, 17, 18, 19, 20, 21, 23, 24, 25, 26],
-                vec![27, 28, 29, 31, 32, 33, 34, 35, 36, 37],
-                vec![38, 39, 40, 41, 42, 43, 44, 45, 46, 47],
-                vec![48, 49, 50, 51, 52, 53, 54, 55, 56, 57],
-                vec![58, 59, 60, 61, 62, 63, 64, 65, 66, 67],
-                vec![68, 69, 71, 72, 73, 74, 75, 76, 77, 78],
-                vec![79, 80, 81, 82, 83, 85, 86, 87, 88, 89],
-                vec![90, 91, 93, 94, 95, 96, 97, 98, 99, 100],
+                vec![1, 2, 4, 5, 6, 8, 9, 10, 11, 13],
+                vec![14, 16, 17, 18, 19, 20, 21, 23, 24, 25],
+                vec![26, 27, 28, 29, 31, 32, 33, 34, 35, 36],
+                vec![37, 38, 39, 40, 41, 42, 43, 44, 45, 46],
+                vec![47, 48, 49, 50, 51, 52, 53, 54, 55, 56],
+                vec![57, 58, 59, 60, 61, 62, 63, 64, 65, 66],
+                vec![67, 68, 69, 71, 72, 73, 74, 75, 76, 77],
+                vec![78, 79, 80, 81, 82, 83, 85, 86, 87, 88],
+                vec![89, 90, 91, 93, 94, 95, 96, 97, 98, 99],
+                vec![100]
             ]
         );
 
