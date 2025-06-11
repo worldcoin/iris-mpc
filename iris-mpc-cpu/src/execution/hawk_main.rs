@@ -305,7 +305,6 @@ impl HawkActor {
             let socket_addr = address
                 .clone()
                 .to_socket_addrs()?
-                .into_iter()
                 .next()
                 .ok_or(eyre::eyre!("invalid peer address"))?;
             connection_builder
