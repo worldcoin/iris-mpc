@@ -72,6 +72,7 @@ fn bench_is_match_batch_tcp(c: &mut Criterion) {
         .build()
         .unwrap();
 
+    #[allow(clippy::single_element_loop)]
     for (nj, rp) in [(1024, 32)] {
         {
             let cp = 1;
@@ -123,7 +124,9 @@ fn bench_is_match_batch_grpc(c: &mut Criterion) {
         .build()
         .unwrap();
 
+    #[allow(clippy::single_element_loop)]
     for nj in [1024] {
+        #[allow(clippy::single_element_loop)]
         for (cp, sp, rp) in [(1, 32, 32)] {
             let mut rng = AesRng::seed_from_u64(0_u64);
             let d1 = create_random_sharing(&mut rng, 10_u16);

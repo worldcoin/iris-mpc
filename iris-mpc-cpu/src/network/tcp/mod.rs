@@ -227,16 +227,12 @@ mod tests {
     #[traced_test]
     async fn test_tcp_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
-        let (_managers, mut sessions) = setup_local_tcp_networking(
-            identities.clone(),
-            3,
-            NetworkType::default_request_parallelism(),
-        )
-        .await?;
+        let (_managers, mut sessions) =
+            setup_local_tcp_networking(identities.clone(), 1, 2).await?;
         sleep(Duration::from_millis(500)).await;
 
-        let num_sessions = sessions[0].len();
-        assert_eq!(num_sessions, 3);
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].len(), 4);
 
         let mut iters = vec![];
         for session in sessions.iter_mut() {
@@ -244,7 +240,7 @@ mod tests {
         }
 
         let mut session_list = vec![];
-        for _ in 0..num_sessions {
+        for _ in 0..3 {
             let mut s = vec![];
             for x in iters.iter_mut() {
                 s.push(x.next().unwrap());
@@ -310,14 +306,14 @@ mod tests {
         let identities = generate_local_identities();
         let (managers, mut sessions) = setup_local_tcp_networking(
             identities.clone(),
-            3,
+            1,
             NetworkType::default_request_parallelism(),
         )
         .await?;
         sleep(Duration::from_millis(500)).await;
 
-        let num_sessions = sessions[0].len();
-        assert_eq!(num_sessions, 3);
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].len(), 2);
 
         let mut iters = vec![];
         for session in sessions.iter_mut() {
@@ -325,7 +321,7 @@ mod tests {
         }
 
         let mut session_list = vec![];
-        for _ in 0..num_sessions {
+        for _ in 0..2 {
             let mut s = vec![];
             for x in iters.iter_mut() {
                 s.push(x.next().unwrap());

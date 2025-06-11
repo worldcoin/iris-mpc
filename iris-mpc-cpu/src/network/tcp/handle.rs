@@ -21,7 +21,6 @@ use tokio::{
         oneshot, Mutex,
     },
     task::JoinSet,
-    time::{self},
 };
 
 const FLUSH_INTERVAL_US: u64 = 500;
@@ -391,7 +390,7 @@ async fn handle_outbound_traffic(
 ) -> io::Result<()> {
     let mut buffered_msgs = 0;
     let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
-    while let Some((session_id, msg)) = outbound_rx.recv() {
+    while let Some((session_id, msg)) = outbound_rx.recv().await {
         let wakeup_time = Instant::now();
         buffered_msgs += 1;
         buf.extend_from_slice(&session_id.0.to_le_bytes());
