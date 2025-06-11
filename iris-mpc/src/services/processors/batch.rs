@@ -18,16 +18,17 @@ use iris_mpc_common::helpers::batch_sync::{
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
-use iris_mpc_common::helpers::smpc_request::ReceiveRequestError;
 use iris_mpc_common::helpers::smpc_request::{
-    IdentityDeletionRequest, ReAuthRequest, SQSMessage, UniquenessRequest,
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest, SQSMessage,
+    UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
+use iris_mpc_common::helpers::smpc_request::{ReceiveRequestError, RESET_CHECK_MESSAGE_TYPE};
 use iris_mpc_common::helpers::smpc_response::{
-    ReAuthResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+    ReAuthResult, ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
     SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
-use iris_mpc_common::job::{BatchMetadata, BatchQuery};
+use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -46,6 +47,7 @@ pub fn receive_batch_stream(
     shutdown_handler: Arc<ShutdownHandler>,
     uniqueness_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
@@ -67,6 +69,7 @@ pub fn receive_batch_stream(
                 &shutdown_handler,
                 &uniqueness_error_result_attributes,
                 &reauth_error_result_attributes,
+                &reset_error_result_attributes,
                 current_batch_id_atomic.clone(),
             )
             .await;
@@ -95,6 +98,7 @@ async fn receive_batch(
     shutdown_handler: &ShutdownHandler,
     uniqueness_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
@@ -107,6 +111,7 @@ async fn receive_batch(
         shutdown_handler,
         uniqueness_error_result_attributes,
         reauth_error_result_attributes,
+        reset_error_result_attributes,
         current_batch_id_atomic,
     );
 
@@ -123,6 +128,7 @@ pub struct BatchProcessor<'a> {
     shutdown_handler: &'a ShutdownHandler,
     uniqueness_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
     reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+    reset_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
     batch_query: BatchQuery,
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
@@ -142,6 +148,7 @@ impl<'a> BatchProcessor<'a> {
         shutdown_handler: &'a ShutdownHandler,
         uniqueness_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
+        reset_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         current_batch_id_atomic: Arc<AtomicU64>,
     ) -> Self {
         Self {
@@ -154,6 +161,7 @@ impl<'a> BatchProcessor<'a> {
             shutdown_handler,
             uniqueness_error_result_attributes,
             reauth_error_result_attributes,
+            reset_error_result_attributes,
             batch_query: BatchQuery::default(),
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
@@ -332,6 +340,14 @@ impl<'a> BatchProcessor<'a> {
                 self.process_reauth_request(&message, batch_metadata, &sqs_message)
                     .await
             }
+            RESET_CHECK_MESSAGE_TYPE => {
+                self.process_reset_check_request(&message, batch_metadata, &sqs_message)
+                    .await
+            }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                self.process_reset_update_request(&message, batch_metadata, &sqs_message)
+                    .await
+            }
             _ => {
                 self.delete_message(&sqs_message).await?;
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
@@ -365,7 +381,6 @@ impl<'a> BatchProcessor<'a> {
         }
 
         self.delete_message(sqs_message).await?;
-        self.msg_counter += 1;
         Ok(())
     }
 
@@ -395,6 +410,17 @@ impl<'a> BatchProcessor<'a> {
         self.batch_query.metadata.push(batch_metadata);
 
         self.add_iris_shares_task(uniqueness_request.s3_key)?;
+        // skip_persistence is only used for uniqueness requests
+        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
+            tracing::info!(
+                "Setting skip_persistence to {} for request id {}",
+                skip_persistence,
+                uniqueness_request.signup_id
+            );
+            self.batch_query.skip_persistence.push(skip_persistence);
+        } else {
+            self.batch_query.skip_persistence.push(false);
+        }
 
         Ok(())
     }
@@ -427,11 +453,6 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        if !self.config.enable_reauth {
-            tracing::warn!("Reauth processing is disabled, skipping reauth request");
-            return Ok(());
-        }
-
         self.msg_counter += 1;
 
         self.batch_query
@@ -459,7 +480,117 @@ impl<'a> BatchProcessor<'a> {
 
         self.batch_query.or_rule_indices.push(or_rule_indices);
         self.add_iris_shares_task(reauth_request.s3_key)?;
+        // skip_persistence is only used for uniqueness requests
+        self.batch_query.skip_persistence.push(false);
 
+        Ok(())
+    }
+
+    async fn process_reset_check_request(
+        &mut self,
+        message: &SQSMessage,
+        batch_metadata: BatchMetadata,
+        sqs_message: &aws_sdk_sqs::types::Message,
+    ) -> Result<(), ReceiveRequestError> {
+        let reset_check_request: ResetCheckRequest = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Reset check request", e))?;
+
+        metrics::counter!("request.received", "type" => "reset_check").increment(1);
+        tracing::debug!("Received reset check request: {:?}", reset_check_request);
+
+        self.delete_message(sqs_message).await?;
+
+        if !self.config.hawk_server_resets_enabled {
+            tracing::warn!("Reset is disabled, skipping reset request");
+            return Ok(());
+        }
+
+        self.msg_counter += 1;
+
+        self.batch_query
+            .request_ids
+            .push(reset_check_request.reset_id.clone());
+        self.batch_query
+            .request_types
+            .push(RESET_CHECK_MESSAGE_TYPE.to_string());
+        self.batch_query.metadata.push(batch_metadata);
+
+        // skip_persistence is only used for uniqueness requests
+        self.batch_query.skip_persistence.push(false);
+
+        // We need to use AND rule for reset check requests
+        self.batch_query.or_rule_indices.push(vec![]);
+        self.add_iris_shares_task(reset_check_request.s3_key)?;
+
+        Ok(())
+    }
+
+    async fn process_reset_update_request(
+        &mut self,
+        message: &SQSMessage,
+        batch_metadata: BatchMetadata,
+        sqs_message: &aws_sdk_sqs::types::Message,
+    ) -> Result<(), ReceiveRequestError> {
+        let sns_message_id = &message.message_id;
+        let reset_update_request: ResetUpdateRequest = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Reset update request", e))?;
+
+        metrics::counter!("request.received", "type" => "reset_update").increment(1);
+        tracing::debug!("Received reset update request: {:?}", reset_update_request);
+
+        self.delete_message(sqs_message).await?;
+
+        if !self.config.hawk_server_resets_enabled {
+            tracing::warn!("Reset is disabled, skipping reset request");
+            return Ok(());
+        }
+        let semaphore = Arc::clone(&self.semaphore);
+        let s3_client = self.s3_client.clone();
+        let bucket_name = self.config.shares_bucket_name.clone();
+        let shares_encryption_key_pairs = self.shares_encryption_key_pairs.clone();
+
+        let task_handle = get_iris_shares_parse_task(
+            self.party_id,
+            shares_encryption_key_pairs,
+            semaphore,
+            s3_client,
+            bucket_name,
+            reset_update_request.s3_key,
+        )?;
+        let (left_shares, right_shares) = match task_handle.await {
+            Ok(result) => match result {
+                Ok(shares) => shares,
+                Err(e) => {
+                    tracing::error!("Failed to process iris shares for reset update: {:?}", e);
+                    return Err(ReceiveRequestError::FailedToProcessIrisShares(e));
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to join task handle for reset update: {:?}", e);
+                return Err(ReceiveRequestError::FailedToJoinHandle(e));
+            }
+        };
+
+        self.msg_counter += 1;
+
+        self.batch_query
+            .reset_update_indices
+            .push(reset_update_request.serial_id - 1);
+        self.batch_query
+            .sns_message_ids
+            .push(sns_message_id.clone());
+        self.batch_query.metadata.push(batch_metadata);
+        self.batch_query
+            .reset_update_request_ids
+            .push(reset_update_request.reset_id);
+        self.batch_query
+            .reset_update_shares
+            .push(GaloisSharesBothSides {
+                code_left: left_shares.code,
+                mask_left: left_shares.mask,
+                code_right: right_shares.code,
+                mask_right: right_shares.mask,
+            });
         Ok(())
     }
 
@@ -519,6 +650,17 @@ impl<'a> BatchProcessor<'a> {
                 );
                 (
                     self.reauth_error_result_attributes,
+                    serde_json::to_string(&message).unwrap(),
+                )
+            }
+            RESET_CHECK_MESSAGE_TYPE => {
+                let message = ResetCheckResult::new_error_result(
+                    request_id.clone(),
+                    self.config.party_id,
+                    ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
+                );
+                (
+                    self.reset_error_result_attributes,
                     serde_json::to_string(&message).unwrap(),
                 )
             }

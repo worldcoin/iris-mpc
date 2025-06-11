@@ -1,11 +1,15 @@
 use eyre::{bail, eyre, Result};
+use futures::join;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
 
-use crate::network::value::{NetworkValue, StateChecksum};
+use crate::{
+    execution::hawk_main::{LEFT, RIGHT},
+    network::value::{NetworkValue, StateChecksum},
+};
 
-use super::{HawkSession, HawkSessionRef};
+use super::{BothEyes, HawkSession, HawkSessionRef};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetHash {
@@ -33,7 +37,19 @@ impl SetHash {
 }
 
 impl HawkSession {
-    pub async fn state_check(session: &HawkSessionRef) -> Result<()> {
+    pub async fn state_check(sessions: BothEyes<&HawkSessionRef>) -> Result<()> {
+        let (left_state, right_state) = join!(
+            HawkSession::state_check_side(sessions[LEFT]),
+            HawkSession::state_check_side(sessions[RIGHT]),
+        );
+
+        let left_state = left_state?;
+        let right_state = right_state?;
+        left_state.check_left_vs_right(&right_state)?;
+        Ok(())
+    }
+
+    async fn state_check_side(session: &HawkSessionRef) -> Result<StateChecksum> {
         let mut session = session.write().await;
         let my_state = session.checksum().await;
         let net = &mut session.aby3_store.session.network_session;
@@ -59,7 +75,7 @@ impl HawkSession {
                 "Party states have diverged: my_state={my_state:?} prev_state={prev_state:?} next_state={next_state:?}"
             );
         }
-        Ok(())
+        Ok(my_state)
     }
 
     async fn checksum(&self) -> StateChecksum {

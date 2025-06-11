@@ -228,6 +228,17 @@ pub struct InsertPlanV<V: VectorStore> {
     match_count: usize,
     set_ep: bool,
 }
+// Manual implementation of Clone for InsertPlan, since derive(Clone) does not propagate the nested Clone bounds on V::QueryRef via TransientRef.
+impl Clone for InsertPlan {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            links: self.links.clone(),
+            match_count: self.match_count,
+            set_ep: self.set_ep,
+        }
+    }
+}
 
 impl<V: VectorStore> InsertPlanV<V> {
     pub fn match_ids(&self) -> Vec<V::VectorRef> {
@@ -355,35 +366,36 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
-    fn graph_store(&self, store_id: StoreId) -> GraphRef {
+    pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
+        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
+            .map(|_| {
+                let mut new_for_side_future = |store_id: StoreId| {
+                    let session_id = self.consensus.next_session_id();
+                    self.create_session(store_id, session_id)
+                };
+
+                (
+                    new_for_side_future(StoreId::Left),
+                    new_for_side_future(StoreId::Right),
+                )
+            })
+            .unzip();
+
         let (l, r) = try_join!(
-            self.new_sessions_side(self.args.request_parallelism, StoreId::Left),
-            self.new_sessions_side(self.args.request_parallelism, StoreId::Right),
+            parallelize(sessions_left.into_iter()),
+            parallelize(sessions_right.into_iter()),
         )?;
         tracing::debug!("Created {} MPC sessions.", self.args.request_parallelism);
         Ok([l, r])
-    }
-
-    fn new_sessions_side(
-        &mut self,
-        count: usize,
-        store_id: StoreId,
-    ) -> impl Future<Output = Result<Vec<HawkSessionRef>>> {
-        let tasks = (0..count)
-            .map(|_| {
-                let session_id = self.consensus.next_session_id();
-                self.create_session(store_id, session_id)
-            })
-            .collect_vec();
-        parallelize(tasks.into_iter())
     }
 
     fn create_session(
@@ -618,18 +630,28 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub async fn load_graph_store(self, graph_store: &GraphStore) -> Result<()> {
+    pub async fn load_graph_store(
+        self,
+        graph_store: &GraphStore,
+        parallelism: usize,
+    ) -> Result<()> {
         let now = Instant::now();
 
         // Spawn two independent transactions and load each graph in parallel.
         let (graph_left, graph_right) = join!(
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx.with_graph(StoreId::Left).load_to_mem().await
+                graph_tx
+                    .with_graph(StoreId::Left)
+                    .load_to_mem(graph_store.pool(), parallelism)
+                    .await
             },
             async {
                 let mut graph_tx = graph_store.tx().await?;
-                graph_tx.with_graph(StoreId::Right).load_to_mem().await
+                graph_tx
+                    .with_graph(StoreId::Right)
+                    .load_to_mem(graph_store.pool(), parallelism)
+                    .await
             }
         );
         let graph_left = graph_left.expect("Could not load left graph");
@@ -758,8 +780,7 @@ impl HawkRequest {
             .enumerate()
             .map(|(i, request_type)| match request_type.as_str() {
                 UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
-                    // Support for optional skip_persistence.
-                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap_or(&false),
+                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap(),
                 }),
                 REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
                     let request_id = &self.batch.request_ids[i];
@@ -942,6 +963,12 @@ impl HawkResult {
             .collect_vec()
     }
 
+    const MATCH_IDS_FILTER: Filter = Filter {
+        eyes: Both,
+        orient: Only(Orientation::Normal),
+        intra_batch: false,
+    };
+
     fn job_result(self) -> ServerJobResult {
         use Decision::*;
         use Orientation::{Mirror, Normal};
@@ -959,11 +986,7 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
             .collect_vec();
 
-        let match_ids = self.select_indices(Filter {
-            eyes: Both,
-            orient: Only(Normal),
-            intra_batch: false,
-        });
+        let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
@@ -1015,6 +1038,7 @@ impl HawkResult {
             .collect_vec();
 
         let batch = self.batch;
+        let batch_size = batch.request_ids.len();
 
         ServerJobResult {
             merged_results,
@@ -1030,6 +1054,8 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            partial_match_rotation_indices_left: vec![vec![]; batch_size],
+            partial_match_rotation_indices_right: vec![vec![]; batch_size],
 
             full_face_mirror_match_ids,
             full_face_mirror_partial_match_ids_left,
@@ -1116,8 +1142,7 @@ impl HawkHandle {
         let mut sessions = hawk_actor.new_sessions().await?;
 
         // Validate the common state before starting.
-        HawkSession::state_check(&sessions[LEFT][0]).await?;
-        HawkSession::state_check(&sessions[RIGHT][0]).await?;
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -1258,6 +1283,16 @@ impl HawkHandle {
         for (side, sessions, search_results, reset_results) in
             izip!(&STORE_IDS, sessions, search_results, resets.search_results)
         {
+            let unique_insertions_persistence_skipped = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsertSkipped))
+                .collect_vec();
+
+            let unique_insertions = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsert))
+                .collect_vec();
+
             // The accepted insertions for uniqueness, reauth, and resets.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
@@ -1265,8 +1300,17 @@ impl HawkHandle {
                 search_results.len(),
                 side
             );
+
+            tracing::info!(
+                "Unique insertions: {}, persistence skipped: {}",
+                unique_insertions.len(),
+                unique_insertions_persistence_skipped.len()
+            );
+
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| {
+                    // If the decision is a mutation, return the insertion plan.
+
                     decision.is_mutation().then(|| search_result.into_center())
                 })
                 .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
@@ -1291,10 +1335,7 @@ impl HawkHandle {
         }
 
         // Validate the common state after processing the requests.
-        try_join!(
-            HawkSession::state_check(&sessions[LEFT][0]),
-            HawkSession::state_check(&sessions[RIGHT][0]),
-        )?;
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
         Ok(())
     }
 }
@@ -1451,7 +1492,7 @@ mod tests {
 
                     or_rule_indices: vec![vec![]; batch_size],
                     luc_lookback_records: 2,
-                    skip_persistence: vec![], // Unused.
+                    skip_persistence:vec![false; batch_size],
 
                     ..BatchQuery::default()
                 };
@@ -1650,7 +1691,7 @@ mod tests_db {
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
-        graph_loader.load_graph_store(&graph_store).await?;
+        graph_loader.load_graph_store(&graph_store, 2).await?;
 
         // Check the loaded graph.
         for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {

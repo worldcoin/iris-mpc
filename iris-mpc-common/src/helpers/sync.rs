@@ -18,6 +18,14 @@ pub struct SyncResult {
     pub all_states: Vec<SyncState>,
 }
 
+/// ModificationKey is used to easily look up modifications after a batch to mark them completed.
+/// All request types with a pre-determined serial id uses `SerialId` option while uniqueness requests use `RequestId` as they are assigned a serial id after the protocol if they're unique.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ModificationKey {
+    RequestSerialId(u32),
+    RequestId(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModificationStatus {
     InProgress,
@@ -47,7 +55,7 @@ impl FromStr for ModificationStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modification {
     pub id: i64,
-    pub serial_id: i64,
+    pub serial_id: Option<i64>,
     pub request_type: String,
     pub s3_url: Option<String>,
     pub status: String,
@@ -56,10 +64,22 @@ pub struct Modification {
 }
 
 impl Modification {
-    pub fn mark_completed(&mut self, persisted: bool, result_message_body: &str) {
+    /// Marks the modification as completed, setting the status to "COMPLETED", updating the result message body and persisted flag.
+    ///
+    /// If `updated_serial_id` is provided, it updates the serial_id field as well.
+    /// It is used when the modification is a uniqueness request and the serial id is assigned after the protocol.
+    pub fn mark_completed(
+        &mut self,
+        persisted: bool,
+        result_message_body: &str,
+        updated_serial_id: Option<u32>,
+    ) {
         self.status = ModificationStatus::Completed.to_string();
         self.result_message_body = Some(result_message_body.to_string());
         self.persisted = persisted;
+        if let Some(serial_id) = updated_serial_id {
+            self.serial_id = Some(serial_id as i64);
+        }
     }
 
     /// Updates the node_id field in the SNS message JSON to specified one
@@ -98,20 +118,6 @@ impl SyncResult {
         Self {
             my_state,
             all_states,
-        }
-    }
-
-    /// Returns `None` if all states have equal database length.  If not all
-    /// database lengths are the same, instead returns `Some(smallest_len)`,
-    /// indicating that other databases probably should be rolled back to this
-    /// smallest size.
-    pub fn must_rollback_storage(&self) -> Option<usize> {
-        let smallest_len = self.all_states.iter().map(|s| s.db_len).min()?;
-        let all_equal = self.all_states.iter().all(|s| s.db_len == smallest_len);
-        if all_equal {
-            None
-        } else {
-            Some(smallest_len as usize)
         }
     }
 
@@ -237,7 +243,9 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
     let first = modifications.first().expect("Empty modifications");
     for m in modifications.iter().skip(1) {
         assert_eq!(first.id, m.id, "Inconsistent modification IDs");
-        assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
+        if first.serial_id.is_some() && m.serial_id.is_some() {
+            assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
+        }
         assert_eq!(
             first.request_type, m.request_type,
             "Inconsistent request types"
@@ -249,6 +257,7 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
     use crate::{
         config::Config,
         helpers::{
@@ -257,49 +266,10 @@ mod tests {
         },
     };
 
-    #[test]
-    fn test_compare_states_sync() {
-        let sync_res = SyncResult {
-            my_state: some_state(),
-            all_states: vec![some_state(), some_state(), some_state()],
-        };
-        assert_eq!(sync_res.must_rollback_storage(), None);
-    }
-
-    #[test]
-    fn test_compare_states_out_of_sync() {
-        let states = vec![
-            SyncState {
-                db_len: 123,
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-            },
-            SyncState {
-                db_len: 456,
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-            },
-            SyncState {
-                db_len: 789,
-                modifications: vec![],
-                next_sns_sequence_num: None,
-                common_config: CommonConfig::default(),
-            },
-        ];
-
-        let sync_res = SyncResult {
-            my_state: states[0].clone(),
-            all_states: states.clone(),
-        };
-        assert_eq!(sync_res.must_rollback_storage(), Some(123)); // most late.
-    }
-
     // Helper function to create a Modification.
     fn create_modification(
         id: i64,
-        serial_id: i64,
+        serial_id: Option<i64>,
         request_type: &str,
         s3_url: Option<&str>,
         status: ModificationStatus,
@@ -330,7 +300,7 @@ mod tests {
     fn test_compare_modifications_local_party_outdated() {
         let mod1_local = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -338,7 +308,7 @@ mod tests {
         );
         let mod2_local = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -346,7 +316,7 @@ mod tests {
         );
         let mod3_local = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -354,9 +324,25 @@ mod tests {
         );
         let mod4_local = create_modification(
             4,
-            400,
+            Some(400),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod5_local = create_modification(
+            5,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod5"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod6_local = create_modification(
+            6,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod6"),
             ModificationStatus::InProgress,
             false,
         );
@@ -365,11 +351,13 @@ mod tests {
             mod2_local.clone(),
             mod3_local.clone(),
             mod4_local.clone(),
+            mod5_local.clone(),
+            mod6_local.clone(),
         ]);
 
         let mod1_other = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -377,7 +365,7 @@ mod tests {
         );
         let mod2_other = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -385,7 +373,7 @@ mod tests {
         );
         let mod3_other = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -393,18 +381,35 @@ mod tests {
         );
         let mod4_other = create_modification(
             4,
-            400,
+            Some(400),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
             ModificationStatus::Completed,
             false,
         );
-
+        let mod5_other = create_modification(
+            5,
+            Some(500),
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod5"),
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod6_other = create_modification(
+            6,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod6"),
+            ModificationStatus::Completed,
+            false,
+        );
         let other_state = create_sync_state(vec![
             mod1_other,
             mod2_other,
             mod3_other.clone(),
             mod4_other.clone(),
+            mod5_other.clone(),
+            mod6_other.clone(),
         ]);
         let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
 
@@ -416,12 +421,9 @@ mod tests {
         let (to_update, to_delete) = sync_result.compare_modifications();
 
         // Expectations:
-        // For ID=1: Already in sync → no action.
-        // For ID=2: Already in sync → no action.
-        // For ID=3: Local is IN_PROGRESS, other nodes are COMPLETED → roll forward to
-        // COMPLETED. For ID=4: Local is IN_PROGRESS, other nodes are COMPLETED
-        // → roll forward to COMPLETED.
-        assert_eq!(to_update.len(), 2, "Expected two modifications to update");
+        // For ID=1,2: Already in sync → no action.
+        // For ID=2-6: Local is IN_PROGRESS, other nodes are COMPLETED → roll forward to COMPLETED
+        assert_eq!(to_update.len(), 4, "Expected four modifications to update");
         assert_eq!(to_delete.len(), 0, "Expected zero modification to delete");
 
         let update_mod3 = to_update.iter().find(|m| m.id == 3).unwrap();
@@ -429,6 +431,12 @@ mod tests {
 
         let update_mod4 = to_update.iter().find(|m| m.id == 4).unwrap();
         assert_eq!(update_mod4.clone(), mod4_other);
+
+        let update_mod5 = to_update.iter().find(|m| m.id == 5).unwrap();
+        assert_eq!(update_mod5.clone(), mod5_other);
+
+        let update_mod6 = to_update.iter().find(|m| m.id == 6).unwrap();
+        assert_eq!(update_mod6.clone(), mod6_other);
     }
 
     #[test]
@@ -436,7 +444,7 @@ mod tests {
         // Create local modifications that are already up-to-date.
         let mod1_local = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -444,7 +452,7 @@ mod tests {
         );
         let mod2_local = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -452,7 +460,7 @@ mod tests {
         );
         let mod3_local = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -460,9 +468,25 @@ mod tests {
         );
         let mod4_local = create_modification(
             4,
-            400,
+            Some(400),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
+            ModificationStatus::Completed,
+            false,
+        );
+        let mod5_local = create_modification(
+            5,
+            Some(500),
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod5"),
+            ModificationStatus::Completed,
+            true,
+        );
+        let mod6_local = create_modification(
+            6,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod6"),
             ModificationStatus::Completed,
             false,
         );
@@ -471,12 +495,14 @@ mod tests {
             mod2_local.clone(),
             mod3_local.clone(),
             mod4_local.clone(),
+            mod5_local.clone(),
+            mod6_local.clone(),
         ]);
 
         // Create other states with in-progress modifications.
         let mod1_other = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -484,7 +510,7 @@ mod tests {
         );
         let mod2_other = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -492,7 +518,7 @@ mod tests {
         );
         let mod3_other = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -500,13 +526,31 @@ mod tests {
         );
         let mod4_other = create_modification(
             4,
-            400,
+            Some(400),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
         );
-        let other_state = create_sync_state(vec![mod1_other, mod2_other, mod3_other, mod4_other]);
+        let mod5_other = create_modification(
+            5,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod5"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let mod6_other = create_modification(
+            6,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some("http://example.com/mod6"),
+            ModificationStatus::InProgress,
+            false,
+        );
+        let other_state = create_sync_state(vec![
+            mod1_other, mod2_other, mod3_other, mod4_other, mod5_other, mod6_other,
+        ]);
         let all_states = vec![my_state.clone(), other_state.clone(), other_state.clone()];
 
         let sync_result = SyncResult {
@@ -514,7 +558,6 @@ mod tests {
             all_states,
         };
 
-        // Compare modifications across nodes.
         let (to_update, to_delete) = sync_result.compare_modifications();
 
         // Since local is already the most advanced party, nothing should be updated or
@@ -532,7 +575,7 @@ mod tests {
         // delete the latest in progress one.
         let mod2_local = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -540,7 +583,7 @@ mod tests {
         );
         let mod3_local = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -550,7 +593,7 @@ mod tests {
 
         let mut mod1_other = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -576,7 +619,7 @@ mod tests {
         let (to_update, to_delete) = sync_result.compare_modifications();
 
         assert_eq!(to_update.len(), 0, "Expected no modification to update");
-        assert_eq!(to_delete.len(), 1, "Expected one modificatio to delete");
+        assert_eq!(to_delete.len(), 1, "Expected one modification to delete");
 
         // Expectation: Local party should delete mod3.
         assert_eq!(to_delete[0], mod3_local);
@@ -587,7 +630,7 @@ mod tests {
         // Create local modifications with some in-progress.
         let mod1_local = create_modification(
             1,
-            100,
+            Some(100),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::Completed,
@@ -595,7 +638,7 @@ mod tests {
         );
         let mod2_local = create_modification(
             2,
-            200,
+            Some(200),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/200"),
             ModificationStatus::Completed,
@@ -603,7 +646,7 @@ mod tests {
         );
         let mod3_local = create_modification(
             3,
-            300,
+            Some(300),
             IDENTITY_DELETION_MESSAGE_TYPE,
             None,
             ModificationStatus::InProgress,
@@ -611,7 +654,7 @@ mod tests {
         );
         let mod4_local = create_modification(
             4,
-            400,
+            Some(400),
             REAUTH_MESSAGE_TYPE,
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
@@ -709,7 +752,7 @@ mod tests {
         // Create a modification with the serialized result
         let mut modification = Modification {
             id: 1,
-            serial_id: 123,
+            serial_id: Some(123),
             request_type: REAUTH_MESSAGE_TYPE.to_string(),
             s3_url: "http://example.com/123".to_string().into(),
             status: ModificationStatus::Completed.to_string(),
@@ -753,7 +796,7 @@ mod tests {
         // Create a modification with the serialized result
         let mut modification = Modification {
             id: 2,
-            serial_id: 456,
+            serial_id: Some(456),
             request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
             s3_url: None,
             status: ModificationStatus::Completed.to_string(),
@@ -779,15 +822,6 @@ mod tests {
             updated_deletion_result.success,
             original_deletion_result.success
         );
-    }
-
-    fn some_state() -> SyncState {
-        SyncState {
-            db_len: 123,
-            modifications: vec![],
-            next_sns_sequence_num: None,
-            common_config: CommonConfig::default(),
-        }
     }
 
     #[test]

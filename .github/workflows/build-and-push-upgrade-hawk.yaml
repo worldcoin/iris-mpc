@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - main
+  
+  release:
+    types:
+      - 'published'
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -17,7 +21,7 @@ jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-32core
+      labels: ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read
@@ -43,6 +47,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ github.event_name == 'release' && format('{0}/worldcoin/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

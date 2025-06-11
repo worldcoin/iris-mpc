@@ -52,7 +52,7 @@ impl VectorId {
     }
 
     /// From Serial ID (1-indexed).
-    pub fn from_serial_id(id: SerialId) -> Self {
+    pub const fn from_serial_id(id: SerialId) -> Self {
         VectorId { id, version: 0 }
     }
 

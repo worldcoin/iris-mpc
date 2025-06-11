@@ -14,7 +14,7 @@ jobs:
   integration-tests:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-32core
+      labels: ubuntu-22.04-16core
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
@@ -50,6 +50,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: hawk-server-local-build:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Run docker compose
         uses: hoverkraft-tech/compose-action@8be2d741e891ac9b8ac20825e6f3904149599925

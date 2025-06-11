@@ -84,7 +84,7 @@ env:
     value: "iris-mpc-db-exporter-store-node-1-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "even_odd_binary_output_16k"
+    value: "even_odd_with_version_id_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
@@ -108,6 +108,9 @@ env:
     value: "64"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+    value: "true"
+
+  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
     value: "true"
 
   - name: SMPC__ENABLE_RESET
@@ -153,9 +156,6 @@ env:
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "20"
-
-  - name: SMPC__ENABLE_SYNC_QUEUES_ON_SNS_SEQUENCE_NUMBER
-    value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_SYNC
     value: "true"

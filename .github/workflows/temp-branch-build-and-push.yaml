@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2413/update-s3-importer-to-include-version-id-2"
+      - "POP-2535/extend-modifications-table-with-insertions"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
@@ -17,7 +17,7 @@ jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-32core
+      labels: ubuntu-22.04-16core
     permissions:
       packages: write
       contents: read

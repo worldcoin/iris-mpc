@@ -1,8 +1,7 @@
 use super::{
     batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
-    logger,
-    utils::PartyId,
+    utils::{self, PartyId},
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
@@ -43,18 +42,15 @@ impl Handle {
             }
 
             // Validate the common state after processing the requests.
-            HawkSession::state_check(&sessions[LEFT][0]).await?;
-            HawkSession::state_check(&sessions[RIGHT][0]).await?;
+            HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
             Ok(())
         }
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        Self::log_info(String::from("Starting State check left"));
-        HawkSession::state_check(&sessions[LEFT][0]).await?;
-        Self::log_info(String::from("Starting State check right"));
-        HawkSession::state_check(&sessions[RIGHT][0]).await?;
+        Self::log_info(String::from("Starting State check"));
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         // Process jobs until health check fails or channel closes.
         let (tx, mut rx) = mpsc::channel::<Job>(1);
@@ -123,7 +119,7 @@ impl Handle {
             .map(|(queries_side, sessions_side)| {
                 let searcher = actor.searcher();
                 let queries_with_ids =
-                    izip!(queries_side.clone(), request.identifiers.clone()).collect_vec();
+                    izip!(queries_side.clone(), request.vector_ids.clone()).collect_vec();
                 let sessions = sessions_side.clone();
 
                 // Per side do searches and insertions
@@ -176,12 +172,12 @@ impl Handle {
 
     // Helper: component error logging.
     fn log_error(msg: String) {
-        logger::log_error(COMPONENT, msg);
+        utils::log_error(COMPONENT, msg);
     }
 
     // Helper: component logging.
     fn log_info(msg: String) {
-        logger::log_info(COMPONENT, msg);
+        utils::log_info(COMPONENT, msg);
     }
 
     /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
