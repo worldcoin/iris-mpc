@@ -157,12 +157,14 @@ impl Step1 {
         let reauth_result = self.reauth_id().map(|(id, or_rule)| {
             tracing::info!("Reauth ID: {id}, or_rule: {or_rule}");
             tracing::info!(
-                "Left match: {}",
-                missing_is_match[LEFT].get(&id).unwrap_or(&false)
+                "Left match: {}, missing_is_match[LEFT] {:?}",
+                missing_is_match[LEFT].get(&id).unwrap_or(&false),
+                missing_is_match[LEFT]
             );
             tracing::info!(
-                "Right match: {}",
-                missing_is_match[RIGHT].get(&id).unwrap_or(&false)
+                "Right match: {}, missing_is_match[RIGHT] {:?}",
+                missing_is_match[RIGHT].get(&id).unwrap_or(&false),
+                missing_is_match[RIGHT]
             );
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
@@ -248,6 +250,8 @@ impl BatchStep3 {
         };
 
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
+
+        tracing::info!("Decisions: {:?}", decisions);
 
         for request in &self.0 {
             tracing::info!(
