@@ -172,16 +172,11 @@ impl Handle {
         assert_eq!(left_plans.len(), right_plans.len());
         let mut mutations = Vec::new();
 
-        for i in 0..left_plans.len() {
-            let left_plan = left_plans.get(i).cloned().flatten();
-            let right_plan = right_plans.get(i).cloned().flatten();
-
-            if left_plan.is_some() || right_plan.is_some() {
-                mutations.push(SingleHawkMutation {
-                    plans: [left_plan, right_plan],
-                    modification_key: None, // Genesis doesn't use modification keys
-                });
-            }
+        for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+            mutations.push(SingleHawkMutation {
+                plans: [left_plan, right_plan],
+                modification_key: None, // Genesis doesn't use modification keys
+            });
         }
 
         Ok(JobResult::new(request, HawkMutation(mutations)))

@@ -153,6 +153,7 @@ pub enum StoreId {
     Left = 0,
     Right = 1,
 }
+
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
@@ -1323,8 +1324,8 @@ impl HawkHandle {
         let mut plans_both_sides: BothEyes<Vec<Option<ConnectPlan>>> = [Vec::new(), Vec::new()];
 
         // For both eyes.
-        for (side_idx, (side, sessions, search_results, reset_results)) in
-            izip!(&STORE_IDS, sessions, search_results, resets.search_results).enumerate()
+        for (side, sessions, search_results, reset_results) in
+            izip!(&STORE_IDS, sessions, search_results, resets.search_results)
         {
             let unique_insertions_persistence_skipped = decisions
                 .iter()
@@ -1364,7 +1365,7 @@ impl HawkHandle {
                 .await?;
 
             // Store plans for this side
-            plans_both_sides[side_idx] = plans;
+            plans_both_sides[*side as usize] = plans;
         }
 
         // Combine left and right plans into SingleHawkMutation objects
@@ -1392,7 +1393,8 @@ impl HawkHandle {
                     _ => None,
                 }
             } else {
-                // This is a reset update mutation
+                // This is a reset update mutation. First N plans of size `decisions.len()` are for batch requests, and the rest are for reset updates.
+                // TODO: refactor BatchQuery to process requests in the order they are received.
                 let reset_idx = i - decisions.len();
                 if let Some(&vector_id) = resets.vector_ids.get(reset_idx) {
                     let serial_id = vector_id.index() + 1;
@@ -1810,23 +1812,16 @@ mod tests_db {
 mod hawk_mutation_tests {
     use super::*;
     use crate::hawkers::aby3::aby3_store::VectorId;
-    use crate::hnsw::{
-        graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV, SortedNeighborhood,
-    };
-    use crate::shares::share::DistanceShare;
+    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        let distance = DistanceShare::new(Default::default(), Default::default());
         ConnectPlan {
             inserted_vector: vector_id,
             layers: vec![ConnectPlanLayer {
-                neighbors: SortedNeighborhood::from_ascending_vec(vec![(
-                    vector_id,
-                    distance.clone(),
-                )]),
+                neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
                 nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
             }],
             set_ep: false,
