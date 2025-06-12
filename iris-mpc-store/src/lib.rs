@@ -632,8 +632,8 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
     }
 }
 
-// #[cfg(feature = "db_dependent")]
 #[cfg(test)]
+#[cfg(feature = "db_dependent")]
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
