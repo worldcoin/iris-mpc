@@ -1,5 +1,3 @@
-use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
-
 use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
@@ -21,7 +19,9 @@ use iris_mpc_cpu::{
     },
 };
 use itertools::{izip, Itertools};
+use rand::{prelude::StdRng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
@@ -137,6 +137,12 @@ struct Args {
     #[clap(long, default_value = "0")]
     hnsw_prng_seed: u64,
 
+    /// Shares seed for iris shares insertion, used to generate secret
+    /// shares of iris codes.
+    /// The default is 42 to match the default in `shares_encoding.rs`.
+    #[clap(long, default_value = "42")]
+    iris_shares_rnd: u64,
+
     /// PRNG seed for ABY3 MPC protocols, used for locally generating secret
     /// shares of iris codes.
     #[clap(long, default_value = "1")]
@@ -219,7 +225,7 @@ async fn main() -> Result<()> {
         .map(|target| target.saturating_sub(n_existing_irises));
 
     info!("Setting hnsw pseudo-random number generators");
-    let (mut hnsw_rng_l, mut hnsw_rng_r, mut aby3_rng) = Rngs::from(&args);
+    let (mut hnsw_rng_l, mut hnsw_rng_r, _aby3_rng) = Rngs::from(&args);
     let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
     if n_existing_irises > 0 {
         if let Ok((rng_l, rng_r)) = read_json(&prng_state_filename) {
@@ -257,17 +263,18 @@ async fn main() -> Result<()> {
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples();
     let stream = limited_iterator(stream, num_irises).chunks(SECRET_SHARING_BATCH_SIZE);
-
     for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
         let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
         n_read += vectors_batch.len();
 
         for (left, right) in vectors_batch {
-            let left_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, left.clone());
-            let right_shares =
-                GaloisRingSharedIris::generate_shares_locally(&mut aby3_rng, right.clone());
+            // Reset RNG for each pair to match shares_encoding.rs behavior
+            let mut shares_seed = StdRng::seed_from_u64(args.iris_shares_rnd);
 
+            let left_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, left.clone());
+            let right_shares =
+                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, right.clone());
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
                 batch[party].push((shares_l, shares_r));
             }
