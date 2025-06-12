@@ -169,14 +169,13 @@ impl Handle {
 
         // Convert the results into SingleHawkMutation format
         let [left_plans, right_plans] = results;
-        let max_len = left_plans.len().max(right_plans.len());
+        assert_eq!(left_plans.len(), right_plans.len());
         let mut mutations = Vec::new();
 
-        for i in 0..max_len {
+        for i in 0..left_plans.len() {
             let left_plan = left_plans.get(i).cloned().flatten();
             let right_plan = right_plans.get(i).cloned().flatten();
 
-            // Only create mutation if at least one side has a plan
             if left_plan.is_some() || right_plan.is_some() {
                 mutations.push(SingleHawkMutation {
                     plans: [left_plan, right_plan],

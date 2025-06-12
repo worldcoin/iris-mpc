@@ -2279,7 +2279,6 @@ dependencies = [
  "aws-sdk-sqs",
  "axum",
  "base64 0.22.1",
- "bincode",
  "bytemuck",
  "chrono",
  "clap",
@@ -2416,7 +2415,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
- "bincode",
  "bytemuck",
  "criterion",
  "cudarc",
@@ -2462,7 +2460,6 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
- "bincode",
  "bytemuck",
  "dotenvy",
  "eyre",

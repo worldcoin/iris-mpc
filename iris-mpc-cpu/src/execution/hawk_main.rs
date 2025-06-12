@@ -1319,12 +1319,12 @@ impl HawkHandle {
             .chain(resets.vector_ids.clone().into_iter().map(Some))
             .collect_vec();
 
-        // Store plans for both sides
-        let mut left_plans = Vec::new();
-        let mut right_plans = Vec::new();
+        // Store plans for both sides using BothEyes structure
+        let mut plans_both_sides: BothEyes<Vec<Option<ConnectPlan>>> = [Vec::new(), Vec::new()];
+
         // For both eyes.
-        for (side, sessions, search_results, reset_results) in
-            izip!(&STORE_IDS, sessions, search_results, resets.search_results)
+        for (side_idx, (side, sessions, search_results, reset_results)) in
+            izip!(&STORE_IDS, sessions, search_results, resets.search_results).enumerate()
         {
             let unique_insertions_persistence_skipped = decisions
                 .iter()
@@ -1364,20 +1364,19 @@ impl HawkHandle {
                 .await?;
 
             // Store plans for this side
-            if *side == StoreId::Left {
-                left_plans = plans;
-            } else {
-                right_plans = plans;
-            }
+            plans_both_sides[side_idx] = plans;
         }
 
-        // Now combine left and right plans into SingleHawkMutation objects
+        // Combine left and right plans into SingleHawkMutation objects
+        // Note that reset update mutations are currently processed after all the other requests.
+        // For modifications to be synced correctly, we need to ensure that all requests are applied in the order they are received.
+        // TODO: https://linear.app/worldcoin/issue/POP-2588
         let mut mutations = Vec::new();
-        let total_mutations = left_plans.len().max(right_plans.len());
+        assert_eq!(plans_both_sides[LEFT].len(), plans_both_sides[RIGHT].len());
 
-        for i in 0..total_mutations {
-            let left_plan = left_plans.get(i).cloned().flatten();
-            let right_plan = right_plans.get(i).cloned().flatten();
+        for i in 0..plans_both_sides[LEFT].len() {
+            let left_plan = plans_both_sides[LEFT].get(i).cloned().flatten();
+            let right_plan = plans_both_sides[RIGHT].get(i).cloned().flatten();
 
             // Determine modification key based on the mutation index
             let modification_key = if i < decisions.len() {
@@ -1387,9 +1386,8 @@ impl HawkHandle {
                         let request_id = &request.batch.request_ids[i];
                         Some(ModificationKey::RequestId(request_id.clone()))
                     }
-                    ReauthUpdate(update_id) => {
-                        let serial_id = update_id.index() + 1;
-                        Some(ModificationKey::RequestSerialId(serial_id))
+                    ReauthUpdate(vector_id) => {
+                        Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     }
                     _ => None,
                 }
@@ -1404,13 +1402,10 @@ impl HawkHandle {
                 }
             };
 
-            // Only create mutation if at least one side has a plan
-            if left_plan.is_some() || right_plan.is_some() {
-                mutations.push(SingleHawkMutation {
-                    plans: [left_plan, right_plan],
-                    modification_key,
-                });
-            }
+            mutations.push(SingleHawkMutation {
+                plans: [left_plan, right_plan],
+                modification_key,
+            });
         }
 
         Ok(HawkMutation(mutations))

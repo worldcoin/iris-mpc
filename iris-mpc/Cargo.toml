@@ -30,7 +30,6 @@ base64.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 sodiumoxide = "0.2.7"
-bincode = "1.3.3"
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
