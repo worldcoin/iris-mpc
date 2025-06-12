@@ -1825,7 +1825,7 @@ impl ServerActor {
                 .map(|mut sorted| {
                     for id in &mut sorted {
                         // re-map the ids to remove the ROTATION aspect from them
-                        *id = *id / ROTATIONS as u64;
+                        *id /= ROTATIONS as u64;
                     }
                     sorted
                 })
