@@ -14,8 +14,10 @@ use crate::{
         searcher::ConnectPlanV,
         GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
-    proto_generated::party_node::party_node_server::PartyNodeServer,
+    network::tcp::{
+        handle::TcpNetworkHandle, networking::connection_builder::PeerConnectionBuilder,
+        session::TcpSession, TcpConfig,
+    },
     protocol::{
         ops::{setup_replicated_prf, setup_shared_rng},
         shared_iris::GaloisRingSharedIris,
@@ -53,7 +55,7 @@ use std::{
     collections::HashMap,
     future::Future,
     hash::{Hash, Hasher},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     ops::Not,
     sync::Arc,
     time::{Duration, Instant},
@@ -62,9 +64,7 @@ use std::{
 use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
-    task::JoinSet,
 };
-use tonic::transport::Server;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
@@ -96,9 +96,6 @@ pub struct HawkArgs {
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
-
-    #[clap(short, long, default_value_t = 1)]
-    pub stream_parallelism: usize,
 
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
@@ -133,7 +130,6 @@ pub struct HawkActor {
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
     role_assignments: Arc<HashMap<Role, Identity>>,
-    consensus: Consensus,
 
     // ---- My state ----
     // TODO: Persistence.
@@ -144,7 +140,7 @@ pub struct HawkActor {
     distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
 
     // ---- My network setup ----
-    networking: GrpcHandle,
+    networking: TcpNetworkHandle,
     party_id: usize,
 }
 
@@ -291,48 +287,36 @@ impl HawkActor {
         let my_identity = identities[my_index].clone();
         let my_address = &args.addresses[my_index];
 
-        let grpc_config = GrpcConfig {
-            timeout_duration: Duration::from_secs(10),
-            connection_parallelism: args.connection_parallelism,
-            stream_parallelism: args.stream_parallelism,
-        };
+        let tcp_config = TcpConfig::new(
+            Duration::from_secs(10),
+            args.connection_parallelism,
+            args.request_parallelism,
+        );
+        tracing::debug!("{:?}", tcp_config);
 
-        let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
-        let networking = GrpcHandle::new(networking).await?;
-
-        // Start server.
-        {
-            let player = networking.clone();
-            let socket = to_inaddr_any(my_address.parse().unwrap());
-            tracing::info!("Starting Hawk server on {}", socket);
-            tokio::spawn(async move {
-                Server::builder()
-                    .add_service(PartyNodeServer::new(player))
-                    .serve(socket)
-                    .await
-                    .unwrap();
-            });
-        }
+        let connection_builder = PeerConnectionBuilder::new(
+            my_identity,
+            to_inaddr_any(my_address.parse::<SocketAddr>()?),
+            tcp_config.clone(),
+        )
+        .await?;
 
         // Connect to other players.
-        izip!(&identities, &args.addresses)
-            .filter(|(_, address)| address != &my_address)
-            .map(|(identity, address)| {
-                let player = networking.clone();
-                let identity = identity.clone();
-                let url = format!("http://{}", address);
-                async move {
-                    tracing::info!("Connecting to {}…", url);
-                    player.connect_to_party(identity, &url).await?;
-                    tracing::info!("_connected to {}!", url);
-                    Ok(())
-                }
-            })
-            .collect::<JoinSet<_>>()
-            .join_all()
-            .await
-            .into_iter()
-            .collect::<Result<()>>()?;
+        for (identity, address) in
+            izip!(&identities, &args.addresses).filter(|(_, address)| address != &my_address)
+        {
+            let socket_addr = address
+                .clone()
+                .to_socket_addrs()?
+                .next()
+                .ok_or(eyre::eyre!("invalid peer address"))?;
+            connection_builder
+                .include_peer(identity.clone(), socket_addr)
+                .await?;
+        }
+
+        let (reconnector, connections) = connection_builder.build().await?;
+        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
 
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
@@ -359,7 +343,6 @@ impl HawkActor {
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [vec![], vec![]],
             role_assignments: Arc::new(role_assignments),
-            consensus: Consensus::default(),
             networking,
             party_id: my_index,
         })
@@ -378,17 +361,24 @@ impl HawkActor {
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
-        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
-        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
-            .map(|_| {
-                let mut new_for_side_future = |store_id: StoreId| {
-                    let session_id = self.consensus.next_session_id();
-                    self.create_session(store_id, session_id)
-                };
+        let mut sessions = self.networking.make_sessions().await?;
 
+        // todo: replace this with array_chunks::<2>() once that feature
+        // is stabilized in Rust.
+        let mut it = sessions.drain(..);
+        let mut left = vec![];
+        let mut right = vec![];
+        while let (Some(l), Some(r)) = (it.next(), it.next()) {
+            left.push(l);
+            right.push(r);
+        }
+
+        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
+        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = izip!(left, right)
+            .map(|(left, right)| {
                 (
-                    new_for_side_future(StoreId::Left),
-                    new_for_side_future(StoreId::Right),
+                    self.create_session(StoreId::Left, left),
+                    self.create_session(StoreId::Right, right),
                 )
             })
             .unzip();
@@ -404,9 +394,8 @@ impl HawkActor {
     fn create_session(
         &self,
         store_id: StoreId,
-        session_id: SessionId,
+        session: TcpSession,
     ) -> impl Future<Output = Result<HawkSessionRef>> {
-        let networking = self.networking.clone();
         let role_assignments = self.role_assignments.clone();
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
@@ -414,12 +403,12 @@ impl HawkActor {
         let hnsw_prng_seed = self.args.hnsw_prng_seed;
 
         async move {
-            let grpc_session = networking.create_session(session_id).await?;
+            let session_id = session.id();
 
             let mut network_session = NetworkSession {
                 session_id,
                 role_assignments,
-                networking: Box::new(grpc_session),
+                networking: Box::new(session),
                 own_role: Role::new(party_id),
             };
 
@@ -1429,19 +1418,6 @@ impl HawkHandle {
     }
 }
 
-#[derive(Default)]
-struct Consensus {
-    next_session_id: u32,
-}
-
-impl Consensus {
-    fn next_session_id(&mut self) -> SessionId {
-        let id = SessionId(self.next_session_id);
-        self.next_session_id += 1;
-        id
-    }
-}
-
 fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
     if socket.is_ipv4() {
         socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
@@ -1473,6 +1449,7 @@ mod tests {
     };
     use rand::SeedableRng;
     use std::ops::Not;
+    use tokio::task::JoinSet;
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -1773,7 +1750,6 @@ mod tests_db {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
-            stream_parallelism: 2,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
