@@ -124,7 +124,7 @@ impl DbContext {
         graph_ops.load_to_mem().await
     }
 
-    /// helper function to get a BothEyes<GraphMem>
+    /// helper function to get a `BothEyes<GraphMem>`
     pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextStore>>> {
         Ok([
             self.load_graph_to_mem(StoreId::Left).await?,
