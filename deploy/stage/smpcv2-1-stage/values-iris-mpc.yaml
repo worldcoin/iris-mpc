@@ -90,7 +90,7 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "clean db"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
@@ -100,9 +100,6 @@ env:
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
-
-  - name: SMPC__N_BUCKETS
-    value: "10"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"  
@@ -156,6 +153,12 @@ env:
 
   - name : SMPC__ENABLE_DEBUG_TIMING
     value: "true"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "biometricTestProdCode"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "5000"
 
 initContainer:
   enabled: true
