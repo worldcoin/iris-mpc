@@ -75,13 +75,7 @@ extern "C" __global__ void openResults(unsigned long long *result1, unsigned lon
             unsigned int match_distances_counter_idx = atomicAdd(&match_distances_counter[0], 1);
             if (match_distances_counter_idx < max_bucket_distances)
             {
-                // Global index for the match distances is compromise of 3 fields:
-                // 1. batch_id: to distinguish between different batches, range [0, ...]
-                // 2. queryIdx: to distinguish between different queries, range [0, max_batch_size)
-                // 3. dbIdx: to distinguish between different database entries, range [0, totalDbLen)]
-                // They are combined into a single index to allow for efficient storage and retrieval, by just treating them as a single long long integer,
-                // offsetting the different parts to avoid overlaps.
-                unsigned long long match_id = batch_id * (totalDbLen * max_batch_size) + (queryIdx / ALL_ROTATIONS) * totalDbLen + dbIdx + offset;
+                unsigned long long match_id = batch_id * (totalDbLen * (ALL_ROTATIONS * max_batch_size)) + queryIdx * totalDbLen + dbIdx + offset;
                 match_distances_indices[match_distances_counter_idx] = match_id;
                 match_distances_buffer_codes_a[match_distances_counter_idx] = code_dots_a[idx * 64 + i];
                 match_distances_buffer_codes_b[match_distances_counter_idx] = code_dots_b[idx * 64 + i];
