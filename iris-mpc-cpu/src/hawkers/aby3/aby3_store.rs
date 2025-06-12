@@ -221,8 +221,17 @@ impl SharedIrisesRef {
         self.data.read().await
     }
 
+    pub async fn get_vector_id(&self, serial_id: SerialId) -> Option<VectorId> {
+        *self.get_vector_ids(&[serial_id]).await.first().unwrap()
+    }
+
     pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
         self.data.read().await.get_vector(vector)
+    }
+
+    pub async fn get_query(&self, vector_id: &VectorId) -> QueryRef {
+        let vector_ref = self.get_vector(vector_id).await.clone();
+        prepare_query((*vector_ref).clone())
     }
 
     pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {

@@ -419,6 +419,7 @@ WHERE id = $1;
     /// # Returns
     ///
     /// An ordered vector of `Modification` instances in ascending order of their IDs.
+    /// Serial ids are initialized for all returned modifications.
     ///
     pub async fn get_persisted_modifications_after_id(
         &self,
