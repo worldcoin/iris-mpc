@@ -635,8 +635,8 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
     };
 
     log_info(format!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
-        hawk_args.party_index, node_addresses
+        "Initializing HawkActor with args: party_index: {}, addresses: {:?} with prng_seed: {:?}",
+        hawk_args.party_index, node_addresses, hawk_args.hnsw_prng_seed
     ));
 
     HawkActor::from_cli(&hawk_args).await

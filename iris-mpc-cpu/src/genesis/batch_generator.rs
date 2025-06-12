@@ -119,9 +119,9 @@ impl fmt::Display for BatchGenerator {
             f,
             "batch-size={}, count-of-exclusions={}, range-of-iris-ids=({}..{}), current-batch-id={}",
             self.batch_size,
+            self.exclusions.len(),
             self.range.start(),
             self.range.end(),
-            self.exclusions.len(),
             self.batch_count
         )
     }
