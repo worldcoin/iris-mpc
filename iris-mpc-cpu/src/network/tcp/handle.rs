@@ -481,7 +481,7 @@ async fn handle_inbound_traffic(
         // first read the session id. this does not get passed to the next layer.
         let mut session_id_buf = [0u8; 4];
         reader.read_exact(&mut session_id_buf).await?;
-        let start = Instant::now();
+        let _rx_start = Instant::now();
         let session_id = u32::from_le_bytes(session_id_buf);
 
         // then read the descriptor byte
@@ -515,9 +515,11 @@ async fn handle_inbound_traffic(
         }
         reader.read_exact(&mut buf[buf_offset..total_len]).await?;
 
-        let elapsed = start.elapsed().as_micros();
-        metrics::histogram!("network::inbound::rx_time_us").record(elapsed as f64);
-
+        #[cfg(feature = "networking_metrics")]
+        {
+            let elapsed = _rx_start.elapsed().as_micros();
+            metrics::histogram!("network::inbound::rx_time_us").record(elapsed as f64);
+        }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
             if ch.send(buf[..total_len].to_vec()).is_err() {
