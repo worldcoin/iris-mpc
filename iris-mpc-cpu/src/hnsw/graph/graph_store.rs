@@ -205,12 +205,12 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         plan: ConnectPlanLayerV<V>,
     ) -> Result<()> {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
+        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(*n, links, lc).await?;
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors.edge_ids(), lc).await?;
+        self.set_links(q, plan.neighbors, lc).await?;
 
         Ok(())
     }

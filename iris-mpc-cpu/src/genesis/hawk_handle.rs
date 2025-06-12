@@ -4,7 +4,8 @@ use super::{
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT, STORE_IDS,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
+    STORE_IDS,
 };
 use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
@@ -173,10 +174,22 @@ impl Handle {
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
 
+                // Convert the results into SingleHawkMutation format
+                let [left_plans, right_plans] = results;
+                assert_eq!(left_plans.len(), right_plans.len());
+                let mut mutations = Vec::new();
+
+                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    mutations.push(SingleHawkMutation {
+                        plans: [left_plan, right_plan],
+                        modification_key: None, // Genesis doesn't use modification keys
+                    });
+                }
+
                 Ok(JobResult::new_batch_result(
                     batch_id,
                     vector_ids,
-                    HawkMutation(results),
+                    HawkMutation(mutations),
                 ))
             }
             JobRequest::Modification { modification } => {
@@ -237,9 +250,21 @@ impl Handle {
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
 
+                // Convert the results into SingleHawkMutation format
+                let [left_plans, right_plans] = results;
+                assert_eq!(left_plans.len(), right_plans.len());
+                let mut mutations = Vec::new();
+
+                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    mutations.push(SingleHawkMutation {
+                        plans: [left_plan, right_plan],
+                        modification_key: None, // Genesis doesn't use modification keys
+                    });
+                }
+
                 Ok(JobResult::new_modification_result(
                     modification.id,
-                    HawkMutation(results),
+                    HawkMutation(mutations),
                 ))
             }
         }
