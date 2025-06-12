@@ -53,7 +53,7 @@ impl FromStr for ModificationStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Modification<A = ()> {
+pub struct Modification {
     pub id: i64,
     pub serial_id: Option<i64>,
     pub request_type: String,
@@ -61,10 +61,10 @@ pub struct Modification<A = ()> {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
-    pub graph_mutation: Option<A>,
+    pub graph_mutation: Option<Vec<u8>>,
 }
 
-impl<A> Modification<A> {
+impl Modification {
     /// Marks the modification as completed, setting the status to "COMPLETED", updating the result message body and persisted flag.
     ///
     /// If `updated_serial_id` is provided, it updates the serial_id field as well.
@@ -74,7 +74,7 @@ impl<A> Modification<A> {
         persisted: bool,
         result_message_body: &str,
         updated_serial_id: Option<u32>,
-        graph_mutation: Option<A>,
+        graph_mutation: Option<Vec<u8>>,
     ) {
         self.status = ModificationStatus::Completed.to_string();
         self.result_message_body = Some(result_message_body.to_string());
@@ -246,14 +246,23 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
     let first = modifications.first().expect("Empty modifications");
     for m in modifications.iter().skip(1) {
         assert_eq!(first.id, m.id, "Inconsistent modification IDs");
-        if first.serial_id.is_some() && m.serial_id.is_some() {
-            assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
-        }
         assert_eq!(
             first.request_type, m.request_type,
             "Inconsistent request types"
         );
         assert_eq!(first.s3_url, m.s3_url, "Inconsistent S3 URLs");
+
+        // Below fields could be missing in the behind party (missing a modification)
+        // They should only be compared if both exists
+        if first.serial_id.is_some() && m.serial_id.is_some() {
+            assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
+        }
+        if first.graph_mutation.is_some() && m.graph_mutation.is_some() {
+            assert_eq!(
+                first.graph_mutation, m.graph_mutation,
+                "Inconsistent graph mutations"
+            );
+        }
     }
 }
 
@@ -268,6 +277,11 @@ mod tests {
             smpc_response::{IdentityDeletionResult, ReAuthResult},
         },
     };
+    use rand::random;
+
+    fn random_graph_mutation() -> Vec<u8> {
+        random::<[u8; 16]>().to_vec()
+    }
 
     // Helper function to create a Modification.
     fn create_modification(
@@ -277,6 +291,7 @@ mod tests {
         s3_url: Option<&str>,
         status: ModificationStatus,
         persisted: bool,
+        graph_mutation: Option<Vec<u8>>,
     ) -> Modification {
         Modification {
             id,
@@ -286,7 +301,7 @@ mod tests {
             status: status.to_string(),
             persisted,
             result_message_body: None,
-            graph_mutation: None,
+            graph_mutation,
         }
     }
 
@@ -302,6 +317,9 @@ mod tests {
 
     #[test]
     fn test_compare_modifications_local_party_outdated() {
+        let mod1_graph_mut = random_graph_mutation();
+        let mod3_graph_mut = random_graph_mutation();
+        let mod5_graph_mut = random_graph_mutation();
         let mod1_local = create_modification(
             1,
             Some(100),
@@ -309,6 +327,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod1_graph_mut.clone()),
         );
         let mod2_local = create_modification(
             2,
@@ -317,6 +336,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_local = create_modification(
             3,
@@ -325,6 +345,7 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod4_local = create_modification(
             4,
@@ -333,6 +354,7 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod5_local = create_modification(
             5,
@@ -341,6 +363,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod6_local = create_modification(
             6,
@@ -349,6 +372,7 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -366,6 +390,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod1_graph_mut.clone()),
         );
         let mod2_other = create_modification(
             2,
@@ -374,6 +399,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_other = create_modification(
             3,
@@ -382,6 +408,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod3_graph_mut.clone()),
         );
         let mod4_other = create_modification(
             4,
@@ -390,6 +417,7 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod5_other = create_modification(
             5,
@@ -398,6 +426,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
+            Some(mod5_graph_mut.clone()),
         );
         let mod6_other = create_modification(
             6,
@@ -406,6 +435,7 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let other_state = create_sync_state(vec![
             mod1_other,
@@ -445,6 +475,9 @@ mod tests {
 
     #[test]
     fn test_compare_modifications_local_party_up_to_date() {
+        let mod1_graph_mut = random_graph_mutation();
+        let mod3_graph_mut = random_graph_mutation();
+        let mod5_graph_mut = random_graph_mutation();
         // Create local modifications that are already up-to-date.
         let mod1_local = create_modification(
             1,
@@ -453,6 +486,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod1_graph_mut.clone()),
         );
         let mod2_local = create_modification(
             2,
@@ -461,6 +495,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_local = create_modification(
             3,
@@ -469,6 +504,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod3_graph_mut.clone()),
         );
         let mod4_local = create_modification(
             4,
@@ -477,6 +513,7 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod5_local = create_modification(
             5,
@@ -485,6 +522,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
+            Some(mod5_graph_mut.clone()),
         );
         let mod6_local = create_modification(
             6,
@@ -493,6 +531,7 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -511,6 +550,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            Some(mod1_graph_mut.clone()),
         );
         let mod2_other = create_modification(
             2,
@@ -519,6 +559,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_other = create_modification(
             3,
@@ -527,6 +568,7 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod4_other = create_modification(
             4,
@@ -535,6 +577,7 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod5_other = create_modification(
             5,
@@ -543,6 +586,7 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod6_other = create_modification(
             6,
@@ -551,6 +595,7 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let other_state = create_sync_state(vec![
             mod1_other, mod2_other, mod3_other, mod4_other, mod5_other, mod6_other,
@@ -584,6 +629,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_local = create_modification(
             3,
@@ -592,6 +638,7 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let my_state = create_sync_state(vec![mod2_local.clone(), mod3_local.clone()]);
 
@@ -602,6 +649,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            None,
         );
         mod1_other.result_message_body = Some(
             serde_json::to_string(&IdentityDeletionResult {
@@ -639,6 +687,7 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
+            None,
         );
         let mod2_local = create_modification(
             2,
@@ -647,6 +696,7 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
+            None,
         );
         let mod3_local = create_modification(
             3,
@@ -655,6 +705,7 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let mod4_local = create_modification(
             4,
@@ -663,6 +714,7 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
+            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -754,7 +806,7 @@ mod tests {
         let serialized_reauth = serde_json::to_string(&original_reauth_result).unwrap();
 
         // Create a modification with the serialized result
-        let mut modification: Modification<()> = Modification {
+        let mut modification = Modification {
             id: 1,
             serial_id: Some(123),
             request_type: REAUTH_MESSAGE_TYPE.to_string(),
@@ -799,7 +851,7 @@ mod tests {
         let serialized_deletion = serde_json::to_string(&original_deletion_result).unwrap();
 
         // Create a modification with the serialized result
-        let mut modification: Modification<()> = Modification {
+        let mut modification = Modification {
             id: 2,
             serial_id: Some(456),
             request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),

@@ -25,6 +25,7 @@ use clap::Parser;
 use eyre::Result;
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
+use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::helpers::{
     smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     statistics::BucketStatistics,
@@ -147,7 +148,7 @@ pub struct HawkActor {
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
@@ -489,7 +490,7 @@ impl HawkActor {
             .map(|x: usize| {
                 translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
             })
-            .collect::<Vec<_>>()
+            .collect_vec()
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
@@ -916,9 +917,12 @@ impl HawkResult {
     }
 
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
-        self.connect_plans.0[LEFT][request_i]
-            .as_ref()
-            .map(|plan| plan.inserted_vector)
+        self.connect_plans.0.get(request_i).and_then(|mutation| {
+            mutation.plans[LEFT]
+                .as_ref()
+                .or(mutation.plans[RIGHT].as_ref())
+                .map(|plan| plan.inserted_vector)
+        })
     }
 
     fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
@@ -1091,25 +1095,45 @@ impl HawkResult {
 
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
-// TODO: let this guy use SingleHawkMutation.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
+pub struct HawkMutation(pub Vec<SingleHawkMutation>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SingleHawkMutation(pub BothEyes<Option<ConnectPlan>>);
+pub struct SingleHawkMutation {
+    pub plans: BothEyes<Option<ConnectPlan>>,
+
+    #[serde(skip)]
+    pub modification_key: Option<ModificationKey>,
+}
+
+impl SingleHawkMutation {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        bincode::serialize(self).map_err(|e| eyre::eyre!("Serialization error: {}", e))
+    }
+}
 
 impl HawkMutation {
-    pub fn get_single_mutation(&self, idx: usize) -> SingleHawkMutation {
-        let left = &self.0[LEFT][idx];
-        let right = &self.0[RIGHT][idx];
-        SingleHawkMutation([left.clone(), right.clone()])
+    /// Get a serialized `SingleHawkMutation` by `ModificationKey`.
+    ///
+    /// Returns None if no mutation exists for the given key.
+    pub fn get_serialized_mutation_by_key(&self, key: &ModificationKey) -> Option<Vec<u8>> {
+        let mutation = self
+            .0
+            .iter()
+            .find(|mutation| mutation.modification_key.as_ref() == Some(key))
+            .cloned();
+        mutation
+            .as_ref()
+            .map(|m| m.serialize().expect("failed to serialize graph mutation"))
     }
 
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
-        for (side, plans) in izip!(STORE_IDS, self.0) {
-            tracing::info!("Hawk Main :: Persisting Hawk mutations: side={}", side);
-            for plan in plans.into_iter().flatten() {
-                graph_tx.with_graph(side).insert_apply(plan).await?;
+        tracing::info!("Hawk Main :: Persisting Hawk mutations");
+        for mutation in self.0 {
+            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
+                if let Some(plan) = plan_opt {
+                    graph_tx.with_graph(side).insert_apply(plan).await?;
+                }
             }
         }
         Ok(())
@@ -1248,9 +1272,15 @@ impl HawkHandle {
         let resets = search_to_reset(hawk_actor, sessions, &request).await?;
 
         // Insert into the in memory stores.
-        let mutations =
-            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result, resets)
-                .await?;
+        let mutations = Self::handle_mutations(
+            hawk_actor,
+            sessions,
+            search_results,
+            &match_result,
+            resets,
+            &request,
+        )
+        .await?;
 
         let results = HawkResult::new(
             request.batch,
@@ -1274,6 +1304,7 @@ impl HawkHandle {
         search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
+        request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
         let decisions = match_result.decisions();
@@ -1285,11 +1316,12 @@ impl HawkHandle {
                 ReauthUpdate(update_id) => Some(*update_id),
                 _ => None,
             })
-            .chain(resets.vector_ids.into_iter().map(Some))
+            .chain(resets.vector_ids.clone().into_iter().map(Some))
             .collect_vec();
 
-        let mut connect_plans = HawkMutation([vec![], vec![]]);
-
+        // Store plans for both sides
+        let mut left_plans = Vec::new();
+        let mut right_plans = Vec::new();
         // For both eyes.
         for (side, sessions, search_results, reset_results) in
             izip!(&STORE_IDS, sessions, search_results, resets.search_results)
@@ -1321,18 +1353,67 @@ impl HawkHandle {
             let insert_plans = izip!(search_results, &decisions)
                 .map(|(search_result, &decision)| {
                     // If the decision is a mutation, return the insertion plan.
-
                     decision.is_mutation().then(|| search_result.into_center())
                 })
                 .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
                 .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
-            connect_plans.0[*side as usize] = hawk_actor
+            let plans = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
                 .await?;
+
+            // Store plans for this side
+            if *side == StoreId::Left {
+                left_plans = plans;
+            } else {
+                right_plans = plans;
+            }
         }
-        Ok(connect_plans)
+
+        // Now combine left and right plans into SingleHawkMutation objects
+        let mut mutations = Vec::new();
+        let total_mutations = left_plans.len().max(right_plans.len());
+
+        for i in 0..total_mutations {
+            let left_plan = left_plans.get(i).cloned().flatten();
+            let right_plan = right_plans.get(i).cloned().flatten();
+
+            // Determine modification key based on the mutation index
+            let modification_key = if i < decisions.len() {
+                // This is a batch request mutation
+                match decisions[i] {
+                    UniqueInsert => {
+                        let request_id = &request.batch.request_ids[i];
+                        Some(ModificationKey::RequestId(request_id.clone()))
+                    }
+                    ReauthUpdate(update_id) => {
+                        let serial_id = update_id.index() + 1;
+                        Some(ModificationKey::RequestSerialId(serial_id))
+                    }
+                    _ => None,
+                }
+            } else {
+                // This is a reset update mutation
+                let reset_idx = i - decisions.len();
+                if let Some(&vector_id) = resets.vector_ids.get(reset_idx) {
+                    let serial_id = vector_id.index() + 1;
+                    Some(ModificationKey::RequestSerialId(serial_id))
+                } else {
+                    None
+                }
+            };
+
+            // Only create mutation if at least one side has a plan
+            if left_plan.is_some() || right_plan.is_some() {
+                mutations.push(SingleHawkMutation {
+                    plans: [left_plan, right_plan],
+                    modification_key,
+                });
+            }
+        }
+
+        Ok(HawkMutation(mutations))
     }
 
     async fn health_check(
@@ -1540,8 +1621,7 @@ mod tests {
         assert!(result.reauth_target_indices.is_empty());
         assert!(result.reauth_or_rule_used.is_empty());
         assert!(result.modifications.is_empty());
-        assert_eq!(batch_size, result.actor_data.0[0].len());
-        assert_eq!(batch_size, result.actor_data.0[1].len());
+        assert_eq!(batch_size, result.actor_data.0.len());
 
         Ok(())
     }
@@ -1673,7 +1753,19 @@ mod tests_db {
         // Populate the SQL store with test data.
         let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
         {
-            let mutation = HawkMutation(STORE_IDS.map(make_plans));
+            let plans_left = make_plans(StoreId::Left);
+            let plans_right = make_plans(StoreId::Right);
+
+            let mutations = plans_left
+                .into_iter()
+                .zip(plans_right.into_iter())
+                .map(|(left_plan, right_plan)| SingleHawkMutation {
+                    plans: [left_plan, right_plan],
+                    modification_key: None,
+                })
+                .collect();
+
+            let mutation = HawkMutation(mutations);
             let mut graph_tx = graph_store.tx().await?;
             mutation.persist(&mut graph_tx).await?;
             graph_tx.tx.commit().await?;
@@ -1716,5 +1808,177 @@ mod tests_db {
 
         graph_store.cleanup().await.unwrap();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod hawk_mutation_tests {
+    use super::*;
+    use crate::hawkers::aby3::aby3_store::VectorId;
+    use crate::hnsw::{
+        graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV, SortedNeighborhood,
+    };
+    use crate::shares::share::DistanceShare;
+    use iris_mpc_common::helpers::sync::ModificationKey;
+
+    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
+
+    fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
+        let distance = DistanceShare::new(Default::default(), Default::default());
+        ConnectPlan {
+            inserted_vector: vector_id,
+            layers: vec![ConnectPlanLayer {
+                neighbors: SortedNeighborhood::from_ascending_vec(vec![(
+                    vector_id,
+                    distance.clone(),
+                )]),
+                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+            }],
+            set_ep: false,
+        }
+    }
+
+    #[test]
+    fn test_get_serialized_mutation_by_key() {
+        let request_id = "test-request-456".to_string();
+        let modification_key = ModificationKey::RequestId(request_id.clone());
+
+        let mutation = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(modification_key.clone()),
+        };
+
+        let hawk_mutation = HawkMutation(vec![mutation.clone()]);
+
+        // Test successful serialization
+        let result = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
+        assert!(result.is_some());
+
+        let serialized = result.unwrap();
+        assert!(!serialized.is_empty());
+
+        // Verify we can deserialize it back
+        let deserialized: SingleHawkMutation = bincode::deserialize(&serialized).unwrap();
+        // Note: modification_key is skipped during serialization, so we only compare plans
+        assert_eq!(deserialized.plans, mutation.plans);
+
+        // Test failed lookup
+        let wrong_key = ModificationKey::RequestId("wrong-request".to_string());
+        let result = hawk_mutation.get_serialized_mutation_by_key(&wrong_key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_multiple_mutations_serialized_lookup() {
+        let request_id1 = "request-1".to_string();
+        let request_id2 = "request-2".to_string();
+        let serial_id = 100u32;
+
+        let key1 = ModificationKey::RequestId(request_id1.clone());
+        let key2 = ModificationKey::RequestId(request_id2.clone());
+        let key3 = ModificationKey::RequestSerialId(serial_id);
+
+        let mutation1 = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(key1.clone()),
+        };
+
+        let mutation2 = SingleHawkMutation {
+            plans: [
+                None,
+                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+            ],
+            modification_key: Some(key2.clone()),
+        };
+
+        let mutation3 = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+            ],
+            modification_key: Some(key3.clone()),
+        };
+
+        let hawk_mutation = HawkMutation(vec![
+            mutation1.clone(),
+            mutation2.clone(),
+            mutation3.clone(),
+        ]);
+
+        // Test all serialized lookups work correctly
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key1)
+            .is_some());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key2)
+            .is_some());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key3)
+            .is_some());
+
+        // Test non-existent key
+        let wrong_key = ModificationKey::RequestId("non-existent".to_string());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&wrong_key)
+            .is_none());
+    }
+
+    #[test]
+    fn test_mutation_without_modification_key() {
+        let mutation_with_key = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(ModificationKey::RequestId("test".to_string())),
+        };
+
+        let mutation_without_key = SingleHawkMutation {
+            plans: [
+                None,
+                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+            ],
+            modification_key: None,
+        };
+
+        let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
+
+        // Should find the serialized mutation with key
+        let key = ModificationKey::RequestId("test".to_string());
+        assert!(hawk_mutation.get_serialized_mutation_by_key(&key).is_some());
+
+        // Should not find mutations without keys
+        let other_key = ModificationKey::RequestSerialId(123);
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&other_key)
+            .is_none());
+    }
+
+    #[test]
+    fn test_single_hawk_mutation_serialization() {
+        let mutation = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(ModificationKey::RequestId("test".to_string())),
+        };
+
+        // Test serialization
+        let serialized = mutation.serialize().unwrap();
+        assert!(!serialized.is_empty());
+
+        // Test deserialization
+        let deserialized: SingleHawkMutation = bincode::deserialize(&serialized).unwrap();
+
+        // modification_key is skipped during serialization, so it should be None
+        assert_eq!(deserialized.plans, mutation.plans);
+        assert_eq!(deserialized.modification_key, None);
     }
 }

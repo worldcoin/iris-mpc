@@ -24,7 +24,6 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use serde::de::DeserializeOwned;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
@@ -118,7 +117,7 @@ pub struct StoredModification {
     pub graph_mutation: Option<Vec<u8>>,
 }
 
-impl<A: DeserializeOwned> From<StoredModification> for Modification<A> {
+impl From<StoredModification> for Modification {
     fn from(stored: StoredModification) -> Self {
         Self {
             id: stored.id,
@@ -128,13 +127,7 @@ impl<A: DeserializeOwned> From<StoredModification> for Modification<A> {
             status: stored.status,
             persisted: stored.persisted,
             result_message_body: stored.result_message_body,
-            graph_mutation: stored.graph_mutation.and_then(|bytes| {
-                if bytes.is_empty() {
-                    return None;
-                }
-                // TODO: consider propagating the error to the caller instead of panic
-                Some(bincode::deserialize(&bytes).expect("Failed to deserialize graph mutation"))
-            }),
+            graph_mutation: stored.graph_mutation,
         }
     }
 }
@@ -469,10 +462,10 @@ WHERE id = $1;
 
     /// Update the status, persisted flag, and result_message_body of the
     /// modifications based on their id.
-    pub async fn update_modifications<A: serde::Serialize>(
+    pub async fn update_modifications(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        modifications: &[&Modification<A>],
+        modifications: &[&Modification],
     ) -> Result<(), sqlx::Error> {
         if modifications.is_empty() {
             return Ok(());
@@ -488,11 +481,7 @@ WHERE id = $1;
         let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
         let graph_mutations: Vec<Option<Vec<u8>>> = modifications
             .iter()
-            .map(|m| {
-                m.graph_mutation
-                    .as_ref()
-                    .and_then(|gm| bincode::serialize(gm).ok())
-            })
+            .map(|m| m.graph_mutation.clone())
             .collect();
 
         sqlx::query(
@@ -643,8 +632,8 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
     }
 }
 
+// #[cfg(feature = "db_dependent")]
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
@@ -981,6 +970,7 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
+            None,
         );
 
         // 3. Insert another modification
@@ -997,6 +987,7 @@ pub mod tests {
             Some("https://example.com".to_string()),
             ModificationStatus::InProgress,
             false,
+            None,
             None,
         );
 
@@ -1036,6 +1027,7 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
+            None,
         );
         assert_modification(
             second_last,
@@ -1045,6 +1037,7 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
+            None,
             None,
         );
 
@@ -1062,6 +1055,7 @@ pub mod tests {
         expected_status: ModificationStatus,
         expected_persisted: bool,
         expected_result_body: Option<String>,
+        expected_graph_mut: Option<Vec<u8>>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1070,6 +1064,7 @@ pub mod tests {
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);
+        assert_eq!(actual.graph_mutation, expected_graph_mut);
     }
 
     #[tokio::test]
@@ -1100,12 +1095,13 @@ pub mod tests {
                 Some("http://example.com/150"),
             )
             .await?;
-
+        let m1_graph_mut = vec![1u8, 2u8, 3u8, 4u8];
+        let m3_graph_mut = vec![3u8, 123u8, 34u8, 99u8];
         // Update the status & persisted fields for first four in a single transaction
         let mut tx = store.tx().await?;
-        m1.mark_completed(true, "m1", None, None);
+        m1.mark_completed(true, "m1", None, Some(m1_graph_mut.clone()));
         m2.mark_completed(false, "m2", None, None);
-        m3.mark_completed(true, "m3", Some(101), None);
+        m3.mark_completed(true, "m3", Some(101), Some(m3_graph_mut.clone()));
         m4.mark_completed(false, "m4", None, None);
 
         let modifications_to_update = vec![&m1, &m2, &m3, &m4];
@@ -1127,6 +1123,7 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
+            None,
         );
         assert_modification(
             &last_five[1],
@@ -1137,6 +1134,7 @@ pub mod tests {
             ModificationStatus::Completed,
             false,
             Some("m4".to_string()),
+            None,
         );
         assert_modification(
             &last_five[2],
@@ -1147,6 +1145,7 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m3".to_string()),
+            Some(m3_graph_mut.clone()),
         );
         assert_modification(
             &last_five[3],
@@ -1157,6 +1156,7 @@ pub mod tests {
             ModificationStatus::Completed,
             false,
             Some("m2".to_string()),
+            None,
         );
         assert_modification(
             &last_five[4],
@@ -1167,6 +1167,7 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m1".to_string()),
+            Some(m1_graph_mut.clone()),
         );
 
         cleanup(&postgres_client, &schema_name).await?;
