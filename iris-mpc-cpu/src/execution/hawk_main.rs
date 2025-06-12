@@ -1632,9 +1632,7 @@ mod tests_db {
         hnsw::{
             graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
             searcher::ConnectPlanLayerV,
-            SortedNeighborhood,
         },
-        shares::share::DistanceShare,
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -1642,7 +1640,6 @@ mod tests_db {
     async fn test_graph_load() -> Result<()> {
         // The test data is a sequence of mutations on the graph.
         let vectors = (0..5).map(VectorId::from_0_index).collect_vec();
-        let distance = DistanceShare::new(Default::default(), Default::default());
 
         let make_plans = |side| {
             let side = side as usize; // Make some difference between sides.
@@ -1653,10 +1650,7 @@ mod tests_db {
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers: vec![ConnectPlanLayer {
-                        neighbors: SortedNeighborhood::from_ascending_vec(vec![(
-                            vectors[side],
-                            distance.clone(),
-                        )]),
+                        neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
                         nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
                     set_ep: i == side,
