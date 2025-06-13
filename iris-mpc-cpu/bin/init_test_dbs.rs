@@ -4,25 +4,18 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    execution::{
-        hawk_main::{session_seeded_rng, StoreId, STORE_IDS},
-        session::SessionId,
-    },
+    execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
         HnswSearcher,
     },
     protocol::shared_iris::GaloisRingSharedIris,
-    py_bindings::{
-        io::{read_json, write_json},
-        limited_iterator,
-        plaintext_store::Base64IrisCode,
-    },
+    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
 use itertools::{izip, Itertools};
-use rand_chacha::ChaCha8Rng;
 
+use rand::SeedableRng;
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::{info, warn};
@@ -132,10 +125,10 @@ struct Args {
     #[clap(long("hnsw-p"), short('p'))]
     layer_probability: Option<f64>,
 
-    /// PRNG seed for HNSW insertion, used to select the layer at which new
+    /// PRF key for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
     #[clap(long, default_value = "0")]
-    hnsw_prng_seed: u64,
+    hnsw_prf_key: u64,
 
     /// PRNG seed for ABY3 MPC protocols, used for locally generating secret
     /// shares of iris codes.
@@ -168,9 +161,6 @@ impl Args {
     }
 }
 
-// Type: Random number generators used to transform plaintext into secret shares.
-type Rngs = (ChaCha8Rng, ChaCha8Rng, AesRng);
-
 // Convertor: Args -> HnswParams.
 impl From<&Args> for HnswParams {
     fn from(args: &Args) -> Self {
@@ -180,18 +170,6 @@ impl From<&Args> for HnswParams {
         }
 
         params
-    }
-}
-
-// Convertor: Args -> Rngs.
-impl From<&Args> for Rngs {
-    fn from(value: &Args) -> Self {
-        (
-            // Emulates session construction from `HawkActor::new_sessions` function call
-            session_seeded_rng(value.hnsw_prng_seed, StoreId::Left, SessionId(0)),
-            session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(1)),
-            <AesRng as rand::SeedableRng>::seed_from_u64(value.aby3_prng_seed),
-        )
     }
 }
 
@@ -219,26 +197,7 @@ async fn main() -> Result<()> {
         .map(|target| target.saturating_sub(n_existing_irises));
 
     info!("Setting hnsw pseudo-random number generators");
-    let (mut hnsw_rng_l, mut hnsw_rng_r, mut aby3_rng) = Rngs::from(&args);
-    let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
-    if n_existing_irises > 0 {
-        if let Ok((rng_l, rng_r)) = read_json(&prng_state_filename) {
-            info!(
-                "Loaded intermediate HNSW PRNG state from file: {}",
-                prng_state_filename
-            );
-            hnsw_rng_l = rng_l;
-            hnsw_rng_r = rng_r;
-        } else {
-            warn!(
-                "Couldn't load intermediate HNSW PRNG state from file: {}",
-                prng_state_filename
-            );
-            warn!("Initialized PRNGs from explicit seeds");
-        }
-    } else {
-        info!("Initialized PRNGs from explicit seeds");
-    }
+    let mut aby3_rng = AesRng::seed_from_u64(args.aby3_prng_seed);
 
     info!("⚓ ANCHOR: Converting plaintext iris codes locally into secret shares");
 
@@ -378,15 +337,14 @@ async fn main() -> Result<()> {
     });
 
     info!("Initializing jobs to process plaintext iris codes");
-    let hnsw_rngs = [hnsw_rng_l, hnsw_rng_r];
-    for (side, mut rx, mut vector_store, mut graph, mut hnsw_rng) in izip!(
+    for (side, mut rx, mut vector_store, mut graph) in izip!(
         STORE_IDS,
         receivers.into_iter(),
         vectors.into_iter(),
         graphs.into_iter(),
-        hnsw_rngs.into_iter()
     ) {
         let params = params.clone();
+        let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
 
         jobs.spawn(async move {
             let searcher = HnswSearcher { params };
@@ -394,8 +352,20 @@ async fn main() -> Result<()> {
 
             while let Some(raw_query) = rx.recv().await {
                 let query = Arc::new(raw_query);
+
+                let inserted_id = vector_store.insert(&query).await;
+                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
+                let (neighbors, set_ep) = searcher
+                    .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
+                    .await?;
                 searcher
-                    .insert(&mut vector_store, &mut graph, &query, &mut hnsw_rng)
+                    .insert_from_search_results(
+                        &mut vector_store,
+                        &mut graph,
+                        inserted_id,
+                        neighbors,
+                        set_ep,
+                    )
                     .await?;
 
                 counter += 1;
@@ -404,7 +374,7 @@ async fn main() -> Result<()> {
                 }
             }
 
-            Ok((side, vector_store, graph, hnsw_rng))
+            Ok((side, vector_store, graph))
         });
     }
 
@@ -424,8 +394,7 @@ async fn main() -> Result<()> {
         results[0].1.points.len()
     );
 
-    let (_, _, graph_r, hnsw_rng_r) = results.remove(1);
-    let (_, _, graph_l, hnsw_rng_l) = results.remove(0);
+    let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
 
     for (party, db) in dbs.iter().enumerate() {
         for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
@@ -433,12 +402,6 @@ async fn main() -> Result<()> {
             db.persist_graph_db(graph.clone(), side).await?;
         }
     }
-
-    info!(
-        "Writing HNSW PRNG intermediate state to file: {}",
-        prng_state_filename
-    );
-    write_json(&(hnsw_rng_l, hnsw_rng_r), &prng_state_filename)?;
 
     info!("Exited successfully! 🎉");
 

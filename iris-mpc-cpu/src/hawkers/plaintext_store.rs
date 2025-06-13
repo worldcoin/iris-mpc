@@ -56,7 +56,7 @@ impl PlaintextStore {
         for idx in 0..graph_size {
             let query = self.points[idx].clone();
             let query_id = VectorId::from_0_index(idx as u32);
-            let insertion_layer = searcher.select_layer(&mut rng)?;
+            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;

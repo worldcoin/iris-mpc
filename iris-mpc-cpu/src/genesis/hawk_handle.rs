@@ -6,6 +6,7 @@ use super::{
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
+    STORE_IDS,
 };
 use eyre::{OptionExt, Result};
 use itertools::{izip, Itertools};
@@ -112,11 +113,9 @@ impl Handle {
         // Use all sessions per iris side to search for insertion indices per
         // batch, number configured by `args.request_parallelism`.
 
-        // TODO implement automatic parallelism scaling
-
         // Iterate per side
-        let jobs_per_side = izip!(request.queries.iter(), sessions.iter())
-            .map(|(queries_side, sessions_side)| {
+        let jobs_per_side = izip!(STORE_IDS, request.queries.iter(), sessions.iter())
+            .map(|(side, queries_side, sessions_side)| {
                 let searcher = actor.searcher();
                 let queries_with_ids =
                     izip!(queries_side.clone(), request.vector_ids.clone()).collect_vec();
@@ -132,13 +131,19 @@ impl Handle {
                     // Process queries in a logical insertion batch for this side
                     for queries_batch in queries_with_ids.chunks(n_sessions) {
                         let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
-                            |((query, _id), session)| {
+                            |((query, id), session)| {
                                 let query = query.clone();
                                 let searcher = searcher.clone();
                                 let session = session.clone();
+                                let identifier = (*id, side);
                                 async move {
-                                    search_single_query_no_match_count(session, query, &searcher)
-                                        .await
+                                    search_single_query_no_match_count(
+                                        session,
+                                        query,
+                                        &searcher,
+                                        &identifier,
+                                    )
+                                    .await
                                 }
                             },
                         );

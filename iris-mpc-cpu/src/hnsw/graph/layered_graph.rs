@@ -333,7 +333,7 @@ mod tests {
 
         for raw_query in raw_queries.db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng)?;
+            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
@@ -372,7 +372,7 @@ mod tests {
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng)?;
+            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
