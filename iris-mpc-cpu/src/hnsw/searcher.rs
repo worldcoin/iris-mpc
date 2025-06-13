@@ -828,9 +828,8 @@ impl HnswSearcher {
         store: &mut V,
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
-        rng: &mut impl RngCore,
+        insertion_layer: usize,
     ) -> Result<V::VectorRef> {
-        let insertion_layer = self.select_layer(rng)?;
         let (neighbors, set_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
             .await?;
@@ -1124,7 +1123,9 @@ mod tests {
 
         // Insert the codes with helper function
         for query in queries2.iter() {
-            db.insert(vector_store, graph_store, query, rng).await?;
+            let insertion_layer = db.select_layer(rng)?;
+            db.insert(vector_store, graph_store, query, insertion_layer)
+                .await?;
         }
 
         // Search for the same codes and find matches.

@@ -26,8 +26,9 @@ fn main() -> Result<()> {
         for idx in 0..DATABASE_SIZE {
             let raw_query = IrisCode::random_rng(&mut rng);
             let query = Arc::new(raw_query);
+            let insertion_layer = searcher.select_layer(&mut rng)?;
             searcher
-                .insert(&mut vector, &mut graph, &query, &mut rng)
+                .insert(&mut vector, &mut graph, &query, insertion_layer)
                 .await?;
             if idx % 100 == 99 {
                 println!("{}", idx + 1);
