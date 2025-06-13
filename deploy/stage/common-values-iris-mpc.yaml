@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc@sha256:a81d585bbbb65223966018f9ceec7240b7509944be149a743b28866414bab5c1" # v0.17.0 + anon stats fix
+image: "ghcr.io/worldcoin/iris-mpc@sha256:88c20af46f445adc020cd10ee97f32dd4c89f9710752296882b69efe0cd58895" # v0.17.0 + anon stats fix + no full scan side switch
 
 environment: stage
 replicaCount: 1
