@@ -371,8 +371,17 @@ mod tests {
     const INDEXATION_END_ID: IrisSerialId = 100;
     const INDEXATION_END_ID_MAX: IrisSerialId = 15_000_000;
     const INDEXATION_START_ID: IrisSerialId = 1;
-    const LAST_INDEXED_IDS: [IrisSerialId; 10] = [
-        0, 2312177, 6983790, 7110281, 7859739, 10174686, 10270291, 11961225, 12317574, 14277641,
+    const LAST_INDEXED_IDS: [(IrisSerialId, usize); 10] = [
+        (0, 1),
+        (2312177, 71),
+        (6983790, 214),
+        (7110281, 217),
+        (7859739, 240),
+        (10174686, 311),
+        (10270291, 314),
+        (11961225, 366),
+        (12317574, 376),
+        (14277641, 436),
     ];
     const PARTY_ID: usize = 0;
     const RNG_SEED: u64 = 0;
@@ -466,10 +475,8 @@ mod tests {
             (BatchSize::new_1(), STATIC_BATCH_SIZE_10),
             (BatchSize::new_2(), STATIC_BATCH_SIZE_1),
         ] {
-            for identifiers in [LAST_INDEXED_IDS.to_vec(), get_last_indexed_identifiers()] {
-                for last_indexed_id in identifiers {
-                    assert_eq!(instance.next_max(last_indexed_id), size);
-                }
+            for last_indexed_id in get_last_indexed_identifiers() {
+                assert_eq!(instance.next_max(last_indexed_id), size);
             }
         }
     }
@@ -478,17 +485,8 @@ mod tests {
     #[test]
     fn test_batch_size_2() {
         let instance = BatchSize::new_3();
-        for last_indexed_id in LAST_INDEXED_IDS {
-            match last_indexed_id {
-                0 => {
-                    // Graph is empty therefore batch size is 1.
-                    assert_eq!(instance.next_max(last_indexed_id), 1);
-                }
-                _ => {
-                    // TODO: how to correctly assert against precise expected value.
-                    assert!(instance.next_max(last_indexed_id) >= STATIC_BATCH_SIZE_10);
-                }
-            }
+        for (last_indexed_id, batch_size) in LAST_INDEXED_IDS {
+            assert_eq!(instance.next_max(last_indexed_id), batch_size);
         }
     }
 
