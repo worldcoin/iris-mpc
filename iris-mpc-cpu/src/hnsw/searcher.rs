@@ -13,12 +13,17 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
+use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use siphasher::sip::SipHasher13;
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+};
 use tracing::{debug, instrument, trace_span, Instrument};
 
 /// The number of explicitly provided parameters for different layers of HNSW
@@ -237,6 +242,28 @@ impl HnswSearcher {
         let geom_distr = Geometric::new(p_geom)?;
 
         Ok(geom_distr.sample(rng) as usize)
+    }
+
+    /// Choose a random insertion layer from a geometric distribution, producing
+    /// graph layers which decrease in density by a constant factor per layer.
+    ///
+    /// Generates the layer value based on the evaluation of a keyed PRF on a
+    /// hashable input identifier `value`, for instance a vector id or a request id.
+    pub fn select_layer_prf<H: Hash>(&self, prf_key: &[u8; 16], value: H) -> Result<usize> {
+        // produce `value_hash` from `value` using `SipHasher13`, keyed with `prf_key`
+        let mut hasher = SipHasher13::new_with_key(prf_key);
+        value.hash(&mut hasher);
+        let value_hash: u64 = hasher.finish();
+
+        // initialize `AesRng` with seed `prf_key ^ (value_hash || value_hash)`
+        let mut rng_seed = *prf_key;
+        for (idx, byte) in value_hash.to_le_bytes().into_iter().enumerate() {
+            rng_seed[idx] ^= byte;
+            rng_seed[idx + 8] ^= byte;
+        }
+        let mut rng = AesRng::from_seed(rng_seed);
+
+        self.select_layer(&mut rng)
     }
 
     /// Return a tuple containing a distance-sorted list initialized with the
