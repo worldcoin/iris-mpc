@@ -394,7 +394,7 @@ async fn main() -> Result<()> {
 
             while let Some(raw_query) = rx.recv().await {
                 let query = Arc::new(raw_query);
-                let insertion_layer = searcher.select_layer(&mut hnsw_rng)?;
+                let insertion_layer = searcher.select_layer_rng(&mut hnsw_rng)?;
                 searcher
                     .insert(&mut vector_store, &mut graph, &query, insertion_layer)
                     .await?;

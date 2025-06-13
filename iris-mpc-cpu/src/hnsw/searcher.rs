@@ -237,7 +237,7 @@ impl HnswSearcher {
 
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
-    pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
+    pub fn select_layer_rng(&self, rng: &mut impl RngCore) -> Result<usize> {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom)?;
 
@@ -263,7 +263,7 @@ impl HnswSearcher {
         }
         let mut rng = AesRng::from_seed(rng_seed);
 
-        self.select_layer(&mut rng)
+        self.select_layer_rng(&mut rng)
     }
 
     /// Return a tuple containing a distance-sorted list initialized with the
@@ -1104,7 +1104,7 @@ mod tests {
 
         // Insert the codes.
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng)?;
+            let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
@@ -1123,7 +1123,7 @@ mod tests {
 
         // Insert the codes with helper function
         for query in queries2.iter() {
-            let insertion_layer = db.select_layer(rng)?;
+            let insertion_layer = db.select_layer_rng(rng)?;
             db.insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
         }

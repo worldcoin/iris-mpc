@@ -43,7 +43,7 @@ pub fn insert(
         let mut rng = ThreadRng::default();
 
         let query = Arc::new(iris);
-        let insertion_layer = searcher.select_layer(&mut rng).unwrap();
+        let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
         searcher
             .insert(vector, graph, &query, insertion_layer)
             .await
@@ -78,7 +78,7 @@ pub fn fill_uniform_random(
 
         for idx in 0..num {
             let query = Arc::new(IrisCode::random_rng(&mut rng));
-            let insertion_layer = searcher.select_layer(&mut rng).unwrap();
+            let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
             searcher
                 .insert(vector, graph, &query, insertion_layer)
                 .await
@@ -116,7 +116,7 @@ pub fn fill_from_ndjson_file(
         for json_pt in stream {
             let raw_query = (&json_pt.unwrap()).into();
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng).unwrap();
+            let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
             searcher
                 .insert(vector, graph, &query, insertion_layer)
                 .await

@@ -498,7 +498,7 @@ mod tests {
                 let mut inserted = vec![];
                 // insert queries
                 for query in queries.iter() {
-                    let insertion_layer = db.select_layer(&mut rng).unwrap();
+                    let insertion_layer = db.select_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
                         .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
                         .await

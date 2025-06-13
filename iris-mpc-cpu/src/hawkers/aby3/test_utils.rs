@@ -328,7 +328,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
                 let searcher = HnswSearcher::new_with_test_parameters();
                 // insert queries
                 for query in queries.iter() {
-                    let insertion_layer = searcher.select_layer(&mut rng_searcher)?;
+                    let insertion_layer = searcher.select_layer_rng(&mut rng_searcher)?;
                     searcher
                         .insert(&mut *store_lock, &mut graph_store, query, insertion_layer)
                         .await?;

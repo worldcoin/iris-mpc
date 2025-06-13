@@ -80,7 +80,9 @@ async fn per_query(
     search_params: &SearchParams,
     graph_store: &GraphMem<Aby3Store>,
 ) -> Result<InsertPlan> {
-    let insertion_layer = search_params.hnsw.select_layer(&mut session.shared_rng)?;
+    let insertion_layer = search_params
+        .hnsw
+        .select_layer_rng(&mut session.shared_rng)?;
 
     let (links, set_ep) = search_params
         .hnsw
@@ -121,7 +123,7 @@ pub async fn search_single_query_no_match_count(
     let mut session = session.write().await;
 
     let graph = session.graph_store.clone().read_owned().await;
-    let insertion_layer = searcher.select_layer(&mut session.shared_rng)?;
+    let insertion_layer = searcher.select_layer_rng(&mut session.shared_rng)?;
 
     let (links, set_ep) = searcher
         .search_to_insert(&mut session.aby3_store, &graph, &query, insertion_layer)
