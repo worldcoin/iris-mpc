@@ -167,6 +167,20 @@ impl BatchSize {
         // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
         BatchSize::Static(size)
     }
+
+    #[allow(non_snake_case)]
+    pub fn new_static_from_dynamic_formula(
+        last_indexed_id: IrisSerialId,
+        error_correction: usize,
+        hnsw_M: usize,
+    ) -> Self {
+        // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        Self::new_static(Self::get_dynamic_size(
+            last_indexed_id,
+            error_correction,
+            hnsw_M,
+        ))
+    }
 }
 
 /// Trait: fmt::Display.
@@ -283,34 +297,47 @@ impl BatchIterator for BatchGenerator {
 
 /// Methods.
 impl BatchSize {
+    /// Dynamically computes size of next batch to be indexed.
+    #[allow(non_snake_case)]
+    pub fn get_dynamic_size(
+        last_indexed_id: IrisSerialId,
+        error_correction: usize,
+        hnsw_M: usize,
+    ) -> usize {
+        // r: configurable parameter for error rate.
+        let r = error_correction;
+
+        // M: HNSW parameter for nearest neighbors.
+        let M = hnsw_M;
+
+        // n: current graph size (last_indexed_id).
+        // TODO: Should be existing graph size rather than id of last indexed node. Typically deviation
+        // will be minimal, but in the interests of precision we should use the existing graph size.
+        let N = last_indexed_id;
+
+        // batch_size: floor(N/(Mr - 1) + 1)
+        (N as usize).div_euclid(M * r - 1) + 1
+    }
+
     /// Calculates maximum size of next batch to be indexed.
     #[allow(non_snake_case)]
     fn next_max(&self, last_indexed_id: IrisSerialId) -> usize {
-        log_info(format!(
-            "Calculating max batch size: last-indexed-id={} :: {}",
-            last_indexed_id, self
-        ));
-
         match self {
             BatchSize::Static(size) => {
-                log_info(format!("Using static max batch size: {}", size));
+                log_info(format!(
+                    "Calculated batch size: last-indexed-id={} :: size={}",
+                    last_indexed_id, size
+                ));
                 *size
             }
             BatchSize::Dynamic {
                 error_correction: r,
                 hnsw_M: M,
             } => {
-                // r: configurable parameter for error rate.
-                // M: HNSW parameter for nearest neighbors.
-                // n: current graph size (last_indexed_id).
-                let N = last_indexed_id;
-
-                // batch_size: floor(N/(Mr - 1) + 1)
-                let batch_size = (N as usize).div_euclid(*M * *r - 1) + 1;
-
+                let batch_size = Self::get_dynamic_size(last_indexed_id, *r, *M);
                 log_info(format!(
-                    "Dynamic max batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                    batch_size, N, M, r
+                    "Calculated batch size: last-indexed-id={} :: size={} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
+                    last_indexed_id, batch_size, last_indexed_id, M, r
                 ));
 
                 batch_size
