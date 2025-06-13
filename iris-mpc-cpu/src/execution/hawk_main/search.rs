@@ -5,7 +5,8 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{
-        scheduler::{collect_results, parallelize}, StoreId
+        scheduler::{collect_results, parallelize},
+        StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Store, QueryRef},
     hnsw::{GraphMem, HnswSearcher},

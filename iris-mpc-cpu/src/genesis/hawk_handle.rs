@@ -5,7 +5,8 @@ use super::{
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
+    STORE_IDS,
 };
 use eyre::{OptionExt, Result};
 use itertools::{izip, Itertools};
@@ -137,7 +138,10 @@ impl Handle {
                                 let identifier = (*id, side);
                                 async move {
                                     search_single_query_no_match_count(
-                                        session, query, &searcher, &identifier,
+                                        session,
+                                        query,
+                                        &searcher,
+                                        &identifier,
                                     )
                                     .await
                                 }
