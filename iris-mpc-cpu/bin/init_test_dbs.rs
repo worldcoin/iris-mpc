@@ -354,7 +354,7 @@ async fn main() -> Result<()> {
                 let query = Arc::new(raw_query);
 
                 let inserted_id = vector_store.insert(&query).await;
-                let insertion_layer = searcher.select_layer_prf(&prf_seed, (inserted_id, side))?;
+                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;

@@ -4,16 +4,21 @@ use super::{
     BothEyes, HawkSession, HawkSessionRef, InsertPlan, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::{collect_results, parallelize},
+    execution::hawk_main::{
+        scheduler::{collect_results, parallelize}, StoreId
+    },
     hawkers::aby3::aby3_store::{Aby3Store, QueryRef},
     hnsw::{GraphMem, HnswSearcher},
 };
-use eyre::Result;
+use eyre::{OptionExt, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<QueryRef, ROT>>>>;
 pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<InsertPlan, ROT>>>;
+
+/// Identifiers of requests
+pub type SearchIds = Arc<VecRequests<String>>;
 
 #[derive(Clone)]
 pub struct SearchParams {
@@ -24,6 +29,7 @@ pub struct SearchParams {
 pub async fn search<ROT>(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
     search_queries: &SearchQueries<ROT>,
+    search_ids: &SearchIds,
     search_params: SearchParams,
 ) -> Result<SearchResults<ROT>>
 where
@@ -39,11 +45,20 @@ where
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
+        let search_ids = search_ids.clone();
         let search_params = search_params.clone();
         let tx = tx.clone();
         async move {
             let mut session = session.write().await;
-            per_session(&mut session, &search_queries, &search_params, tx, batch).await
+            per_session(
+                &mut session,
+                &search_queries,
+                &search_ids,
+                &search_params,
+                tx,
+                batch,
+            )
+            .await
         }
     };
 
@@ -58,7 +73,8 @@ where
 
 async fn per_session<ROT>(
     session: &mut HawkSession,
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef, ROT>>>,
+    search_queries: &SearchQueries<ROT>,
+    search_ids: &SearchIds,
     search_params: &SearchParams,
     tx: UnboundedSender<(TaskId, InsertPlan)>,
     batch: Batch,
@@ -67,7 +83,20 @@ async fn per_session<ROT>(
 
     for task in batch.tasks {
         let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
-        let result = per_query(session, query, search_params, &graph_store).await?;
+        let mut insertion_layer = 0;
+        if task.is_central {
+            let query_uuid = search_ids
+                .get(task.i_request)
+                .ok_or_eyre("Invalid request id for uuid lookup")?
+                .clone();
+            let side: StoreId = batch.i_eye.try_into()?;
+            let layer_selection_value = (query_uuid, side);
+            insertion_layer = search_params
+                .hnsw
+                .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?
+        }
+        let result =
+            per_query(session, query, search_params, &graph_store, insertion_layer).await?;
         tx.send((task.id(), result))?;
     }
 
@@ -79,11 +108,8 @@ async fn per_query(
     query: QueryRef,
     search_params: &SearchParams,
     graph_store: &GraphMem<Aby3Store>,
+    insertion_layer: usize,
 ) -> Result<InsertPlan> {
-    let insertion_layer = search_params
-        .hnsw
-        .select_layer_rng(&mut session.shared_rng)?;
-
     let (links, set_ep) = search_params
         .hnsw
         .search_to_insert(
@@ -115,15 +141,17 @@ async fn per_query(
 /// calculating the match count of the results.
 ///
 /// (The `match_count` field returned is always set to 0.)
-pub async fn search_single_query_no_match_count(
+pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     session: HawkSessionRef,
     query: QueryRef,
     searcher: &HnswSearcher,
+    identifier: &H,
 ) -> Result<InsertPlan> {
     let mut session = session.write().await;
 
     let graph = session.graph_store.clone().read_owned().await;
-    let insertion_layer = searcher.select_layer_rng(&mut session.shared_rng)?;
+
+    let insertion_layer = searcher.select_layer_prf(&session.hnsw_prf_key, identifier)?;
 
     let (links, set_ep) = searcher
         .search_to_insert(&mut session.aby3_store, &graph, &query, insertion_layer)

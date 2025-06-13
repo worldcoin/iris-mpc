@@ -20,10 +20,8 @@ use crate::{
         IntRing2k,
     },
 };
-use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
-use rand::SeedableRng;
 use std::array;
 use tracing::instrument;
 
@@ -54,7 +52,7 @@ pub async fn setup_replicated_prf(session: &mut NetworkSession, my_seed: PrfSeed
 }
 
 /// Setup an RNG common between all parties, for use in stochastic algorithms (e.g. HNSW layer selection).
-pub async fn setup_shared_rng(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<AesRng> {
+pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -> Result<PrfSeed> {
     let my_msg = NetworkValue::PrfKey(my_seed).to_network();
 
     let decode = |msg| match NetworkValue::from_network(msg) {
@@ -70,8 +68,7 @@ pub async fn setup_shared_rng(session: &mut NetworkSession, my_seed: PrfSeed) ->
     session.send_prev(my_msg).await?;
     let next_seed = decode(session.receive_next().await)?;
 
-    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
-    Ok(AesRng::from_seed(shared_seed))
+    Ok(array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]))
 }
 
 /// Compares the distance between two iris pairs to a threshold.

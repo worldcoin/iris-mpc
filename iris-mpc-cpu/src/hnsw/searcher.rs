@@ -249,7 +249,7 @@ impl HnswSearcher {
     ///
     /// Generates the layer value based on the evaluation of a keyed PRF on a
     /// hashable input identifier `value`, for instance a vector id or a request id.
-    pub fn select_layer_prf<H: Hash>(&self, prf_key: &[u8; 16], value: H) -> Result<usize> {
+    pub fn select_layer_prf<H: Hash>(&self, prf_key: &[u8; 16], value: &H) -> Result<usize> {
         // produce `value_hash` from `value` using `SipHasher13`, keyed with `prf_key`
         let mut hasher = SipHasher13::new_with_key(prf_key);
         value.hash(&mut hasher);
