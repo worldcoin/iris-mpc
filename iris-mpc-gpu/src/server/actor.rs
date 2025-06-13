@@ -430,7 +430,8 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let distance_comparator = DistanceComparator::init(n_queries, device_manager.clone());
+        let distance_comparator =
+            DistanceComparator::init(n_queries, max_db_size, device_manager.clone());
         // Prepare streams etc.
         let mut streams = vec![];
         let mut cublas_handles = vec![];
