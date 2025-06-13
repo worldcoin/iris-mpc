@@ -68,7 +68,8 @@ pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -
     session.send_prev(my_msg).await?;
     let next_seed = decode(session.receive_next().await)?;
 
-    Ok(array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]))
+    let shared_seed = array::from_fn(|i| my_seed[i] ^ prev_seed[i] ^ next_seed[i]);
+    Ok(shared_seed)
 }
 
 /// Compares the distance between two iris pairs to a threshold.
