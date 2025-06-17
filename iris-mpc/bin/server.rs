@@ -11,7 +11,9 @@ use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
 use iris_mpc::services::processors::get_iris_shares_parse_task;
-use iris_mpc::services::processors::modifications_sync::sync_modifications;
+use iris_mpc::services::processors::modifications_sync::{
+    send_last_modifications_to_sns, sync_modifications,
+};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
@@ -797,125 +799,6 @@ async fn receive_batch(
     Ok(Some(batch_query))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn send_last_modifications_to_sns(
-    store: &Store,
-    sns_client: &SNSClient,
-    config: &Config,
-    uniqueness_result_attributes: &HashMap<String, MessageAttributeValue>,
-    reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
-    deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
-    reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
-    lookback: usize,
-) -> Result<()> {
-    // Fetch the last modifications from the database
-    let last_modifications = store.last_modifications(lookback).await?;
-    tracing::info!(
-        "Replaying last {} modification results to SNS",
-        last_modifications.len()
-    );
-
-    if last_modifications.is_empty() {
-        tracing::info!("No last modifications found to send to SNS");
-        return Ok(());
-    }
-
-    // Collect messages by type
-    let mut deletion_messages = Vec::new();
-    let mut reauth_messages = Vec::new();
-    let mut reset_update_messages = Vec::new();
-    let mut uniqueness_messages = Vec::new();
-    for modification in &last_modifications {
-        if modification.result_message_body.is_none() {
-            tracing::error!("Missing modification result message body");
-            continue;
-        }
-
-        let body = modification
-            .result_message_body
-            .as_ref()
-            .expect("Missing SNS message body")
-            .clone();
-
-        match modification.request_type.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                deletion_messages.push(body);
-            }
-            REAUTH_MESSAGE_TYPE => {
-                reauth_messages.push(body);
-            }
-            RESET_UPDATE_MESSAGE_TYPE => {
-                reset_update_messages.push(body);
-            }
-            UNIQUENESS_MESSAGE_TYPE => {
-                uniqueness_messages.push(body);
-            }
-            other => {
-                tracing::error!("Unknown message type: {}", other);
-            }
-        }
-    }
-
-    tracing::info!(
-        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update",
-        last_modifications.len(),
-        uniqueness_messages.len(),
-        deletion_messages.len(),
-        reauth_messages.len(),
-        reset_update_messages.len(),
-    );
-
-    if !uniqueness_messages.is_empty() {
-        send_results_to_sns(
-            uniqueness_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            uniqueness_result_attributes,
-            UNIQUENESS_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !deletion_messages.is_empty() {
-        send_results_to_sns(
-            deletion_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            deletion_message_attributes,
-            IDENTITY_DELETION_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reauth_messages.is_empty() {
-        send_results_to_sns(
-            reauth_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            reauth_message_attributes,
-            REAUTH_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reset_update_messages.is_empty() {
-        send_results_to_sns(
-            reset_update_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            reset_update_message_attributes,
-            RESET_UPDATE_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -966,9 +849,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
-    let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
-    let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
@@ -1381,28 +1262,26 @@ async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &store,
+            None,
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result,
-            dummy_shares_for_deletions,
         )
         .await?;
     }
 
     if config.enable_modifications_replay {
         // replay last `max_modification_lookback` modifications to SNS
-        send_last_modifications_to_sns(
+        if let Err(e) = send_last_modifications_to_sns(
             &store,
             &aws_clients.sns_client,
             &config,
-            &uniqueness_result_attributes,
-            &reauth_result_attributes,
-            &identity_deletion_result_attributes,
-            &reset_update_result_attributes,
             max_modification_lookback,
         )
         .await
-        .map_err(|e| tracing::error!("Failed to replay last modifications: {:?}", e));
+        {
+            tracing::error!("Failed to replay last modifications: {:?}", e);
+        }
     }
 
     if download_shutdown_handler.is_shutting_down() {
