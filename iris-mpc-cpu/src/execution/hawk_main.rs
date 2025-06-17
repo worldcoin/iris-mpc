@@ -1001,7 +1001,8 @@ impl HawkResult {
                         IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
-                    .unique()
+                    .sorted()
+                    .dedup()
                     .collect_vec()
             })
             .collect_vec()
@@ -1594,72 +1595,50 @@ mod tests {
             })
             .collect_vec();
 
-        let all_results = izip!(irises, handles.clone())
-            .map(|(shares, mut handle)| async move {
-                // TODO: different test irises for each eye.
+        let request_ids = {
+            (0..batch_size as u32)
+                .map(|i| format!("request_{i}"))
+                .collect_vec()
+        };
 
-                let shares_right_cloned = shares.clone();
-                let shares_left_cloned = shares.clone();
-
-                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
-
-                let batch = BatchQuery {
-                    // Iris shares.
-                    left_iris_requests,
-                    right_iris_requests,
-                    // All rotations.
-                    left_iris_rotated_requests,
-                    right_iris_rotated_requests,
-                    // All rotations, preprocessed.
-                    left_iris_interpolated_requests,
-                    right_iris_interpolated_requests,
-                    // All rotations, preprocessed, mirrored.
-                    left_mirrored_iris_interpolated_requests,
-                    right_mirrored_iris_interpolated_requests,
-
-                    // Batch details to be just copied to the result.
-                    request_ids: vec!["X".to_string(); batch_size],
-                    request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
-                    metadata: vec![
-                        BatchMetadata {
-                            node_id: "X".to_string(),
-                            trace_id: "X".to_string(),
-                            span_id: "X".to_string(),
-                        };
-                        batch_size
-                    ],
-
-                    or_rule_indices: vec![vec![]; batch_size],
-                    luc_lookback_records: 2,
-                    skip_persistence:vec![false; batch_size],
-
-                    ..BatchQuery::default()
+        let batch_0 = BatchQuery {
+            // Batch details to be just copied to the result.
+            request_ids: request_ids.clone(),
+            request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
+            metadata: vec![
+                BatchMetadata {
+                    node_id: "X".to_string(),
+                    trace_id: "X".to_string(),
+                    span_id: "X".to_string(),
                 };
-                handle.submit_batch_query(batch).await.await
-            })
-            .collect::<JoinSet<_>>()
-            .join_all()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<ServerJobResult>>>()?;
+                batch_size
+            ],
+
+            or_rule_indices: vec![vec![]; batch_size],
+            luc_lookback_records: 2,
+            skip_persistence: vec![false; batch_size],
+
+            ..BatchQuery::default()
+        };
+
+        let all_results =
+            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+                let batch = batch_of_party(&batch_0, shares);
+                async move { handle.submit_batch_query(batch).await.await }
+            }))
+            .await?;
 
         let result = assert_all_equal(all_results);
 
-        assert_eq!(batch_size, result.merged_results.len());
-        assert_eq!(result.merged_results, (0..batch_size as u32).collect_vec());
+        let inserted_indices = (0..batch_size as u32).collect_vec();
+
+        assert_eq!(result.matches, vec![false; batch_size]);
+        assert_eq!(result.merged_results, inserted_indices);
         assert_eq!(batch_size, result.request_ids.len());
         assert_eq!(batch_size, result.request_types.len());
         assert_eq!(batch_size, result.metadata.len());
-        assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
-        assert_eq!(batch_size, result.match_ids.len());
+        assert_eq!(result.match_ids, vec![Vec::<u32>::new(); batch_size]);
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
@@ -1676,6 +1655,61 @@ mod tests {
         assert!(result.reauth_or_rule_used.is_empty());
         assert!(result.modifications.is_empty());
         assert_eq!(batch_size, result.actor_data.0.len());
+
+        // --- Reauth ---
+
+        let batch_1 = BatchQuery {
+            request_types: vec![REAUTH_MESSAGE_TYPE.to_string(); batch_size],
+
+            // Map the request ID to the inserted index.
+            reauth_target_indices: izip!(&request_ids, &inserted_indices)
+                .map(|(req_id, inserted_index)| (req_id.clone(), *inserted_index))
+                .collect(),
+            reauth_use_or_rule: request_ids
+                .iter()
+                .map(|req_id| (req_id.clone(), false))
+                .collect(),
+
+            ..batch_0.clone()
+        };
+
+        let failed_request_i = 1;
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            // Mess with the shares to make one request fail.
+            let mut shares = irises[party_i].clone();
+            shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
+
+            let batch = batch_of_party(&batch_1, &shares);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+
+        let result = assert_all_equal(all_results);
+        assert_eq!(
+            result.successful_reauths,
+            (0..batch_size).map(|i| i != failed_request_i).collect_vec()
+        );
+
+        // --- Rejected Uniqueness ---
+
+        let batch_2 = batch_0.clone();
+
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            let batch = batch_of_party(&batch_2, &irises[party_i]);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(
+            result.match_ids.iter().map(|ids| ids[0]).collect_vec(),
+            inserted_indices,
+        );
+        assert_eq!(result.merged_results, inserted_indices);
+        assert_eq!(result.matches, vec![true; batch_size]);
+        assert_match_ids(&result);
 
         Ok(())
     }
@@ -1704,6 +1738,58 @@ mod tests {
             out[3].mask.extend(one.mask_mirrored);
         }
         out
+    }
+
+    // Prepare a batch for a particular party, setting their shares.
+    fn batch_of_party(
+        batch: &BatchQuery,
+        shares: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    ) -> BatchQuery {
+        // TODO: different test irises for each eye.
+        let shares_right_cloned = shares.to_vec();
+        let shares_left_cloned = shares.to_vec();
+
+        let shares_right = shares_right_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_right_mirrored = shares_right_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let shares_left = shares_left_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_left_mirrored = shares_left_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_right, shares_right_mirrored);
+        let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_left, shares_left_mirrored);
+
+        BatchQuery {
+            // Iris shares.
+            left_iris_requests,
+            right_iris_requests,
+            // All rotations.
+            left_iris_rotated_requests,
+            right_iris_rotated_requests,
+            // All rotations, preprocessed.
+            left_iris_interpolated_requests,
+            right_iris_interpolated_requests,
+            // All rotations, preprocessed, mirrored.
+            left_mirrored_iris_interpolated_requests,
+            right_mirrored_iris_interpolated_requests,
+            // Details common to all parties.
+            ..batch.clone()
+        }
     }
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
