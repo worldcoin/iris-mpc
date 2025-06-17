@@ -211,10 +211,6 @@ pub async fn process_job_result(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    if config.party_id == 2 {
-        bail!("Disabling party 2 write to test modifications...");
-    }
-
     let mut iris_tx = store.tx().await?;
 
     store
