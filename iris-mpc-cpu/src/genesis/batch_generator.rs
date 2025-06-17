@@ -107,11 +107,20 @@ impl fmt::Display for BatchGenerator {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
+<<<<<<< fix-creation-of-shares
+            "batch-size={}, count-of-exclusions={}, range-of-iris-ids=({}..{}), current-batch-id={}",
+            self.batch_size,
+            self.exclusions.len(),
+            self.range.start(),
+            self.range.end(),
+            self.batch_count
+=======
             "current-batch-id={}, count-of-exclusions={}, range-of-iris-ids=({}..{})",
             self.batch_count,
             self.exclusions.len(),
             self.range.start(),
             self.range.end(),
+>>>>>>> main
         )
     }
 }
