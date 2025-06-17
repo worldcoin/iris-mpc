@@ -107,7 +107,7 @@ impl Handle {
             request.batch_id,
             request.batch_size()
         ));
-        let _ = Instant::now();
+        let now = Instant::now();
 
         // Use all sessions per iris side to search for insertion indices per
         // batch, number configured by `args.request_parallelism`.
@@ -178,6 +178,8 @@ impl Handle {
                 modification_key: None, // Genesis doesn't use modification keys
             });
         }
+        metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
+        metrics::gauge!("genesis_batch_size").set(request.batch_size() as f64);
 
         Ok(JobResult::new(request, HawkMutation(mutations)))
     }
