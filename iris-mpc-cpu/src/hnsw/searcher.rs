@@ -178,21 +178,19 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
-pub type ConnectPlanV<V> =
-    ConnectPlan<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
-pub type ConnectPlanLayerV<V> =
-    ConnectPlanLayer<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
+pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectPlan<Vector, Distance> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
     /// The HNSW graph updates required by insertion. The insertion layer of the new vector
     /// is `layers.len() - 1`.
-    pub layers: Vec<ConnectPlanLayer<Vector, Distance>>,
+    pub layers: Vec<ConnectPlanLayer<Vector>>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
     pub set_ep: bool,
@@ -200,10 +198,10 @@ pub struct ConnectPlan<Vector, Distance> {
 
 /// Represents the state updates required for insertion of a new node into a single layer of
 /// an HNSW hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectPlanLayer<Vector, Distance> {
-    /// The neighbors of the inserted vector, and their distances
-    pub neighbors: SortedNeighborhood<Vector, Distance>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectPlanLayer<Vector> {
+    /// The neighbors of the inserted vector
+    pub neighbors: SortedEdgeIds<Vector>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
@@ -997,7 +995,7 @@ impl HnswSearcher {
             .into_iter()
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links,
+                neighbors: l_links.edge_ids(),
                 nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
             })
             .collect();

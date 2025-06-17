@@ -5,7 +5,7 @@ use super::{
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, LEFT, RIGHT,
+    HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
 };
 use eyre::{OptionExt, Result};
 use itertools::{izip, Itertools};
@@ -167,7 +167,19 @@ impl Handle {
         let results_ = parallelize(jobs_per_side.into_iter()).await?;
         let results: [_; 2] = results_.try_into().unwrap();
 
-        Ok(JobResult::new(request, HawkMutation(results)))
+        // Convert the results into SingleHawkMutation format
+        let [left_plans, right_plans] = results;
+        assert_eq!(left_plans.len(), right_plans.len());
+        let mut mutations = Vec::new();
+
+        for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+            mutations.push(SingleHawkMutation {
+                plans: [left_plan, right_plan],
+                modification_key: None, // Genesis doesn't use modification keys
+            });
+        }
+
+        Ok(JobResult::new(request, HawkMutation(mutations)))
     }
 
     // Helper: component error logging.

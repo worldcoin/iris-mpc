@@ -98,12 +98,12 @@ impl<V: VectorStore> GraphMem<V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
+        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(n.clone(), links, lc).await;
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
+        self.set_links(q, plan.neighbors, lc).await;
     }
 
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {

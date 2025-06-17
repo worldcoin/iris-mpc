@@ -646,6 +646,7 @@ async fn run_main_server_loop(
             reauth_error_result_attribute.clone(),
             reset_error_result_attributes.clone(),
             current_batch_id_atomic,
+            iris_store.clone(),
         );
 
         let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);

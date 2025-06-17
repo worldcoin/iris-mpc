@@ -28,7 +28,9 @@ use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
     SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
+use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
+use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -49,6 +51,7 @@ pub fn receive_batch_stream(
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: Store,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
@@ -71,6 +74,7 @@ pub fn receive_batch_stream(
                 &reauth_error_result_attributes,
                 &reset_error_result_attributes,
                 current_batch_id_atomic.clone(),
+                &iris_store,
             )
             .await;
 
@@ -100,6 +104,7 @@ async fn receive_batch(
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: &Store,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
@@ -113,6 +118,7 @@ async fn receive_batch(
         reauth_error_result_attributes,
         reset_error_result_attributes,
         current_batch_id_atomic,
+        iris_store,
     );
 
     processor.receive_batch().await
@@ -134,6 +140,7 @@ pub struct BatchProcessor<'a> {
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: &'a Store,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -150,6 +157,7 @@ impl<'a> BatchProcessor<'a> {
         reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         reset_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         current_batch_id_atomic: Arc<AtomicU64>,
+        iris_store: &'a Store,
     ) -> Self {
         Self {
             party_id,
@@ -167,6 +175,7 @@ impl<'a> BatchProcessor<'a> {
             handles: vec![],
             msg_counter: 0,
             current_batch_id_atomic,
+            iris_store,
         }
     }
 
@@ -370,6 +379,34 @@ impl<'a> BatchProcessor<'a> {
 
             metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
 
+            // Skip the request if serial ID already exists in current batch modifications
+            if self
+                .batch_query
+                .modifications
+                .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
+            {
+                tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                identity_deletion_request.serial_id,
+                                identity_deletion_request,
+                            );
+                return Ok(());
+            }
+
+            // Persist in progress modification
+            let modification = self
+                .iris_store
+                .insert_modification(
+                    Some(identity_deletion_request.serial_id as i64),
+                    IDENTITY_DELETION_MESSAGE_TYPE,
+                    None,
+                )
+                .await?;
+            self.batch_query.modifications.insert(
+                RequestSerialId(identity_deletion_request.serial_id),
+                modification,
+            );
+
             self.batch_query
                 .deletion_requests_indices
                 .push(identity_deletion_request.serial_id - 1);
@@ -396,6 +433,20 @@ impl<'a> BatchProcessor<'a> {
         metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
 
         self.delete_message(sqs_message).await?;
+
+        // Persist in progress modification
+        let modification = self
+            .iris_store
+            .insert_modification(
+                None,
+                UNIQUENESS_MESSAGE_TYPE,
+                Some(uniqueness_request.s3_key.as_str()),
+            )
+            .await?;
+        self.batch_query.modifications.insert(
+            RequestId(uniqueness_request.signup_id.clone()),
+            modification,
+        );
 
         self.update_luc_config_if_needed(&uniqueness_request);
 
@@ -453,6 +504,33 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
+        // Skip the request if serial ID already exists in current batch modifications
+        if self
+            .batch_query
+            .modifications
+            .contains_key(&RequestSerialId(reauth_request.serial_id))
+        {
+            tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reauth_request.serial_id,
+                                reauth_request,
+                            );
+            return Ok(());
+        }
+
+        // Persist in progress modification
+        let modification = self
+            .iris_store
+            .insert_modification(
+                Some(reauth_request.serial_id as i64),
+                REAUTH_MESSAGE_TYPE,
+                Some(reauth_request.s3_key.as_str()),
+            )
+            .await?;
+        self.batch_query
+            .modifications
+            .insert(RequestSerialId(reauth_request.serial_id), modification);
+
         self.msg_counter += 1;
 
         self.batch_query
@@ -505,6 +583,20 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
+        // Persist in progress modification
+        let modification = self
+            .iris_store
+            .insert_modification(
+                None,
+                RESET_CHECK_MESSAGE_TYPE,
+                Some(reset_check_request.s3_key.as_str()),
+            )
+            .await?;
+        self.batch_query.modifications.insert(
+            RequestId(reset_check_request.reset_id.clone()),
+            modification,
+        );
+
         self.msg_counter += 1;
 
         self.batch_query
@@ -555,7 +647,7 @@ impl<'a> BatchProcessor<'a> {
             semaphore,
             s3_client,
             bucket_name,
-            reset_update_request.s3_key,
+            reset_update_request.s3_key.clone(),
         )?;
         let (left_shares, right_shares) = match task_handle.await {
             Ok(result) => match result {
@@ -570,6 +662,32 @@ impl<'a> BatchProcessor<'a> {
                 return Err(ReceiveRequestError::FailedToJoinHandle(e));
             }
         };
+
+        if self
+            .batch_query
+            .modifications
+            .contains_key(&RequestSerialId(reset_update_request.serial_id))
+        {
+            tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
+                            );
+            return Ok(());
+        }
+
+        let modification = self
+            .iris_store
+            .insert_modification(
+                Some(reset_update_request.serial_id as i64),
+                RESET_UPDATE_MESSAGE_TYPE,
+                Some(reset_update_request.s3_key.as_str()),
+            )
+            .await?;
+        self.batch_query.modifications.insert(
+            RequestSerialId(reset_update_request.serial_id),
+            modification,
+        );
 
         self.msg_counter += 1;
 

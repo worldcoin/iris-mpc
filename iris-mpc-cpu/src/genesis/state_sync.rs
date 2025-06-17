@@ -109,7 +109,6 @@ mod tests {
         fn new_1() -> Self {
             Self::new(64, 128, vec![3, 5], 50, 100, 100)
         }
-
         fn new_2() -> Self {
             Self::new(64, 128, vec![3, 5, 6], 150, 200, 200)
         }
@@ -119,11 +118,9 @@ mod tests {
         fn new_0(genesis_config: Config) -> Self {
             Self::new(CommonConfig::default(), genesis_config)
         }
-
         fn new_1() -> Self {
             Self::new_0(Config::new_1())
         }
-
         fn new_2() -> Self {
             Self::new_0(Config::new_2())
         }

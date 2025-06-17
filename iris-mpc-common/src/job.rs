@@ -82,17 +82,15 @@ pub struct BatchQuery {
 
     // Only reauth specific fields
     // Map from reauth request id to the index of the target entry to be matched
-    // These can be ignored on the first iterations of HNSW
     pub reauth_target_indices: HashMap<String, u32>,
     pub reauth_use_or_rule: HashMap<String, bool>,
 
     // Only deletion specific fields
-    // These can be ignored on the first iterations of HNSW
     pub deletion_requests_indices: Vec<u32>, // 0-indexed indices of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
-    // Used for roll forward in the case of needing to r-run mutations
+    // Used for roll forward in the case of needing to re-run mutations
     pub modifications: HashMap<ModificationKey, Modification>,
 
     // SNS message ids to assert identical batch processing across parties
