@@ -342,6 +342,9 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
         max_modification_id
     ));
 
+    metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
+    metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
+
     // TODO: implement applying modifications
     for modification in modifications {
         log_info(format!(
@@ -447,7 +450,6 @@ async fn exec_indexation(
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
-            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
