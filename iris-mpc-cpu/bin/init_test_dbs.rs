@@ -160,6 +160,9 @@ impl Args {
     }
 }
 
+// Type: Random number generators used to transform plaintext into secret shares.
+type Rngs = (ChaCha8Rng, ChaCha8Rng);
+
 // Convertor: Args -> HnswParams.
 impl From<&Args> for HnswParams {
     fn from(args: &Args) -> Self {
@@ -169,6 +172,17 @@ impl From<&Args> for HnswParams {
         }
 
         params
+    }
+}
+
+// Convertor: Args -> Rngs.
+impl From<&Args> for Rngs {
+    fn from(value: &Args) -> Self {
+        (
+            // Emulates session construction from `HawkActor::new_sessions` function call
+            session_seeded_rng(value.hnsw_prng_seed, StoreId::Left, SessionId(0)),
+            session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(1)),
+        )
     }
 }
 
