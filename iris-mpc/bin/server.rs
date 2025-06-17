@@ -1881,7 +1881,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestId(request_ids[i].clone()))
                         .unwrap()
-                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id);
+                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1948,7 +1948,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(success, &result_string, None);
+                        .mark_completed(success, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1964,7 +1964,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string, None);
+                        .mark_completed(true, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -2015,7 +2015,7 @@ async fn server_main(config: Config) -> Result<()> {
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string, None);
+                        .mark_completed(true, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
