@@ -217,7 +217,7 @@ pub struct Config {
     pub hnsw_param_ef_search: usize,
 
     #[serde(default)]
-    pub hawk_prng_seed: Option<u64>,
+    pub hawk_prf_key: Option<u64>,
 
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
@@ -565,7 +565,7 @@ pub struct CommonConfig {
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
     hnsw_param_ef_search: usize,
-    hawk_prng_seed: Option<u64>,
+    hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
     mode_of_compute: ModeOfCompute,
     mode_of_deployment: ModeOfDeployment,
@@ -645,7 +645,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
-            hawk_prng_seed,
+            hawk_prf_key,
             max_deletions_per_batch,
             mode_of_compute,
             mode_of_deployment,
@@ -700,7 +700,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
-            hawk_prng_seed,
+            hawk_prf_key,
             max_deletions_per_batch,
             mode_of_compute,
             mode_of_deployment,
