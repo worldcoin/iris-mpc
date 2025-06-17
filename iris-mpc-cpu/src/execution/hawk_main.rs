@@ -1600,14 +1600,13 @@ mod tests {
         assert_eq!(batch_size, result.actor_data.0.len());
 
         // --- Reauth ---
-        let inserted_indices = result.merged_results;
 
         let batch_1 = BatchQuery {
             request_types: vec![REAUTH_MESSAGE_TYPE.to_string(); batch_size],
 
             // Map the request ID to the inserted index.
-            reauth_target_indices: izip!(&request_ids, inserted_indices)
-                .map(|(req_id, inserted_index)| (req_id.clone(), inserted_index))
+            reauth_target_indices: izip!(&request_ids, &inserted_indices)
+                .map(|(req_id, inserted_index)| (req_id.clone(), *inserted_index))
                 .collect(),
             reauth_use_or_rule: request_ids
                 .iter()
@@ -1634,6 +1633,26 @@ mod tests {
             result.successful_reauths,
             (0..batch_size).map(|i| i != failed_request_i).collect_vec()
         );
+
+        // --- Rejected Uniqueness ---
+
+        let batch_2 = batch_0.clone();
+
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            let batch = batch_of_party(&batch_2, &irises[party_i]);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(
+            result.match_ids.iter().map(|ids| ids[0]).collect_vec(),
+            inserted_indices,
+        );
+        assert_eq!(result.merged_results, inserted_indices);
+        assert_eq!(result.matches, vec![true; batch_size]);
+        assert_match_ids(&result);
 
         Ok(())
     }
