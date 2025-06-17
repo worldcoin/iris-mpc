@@ -23,7 +23,7 @@ use crate::{
     },
 };
 use clap::Parser;
-use eyre::{eyre, OptionExt, Report, Result};
+use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::sync::ModificationKey;
@@ -56,7 +56,7 @@ use std::{
     hash::{Hash, Hasher},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Not,
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::{Duration, Instant},
     vec,
 };
@@ -133,7 +133,7 @@ pub struct HawkActor {
 
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
-    prf_key: OnceLock<Arc<[u8; 16]>>,
+    prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus: Consensus,
 
@@ -369,7 +369,7 @@ impl HawkActor {
         Ok(HawkActor {
             args: args.clone(),
             searcher,
-            prf_key: OnceLock::new(),
+            prf_key: None,
             db_size: 0,
             iris_store,
             graph_store,
@@ -402,8 +402,8 @@ impl HawkActor {
     /// This PRF key is used to determine insertion heights for new elements added to the
     /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
     /// upon startup of the `HawkActor` instance.
-    pub async fn try_init_prf_key(&mut self) -> Result<()> {
-        if self.prf_key.get().is_none() {
+    async fn get_or_init_prf_key(&mut self) -> Result<Arc<[u8; 16]>> {
+        if self.prf_key.is_none() {
             let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
                 tracing::info!("Initializing HNSW shared PRF key to static value {prf_key:?}");
                 (prf_key as u128).to_le_bytes()
@@ -430,21 +430,14 @@ impl HawkActor {
             };
             let prf_key = Arc::new(prf_key_);
 
-            self.prf_key
-                .set(prf_key)
-                .map_err(|err| eyre!("Unable to set HawkActor prf_key field: {err:?}"))?;
+            self.prf_key = Some(prf_key);
         }
 
-        Ok(())
+        Ok(self.prf_key.as_ref().unwrap().clone())
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
-        self.try_init_prf_key().await?;
-        let hnsw_prf_key = self
-            .prf_key
-            .get()
-            .ok_or_eyre("HNSW PRF key not initialized on session creation")?
-            .clone();
+        let hnsw_prf_key = self.get_or_init_prf_key().await?;
 
         // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
         let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
