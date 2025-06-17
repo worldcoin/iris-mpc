@@ -1,4 +1,3 @@
-use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
@@ -143,11 +142,6 @@ struct Args {
     #[clap(long, default_value = "42")]
     iris_shares_rnd: u64,
 
-    /// PRNG seed for ABY3 MPC protocols, used for locally generating secret
-    /// shares of iris codes.
-    #[clap(long, default_value = "1")]
-    aby3_prng_seed: u64,
-
     /// Skip creation of the HNSW graph. When set to true, only the iris codes
     /// are processed and persisted, without building the HNSW graph.
     #[clap(long, default_value = "false")]
@@ -175,7 +169,7 @@ impl Args {
 }
 
 // Type: Random number generators used to transform plaintext into secret shares.
-type Rngs = (ChaCha8Rng, ChaCha8Rng, AesRng);
+type Rngs = (ChaCha8Rng, ChaCha8Rng);
 
 // Convertor: Args -> HnswParams.
 impl From<&Args> for HnswParams {
@@ -196,7 +190,6 @@ impl From<&Args> for Rngs {
             // Emulates session construction from `HawkActor::new_sessions` function call
             session_seeded_rng(value.hnsw_prng_seed, StoreId::Left, SessionId(0)),
             session_seeded_rng(value.hnsw_prng_seed, StoreId::Right, SessionId(1)),
-            <AesRng as rand::SeedableRng>::seed_from_u64(value.aby3_prng_seed),
         )
     }
 }
@@ -225,7 +218,7 @@ async fn main() -> Result<()> {
         .map(|target| target.saturating_sub(n_existing_irises));
 
     info!("Setting hnsw pseudo-random number generators");
-    let (mut hnsw_rng_l, mut hnsw_rng_r, _aby3_rng) = Rngs::from(&args);
+    let (mut hnsw_rng_l, mut hnsw_rng_r) = Rngs::from(&args);
     let prng_state_filename = args.prng_state_file.into_os_string().into_string().unwrap();
     if n_existing_irises > 0 {
         if let Ok((rng_l, rng_r)) = read_json(&prng_state_filename) {
