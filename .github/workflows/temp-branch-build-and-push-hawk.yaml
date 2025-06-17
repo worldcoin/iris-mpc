@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "POP-2547/store-graph-modifications"
+      - "POP-2548/sync-graph-modifications-on-startup"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
