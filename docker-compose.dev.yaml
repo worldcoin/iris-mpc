@@ -4,6 +4,7 @@ services:
     ports:
       - "5432:5432"
     user: "postgres"
+    command: -c 'max_connections=300'
     environment:
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
