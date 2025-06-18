@@ -1,7 +1,7 @@
 use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{bail, Result, WrapErr};
-use iris_mpc_common::config::{Config, ModeOfDeployment};
+use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -217,7 +217,7 @@ pub async fn process_job_result(
         .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
         .await?;
 
-    if !codes_and_masks.is_empty() && !config.disable_persistence {
+    if !codes_and_masks.is_empty() {
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
 
         // Check if the serial_ids match between memory and db.
@@ -343,21 +343,8 @@ async fn persist(
     hawk_mutation: HawkMutation,
     config: &Config,
 ) -> Result<()> {
-    // If we're in ShadowReadOnly mode, never commit to iris-db, but possibly commit graph.
-    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
-        if !config.cpu_disable_persistence {
-            let mut graph_tx = graph_store.tx().await?;
-            hawk_mutation.persist(&mut graph_tx).await?;
-            graph_tx.tx.commit().await?;
-        } else {
-            tracing::info!(
-                "Not persisting graph changes due to ShadowReadOnly + cpu_disable_persistence=true"
-            );
-        }
-        return Ok(());
-    }
     // simply persist or not both iris and graph changes
-    if !config.cpu_disable_persistence {
+    if !config.disable_persistence {
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
         hawk_mutation.persist(&mut graph_tx).await?;
         graph_tx.tx.commit().await?;

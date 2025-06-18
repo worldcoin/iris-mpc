@@ -52,7 +52,7 @@ impl FromStr for ModificationStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Modification {
     pub id: i64,
     pub serial_id: Option<i64>,

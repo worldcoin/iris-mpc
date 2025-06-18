@@ -26,7 +26,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
-    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
+    config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
@@ -833,20 +833,6 @@ async fn server_main(config: Config) -> Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
-
-    // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::Gpu
-        || config.mode_of_deployment != ModeOfDeployment::Standard
-    {
-        panic!(
-            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
-             :: ModeOfDeployment::STANDARD"
-        );
-    } else {
-        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
-    }
-
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;

@@ -29,6 +29,10 @@ services:
     env_file:
       - .test.env
       - .test.hawk0.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_0
+      - SMPC__DATABASE__MIGRATE=true
+      - SMPC__DATABASE__CREATE=true
     depends_on:
       localstack:
         condition: service_healthy
@@ -50,6 +54,10 @@ services:
     env_file:
       - .test.env
       - .test.hawk1.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_1
+      - SMPC__DATABASE__MIGRATE=true
+      - SMPC__DATABASE__CREATE=true
     depends_on:
       localstack:
         condition: service_healthy
@@ -71,6 +79,10 @@ services:
     env_file:
       - .test.env
       - .test.hawk2.env
+    environment:
+      - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_2
+      - SMPC__DATABASE__MIGRATE=true
+      - SMPC__DATABASE__CREATE=true
     depends_on:
       localstack:
         condition: service_healthy
