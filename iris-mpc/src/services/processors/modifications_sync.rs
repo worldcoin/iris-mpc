@@ -8,8 +8,8 @@ use eyre::{eyre, Report};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
-    ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
-    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
@@ -154,7 +154,6 @@ pub async fn send_last_modifications_to_sns(
     let reauth_message_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
     let reset_update_message_attributes =
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
-    create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let deletion_message_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
 
