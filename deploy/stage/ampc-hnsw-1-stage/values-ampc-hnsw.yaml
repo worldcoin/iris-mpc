@@ -14,12 +14,6 @@ env:
   - name: SMPC__PARTY_ID
     value: "1"
 
-  - name: SMPC__DATABASE__URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_MPCV2_URL
-        name: application
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
