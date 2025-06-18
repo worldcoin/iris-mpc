@@ -193,16 +193,6 @@ fn process_config(config: &Config) {
         tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
         tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
     }
-
-    // Make sure the configuration is in correct state, to avoid complex handling of ReadOnly
-    // during ShadowReadOnly deployment we panic if the base store persistence is enabled.
-    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly && !config.disable_persistence
-    {
-        panic!(
-            "The system cannot start securely in ShadowReadOnly mode with enabled base persistence flag!"
-        )
-    }
-
     // Load batch_size config
     tracing::info!("Set batch size to {}", config.max_batch_size);
 }
@@ -249,46 +239,6 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), 
             let iris_store = Store::new(&hawk_postgres_client).await?;
 
             // Graph -> CPU
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-
-        // use base db for iris store and hawk db for graph store
-        ModeOfDeployment::ShadowReadOnly => {
-            let db_config = config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?;
-
-            let postgres_client =
-                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadOnly)
-                    .await?;
-
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                db_config,
-                config.mode_of_deployment
-            );
-
-            let iris_store = Store::new(&postgres_client).await?;
-
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &hawk_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
-
             tracing::info!(
                 "Creating new graph store from: {:?} in mode {:?}",
                 hawk_db_config,

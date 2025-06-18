@@ -281,8 +281,6 @@ pub enum ModeOfDeployment {
     // shadow mode for when HSNW deployment does not read from the Gpu implementation
     // it should create and write its own shares DB
     ShadowIsolation,
-    // Shadow mode for when HNSW test deployment reads from the Gpu Implementation
-    ShadowReadOnly,
     // Standard mode for all other deployments.
     #[default]
     Standard,

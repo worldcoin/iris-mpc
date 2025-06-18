@@ -343,19 +343,6 @@ async fn persist(
     hawk_mutation: HawkMutation,
     config: &Config,
 ) -> Result<()> {
-    // If we're in ShadowReadOnly mode, never commit to iris-db, but possibly commit graph.
-    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly {
-        if !config.cpu_disable_persistence {
-            let mut graph_tx = graph_store.tx().await?;
-            hawk_mutation.persist(&mut graph_tx).await?;
-            graph_tx.tx.commit().await?;
-        } else {
-            tracing::info!(
-                "Not persisting graph changes due to ShadowReadOnly + cpu_disable_persistence=true"
-            );
-        }
-        return Ok(());
-    }
     // simply persist or not both iris and graph changes
     if !config.cpu_disable_persistence {
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
