@@ -217,7 +217,7 @@ pub async fn process_job_result(
         .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
         .await?;
 
-    if !codes_and_masks.is_empty() && !config.disable_persistence {
+    if !codes_and_masks.is_empty() {
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
 
         // Check if the serial_ids match between memory and db.
