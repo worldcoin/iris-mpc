@@ -342,6 +342,9 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
         max_modification_id
     ));
 
+    metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
+    metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
+
     // TODO: implement applying modifications
     for modification in modifications {
         log_info(format!(
@@ -447,7 +450,6 @@ async fn exec_indexation(
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
-            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
@@ -596,7 +598,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
-        hnsw_prng_seed: config.hawk_prng_seed,
+        hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.cpu_disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,

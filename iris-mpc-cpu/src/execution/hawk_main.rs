@@ -2,6 +2,7 @@ use super::player::Identity;
 pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
+        hawk_main::search::SearchIds,
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -17,12 +18,12 @@ use crate::{
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::{
-        ops::{setup_replicated_prf, setup_shared_rng},
+        ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::sync::ModificationKey;
@@ -42,7 +43,7 @@ use matching::{
     OnlyOrBoth::{Both, Only},
     RequestType, UniquenessRequest,
 };
-use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
@@ -113,7 +114,7 @@ pub struct HawkArgs {
     pub hnsw_param_ef_search: usize,
 
     #[clap(long)]
-    pub hnsw_prng_seed: Option<u64>,
+    pub hnsw_prf_key: Option<u64>,
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
@@ -132,6 +133,7 @@ pub struct HawkActor {
 
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
+    prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus: Consensus,
 
@@ -157,6 +159,20 @@ pub enum StoreId {
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
+
+impl TryFrom<usize> for StoreId {
+    type Error = Report;
+
+    fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(StoreId::Left),
+            1 => Ok(StoreId::Right),
+            _ => Err(eyre!(
+                "Invalid usize representation of StoreId, valid inputs are 0 (left) and 1 (right)"
+            )),
+        }
+    }
+}
 
 // TODO: Merge with the same in iris-mpc-gpu.
 // Orientation enum to indicate the orientation of the iris code during the batch processing.
@@ -204,7 +220,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: Box<dyn RngCore + Send + Sync>,
+    hnsw_prf_key: Arc<[u8; 16]>,
 }
 
 // Thread safe reference to a HakwSession instance.
@@ -353,6 +369,7 @@ impl HawkActor {
         Ok(HawkActor {
             args: args.clone(),
             searcher,
+            prf_key: None,
             db_size: 0,
             iris_store,
             graph_store,
@@ -377,13 +394,57 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
+    /// Initialize the shared PRF key for HNSW graph insertion layer selection.
+    ///
+    /// The PRF key is either statically injected via configuration in TEST environments or
+    /// mutually derived with other MPC parties in PROD environments.
+    ///
+    /// This PRF key is used to determine insertion heights for new elements added to the
+    /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
+    /// upon startup of the `HawkActor` instance.
+    async fn get_or_init_prf_key(&mut self) -> Result<Arc<[u8; 16]>> {
+        if self.prf_key.is_none() {
+            let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
+                tracing::info!("Initializing HNSW shared PRF key to static value {prf_key:?}");
+                (prf_key as u128).to_le_bytes()
+            } else {
+                let init_session_id = self.consensus.next_session_id();
+                let grpc_session = self.networking.create_session(init_session_id).await?;
+
+                let mut network_session = NetworkSession {
+                    session_id: init_session_id,
+                    role_assignments: self.role_assignments.clone(),
+                    networking: Box::new(grpc_session),
+                    own_role: Role::new(self.party_id),
+                };
+
+                tracing::info!("Initializing HNSW shared PRF key to mutually derived random value");
+                let my_prf_key = thread_rng().gen();
+                setup_shared_seed(&mut network_session, my_prf_key)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!("Unable to initialize shared HNSW PRF key: {err}");
+                        tracing::warn!("Using default PRF key value [0u8; 16]");
+                        [0u8; 16]
+                    })
+            };
+            let prf_key = Arc::new(prf_key_);
+
+            self.prf_key = Some(prf_key);
+        }
+
+        Ok(self.prf_key.as_ref().unwrap().clone())
+    }
+
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        let hnsw_prf_key = self.get_or_init_prf_key().await?;
+
         // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
         let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
             .map(|_| {
                 let mut new_for_side_future = |store_id: StoreId| {
                     let session_id = self.consensus.next_session_id();
-                    self.create_session(store_id, session_id)
+                    self.create_session(store_id, session_id, &hnsw_prf_key)
                 };
 
                 (
@@ -405,13 +466,14 @@ impl HawkActor {
         &self,
         store_id: StoreId,
         session_id: SessionId,
+        hnsw_prf_key: &Arc<[u8; 16]>,
     ) -> impl Future<Output = Result<HawkSessionRef>> {
         let networking = self.networking.clone();
         let role_assignments = self.role_assignments.clone();
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let party_id = self.party_id;
-        let hnsw_prng_seed = self.args.hnsw_prng_seed;
+        let hnsw_prf_key = hnsw_prf_key.clone();
 
         async move {
             let grpc_session = networking.create_session(session_id).await?;
@@ -426,18 +488,6 @@ impl HawkActor {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
-            // PRNG seed is either statically injected via configuration in TEST environments or
-            // mutually derived with other MPC parties in PROD environments.
-            let shared_rng: Box<dyn RngCore + Send + Sync> = if let Some(base_seed) = hnsw_prng_seed
-            {
-                let rng = session_seeded_rng(base_seed, store_id, session_id);
-                Box::new(rng)
-            } else {
-                let my_rng_seed = thread_rng().gen();
-                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
-                Box::new(rng)
-            };
-
             let hawk_session = HawkSession {
                 aby3_store: Aby3Store {
                     session: Session {
@@ -447,7 +497,7 @@ impl HawkActor {
                     storage,
                 },
                 graph_store,
-                shared_rng,
+                hnsw_prf_key,
             };
 
             Ok(Arc::new(RwLock::new(hawk_session)))
@@ -682,6 +732,7 @@ pub struct HawkRequest {
     batch: BatchQuery,
     queries: SearchQueries,
     queries_mirror: SearchQueries,
+    ids: SearchIds,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -759,12 +810,15 @@ impl From<BatchQuery> for HawkRequest {
             Arc::new(queries)
         };
 
+        let ids = Arc::new(batch.request_ids.clone());
+
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
         Self {
             queries: extract_queries(Orientation::Normal),
             queries_mirror: extract_queries(Orientation::Mirror),
             batch,
+            ids,
         }
     }
 }
@@ -859,6 +913,7 @@ impl HawkRequest {
         });
         ResetRequests {
             vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
+            request_ids: Arc::new(self.batch.reset_update_request_ids.clone()),
             queries: Arc::new(queries),
         }
     }
@@ -946,7 +1001,8 @@ impl HawkResult {
                         IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
-                    .unique()
+                    .sorted()
+                    .dedup()
                     .collect_vec()
             })
             .collect_vec()
@@ -1249,11 +1305,13 @@ impl HawkHandle {
 
             // Search for nearest neighbors.
             // For both eyes, all requests, and rotations.
+            let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results = search::search(sessions, search_queries, search_params).await?;
+            let search_results =
+                search::search(sessions, search_queries, search_ids, search_params).await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1554,72 +1612,50 @@ mod tests {
             })
             .collect_vec();
 
-        let all_results = izip!(irises, handles.clone())
-            .map(|(shares, mut handle)| async move {
-                // TODO: different test irises for each eye.
+        let request_ids = {
+            (0..batch_size as u32)
+                .map(|i| format!("request_{i}"))
+                .collect_vec()
+        };
 
-                let shares_right_cloned = shares.clone();
-                let shares_left_cloned = shares.clone();
-
-                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
-
-                let batch = BatchQuery {
-                    // Iris shares.
-                    left_iris_requests,
-                    right_iris_requests,
-                    // All rotations.
-                    left_iris_rotated_requests,
-                    right_iris_rotated_requests,
-                    // All rotations, preprocessed.
-                    left_iris_interpolated_requests,
-                    right_iris_interpolated_requests,
-                    // All rotations, preprocessed, mirrored.
-                    left_mirrored_iris_interpolated_requests,
-                    right_mirrored_iris_interpolated_requests,
-
-                    // Batch details to be just copied to the result.
-                    request_ids: vec!["X".to_string(); batch_size],
-                    request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
-                    metadata: vec![
-                        BatchMetadata {
-                            node_id: "X".to_string(),
-                            trace_id: "X".to_string(),
-                            span_id: "X".to_string(),
-                        };
-                        batch_size
-                    ],
-
-                    or_rule_indices: vec![vec![]; batch_size],
-                    luc_lookback_records: 2,
-                    skip_persistence:vec![false; batch_size],
-
-                    ..BatchQuery::default()
+        let batch_0 = BatchQuery {
+            // Batch details to be just copied to the result.
+            request_ids: request_ids.clone(),
+            request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
+            metadata: vec![
+                BatchMetadata {
+                    node_id: "X".to_string(),
+                    trace_id: "X".to_string(),
+                    span_id: "X".to_string(),
                 };
-                handle.submit_batch_query(batch).await.await
-            })
-            .collect::<JoinSet<_>>()
-            .join_all()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<ServerJobResult>>>()?;
+                batch_size
+            ],
+
+            or_rule_indices: vec![vec![]; batch_size],
+            luc_lookback_records: 2,
+            skip_persistence: vec![false; batch_size],
+
+            ..BatchQuery::default()
+        };
+
+        let all_results =
+            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+                let batch = batch_of_party(&batch_0, shares);
+                async move { handle.submit_batch_query(batch).await.await }
+            }))
+            .await?;
 
         let result = assert_all_equal(all_results);
 
-        assert_eq!(batch_size, result.merged_results.len());
-        assert_eq!(result.merged_results, (0..batch_size as u32).collect_vec());
+        let inserted_indices = (0..batch_size as u32).collect_vec();
+
+        assert_eq!(result.matches, vec![false; batch_size]);
+        assert_eq!(result.merged_results, inserted_indices);
         assert_eq!(batch_size, result.request_ids.len());
         assert_eq!(batch_size, result.request_types.len());
         assert_eq!(batch_size, result.metadata.len());
-        assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
-        assert_eq!(batch_size, result.match_ids.len());
+        assert_eq!(result.match_ids, vec![Vec::<u32>::new(); batch_size]);
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
@@ -1636,6 +1672,61 @@ mod tests {
         assert!(result.reauth_or_rule_used.is_empty());
         assert!(result.modifications.is_empty());
         assert_eq!(batch_size, result.actor_data.0.len());
+
+        // --- Reauth ---
+
+        let batch_1 = BatchQuery {
+            request_types: vec![REAUTH_MESSAGE_TYPE.to_string(); batch_size],
+
+            // Map the request ID to the inserted index.
+            reauth_target_indices: izip!(&request_ids, &inserted_indices)
+                .map(|(req_id, inserted_index)| (req_id.clone(), *inserted_index))
+                .collect(),
+            reauth_use_or_rule: request_ids
+                .iter()
+                .map(|req_id| (req_id.clone(), false))
+                .collect(),
+
+            ..batch_0.clone()
+        };
+
+        let failed_request_i = 1;
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            // Mess with the shares to make one request fail.
+            let mut shares = irises[party_i].clone();
+            shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
+
+            let batch = batch_of_party(&batch_1, &shares);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+
+        let result = assert_all_equal(all_results);
+        assert_eq!(
+            result.successful_reauths,
+            (0..batch_size).map(|i| i != failed_request_i).collect_vec()
+        );
+
+        // --- Rejected Uniqueness ---
+
+        let batch_2 = batch_0.clone();
+
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            let batch = batch_of_party(&batch_2, &irises[party_i]);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(
+            result.match_ids.iter().map(|ids| ids[0]).collect_vec(),
+            inserted_indices,
+        );
+        assert_eq!(result.merged_results, inserted_indices);
+        assert_eq!(result.matches, vec![true; batch_size]);
+        assert_match_ids(&result);
 
         Ok(())
     }
@@ -1664,6 +1755,58 @@ mod tests {
             out[3].mask.extend(one.mask_mirrored);
         }
         out
+    }
+
+    // Prepare a batch for a particular party, setting their shares.
+    fn batch_of_party(
+        batch: &BatchQuery,
+        shares: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    ) -> BatchQuery {
+        // TODO: different test irises for each eye.
+        let shares_right_cloned = shares.to_vec();
+        let shares_left_cloned = shares.to_vec();
+
+        let shares_right = shares_right_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_right_mirrored = shares_right_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let shares_left = shares_left_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_left_mirrored = shares_left_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_right, shares_right_mirrored);
+        let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_left, shares_left_mirrored);
+
+        BatchQuery {
+            // Iris shares.
+            left_iris_requests,
+            right_iris_requests,
+            // All rotations.
+            left_iris_rotated_requests,
+            right_iris_rotated_requests,
+            // All rotations, preprocessed.
+            left_iris_interpolated_requests,
+            right_iris_interpolated_requests,
+            // All rotations, preprocessed, mirrored.
+            left_mirrored_iris_interpolated_requests,
+            right_mirrored_iris_interpolated_requests,
+            // Details common to all parties.
+            ..batch.clone()
+        }
     }
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
@@ -1795,7 +1938,7 @@ mod tests_db {
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
-            hnsw_prng_seed: None,
+            hnsw_prf_key: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
