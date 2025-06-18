@@ -8,7 +8,7 @@ use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute};
+use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -183,17 +183,11 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 
 /// Validates server config and initializes associated static state.
 fn process_config(config: &Config) {
-    // Validate modes of compute/deployment.
-    if config.mode_of_compute != ModeOfCompute::Cpu {
-        panic!(
-            "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
-            config.mode_of_compute
-        );
-    } else {
-        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
+    if config.cpu_database.is_none() {
+        panic!("Missing CPU dB config settings",);
     }
     // Load batch_size config
-    tracing::info!("Set batch size to {}", config.max_batch_size);
+    tracing::info!("Set max batch size to {}", config.max_batch_size);
 }
 
 /// Returns computed maximum sync lookback size.

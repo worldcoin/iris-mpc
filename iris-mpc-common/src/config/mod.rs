@@ -222,10 +222,6 @@ pub struct Config {
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 
-    /// Server process behaviour can be adjusted as per compute mode.
-    #[serde(default)]
-    pub mode_of_compute: ModeOfCompute,
-
     #[serde(default)]
     pub enable_modifications_sync: bool,
 
@@ -259,16 +255,6 @@ pub struct Config {
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
-}
-
-/// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfCompute {
-    /// Computation with standard CPUs (see HNSW graph).
-    Cpu,
-    /// Computation with Cuda GPU(s).
-    #[default]
-    Gpu,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -550,7 +536,6 @@ pub struct CommonConfig {
     hnsw_param_ef_search: usize,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
-    mode_of_compute: ModeOfCompute,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -629,7 +614,6 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -683,7 +667,6 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
