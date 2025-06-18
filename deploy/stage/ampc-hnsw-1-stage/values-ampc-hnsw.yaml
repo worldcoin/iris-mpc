@@ -17,9 +17,6 @@ env:
   - name: SMPC__MODE_OF_COMPUTE
     value: "Cpu"
 
-  - name: SMPC__MODE_OF_DEPLOYMENT
-    value: "ShadowIsolation"
-
   - name: SMPC__DATABASE__URL
     valueFrom:
       secretKeyRef:

@@ -226,10 +226,6 @@ pub struct Config {
     #[serde(default)]
     pub mode_of_compute: ModeOfCompute,
 
-    /// Server process behaviour can be adjusted as per deployment mode.
-    #[serde(default)]
-    pub mode_of_deployment: ModeOfDeployment,
-
     #[serde(default)]
     pub enable_modifications_sync: bool,
 
@@ -273,17 +269,6 @@ pub enum ModeOfCompute {
     /// Computation with Cuda GPU(s).
     #[default]
     Gpu,
-}
-
-/// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfDeployment {
-    // shadow mode for when HSNW deployment does not read from the Gpu implementation
-    // it should create and write its own shares DB
-    ShadowIsolation,
-    // Standard mode for all other deployments.
-    #[default]
-    Standard,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -566,7 +551,6 @@ pub struct CommonConfig {
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
     mode_of_compute: ModeOfCompute,
-    mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -646,7 +630,6 @@ impl From<Config> for CommonConfig {
             hawk_prf_key,
             max_deletions_per_batch,
             mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -701,7 +684,6 @@ impl From<Config> for CommonConfig {
             hawk_prf_key,
             max_deletions_per_batch,
             mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,

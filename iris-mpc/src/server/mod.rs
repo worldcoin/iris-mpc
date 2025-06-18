@@ -8,7 +8,7 @@ use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
+use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -191,7 +191,6 @@ fn process_config(config: &Config) {
         );
     } else {
         tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
     }
     // Load batch_size config
     tracing::info!("Set batch size to {}", config.max_batch_size);
@@ -205,89 +204,27 @@ fn max_sync_lookback(config: &Config) -> usize {
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let iris_schema_name = format!(
-        "{}{}_{}_{}",
-        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
-    );
-
     let hawk_schema_name = format!(
         "{}{}_{}_{}",
         config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
     );
 
-    match config.mode_of_deployment {
-        // use the hawk db for both stores
-        ModeOfDeployment::ShadowIsolation => {
-            // This mode uses only Hawk DB
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &iris_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
+    // HNSW will always use the CPU__DATABASE_* both for irises and graph
+    let hawk_db_config = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!("Missing CPU database config"))?;
+    let hawk_postgres_client = PostgresClient::new(
+        &hawk_db_config.url,
+        &hawk_schema_name,
+        AccessMode::ReadWrite,
+    )
+    .await?;
 
-            // Store -> CPU
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let iris_store = Store::new(&hawk_postgres_client).await?;
+    let iris_store = Store::new(&hawk_postgres_client).await?;
+    let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
-            // Graph -> CPU
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-
-        ModeOfDeployment::Standard => {
-            let db_config = config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?;
-
-            let postgres_client =
-                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadWrite)
-                    .await?;
-
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                db_config,
-                config.mode_of_deployment
-            );
-
-            let iris_store = Store::new(&postgres_client).await?;
-
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in Standard"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &hawk_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
-
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-    }
+    Ok((iris_store, graph_store))
 }
 
 /// Returns AWS service clients for SQS, SNS, S3, and Secrets Manager.
@@ -494,7 +431,7 @@ async fn load_database(
     }
 
     let parallelism = config
-        .database
+        .cpu_database
         .as_ref()
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;

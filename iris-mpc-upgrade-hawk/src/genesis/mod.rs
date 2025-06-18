@@ -8,7 +8,7 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
+    config::{CommonConfig, Config, ModeOfCompute},
     helpers::{
         shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
         sync::Modification, task_monitor::TaskMonitor,
@@ -187,7 +187,6 @@ async fn exec_setup(
     // Bail if config is invalid.
     validate_config(config)?;
     log_info(format!("Compute mode: {:?}", config.mode_of_compute));
-    log_info(format!("Deployment mode: {:?}", config.mode_of_deployment));
 
     // Set shutdown handler.
     let shutdown_handler = init_shutdown_handler(config).await;
@@ -918,15 +917,6 @@ fn validate_config(config: &Config) -> Result<()> {
         let msg = log_error(format!(
             "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
             config.mode_of_compute
-        ));
-        bail!("{}", msg);
-    }
-
-    // Validate modes of compute/deployment.
-    if config.mode_of_deployment != ModeOfDeployment::Standard {
-        let msg = log_error(format!(
-            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
-            config.mode_of_deployment
         ));
         bail!("{}", msg);
     }
