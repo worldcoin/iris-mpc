@@ -247,13 +247,19 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
+    use crate::{
+        hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+        hnsw::vector_store::VectorStoreMut,
+    };
     use iris_mpc_common::iris_db::iris::IrisCode;
 
     #[tokio::test]
     async fn test_neighborhood() -> Result<()> {
         let mut store = PlaintextStore::new();
-        let query = Arc::new(IrisCode::default());
+        let query = Arc::new(IrisCodeWithSerialId {
+            serial_id: 0,
+            iris_code: IrisCode::default(),
+        });
         let vector = store.insert(&query).await;
         let distance = store.eval_distance(&query, &vector).await?;
 

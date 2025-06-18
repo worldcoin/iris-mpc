@@ -1,6 +1,6 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
     hnsw::{GraphMem, HnswSearcher},
 };
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
@@ -20,7 +20,10 @@ pub fn search(
         .unwrap();
 
     rt.block_on(async move {
-        let query = Arc::new(query);
+        let query = Arc::new(IrisCodeWithSerialId {
+            iris_code: query,
+            serial_id: 0,
+        });
         let neighbors = searcher.search(vector, graph, &query, 1).await.unwrap();
         let (nearest, (dist_num, dist_denom)) = neighbors.get_nearest().unwrap();
         (*nearest, (*dist_num as f64) / (*dist_denom as f64))
@@ -29,7 +32,7 @@ pub fn search(
 
 // TODO could instead take iterator of IrisCodes to make more flexible
 pub fn insert(
-    iris: IrisCode,
+    iris: IrisCodeWithSerialId,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
     graph: &mut GraphMem<PlaintextStore>,
@@ -58,8 +61,13 @@ pub fn insert_uniform_random(
 ) -> VectorId {
     let mut rng = ThreadRng::default();
     let raw_query = IrisCode::random_rng(&mut rng);
+    let serial_id = vector.points.len() as u32 + 1;
+    let query = IrisCodeWithSerialId {
+        iris_code: raw_query,
+        serial_id,
+    };
 
-    insert(raw_query, searcher, vector, graph)
+    insert(query, searcher, vector, graph)
 }
 
 pub fn fill_uniform_random(
@@ -77,8 +85,11 @@ pub fn fill_uniform_random(
         let mut rng = ThreadRng::default();
 
         for idx in 0..num {
-            let query = Arc::new(IrisCode::random_rng(&mut rng));
             let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
+            let query = Arc::new(IrisCodeWithSerialId {
+                iris_code: IrisCode::random_rng(&mut rng),
+                serial_id: idx as u32 + 1,
+            });
             searcher
                 .insert(vector, graph, &query, insertion_layer)
                 .await
@@ -112,10 +123,13 @@ pub fn fill_from_ndjson_file(
         let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
         let stream = super::limited_iterator(stream, limit);
 
-        // Iterate over each deserialized object
-        for json_pt in stream {
-            let raw_query = (&json_pt.unwrap()).into();
-            let query = Arc::new(raw_query);
+        for (idx, json_pt) in stream.into_iter().enumerate() {
+            let iris_code: IrisCode = (&json_pt.unwrap()).into();
+
+            let query = Arc::new(IrisCodeWithSerialId {
+                iris_code,
+                serial_id: idx as u32 + 1,
+            });
             let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
             searcher
                 .insert(vector, graph, &query, insertion_layer)

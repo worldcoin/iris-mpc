@@ -16,7 +16,7 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
     hnsw::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
@@ -168,16 +168,22 @@ async fn init_hnsw(
     HnswSearcher,
     PlaintextStore,
     GraphMem<PlaintextStore>,
-    Arc<IrisCode>,
-    Arc<IrisCode>,
+    Arc<IrisCodeWithSerialId>,
+    Arc<IrisCodeWithSerialId>,
 )> {
     let searcher = HnswSearcher {
         params: HnswParams::new(64, 64, 32),
     };
     let mut vector_store = PlaintextStore::new_random(rng, db_size);
     let graph_store = vector_store.generate_graph(rng, db_size, &searcher).await?;
-    let query1 = Arc::new(IrisCode::random_rng(rng));
-    let query2 = Arc::new(IrisCode::random_rng(rng));
+    let query1 = Arc::new(IrisCodeWithSerialId {
+        iris_code: IrisCode::random_rng(rng),
+        serial_id: db_size as u32 + 1,
+    });
+    let query2 = Arc::new(IrisCodeWithSerialId {
+        iris_code: IrisCode::random_rng(rng),
+        serial_id: db_size as u32 + 2,
+    });
     Ok((searcher, vector_store, graph_store, query1, query2))
 }
 
@@ -185,8 +191,8 @@ async fn hnsw_search_queries_seq(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
-    query1: Arc<IrisCode>,
-    query2: Arc<IrisCode>,
+    query1: Arc<IrisCodeWithSerialId>,
+    query2: Arc<IrisCodeWithSerialId>,
 ) -> Result<()> {
     for q in [query1, query2].into_iter() {
         searcher.search(vector_store, graph_store, &q, 1).await?;
@@ -199,8 +205,8 @@ async fn hnsw_search_queries_par(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
     graph_store: &mut GraphMem<PlaintextStore>,
-    query1: Arc<IrisCode>,
-    query2: Arc<IrisCode>,
+    query1: Arc<IrisCodeWithSerialId>,
+    query2: Arc<IrisCodeWithSerialId>,
 ) {
     let mut jobs: JoinSet<Result<()>> = JoinSet::new();
     for q in [query1, query2].into_iter() {

@@ -500,7 +500,7 @@ mod tests {
                 eval_vector_distance, get_owner_index, lazy_random_setup,
                 setup_local_store_aby3_players, shared_random_setup,
             },
-            plaintext_store::PlaintextStore,
+            plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
         },
         hnsw::{GraphMem, HnswSearcher},
         network::NetworkType,
@@ -604,7 +604,11 @@ mod tests {
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
-            let query = cleartext_data.0.points.get(i).unwrap().clone();
+            let serial_id = vector_id.serial_id();
+            let query = IrisCodeWithSerialId {
+                iris_code: cleartext_data.0.points.get(&serial_id).unwrap().clone(),
+                serial_id,
+            };
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
@@ -668,10 +672,20 @@ mod tests {
     async fn test_gr_aby3_store_plaintext() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_dim = 4;
-        let plaintext_database = IrisDB::new_random_rng(db_dim, &mut rng).db;
+        let plaintext_database_codes = IrisDB::new_random_rng(db_dim, &mut rng).db;
+        let plaintext_database: Vec<IrisCodeWithSerialId> = plaintext_database_codes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, iris)| IrisCodeWithSerialId {
+                iris_code: iris,
+                serial_id: idx as u32 + 1,
+            })
+            .collect();
         let shared_irises: Vec<_> = plaintext_database
             .iter()
-            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .map(|iris| {
+                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.iris_code.clone())
+            })
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
@@ -769,16 +783,26 @@ mod tests {
     async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let db_size = 10;
-        let plaintext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
-        let shared_irises: Vec<_> = plaintext_database
+        let plaintext_database_codes = IrisDB::new_random_rng(db_size, &mut rng).db;
+        let plaintext_insertions_ref: Vec<IrisCodeWithSerialId> = plaintext_database_codes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, iris)| IrisCodeWithSerialId {
+                iris_code: iris,
+                serial_id: idx as u32 + 1,
+            })
+            .collect();
+        let shared_irises: Vec<_> = plaintext_insertions_ref
             .iter()
-            .map(|iris| GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone()))
+            .map(|iris| {
+                GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.iris_code.clone())
+            })
             .collect();
         let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         // Now do the work for the plaintext store
         let mut plaintext_store = PlaintextStore::new();
         let plaintext_preps: Vec<_> = (0..db_size)
-            .map(|id| Arc::new(plaintext_database[id].clone()))
+            .map(|id| Arc::new(plaintext_insertions_ref[id].clone()))
             .collect();
         let mut plaintext_inserts = Vec::with_capacity(db_size);
         for p in plaintext_preps.iter() {
@@ -787,10 +811,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_insertions_ref[0].clone()], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[plaintext_insertions_ref[1].clone()], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()

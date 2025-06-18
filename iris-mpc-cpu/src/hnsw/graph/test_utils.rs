@@ -11,7 +11,9 @@ use crate::{
     },
 };
 use crate::{
-    execution::hawk_main::StoreId, hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem,
+    execution::hawk_main::StoreId,
+    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+    hnsw::GraphMem,
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
@@ -212,17 +214,29 @@ impl DbContext {
 
         let vectors = {
             let mut v = vec![];
-            for raw_query in IrisDB::new_random_rng(NUM_RANDOM_IRIS_CODES, rng).db {
-                let q = Arc::new(raw_query);
+            for (idx, raw_query) in IrisDB::new_random_rng(NUM_RANDOM_IRIS_CODES, rng)
+                .db
+                .into_iter()
+                .enumerate()
+            {
+                let q = Arc::new(IrisCodeWithSerialId {
+                    iris_code: raw_query,
+                    serial_id: idx as u32 + 1,
+                });
                 v.push(vector_store.insert(&q).await);
             }
             v
         };
 
-        // get the distance from point[0] to every other point
+        // get the distance from the first vector to all other vectors
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+
+            let q = IrisCodeWithSerialId {
+                iris_code: vector_store.points.get(&1).unwrap().clone(),
+                serial_id: 0,
+            };
+
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
