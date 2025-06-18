@@ -91,9 +91,6 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
-    pub cpu_disable_persistence: bool,
-
-    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
@@ -544,7 +541,6 @@ pub struct CommonConfig {
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
-    cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
     batch_polling_timeout_secs: i32,
@@ -622,7 +618,6 @@ impl From<Config> for CommonConfig {
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
@@ -675,7 +670,6 @@ impl From<Config> for CommonConfig {
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,

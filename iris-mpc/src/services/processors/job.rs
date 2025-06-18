@@ -344,7 +344,7 @@ async fn persist(
     config: &Config,
 ) -> Result<()> {
     // simply persist or not both iris and graph changes
-    if !config.cpu_disable_persistence {
+    if !config.disable_persistence {
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
         hawk_mutation.persist(&mut graph_tx).await?;
         graph_tx.tx.commit().await?;

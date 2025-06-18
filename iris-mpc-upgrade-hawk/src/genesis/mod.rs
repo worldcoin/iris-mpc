@@ -597,7 +597,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_prf_key: config.hawk_prf_key,
-        disable_persistence: config.cpu_disable_persistence,
+        disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
     };
