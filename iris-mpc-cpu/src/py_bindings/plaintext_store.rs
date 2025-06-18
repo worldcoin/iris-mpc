@@ -41,9 +41,9 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
 
     // Iterate over each deserialized object
     let mut vector = PlaintextStore::new();
-    for json_pt in stream {
+    for (idx, json_pt) in stream.into_iter().enumerate() {
         let json_pt = json_pt?;
-        vector.points.push((&json_pt).into());
+        vector.points.insert(idx as u32 + 1, (&json_pt).into());
     }
 
     if let Some(num) = len {
@@ -66,7 +66,12 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     // Serialize the objects to the file
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
-    for pt in &vector.points {
+    // Collect and sort keys
+    let mut keys: Vec<_> = vector.points.keys().cloned().collect();
+    keys.sort();
+    // to keep all old ndjson files backwards compatible, we write the iris codes only
+    for key in keys {
+        let pt = vector.points.get(&key).expect("Key not found");
         let json_pt: Base64IrisCode = pt.into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
