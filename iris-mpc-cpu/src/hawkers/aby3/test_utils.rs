@@ -41,8 +41,17 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for (i, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from_0_index(i as u32);
+    // sort the iris codes by their serial id
+    // Collect and sort keys
+    let mut sorted_serial_ids: Vec<_> = plain_store.points.keys().cloned().collect();
+    sorted_serial_ids.sort();
+
+    for serial_id in sorted_serial_ids {
+        let iris = plain_store
+            .points
+            .get(&serial_id)
+            .expect("Key not found in plain store");
+        let vector_id = VectorId::from_serial_id(serial_id);
         let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
