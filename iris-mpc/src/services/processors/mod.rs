@@ -1,5 +1,6 @@
 pub mod batch;
 pub mod job;
+pub mod modifications_sync;
 pub mod result_message;
 
 use aws_sdk_s3::Client as S3Client;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::{spawn_blocking, JoinHandle};
 
-type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
+pub type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 
 fn decode_iris_message_shares(
     code_share: String,
@@ -46,7 +47,7 @@ fn decode_iris_message_shares(
     ))
 }
 
-fn get_iris_shares_parse_task(
+pub fn get_iris_shares_parse_task(
     party_id: usize,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     semaphore: Arc<Semaphore>,

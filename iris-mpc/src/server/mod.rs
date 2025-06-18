@@ -4,6 +4,9 @@ use crate::services::processors::job::process_job_result;
 use crate::services::processors::process_identity_deletions;
 use aws_sdk_sns::types::MessageAttributeValue;
 
+use crate::services::processors::modifications_sync::{
+    send_last_modifications_to_sns, sync_modifications,
+};
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -84,6 +87,33 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    // Handle modifications sync
+    if config.enable_modifications_sync {
+        sync_modifications(
+            &config,
+            &iris_store,
+            Some(&graph_store),
+            &aws_clients,
+            &shares_encryption_key_pair,
+            sync_result.clone(),
+        )
+        .await?;
+    }
+
+    if config.enable_modifications_replay {
+        // replay last `max_modification_lookback` modifications to SNS
+        if let Err(e) = send_last_modifications_to_sns(
+            &iris_store,
+            &aws_clients.sns_client,
+            &config,
+            max_sync_lookback(&config),
+        )
+        .await
+        {
+            tracing::error!("Failed to replay last modifications: {:?}", e);
+        }
+    }
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
@@ -179,7 +209,7 @@ fn process_config(config: &Config) {
 
 /// Returns computed maximum sync lookback size.
 fn max_sync_lookback(config: &Config) -> usize {
-    config.max_batch_size * 2
+    (config.max_deletions_per_batch + config.max_batch_size) * 2
 }
 
 /// Returns initialized PostgreSQL clients for interacting

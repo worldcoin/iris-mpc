@@ -40,6 +40,7 @@ serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono = "0.4.38"
 sqlx.workspace = true
+bincode.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
