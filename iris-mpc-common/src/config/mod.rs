@@ -227,6 +227,9 @@ pub struct Config {
 
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
+
+    #[serde(default)]
+    pub gpu_schema_name_suffix: String,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -499,6 +502,7 @@ pub struct CommonConfig {
     hawk_server_deletions_enabled: bool,
     hawk_server_reauths_enabled: bool,
     app_name: String,
+    gpu_schema_name_suffix: String,
     cpu_disable_persistence: bool,
     enable_reset: bool,
     hawk_server_resets_enabled: bool,
@@ -573,6 +577,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            gpu_schema_name_suffix,
         } = value;
 
         Self {
@@ -619,6 +624,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             hawk_server_resets_enabled,
             full_scan_side,
+            gpu_schema_name_suffix,
         }
     }
 }

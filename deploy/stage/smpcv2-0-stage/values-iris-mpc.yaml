@@ -156,6 +156,12 @@ env:
 
   - name : SMPC__ENABLE_DEBUG_TIMING
     value: "true"
+  
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "before1371"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "5000"
 
 initContainer:
   enabled: true
