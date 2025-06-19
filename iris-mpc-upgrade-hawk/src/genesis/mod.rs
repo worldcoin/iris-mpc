@@ -8,7 +8,7 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
+    config::{CommonConfig, Config},
     helpers::{
         shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
         sync::Modification, task_monitor::TaskMonitor,
@@ -186,8 +186,6 @@ async fn exec_setup(
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
-    log_info(format!("Compute mode: {:?}", config.mode_of_compute));
-    log_info(format!("Deployment mode: {:?}", config.mode_of_deployment));
 
     // Set shutdown handler.
     let shutdown_handler = init_shutdown_handler(config).await;
@@ -599,7 +597,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
         hnsw_prf_key: config.hawk_prf_key,
-        disable_persistence: config.cpu_disable_persistence,
+        disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
     };
@@ -913,24 +911,6 @@ fn log_warn(msg: String) -> String {
 /// * `config` - Application configuration instance.
 ///
 fn validate_config(config: &Config) -> Result<()> {
-    // Validate modes of compute/deployment.
-    if config.mode_of_compute != ModeOfCompute::Cpu {
-        let msg = log_error(format!(
-            "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
-            config.mode_of_compute
-        ));
-        bail!("{}", msg);
-    }
-
-    // Validate modes of compute/deployment.
-    if config.mode_of_deployment != ModeOfDeployment::Standard {
-        let msg = log_error(format!(
-            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
-            config.mode_of_deployment
-        ));
-        bail!("{}", msg);
-    }
-
     // Validate CPU db config.
     if config.cpu_database.is_none() {
         bail!(

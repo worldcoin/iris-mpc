@@ -15,17 +15,6 @@ docker compose -f docker-compose.dev.yaml up -d
 
 ## Running server in different deployment modes
 
-### ShadowReadOnly
+### Standard
 
-Script: `./scripts/tools/run-shadowreadonly-server.sh`
-
-This mode represents setup in which the irises are read from the `iris-mpc` production database and graph is written to a shadow / CPU database.
-
-The difference in configuration is the `MODE_OF_DEPLOYMENT=SHADOWREADONLY` and `DISABLE_PERSISTANCE=true`. This allows us to run the system with confidence that data in the `iris-mpc` database will not be altered. 
-
-Also, in this mode the `iris-mpc` database is being accessed via a read-only user. To see details of how it is set up, please refer to `init-db-pgres.sql` script.
-### ShadowIsolation
-
-Script: `./scripts/tools/run-shadowisolaton-server.sh`
-
-This mode represents setup in which all the data is read/written to the shadow / CPU database. 
+This is used currently for local only. It is the default mode of operation, in which the server reads/writes data to the CPU database (both irises and graph data)

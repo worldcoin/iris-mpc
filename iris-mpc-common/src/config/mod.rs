@@ -91,9 +91,6 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
-    pub cpu_disable_persistence: bool,
-
-    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
@@ -222,14 +219,6 @@ pub struct Config {
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 
-    /// Server process behaviour can be adjusted as per compute mode.
-    #[serde(default)]
-    pub mode_of_compute: ModeOfCompute,
-
-    /// Server process behaviour can be adjusted as per deployment mode.
-    #[serde(default)]
-    pub mode_of_deployment: ModeOfDeployment,
-
     #[serde(default)]
     pub enable_modifications_sync: bool,
 
@@ -263,29 +252,6 @@ pub struct Config {
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
-}
-
-/// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfCompute {
-    /// Computation with standard CPUs (see HNSW graph).
-    Cpu,
-    /// Computation with Cuda GPU(s).
-    #[default]
-    Gpu,
-}
-
-/// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfDeployment {
-    // shadow mode for when HSNW deployment does not read from the Gpu implementation
-    // it should create and write its own shares DB
-    ShadowIsolation,
-    // Shadow mode for when HNSW test deployment reads from the Gpu Implementation
-    ShadowReadOnly,
-    // Standard mode for all other deployments.
-    #[default]
-    Standard,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -567,8 +533,6 @@ pub struct CommonConfig {
     hnsw_param_ef_search: usize,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
-    mode_of_compute: ModeOfCompute,
-    mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -577,7 +541,6 @@ pub struct CommonConfig {
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
-    cpu_disable_persistence: bool,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
     batch_polling_timeout_secs: i32,
@@ -647,8 +610,6 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -657,7 +618,6 @@ impl From<Config> for CommonConfig {
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
@@ -702,8 +662,6 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -712,7 +670,6 @@ impl From<Config> for CommonConfig {
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
-            cpu_disable_persistence,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
