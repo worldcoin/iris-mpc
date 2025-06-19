@@ -35,6 +35,7 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
+use std::process::exit;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -497,7 +498,8 @@ async fn start_results_thread(
             )
             .await
             {
-                tracing::error!("Error processing job result: {:?}", e);
+                tracing::error!("Error processing job result: {:?}. Exiting...", e);
+                exit(1);
             }
         }
 
