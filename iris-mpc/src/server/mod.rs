@@ -1,7 +1,6 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
-use crate::services::processors::process_identity_deletions;
 use aws_sdk_sns::types::MessageAttributeValue;
 
 use crate::services::processors::modifications_sync::{
@@ -20,7 +19,6 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
@@ -249,6 +247,8 @@ async fn get_shares_encryption_key_pair(
 struct SnsAttributesMaps {
     uniqueness_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_check_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_update_result_attributes: HashMap<String, MessageAttributeValue>,
     anonymized_statistics_attributes: HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: HashMap<String, MessageAttributeValue>,
 }
@@ -257,14 +257,19 @@ struct SnsAttributesMaps {
 fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_check_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_result_attributes = create_message_type_attribute_map(
+        iris_mpc_common::helpers::smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+    );
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
         reauth_result_attributes,
+        reset_check_result_attributes,
+        reset_update_result_attributes,
         anonymized_statistics_attributes,
         identity_deletion_result_attributes,
     })
@@ -492,6 +497,8 @@ async fn start_results_thread(
                 &sns_attributes_maps.uniqueness_result_attributes,
                 &sns_attributes_maps.reauth_result_attributes,
                 &sns_attributes_maps.identity_deletion_result_attributes,
+                &sns_attributes_maps.reset_check_result_attributes,
+                &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.anonymized_statistics_attributes,
                 &shutdown_handler_bg,
             )
@@ -560,8 +567,6 @@ async fn run_main_server_loop(
             iris_store.clone(),
         );
 
-        let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
-
         loop {
             let now = Instant::now();
 
@@ -581,14 +586,6 @@ async fn run_main_server_loop(
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
             metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
-
-            process_identity_deletions(
-                &batch,
-                iris_store,
-                &dummy_shares_for_deletions.0,
-                &dummy_shares_for_deletions.1,
-            )
-            .await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and
