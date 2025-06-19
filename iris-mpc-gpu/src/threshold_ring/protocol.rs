@@ -2543,6 +2543,11 @@ impl Circuits {
         let res = buckets.as_view();
 
         let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+
+        if rcv_buffer_.is_empty() {
+            tracing::error!("Empty lifted_shares buffer in open_buckets");
+            return Vec::new();
+        }
         let mut rcv_buffer = rcv_buffer_[0].get_range(0, buckets.len());
 
         result::group_start().unwrap();
