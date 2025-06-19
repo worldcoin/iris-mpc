@@ -21,7 +21,7 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
@@ -258,6 +258,9 @@ async fn receive_batch(
                             modification,
                         );
 
+                        batch_query.requests_order.push(RequestIndex::Deletion(
+                            batch_query.deletion_requests_indices.len(),
+                        ));
                         batch_query
                             .deletion_requests_indices
                             .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
@@ -359,6 +362,11 @@ async fn receive_batch(
                         batch_query.or_rule_indices.push(or_rule_indices);
 
                         batch_query
+                            .requests_order
+                            .push(RequestIndex::UniqueReauthResetCheck(
+                                batch_query.request_ids.len(),
+                            ));
+                        batch_query
                             .request_ids
                             .push(uniqueness_request.signup_id.clone());
                         batch_query
@@ -450,6 +458,11 @@ async fn receive_batch(
                             }
 
                             batch_query
+                                .requests_order
+                                .push(RequestIndex::UniqueReauthResetCheck(
+                                    batch_query.request_ids.len(),
+                                ));
+                            batch_query
                                 .request_ids
                                 .push(reauth_request.reauth_id.clone());
                             batch_query
@@ -518,6 +531,11 @@ async fn receive_batch(
                                 tracing::info!("Updating batch size to {}", batch_size);
                             }
 
+                            batch_query
+                                .requests_order
+                                .push(RequestIndex::UniqueReauthResetCheck(
+                                    batch_query.request_ids.len(),
+                                ));
                             batch_query
                                 .request_ids
                                 .push(reset_check_request.reset_id.clone());
@@ -626,6 +644,9 @@ async fn receive_batch(
                                 modification,
                             );
 
+                            batch_query.requests_order.push(RequestIndex::ResetUpdate(
+                                batch_query.reset_update_indices.len(),
+                            ));
                             batch_query
                                 .reset_update_indices
                                 .push(reset_update_request.serial_id - 1);
