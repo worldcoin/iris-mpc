@@ -8,8 +8,8 @@ use eyre::{eyre, Report};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
-    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
-    UNIQUENESS_MESSAGE_TYPE,
+    IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
@@ -156,6 +156,8 @@ pub async fn send_last_modifications_to_sns(
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let deletion_message_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+    let reset_check_message_attributes =
+        create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
 
     // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
@@ -173,6 +175,7 @@ pub async fn send_last_modifications_to_sns(
     let mut deletion_messages = Vec::new();
     let mut reauth_messages = Vec::new();
     let mut reset_update_messages = Vec::new();
+    let mut reset_check_messages = Vec::new();
     let mut uniqueness_messages = Vec::new();
     for modification in &last_modifications {
         if modification.result_message_body.is_none() {
@@ -196,6 +199,9 @@ pub async fn send_last_modifications_to_sns(
             RESET_UPDATE_MESSAGE_TYPE => {
                 reset_update_messages.push(body);
             }
+            RESET_CHECK_MESSAGE_TYPE => {
+                reset_check_messages.push(body);
+            }
             UNIQUENESS_MESSAGE_TYPE => {
                 uniqueness_messages.push(body);
             }
@@ -206,12 +212,13 @@ pub async fn send_last_modifications_to_sns(
     }
 
     tracing::info!(
-        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update",
+        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update, {} reset check",
         last_modifications.len(),
         uniqueness_messages.len(),
         deletion_messages.len(),
         reauth_messages.len(),
         reset_update_messages.len(),
+        reset_check_messages.len(),
     );
 
     if !uniqueness_messages.is_empty() {
@@ -258,6 +265,18 @@ pub async fn send_last_modifications_to_sns(
             config,
             &reset_update_message_attributes,
             RESET_UPDATE_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    if !reset_check_messages.is_empty() {
+        send_results_to_sns(
+            reset_check_messages,
+            &Vec::new(),
+            sns_client,
+            config,
+            &reset_check_message_attributes,
+            RESET_CHECK_MESSAGE_TYPE,
         )
         .await?;
     }

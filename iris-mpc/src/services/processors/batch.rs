@@ -584,7 +584,9 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        // Persist in progress modification
+        // Persist in progress reset_check message.
+        // Note that reset_check is only a query and does not persist anything into the database.
+        // We store modification so that the SNS result can be replayed.
         let modification = persist_modification(
             self.config.disable_persistence,
             self.iris_store,
