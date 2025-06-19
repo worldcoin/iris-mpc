@@ -52,7 +52,7 @@ impl FromStr for ModificationStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Modification {
     pub id: i64,
     pub serial_id: Option<i64>,
@@ -62,6 +62,26 @@ pub struct Modification {
     pub persisted: bool,
     pub result_message_body: Option<String>,
     pub graph_mutation: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for Modification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let graph_mutation_summary = match &self.graph_mutation {
+            Some(bytes) => format!("Some([{} bytes])", bytes.len()),
+            None => "None".to_string(),
+        };
+
+        f.debug_struct("Modification")
+            .field("id", &self.id)
+            .field("serial_id", &self.serial_id)
+            .field("request_type", &self.request_type)
+            .field("s3_url", &self.s3_url)
+            .field("status", &self.status)
+            .field("persisted", &self.persisted)
+            .field("result_message_body", &self.result_message_body)
+            .field("graph_mutation", &graph_mutation_summary)
+            .finish()
+    }
 }
 
 impl Modification {

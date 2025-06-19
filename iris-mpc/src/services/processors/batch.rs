@@ -372,13 +372,14 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
+        self.delete_message(sqs_message).await?;
+
         if self.config.hawk_server_deletions_enabled {
             let identity_deletion_request: IdentityDeletionRequest =
                 serde_json::from_str(&message.message).map_err(|e| {
                     ReceiveRequestError::json_parse_error("Identity deletion request", e)
                 })?;
-
-            metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
 
             // Skip the request if serial ID already exists in current batch modifications
             if self
@@ -418,7 +419,6 @@ impl<'a> BatchProcessor<'a> {
             tracing::warn!("Identity deletions are disabled");
         }
 
-        self.delete_message(sqs_message).await?;
         Ok(())
     }
 
