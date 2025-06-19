@@ -265,6 +265,7 @@ fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
+
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
         reauth_result_attributes,

@@ -70,6 +70,10 @@ impl fmt::Debug for Modification {
             Some(bytes) => format!("Some([{} bytes])", bytes.len()),
             None => "None".to_string(),
         };
+        let result_message_summary = match &self.result_message_body {
+            Some(msg) => format!("Some([{} chars])", msg.chars().count()),
+            None => "None".to_string(),
+        };
 
         f.debug_struct("Modification")
             .field("id", &self.id)
@@ -78,7 +82,7 @@ impl fmt::Debug for Modification {
             .field("s3_url", &self.s3_url)
             .field("status", &self.status)
             .field("persisted", &self.persisted)
-            .field("result_message_body", &self.result_message_body)
+            .field("result_message_body", &result_message_summary)
             .field("graph_mutation", &graph_mutation_summary)
             .finish()
     }
