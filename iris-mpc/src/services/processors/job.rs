@@ -271,14 +271,14 @@ pub async fn process_job_result(
             let serial_id = reset_update_indices[i] + 1;
             let result_event = ResetUpdateAckResult::new(reset_id.clone(), party_id, serial_id);
             let result_string = serde_json::to_string(&result_event)
-                .expect("failed to serialize reset update result");
+                .wrap_err("failed to serialize reset update result")?;
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
                 .mark_completed(true, &result_string, None, None);
-            result_string
+            Ok(result_string)
         })
-        .collect::<Vec<String>>();
+        .collect::<Result<Vec<_>>>()?;
 
     let mut iris_tx = store.tx().await?;
 
