@@ -62,12 +62,6 @@ impl<R, ROT: Rotations> VecRots<R, ROT> {
         &self.rotations[self.rotations.len() / 2]
     }
 
-    /// Get the item attached to the center rotation.
-    pub fn into_center(self) -> R {
-        let middle = self.rotations.len() / 2;
-        self.rotations.into_iter().nth(middle).unwrap()
-    }
-
     /// Flatten a batch of something with rotations into a concatenated Vec.
     /// Attach a copy of the corresponding `B` to each rotation.
     pub fn flatten_broadcast<'a, B>(batch: impl IntoIterator<Item = (&'a Self, B)>) -> Vec<(R, B)>

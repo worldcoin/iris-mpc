@@ -181,6 +181,7 @@ impl Handle {
             mutations.push(SingleHawkMutation {
                 plans: [left_plan, right_plan],
                 modification_key: None, // Genesis doesn't use modification keys
+                request_index: None,    // Genesis doesn't use request indices
             });
         }
         metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
