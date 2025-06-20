@@ -28,6 +28,7 @@ use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
     SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
+use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
@@ -371,13 +372,14 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
+        self.delete_message(sqs_message).await?;
+
         if self.config.hawk_server_deletions_enabled {
             let identity_deletion_request: IdentityDeletionRequest =
                 serde_json::from_str(&message.message).map_err(|e| {
                     ReceiveRequestError::json_parse_error("Identity deletion request", e)
                 })?;
-
-            metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
 
             // Skip the request if serial ID already exists in current batch modifications
             if self
@@ -394,14 +396,14 @@ impl<'a> BatchProcessor<'a> {
             }
 
             // Persist in progress modification
-            let modification = self
-                .iris_store
-                .insert_modification(
-                    Some(identity_deletion_request.serial_id as i64),
-                    IDENTITY_DELETION_MESSAGE_TYPE,
-                    None,
-                )
-                .await?;
+            let modification = persist_modification(
+                self.config.disable_persistence,
+                self.iris_store,
+                Some(identity_deletion_request.serial_id as i64),
+                IDENTITY_DELETION_MESSAGE_TYPE,
+                None,
+            )
+            .await;
             self.batch_query.modifications.insert(
                 RequestSerialId(identity_deletion_request.serial_id),
                 modification,
@@ -417,7 +419,6 @@ impl<'a> BatchProcessor<'a> {
             tracing::warn!("Identity deletions are disabled");
         }
 
-        self.delete_message(sqs_message).await?;
         Ok(())
     }
 
@@ -435,14 +436,14 @@ impl<'a> BatchProcessor<'a> {
         self.delete_message(sqs_message).await?;
 
         // Persist in progress modification
-        let modification = self
-            .iris_store
-            .insert_modification(
-                None,
-                UNIQUENESS_MESSAGE_TYPE,
-                Some(uniqueness_request.s3_key.as_str()),
-            )
-            .await?;
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some(uniqueness_request.s3_key.as_str()),
+        )
+        .await;
         self.batch_query.modifications.insert(
             RequestId(uniqueness_request.signup_id.clone()),
             modification,
@@ -519,14 +520,14 @@ impl<'a> BatchProcessor<'a> {
         }
 
         // Persist in progress modification
-        let modification = self
-            .iris_store
-            .insert_modification(
-                Some(reauth_request.serial_id as i64),
-                REAUTH_MESSAGE_TYPE,
-                Some(reauth_request.s3_key.as_str()),
-            )
-            .await?;
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            Some(reauth_request.serial_id as i64),
+            REAUTH_MESSAGE_TYPE,
+            Some(reauth_request.s3_key.as_str()),
+        )
+        .await;
         self.batch_query
             .modifications
             .insert(RequestSerialId(reauth_request.serial_id), modification);
@@ -583,15 +584,17 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        // Persist in progress modification
-        let modification = self
-            .iris_store
-            .insert_modification(
-                None,
-                RESET_CHECK_MESSAGE_TYPE,
-                Some(reset_check_request.s3_key.as_str()),
-            )
-            .await?;
+        // Persist in progress reset_check message.
+        // Note that reset_check is only a query and does not persist anything into the database.
+        // We store modification so that the SNS result can be replayed.
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            None,
+            RESET_CHECK_MESSAGE_TYPE,
+            Some(reset_check_request.s3_key.as_str()),
+        )
+        .await;
         self.batch_query.modifications.insert(
             RequestId(reset_check_request.reset_id.clone()),
             modification,
@@ -676,14 +679,15 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
-        let modification = self
-            .iris_store
-            .insert_modification(
-                Some(reset_update_request.serial_id as i64),
-                RESET_UPDATE_MESSAGE_TYPE,
-                Some(reset_update_request.s3_key.as_str()),
-            )
-            .await?;
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            Some(reset_update_request.serial_id as i64),
+            RESET_UPDATE_MESSAGE_TYPE,
+            Some(reset_update_request.s3_key.as_str()),
+        )
+        .await;
+
         self.batch_query.modifications.insert(
             RequestSerialId(reset_update_request.serial_id),
             modification,
@@ -962,4 +966,21 @@ impl<'a> BatchProcessor<'a> {
             .mask
             .extend(share_right.mask_mirrored);
     }
+}
+
+async fn persist_modification(
+    disable_persistence: bool,
+    iris_store: &Store,
+    serial_id: Option<i64>,
+    request_type: &str,
+    s3_url: Option<&str>,
+) -> Modification {
+    if disable_persistence {
+        tracing::debug!("Persistence is disabled, skipping modification persistence");
+        return Modification::default();
+    }
+    iris_store
+        .insert_modification(serial_id, request_type, s3_url)
+        .await
+        .expect("Failed to insert modification into store")
 }
