@@ -24,14 +24,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils,
-        BatchGenerator,
-        BatchIterator,
-        BatchSize,
-        Handle as GenesisHawkHandle,
-        IndexationError,
-        JobRequest,
-        JobResult,
+        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
+        IndexationError, JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
     hnsw::graph::graph_store::GraphPg,
@@ -154,7 +148,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         hawk_handle = exec_delta(
             &config,
             &ctx,
-            &imem_iris_stores,
             hawk_handle,
             &tx_results,
             &mut task_monitor_bg,
@@ -364,13 +357,16 @@ async fn exec_setup(
 ///
 /// # Arguments
 ///
+/// * `config` - Application configuration struct.
 /// * `ctx` - Execution context information.
-/// * `modifications` - Set of indexation modifications to apply.
+/// * `hawk_handle` - Genesis hawk handle for processing queries with HNSW engine.
+/// * `tx_results` - Sender handle for persisting modifications to database.
+/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
+/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
 ///
 async fn exec_delta(
     config: &Config,
     ctx: &ExecutionContextInfo,
-    _imem_iris_stores: &BothEyes<SharedIrisesRef>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     task_monitor_bg: &mut TaskMonitor,
@@ -415,10 +411,6 @@ async fn exec_delta(
             // Send results to processing thread responsible for persisting to database.
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
-
-            // TODO: apply modification to the graph
-            // TODO: set last indexed modification id
-            // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
         }
 
         Ok(())
@@ -461,10 +453,11 @@ async fn exec_delta(
 /// # Arguments
 ///
 /// * `ctx` - Execution context information.
+/// * `imem_iris_stores` - In-memory iris shares for indexation queries.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
-/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
-/// * `shutdown_handler` - Handler coordinating process shutdown.
 /// * `tx_results` - Channel to send job results to DB persistence thread.
+/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
+/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
 ///
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,

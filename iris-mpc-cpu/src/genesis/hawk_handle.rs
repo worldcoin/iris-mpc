@@ -228,11 +228,11 @@ impl Handle {
                                     // TODO remove any prior versions of this vector id from graph
 
                                     let query = vector.get_query(&vector_id).await;
-                                    let insert_plan_ = search_single_query_no_match_count(
+                                    let insert_plan = search_single_query_no_match_count(
                                                 session.clone(), query, &searcher, &identifier
                                         )
                                         .await?;
-                                    let plans = vec![Some(insert_plan_)];
+                                    let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
                                     let connect_plan = insert(session, &searcher, plans, &ids).await?;
