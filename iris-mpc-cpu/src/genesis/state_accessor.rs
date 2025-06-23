@@ -4,7 +4,7 @@ use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
 use iris_mpc_store::Store;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::fmt::Debug;
 
@@ -137,23 +137,10 @@ pub async fn get_iris_modifications(
 ///
 /// # Returns
 ///
-/// Serial id of the last indexed iris, or 0 if no serial id is recorded.
+/// The serial id of last iris to have been indexed, or 0 if none has been recorded.
 ///
 pub async fn get_last_indexed_iris_id(graph_store: &GraphPg<Aby3Store>) -> Result<IrisSerialId> {
-    utils::log_info(
-        COMPONENT,
-        format!(
-            "Retrieving Genesis indexation state element: key={}",
-            STATE_KEY_LAST_INDEXED_IRIS_ID
-        ),
-    );
-
-    let id = graph_store
-        .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
-        .await?
-        .unwrap_or(0);
-
-    Ok(id)
+    get_state_element(graph_store, STATE_KEY_LAST_INDEXED_IRIS_ID).await
 }
 
 /// Gets the modification id of the last indexed modification.
@@ -164,23 +151,28 @@ pub async fn get_last_indexed_iris_id(graph_store: &GraphPg<Aby3Store>) -> Resul
 ///
 /// # Returns
 ///
-/// The modification id of the last indexed modification, or 0 if no modification id is recorded.
+/// The modification id of the last indexed modification, or 0 if none has been recorded.
 ///
 pub async fn get_last_indexed_modification_id(graph_store: &GraphPg<Aby3Store>) -> Result<i64> {
+    get_state_element(graph_store, STATE_KEY_LAST_INDEXED_MODIFICATION_ID).await
+}
+
+/// Gets a state element value from remote store.
+async fn get_state_element<T: DeserializeOwned + Default>(
+    graph_store: &GraphPg<Aby3Store>,
+    key: &str,
+) -> Result<T> {
     utils::log_info(
         COMPONENT,
-        format!(
-            "Retrieving Genesis indexation state element: key={}",
-            STATE_KEY_LAST_INDEXED_MODIFICATION_ID
-        ),
+        format!("Retrieving Genesis indexation state element: key={}", key),
     );
 
-    let id = graph_store
-        .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
+    let value = graph_store
+        .get_persistent_state(STATE_DOMAIN, key)
         .await?
-        .unwrap_or(0);
+        .unwrap_or(T::default());
 
-    Ok(id)
+    Ok(value)
 }
 
 /// Sets serial id of last Iris to have been indexed.
@@ -220,17 +212,6 @@ pub async fn set_last_indexed_modification_id(
 }
 
 /// Persists a state element to remote store.
-///
-/// # Arguments
-///
-/// * `tx` - PostgreSQL transaction to use for operation scope.
-/// * `key` - Key of state element to be persisted.
-/// * `value` - Value of state element to be persisted.
-///
-/// # Returns
-///
-/// Result<()> on success
-///
 async fn set_state_element<T: Serialize + Debug>(
     tx: &mut Transaction<'_, Postgres>,
     key: &str,

@@ -14,18 +14,6 @@ env:
   - name: SMPC__PARTY_ID
     value: "2"
 
-  - name: SMPC__MODE_OF_COMPUTE
-    value: "Cpu"
-
-  - name: SMPC__MODE_OF_DEPLOYMENT
-    value: "ShadowIsolation"
-
-  - name: SMPC__DATABASE__URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_MPCV2_URL
-        name: application
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
@@ -53,7 +41,7 @@ env:
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
 
-  - name: SMPC__CPU_DISABLE_PERSISTENCE
+  - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
@@ -153,6 +141,12 @@ env:
 
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
+
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
 
 initContainer:
   enabled: true

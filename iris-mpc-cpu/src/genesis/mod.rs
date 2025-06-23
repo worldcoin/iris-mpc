@@ -5,7 +5,7 @@ pub mod state_accessor;
 pub mod state_sync;
 pub mod utils;
 
-pub use batch_generator::{Batch, BatchGenerator, BatchIterator};
+pub use batch_generator::{Batch, BatchGenerator, BatchIterator, BatchSize};
 pub use hawk_handle::Handle;
 pub use hawk_job::{Job, JobRequest, JobResult};
 pub use state_accessor::{

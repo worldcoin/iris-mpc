@@ -52,7 +52,7 @@ impl FromStr for ModificationStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Modification {
     pub id: i64,
     pub serial_id: Option<i64>,
@@ -62,6 +62,30 @@ pub struct Modification {
     pub persisted: bool,
     pub result_message_body: Option<String>,
     pub graph_mutation: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for Modification {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let graph_mutation_summary = match &self.graph_mutation {
+            Some(bytes) => format!("Some([{} bytes])", bytes.len()),
+            None => "None".to_string(),
+        };
+        let result_message_summary = match &self.result_message_body {
+            Some(msg) => format!("Some([{} chars])", msg.chars().count()),
+            None => "None".to_string(),
+        };
+
+        f.debug_struct("Modification")
+            .field("id", &self.id)
+            .field("serial_id", &self.serial_id)
+            .field("request_type", &self.request_type)
+            .field("s3_url", &self.s3_url)
+            .field("status", &self.status)
+            .field("persisted", &self.persisted)
+            .field("result_message_body", &result_message_summary)
+            .field("graph_mutation", &graph_mutation_summary)
+            .finish()
+    }
 }
 
 impl Modification {
@@ -143,9 +167,26 @@ impl SyncResult {
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {
-        self.all_states
+        let sequence_nums: Vec<Option<u128>> = self
+            .all_states
             .iter()
             .map(|s| s.next_sns_sequence_num)
+            .collect();
+
+        // All nodes should either have an empty queue or filled with some items.
+        // Otherwise, we can not conclude queue sync and proceed safely.
+        // More info: https://linear.app/worldcoin/issue/POP-2577/cover-edge-case-in-sqs-sync
+        let any_empty_queues = sequence_nums.iter().any(|seq| seq.is_none());
+        let any_non_empty_queues = sequence_nums.iter().any(|seq| seq.is_some());
+        if any_empty_queues && any_non_empty_queues {
+            panic!(
+                "Can not deduce max SNS sequence number safely out of {:?}. Restarting...",
+                sequence_nums
+            );
+        }
+
+        sequence_nums
+            .into_iter()
             .max()
             .expect("can get max u128 value")
     }
@@ -746,7 +787,7 @@ mod tests {
 
     #[test]
     fn test_max_sns_sequence_num() {
-        // 1. Test with mixed sequence values
+        // 1. Test with all Some sequence values
         let states = vec![
             SyncState {
                 db_len: 10,
@@ -763,7 +804,7 @@ mod tests {
             SyncState {
                 db_len: 30,
                 modifications: vec![],
-                next_sns_sequence_num: None,
+                next_sns_sequence_num: Some(150),
                 common_config: CommonConfig::default(),
             },
         ];
@@ -786,6 +827,37 @@ mod tests {
 
         let sync_result_none = SyncResult::new(state_with_none_sequence_num, all_states);
         assert_eq!(sync_result_none.max_sns_sequence_num(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Can not deduce max SNS sequence number safely")]
+    fn test_max_sns_sequence_num_mixed_panic() {
+        // Test the edge case where some nodes have None while others have Some
+        // This should panic to prevent the batch mismatch described in the issue
+        let states = vec![
+            SyncState {
+                db_len: 10,
+                modifications: vec![],
+                next_sns_sequence_num: None, // NodeX - advanced but empty queue
+                common_config: CommonConfig::default(),
+            },
+            SyncState {
+                db_len: 20,
+                modifications: vec![],
+                next_sns_sequence_num: Some(123), // Other nodes still have messages
+                common_config: CommonConfig::default(),
+            },
+            SyncState {
+                db_len: 30,
+                modifications: vec![],
+                next_sns_sequence_num: Some(123),
+                common_config: CommonConfig::default(),
+            },
+        ];
+
+        let sync_result = SyncResult::new(states[0].clone(), states);
+        // This should panic due to inconsistent sequence numbers
+        sync_result.max_sns_sequence_num();
     }
 
     #[test]

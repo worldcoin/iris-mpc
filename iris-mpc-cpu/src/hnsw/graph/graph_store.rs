@@ -386,23 +386,24 @@ where
                 let mut conn = pool.acquire().await?;
                 let table = format!("\"{}\".hawk_graph_links", schema_name);
 
-                // Calculate ID range for this partition
-                let start_id = 1 + (partition_size * i);
-                let end_id = start_id + partition_size - 1;
+                // Use OFFSET/LIMIT for partitioning by row count
+                // We cannot rely on the serial id since there could be deletions
+                let offset = partition_size * i;
+                let limit = partition_size;
 
                 let query_sql = format!(
                     "
                     SELECT serial_id, version_id, links, layer FROM {table}
                     WHERE graph_id = $1
-                    AND serial_id BETWEEN $2 AND $3
                     ORDER BY serial_id, layer
+                    OFFSET $2 LIMIT $3
                 "
                 );
 
                 let mut rows = sqlx::query_as::<_, RowLinks>(&query_sql)
                     .bind(graph_id)
-                    .bind(start_id as i32)
-                    .bind(end_id as i32)
+                    .bind(offset as i32)
+                    .bind(limit as i32)
                     .fetch(&mut *conn);
 
                 let mut links_loaded = 0;
@@ -422,10 +423,10 @@ where
                 }
 
                 tracing::info!(
-                    "GraphLoader: Partition {} (IDs {}-{}) loaded {} links",
+                    "GraphLoader: Partition {} (IDs offset {} with limit {}) loaded {} links",
                     i,
-                    start_id,
-                    end_id,
+                    offset,
+                    limit,
                     links_loaded
                 );
 
@@ -633,7 +634,7 @@ mod tests {
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng)?;
+            let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;

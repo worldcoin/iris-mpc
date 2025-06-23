@@ -101,7 +101,7 @@ impl Handle {
         sessions: &BothEyes<Vec<HawkSessionRef>>,
         request: JobRequest,
     ) -> Result<JobResult> {
-        let _ = Instant::now();
+        let now = Instant::now();
 
         match request {
             JobRequest::BatchIndexation {
@@ -119,8 +119,8 @@ impl Handle {
                 // batch, number configured by `args.request_parallelism`.
 
                 // Iterate per side
-                let jobs_per_side = izip!(queries.iter(), sessions.iter())
-                    .map(|(queries_side, sessions_side)| {
+                let jobs_per_side = izip!(STORE_IDS, queries.iter(), sessions.iter())
+                    .map(|(side, queries_side, sessions_side)| {
                         let searcher = actor.searcher();
                         let queries_with_ids =
                             izip!(queries_side.clone(), vector_ids.clone()).collect_vec();
@@ -136,13 +136,17 @@ impl Handle {
                             // Process queries in a logical insertion batch for this side
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
                                 let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
-                                    |((query, _id), session)| {
+                                    |((query, id), session)| {
                                         let query = query.clone();
                                         let searcher = searcher.clone();
                                         let session = session.clone();
+                                        let identifier = (*id, side);
                                         async move {
                                             search_single_query_no_match_count(
-                                                session, query, &searcher,
+                                                session,
+                                                query,
+                                                &searcher,
+                                                &identifier,
                                             )
                                             .await
                                         }
@@ -180,11 +184,16 @@ impl Handle {
                 let mut mutations = Vec::new();
 
                 for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    // Genesis doesn't use modification keys or request indices
                     mutations.push(SingleHawkMutation {
                         plans: [left_plan, right_plan],
-                        modification_key: None, // Genesis doesn't use modification keys
+                        modification_key: None,
+                        request_index: None,
                     });
                 }
+
+                metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
+                metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
 
                 Ok(JobResult::new_batch_result(
                     batch_id,
@@ -198,9 +207,9 @@ impl Handle {
                 ))? as u32;
 
                 let jobs_per_side =
-                    izip!(sessions.iter(), STORE_IDS).map(|(sessions_side, store_id)| {
+                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
                         let sessions = sessions_side.clone();
-                        let vector = actor.iris_store(store_id);
+                        let vector = actor.iris_store(side);
                         let modification = modification.clone();
                         let searcher = actor.searcher();
 
@@ -214,12 +223,13 @@ impl Handle {
                             match modification.request_type.as_str() {
                                 smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
                                     let vector_id = vector_id_.ok_or_eyre("Expected vector serial id of update is missing from store")?;
+                                    let identifier = (vector_id, side);
 
                                     // TODO remove any prior versions of this vector id from graph
 
                                     let query = vector.get_query(&vector_id).await;
                                     let insert_plan_ = search_single_query_no_match_count(
-                                                session.clone(), query, &searcher,
+                                                session.clone(), query, &searcher, &identifier
                                         )
                                         .await?;
                                     let plans = vec![Some(insert_plan_)];
@@ -256,9 +266,11 @@ impl Handle {
                 let mut mutations = Vec::new();
 
                 for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    // Genesis doesn't use modification keys or request indices
                     mutations.push(SingleHawkMutation {
                         plans: [left_plan, right_plan],
-                        modification_key: None, // Genesis doesn't use modification keys
+                        modification_key: None,
+                        request_index: None,
                     });
                 }
 
