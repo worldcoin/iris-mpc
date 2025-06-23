@@ -148,7 +148,11 @@ impl NetworkValue {
     }
 
     pub fn from_network(serialized: Result<Vec<u8>>) -> Result<Self> {
-        let serialized = serialized?;
+        let v = serialized?;
+        Self::from_network_slice(&v)
+    }
+
+    fn from_network_slice(serialized: &[u8]) -> Result<Self> {
         if serialized.is_empty() {
             bail!("Empty serialized data");
         }
@@ -199,15 +203,15 @@ impl NetworkValue {
                 )))
             }
             DescriptorByte::VecRing16 => {
-                let res = get_vec_ring_elements::<u16, 2, _>(&serialized, u16::from_le_bytes)?;
+                let res = get_vec_ring_elements::<u16, 2, _>(serialized, u16::from_le_bytes)?;
                 Ok(NetworkValue::VecRing16(res))
             }
             DescriptorByte::VecRing32 => {
-                let res = get_vec_ring_elements::<u32, 4, _>(&serialized, u32::from_le_bytes)?;
+                let res = get_vec_ring_elements::<u32, 4, _>(serialized, u32::from_le_bytes)?;
                 Ok(NetworkValue::VecRing32(res))
             }
             DescriptorByte::VecRing64 => {
-                let res = get_vec_ring_elements::<u64, 8, _>(&serialized, u64::from_le_bytes)?;
+                let res = get_vec_ring_elements::<u64, 8, _>(serialized, u64::from_le_bytes)?;
                 Ok(NetworkValue::VecRing64(res))
             }
             DescriptorByte::StateChecksum => {
@@ -271,9 +275,9 @@ impl NetworkValue {
                 | DescriptorByte::VecRing64 => get_vec_ring_len(idx, end_idx, &serialized)?,
                 _ => bail!("Invalid network value type"),
             };
-            res.push(NetworkValue::from_network(Ok(serialized
-                [idx..idx + value_len]
-                .to_vec()))?);
+            res.push(NetworkValue::from_network_slice(
+                &serialized[idx..idx + value_len],
+            )?);
             idx += value_len;
         }
         Ok(res)
