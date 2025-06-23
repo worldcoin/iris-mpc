@@ -29,9 +29,10 @@ pub struct Batch {
 /// A task within a batch is something to do with one rotation of one request.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct Task {
-    i_eye: usize,
+    pub i_eye: usize,
     pub i_request: usize,
     pub i_rotation: usize,
+    pub is_central: bool,
 }
 
 impl Task {
@@ -65,6 +66,7 @@ impl Schedule {
                         i_eye,
                         i_request,
                         i_rotation,
+                        is_central: (i_rotation == self.n_rotations / 2),
                     })
                 });
 
@@ -97,6 +99,7 @@ impl Schedule {
                                 i_eye,
                                 i_request,
                                 i_rotation,
+                                is_central: (i_rotation == self.n_rotations / 2),
                             };
                             results
                                 .remove(&task.id())

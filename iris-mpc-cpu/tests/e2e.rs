@@ -131,7 +131,7 @@ async fn e2e_test() -> Result<()> {
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
         hnsw_param_M: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
-        hnsw_prng_seed: None,
+        hnsw_prf_key: None,
         disable_persistence: false,
         match_distances_buffer_size: 64,
         n_buckets: 10,

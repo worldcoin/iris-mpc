@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "add-hnsw-logs-skip-persistence"
+      - "POP-2591/include-reset-check-messages-in-modifications-table"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'

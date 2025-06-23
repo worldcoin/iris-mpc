@@ -13,12 +13,17 @@ use crate::hnsw::{
     graph::neighborhood::SortedEdgeIds, metrics::ops_counter::Operation, GraphMem,
     SortedNeighborhood, VectorStore,
 };
+use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
-use rand::RngCore;
+use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use siphasher::sip::SipHasher13;
+use std::{
+    collections::HashSet,
+    hash::{Hash, Hasher},
+};
 use tracing::{debug, instrument, trace_span, Instrument};
 
 /// The number of explicitly provided parameters for different layers of HNSW
@@ -178,21 +183,19 @@ pub struct HnswSearcher {
     pub params: HnswParams,
 }
 
-pub type ConnectPlanV<V> =
-    ConnectPlan<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
-pub type ConnectPlanLayerV<V> =
-    ConnectPlanLayer<<V as VectorStore>::VectorRef, <V as VectorStore>::DistanceRef>;
+pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
+pub type ConnectPlanLayerV<V> = ConnectPlanLayer<<V as VectorStore>::VectorRef>;
 
 /// Represents the state updates required for insertion of a new node into an HNSW
 /// hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectPlan<Vector, Distance> {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectPlan<Vector> {
     /// The new vector to insert
     pub inserted_vector: Vector,
 
     /// The HNSW graph updates required by insertion. The insertion layer of the new vector
     /// is `layers.len() - 1`.
-    pub layers: Vec<ConnectPlanLayer<Vector, Distance>>,
+    pub layers: Vec<ConnectPlanLayer<Vector>>,
 
     /// Whether this update sets the entry point of the HNSW graph to the inserted vector
     pub set_ep: bool,
@@ -200,10 +203,10 @@ pub struct ConnectPlan<Vector, Distance> {
 
 /// Represents the state updates required for insertion of a new node into a single layer of
 /// an HNSW hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConnectPlanLayer<Vector, Distance> {
-    /// The neighbors of the inserted vector, and their distances
-    pub neighbors: SortedNeighborhood<Vector, Distance>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectPlanLayer<Vector> {
+    /// The neighbors of the inserted vector
+    pub neighbors: SortedEdgeIds<Vector>,
 
     /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
@@ -234,11 +237,33 @@ impl HnswSearcher {
 
     /// Choose a random insertion layer from a geometric distribution, producing
     /// graph layers which decrease in density by a constant factor per layer.
-    pub fn select_layer(&self, rng: &mut impl RngCore) -> Result<usize> {
+    pub fn select_layer_rng(&self, rng: &mut impl RngCore) -> Result<usize> {
         let p_geom = 1f64 - self.params.get_layer_probability();
         let geom_distr = Geometric::new(p_geom)?;
 
         Ok(geom_distr.sample(rng) as usize)
+    }
+
+    /// Choose a random insertion layer from a geometric distribution, producing
+    /// graph layers which decrease in density by a constant factor per layer.
+    ///
+    /// Generates the layer value based on the evaluation of a keyed PRF on a
+    /// hashable input identifier `value`, for instance a vector id or a request id.
+    pub fn select_layer_prf<H: Hash>(&self, prf_key: &[u8; 16], value: &H) -> Result<usize> {
+        // produce `value_hash` from `value` using `SipHasher13`, keyed with `prf_key`
+        let mut hasher = SipHasher13::new_with_key(prf_key);
+        value.hash(&mut hasher);
+        let value_hash: u64 = hasher.finish();
+
+        // initialize `AesRng` with seed `prf_key ^ (value_hash || value_hash)`
+        let mut rng_seed = *prf_key;
+        for (idx, byte) in value_hash.to_le_bytes().into_iter().enumerate() {
+            rng_seed[idx] ^= byte;
+            rng_seed[idx + 8] ^= byte;
+        }
+        let mut rng = AesRng::from_seed(rng_seed);
+
+        self.select_layer_rng(&mut rng)
     }
 
     /// Return a tuple containing a distance-sorted list initialized with the
@@ -803,9 +828,8 @@ impl HnswSearcher {
         store: &mut V,
         graph: &mut GraphMem<V>,
         query: &V::QueryRef,
-        rng: &mut impl RngCore,
+        insertion_layer: usize,
     ) -> Result<V::VectorRef> {
-        let insertion_layer = self.select_layer(rng)?;
         let (neighbors, set_ep) = self
             .search_to_insert(store, graph, query, insertion_layer)
             .await?;
@@ -997,7 +1021,7 @@ impl HnswSearcher {
             .into_iter()
             .zip(neighbors)
             .map(|(l_links, l_neighbors)| ConnectPlanLayer {
-                neighbors: l_links,
+                neighbors: l_links.edge_ids(),
                 nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
             })
             .collect();
@@ -1080,7 +1104,7 @@ mod tests {
 
         // Insert the codes.
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng)?;
+            let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
@@ -1099,7 +1123,9 @@ mod tests {
 
         // Insert the codes with helper function
         for query in queries2.iter() {
-            db.insert(vector_store, graph_store, query, rng).await?;
+            let insertion_layer = db.select_layer_rng(rng)?;
+            db.insert(vector_store, graph_store, query, insertion_layer)
+                .await?;
         }
 
         // Search for the same codes and find matches.

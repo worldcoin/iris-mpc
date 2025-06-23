@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::hnsw::HnswSearcher;
+use crate::hnsw::{HnswSearcher, VectorStore};
 
 use super::{ConnectPlan, HawkSession, HawkSessionRef, InsertPlan, VecRequests};
 
@@ -24,17 +24,47 @@ pub async fn insert(
 ) -> Result<VecRequests<Option<ConnectPlan>>> {
     let insert_plans = join_plans(plans);
     let mut connect_plans = vec![None; insert_plans.len()];
+    let mut inserted_ids = vec![];
+    let m = searcher.params.get_M(0);
 
     // Parallel insertions are not supported, so only one session is needed.
     let mut session = session.write().await;
 
     for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
         if let Some(plan) = plan {
+            let plan = add_batch_neighbors(&mut session, plan, &inserted_ids, m).await?;
+
             *cp = Some(insert_one(&mut session, searcher, plan, *update_id).await?);
+
+            inserted_ids.push(cp.as_ref().unwrap().inserted_vector);
         }
     }
 
     Ok(connect_plans)
+}
+
+async fn add_batch_neighbors(
+    session: &mut HawkSession,
+    mut insert_plan: InsertPlan,
+    extra_ids: &[VectorId],
+    target_n_neighbors: usize,
+) -> Result<InsertPlan> {
+    let store = &mut session.aby3_store;
+    let query = insert_plan.query.clone();
+
+    if let Some(bottom_layer) = insert_plan.links.first_mut() {
+        if bottom_layer.len() < target_n_neighbors {
+            let distances = store.eval_distance_batch(&[query], extra_ids).await?;
+
+            let ids_dists = izip!(extra_ids, distances)
+                .map(|(&id, dist)| (id, dist))
+                .collect_vec();
+
+            bottom_layer.insert_batch(store, &ids_dists).await?;
+        }
+    }
+
+    Ok(insert_plan)
 }
 
 /// Insert a single `InsertPlan` into the vector store and graph of `session`.  If

@@ -98,12 +98,12 @@ impl<V: VectorStore> GraphMem<V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for ((n, _nq), links) in izip!(plan.neighbors.iter(), plan.nb_links) {
+        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(n.clone(), links, lc).await;
         }
 
         // Connect q -> all n.
-        self.set_links(q, plan.neighbors.edge_ids(), lc).await;
+        self.set_links(q, plan.neighbors, lc).await;
     }
 
     pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
@@ -333,7 +333,7 @@ mod tests {
 
         for raw_query in raw_queries.db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng)?;
+            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
@@ -372,7 +372,7 @@ mod tests {
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
-            let insertion_layer = searcher.select_layer(&mut rng)?;
+            let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;

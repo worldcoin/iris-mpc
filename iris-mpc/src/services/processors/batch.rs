@@ -28,7 +28,10 @@ use iris_mpc_common::helpers::smpc_response::{
     ReAuthResult, ResetCheckResult, UniquenessResult, ERROR_FAILED_TO_PROCESS_IRIS_SHARES,
     SMPC_MESSAGE_TYPE_ATTRIBUTE,
 };
-use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
+use iris_mpc_common::helpers::sync::Modification;
+use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
+use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides, RequestIndex};
+use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -49,6 +52,7 @@ pub fn receive_batch_stream(
     reauth_error_result_attributes: HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: Store,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
@@ -71,6 +75,7 @@ pub fn receive_batch_stream(
                 &reauth_error_result_attributes,
                 &reset_error_result_attributes,
                 current_batch_id_atomic.clone(),
+                &iris_store,
             )
             .await;
 
@@ -100,6 +105,7 @@ async fn receive_batch(
     reauth_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: &Store,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
@@ -113,6 +119,7 @@ async fn receive_batch(
         reauth_error_result_attributes,
         reset_error_result_attributes,
         current_batch_id_atomic,
+        iris_store,
     );
 
     processor.receive_batch().await
@@ -134,6 +141,7 @@ pub struct BatchProcessor<'a> {
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
     current_batch_id_atomic: Arc<AtomicU64>,
+    iris_store: &'a Store,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -150,6 +158,7 @@ impl<'a> BatchProcessor<'a> {
         reauth_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         reset_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         current_batch_id_atomic: Arc<AtomicU64>,
+        iris_store: &'a Store,
     ) -> Self {
         Self {
             party_id,
@@ -167,6 +176,7 @@ impl<'a> BatchProcessor<'a> {
             handles: vec![],
             msg_counter: 0,
             current_batch_id_atomic,
+            iris_store,
         }
     }
 
@@ -362,14 +372,46 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
+        self.delete_message(sqs_message).await?;
+
         if self.config.hawk_server_deletions_enabled {
             let identity_deletion_request: IdentityDeletionRequest =
                 serde_json::from_str(&message.message).map_err(|e| {
                     ReceiveRequestError::json_parse_error("Identity deletion request", e)
                 })?;
 
-            metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
+            // Skip the request if serial ID already exists in current batch modifications
+            if self
+                .batch_query
+                .modifications
+                .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
+            {
+                tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                identity_deletion_request.serial_id,
+                                identity_deletion_request,
+                            );
+                return Ok(());
+            }
 
+            // Persist in progress modification
+            let modification = persist_modification(
+                self.config.disable_persistence,
+                self.iris_store,
+                Some(identity_deletion_request.serial_id as i64),
+                IDENTITY_DELETION_MESSAGE_TYPE,
+                None,
+            )
+            .await;
+            self.batch_query.modifications.insert(
+                RequestSerialId(identity_deletion_request.serial_id),
+                modification,
+            );
+
+            self.batch_query.requests_order.push(RequestIndex::Deletion(
+                self.batch_query.deletion_requests_indices.len(),
+            ));
             self.batch_query
                 .deletion_requests_indices
                 .push(identity_deletion_request.serial_id - 1);
@@ -380,7 +422,6 @@ impl<'a> BatchProcessor<'a> {
             tracing::warn!("Identity deletions are disabled");
         }
 
-        self.delete_message(sqs_message).await?;
         Ok(())
     }
 
@@ -397,10 +438,29 @@ impl<'a> BatchProcessor<'a> {
 
         self.delete_message(sqs_message).await?;
 
+        // Persist in progress modification
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            None,
+            UNIQUENESS_MESSAGE_TYPE,
+            Some(uniqueness_request.s3_key.as_str()),
+        )
+        .await;
+        self.batch_query.modifications.insert(
+            RequestId(uniqueness_request.signup_id.clone()),
+            modification,
+        );
+
         self.update_luc_config_if_needed(&uniqueness_request);
 
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
         self.batch_query
             .request_ids
             .push(uniqueness_request.signup_id.clone());
@@ -453,8 +513,40 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
+        // Skip the request if serial ID already exists in current batch modifications
+        if self
+            .batch_query
+            .modifications
+            .contains_key(&RequestSerialId(reauth_request.serial_id))
+        {
+            tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reauth_request.serial_id,
+                                reauth_request,
+                            );
+            return Ok(());
+        }
+
+        // Persist in progress modification
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            Some(reauth_request.serial_id as i64),
+            REAUTH_MESSAGE_TYPE,
+            Some(reauth_request.s3_key.as_str()),
+        )
+        .await;
+        self.batch_query
+            .modifications
+            .insert(RequestSerialId(reauth_request.serial_id), modification);
+
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
         self.batch_query
             .request_ids
             .push(reauth_request.reauth_id.clone());
@@ -505,8 +597,29 @@ impl<'a> BatchProcessor<'a> {
             return Ok(());
         }
 
+        // Persist in progress reset_check message.
+        // Note that reset_check is only a query and does not persist anything into the database.
+        // We store modification so that the SNS result can be replayed.
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            None,
+            RESET_CHECK_MESSAGE_TYPE,
+            Some(reset_check_request.s3_key.as_str()),
+        )
+        .await;
+        self.batch_query.modifications.insert(
+            RequestId(reset_check_request.reset_id.clone()),
+            modification,
+        );
+
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
         self.batch_query
             .request_ids
             .push(reset_check_request.reset_id.clone());
@@ -555,7 +668,7 @@ impl<'a> BatchProcessor<'a> {
             semaphore,
             s3_client,
             bucket_name,
-            reset_update_request.s3_key,
+            reset_update_request.s3_key.clone(),
         )?;
         let (left_shares, right_shares) = match task_handle.await {
             Ok(result) => match result {
@@ -571,8 +684,40 @@ impl<'a> BatchProcessor<'a> {
             }
         };
 
+        if self
+            .batch_query
+            .modifications
+            .contains_key(&RequestSerialId(reset_update_request.serial_id))
+        {
+            tracing::warn!(
+                                "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
+                                reset_update_request.serial_id,
+                                reset_update_request,
+                            );
+            return Ok(());
+        }
+
+        let modification = persist_modification(
+            self.config.disable_persistence,
+            self.iris_store,
+            Some(reset_update_request.serial_id as i64),
+            RESET_UPDATE_MESSAGE_TYPE,
+            Some(reset_update_request.s3_key.as_str()),
+        )
+        .await;
+
+        self.batch_query.modifications.insert(
+            RequestSerialId(reset_update_request.serial_id),
+            modification,
+        );
+
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::ResetUpdate(
+                self.batch_query.reset_update_indices.len(),
+            ));
         self.batch_query
             .reset_update_indices
             .push(reset_update_request.serial_id - 1);
@@ -844,4 +989,21 @@ impl<'a> BatchProcessor<'a> {
             .mask
             .extend(share_right.mask_mirrored);
     }
+}
+
+async fn persist_modification(
+    disable_persistence: bool,
+    iris_store: &Store,
+    serial_id: Option<i64>,
+    request_type: &str,
+    s3_url: Option<&str>,
+) -> Modification {
+    if disable_persistence {
+        tracing::debug!("Persistence is disabled, skipping modification persistence");
+        return Modification::default();
+    }
+    iris_store
+        .insert_modification(serial_id, request_type, s3_url)
+        .await
+        .expect("Failed to insert modification into store")
 }

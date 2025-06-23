@@ -8,7 +8,7 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment},
+    config::{CommonConfig, Config},
     helpers::{
         shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
         sync::Modification, task_monitor::TaskMonitor,
@@ -26,8 +26,8 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        utils, BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError,
-        JobResult,
+        utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
+        IndexationError, JobResult,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
@@ -50,10 +50,10 @@ pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
-    // Batch size for indexing.
+    // Initial batch size for indexing.
     batch_size: usize,
 
-    // Batch size error rate to be applied.
+    // Error rate to be applied when calculating dynamic batch sizes.
     batch_size_error_rate: usize,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
@@ -82,17 +82,11 @@ struct ExecutionContextInfo {
     /// Process input args.
     args: ExecutionArgs,
 
+    /// Process configuration.
+    config: Config,
+
     // Serial idenitifer of last indexed Iris.
     last_indexed_id: IrisSerialId,
-
-    // Serial idenitifer of maximum indexed Iris.
-    max_indexation_id: IrisSerialId,
-
-    // Batch size for indexing.
-    batch_size: usize,
-
-    // Batch size error rate to be applied.
-    batch_size_error_rate: usize,
 
     // Set identifiers of Iris's to be excluded from indexation.
     excluded_serial_ids: Vec<IrisSerialId>,
@@ -108,6 +102,7 @@ struct ExecutionContextInfo {
 impl ExecutionContextInfo {
     fn new(
         args: &ExecutionArgs,
+        config: &Config,
         last_indexed_id: IrisSerialId,
         excluded_serial_ids: Vec<IrisSerialId>,
         modifications: Vec<Modification>,
@@ -115,13 +110,11 @@ impl ExecutionContextInfo {
     ) -> Self {
         Self {
             args: args.clone(),
+            config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
             max_modification_id,
             modifications,
-            batch_size: args.batch_size,
-            batch_size_error_rate: args.batch_size_error_rate,
-            max_indexation_id: args.max_indexation_id,
         }
     }
 }
@@ -153,7 +146,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     // Phase 2: indexation.
     exec_indexation(
-        &config,
         &ctx,
         hawk_actor,
         graph_store,
@@ -167,7 +159,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     if !args.perform_snapshot {
         log_info(String::from("Snapshot skipped ... as requested."));
     } else {
-        exec_snapshot(&config, &ctx, &aws_rds_client).await?;
+        exec_snapshot(&ctx, &aws_rds_client).await?;
         log_info(String::from("Snapshot complete."));
     };
 
@@ -194,11 +186,6 @@ async fn exec_setup(
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
-    log_info(format!("Mode of compute: {:?}", config.mode_of_compute));
-    log_info(format!(
-        "Mode of deployment: {:?}",
-        config.mode_of_deployment
-    ));
 
     // Set shutdown handler.
     let shutdown_handler = init_shutdown_handler(config).await;
@@ -280,9 +267,6 @@ async fn exec_setup(
     task_monitor_bg.check_tasks();
     log_info(String::from("Network status = HEALTHY"));
 
-    // TODO: What should happen here - see Bryan.
-    // sync_dbs_genesis(&config, &sync_result, &iris_store).await?;
-
     // Coordinator: await network state = SYNCHRONIZED.
     let sync_result = get_sync_result(config, &my_state).await?;
     sync_result.check_synced_state()?;
@@ -320,10 +304,10 @@ async fn exec_setup(
         bail!("Shutdown")
         // return Ok(());
     }
-
     Ok((
         ExecutionContextInfo::new(
             args,
+            config,
             last_indexed_id,
             excluded_serial_ids.clone(),
             modifications.clone(),
@@ -356,6 +340,9 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
         max_modification_id
     ));
 
+    metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
+    metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
+
     // TODO: implement applying modifications
     for modification in modifications {
         log_info(format!(
@@ -382,7 +369,6 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration instance.
 /// * `ctx` - Execution context information.
 /// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
 /// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
@@ -390,53 +376,21 @@ async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
 /// * `tx_results` - Channel to send job results to DB persistence thread.
 ///
 async fn exec_indexation(
-    config: &Config,
     ctx: &ExecutionContextInfo,
     hawk_actor: HawkActor,
     graph_store: GraphPg<Aby3Store>,
     mut task_monitor_bg: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<()> {
-    log_info(format!("Starting indexation: batch_size={}, batch_size_error_rate={}, last_indexed_id={}, max_indexation_id={}", ctx.batch_size, ctx.batch_size_error_rate, ctx.last_indexed_id, ctx.max_indexation_id));
+    log_info(format!(
+        "Starting indexation: last_indexed_id={}, max_indexation_id={}",
+        ctx.last_indexed_id, ctx.args.max_indexation_id
+    ));
 
     // Set thread for persisting indexing results to DB.
     let tx_results =
         get_results_thread(graph_store, &mut task_monitor_bg, shutdown_handler).await?;
     task_monitor_bg.check_tasks();
-
-    // Set dynamic batch size.
-    // TODO: calculate before 1st batch and at end of each subsequent batch.
-    let batch_size = match ctx.batch_size {
-        // If batch size is 0 then calculate dynamic batch size based on the current graph size.
-        0 => {
-            // Set r: configurable parameter for error rate.
-            let r = ctx.batch_size_error_rate;
-
-            // Set m: HNSW parameter for nearest neighbors.
-            let m = config.hnsw_param_M as u64;
-
-            // Set n: current graph size (last_indexed_id).
-            let n = ctx.last_indexed_id as u64;
-
-            // Apply dynamic batch size formula: floor(N/(Mr - 1) + 1)
-            let batch_size = if n > 0 {
-                (n as f64 / (m as f64 * r as f64 - 1.0) + 1.0).floor() as usize
-            } else {
-                // Graph is empty therefore use a batch size of 1
-                1
-            };
-
-            log_info(format!(
-                "Dynamic batch size calculated: {} (formula: N/(Mr-1)+1, where N={}, M={}, r={})",
-                batch_size, n, m, r
-            ));
-            batch_size
-        }
-        _ => {
-            log_info(format!("Using static batch size: {}", ctx.batch_size));
-            ctx.batch_size
-        }
-    };
 
     // Set in memory Iris stores.
     let imem_iris_stores: BothEyes<_> = [
@@ -445,13 +399,23 @@ async fn exec_indexation(
     ];
 
     // Set Hawk handle.
-    let mut hawk_handle = GenesisHawkHandle::new(config.party_id, hawk_actor).await?;
+    let mut hawk_handle = GenesisHawkHandle::new(ctx.config.party_id, hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
+
+    // Set batch size.
+    let batch_size = match ctx.args.batch_size {
+        0 => BatchSize::new_static_from_dynamic_formula(
+            ctx.last_indexed_id,
+            ctx.args.batch_size_error_rate,
+            ctx.config.hnsw_param_M,
+        ),
+        _ => BatchSize::new_static(ctx.args.batch_size),
+    };
 
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
-        ctx.max_indexation_id,
+        ctx.args.max_indexation_id,
         batch_size,
         ctx.excluded_serial_ids.clone(),
     );
@@ -463,11 +427,15 @@ async fn exec_indexation(
 
         // Housekeeping.
         let now = Instant::now();
-        let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+        let processing_timeout = Duration::from_secs(ctx.config.processing_timeout_secs);
 
         // Index until generator is exhausted.
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
-        while let Some(batch) = batch_generator.next_batch(&imem_iris_stores).await? {
+        let mut last_indexed_id = ctx.last_indexed_id;
+        while let Some(batch) = batch_generator
+            .next_batch(last_indexed_id, &imem_iris_stores)
+            .await?
+        {
             // Coordinator: escape on shutdown.
             if shutdown_handler.is_shutting_down() {
                 log_warn(String::from("Shutting down has been triggered"));
@@ -480,10 +448,12 @@ async fn exec_indexation(
                 batch,
                 now.elapsed().as_secs_f64(),
             ));
-            metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
 
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
+
+            // Set next last indexed id.
+            last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
             let result_future = hawk_handle.submit_batch(batch).await;
@@ -539,12 +509,10 @@ async fn exec_indexation(
 ///
 /// # Arguments
 ///
-/// * `config` - Application configuration instance.
 /// * `ctx` - Execution context information.
 /// * `aws_rds_client` - AWS RDS SDK client.
 ///
 async fn exec_snapshot(
-    config: &Config,
     ctx: &ExecutionContextInfo,
     aws_rds_client: &RDSClient,
 ) -> Result<(), IndexationError> {
@@ -554,11 +522,11 @@ async fn exec_snapshot(
     let unix_timestamp = Utc::now().timestamp();
     let snapshot_id = format!(
         "genesis-{}-{}-{}-{}",
-        ctx.last_indexed_id, ctx.max_indexation_id, ctx.args.batch_size, unix_timestamp
+        ctx.last_indexed_id, ctx.args.max_indexation_id, ctx.args.batch_size, unix_timestamp
     );
 
     // Set cluster ID.
-    let db_config = config.cpu_database.as_ref().unwrap();
+    let db_config = ctx.config.cpu_database.as_ref().unwrap();
     let url = db_config
         .url
         .strip_prefix("postgresql://")
@@ -627,8 +595,8 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
-        hnsw_prng_seed: config.hawk_prng_seed,
-        disable_persistence: config.cpu_disable_persistence,
+        hnsw_prf_key: config.hawk_prf_key,
+        disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
     };
@@ -935,16 +903,6 @@ fn log_warn(msg: String) -> String {
     utils::log_warn("Server", msg)
 }
 
-/// TODO : implement db sync genesis
-#[allow(dead_code)]
-async fn sync_dbs_genesis(
-    _config: &Config,
-    _sync_result: &GenesisSyncResult,
-    _iris_store: &IrisStore,
-) -> Result<()> {
-    todo!("If network state decoheres then re-synchronize");
-}
-
 /// Validates application config.
 ///
 /// # Arguments
@@ -952,24 +910,6 @@ async fn sync_dbs_genesis(
 /// * `config` - Application configuration instance.
 ///
 fn validate_config(config: &Config) -> Result<()> {
-    // Validate modes of compute/deployment.
-    if config.mode_of_compute != ModeOfCompute::Cpu {
-        let msg = log_error(format!(
-            "Invalid config setting: mode_of_compute: actual: {:?} :: expected: ModeOfCompute::CPU",
-            config.mode_of_compute
-        ));
-        bail!("{}", msg);
-    }
-
-    // Validate modes of compute/deployment.
-    if config.mode_of_deployment != ModeOfDeployment::Standard {
-        let msg = log_error(format!(
-            "Invalid config setting: mode_of_deployment: actual: {:?} :: expected: ModeOfDeployment::Standard",
-            config.mode_of_deployment
-        ));
-        bail!("{}", msg);
-    }
-
     // Validate CPU db config.
     if config.cpu_database.is_none() {
         bail!(
