@@ -1635,6 +1635,7 @@ mod tests {
         };
         for i in 0..batch_size {
             batch_0.push_matching_request(
+                format!("sns_{i}"),
                 format!("request_{i}"),
                 UNIQUENESS_MESSAGE_TYPE,
                 BatchMetadata::default(),

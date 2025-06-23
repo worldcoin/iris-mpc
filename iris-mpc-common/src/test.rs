@@ -513,7 +513,11 @@ impl TestCaseGenerator {
                 tracing::info!("Deleting index {}", idx);
 
                 for b in [&mut batch0, &mut batch1, &mut batch2] {
-                    b.push_deletion_request(idx as u32, BatchMetadata::default());
+                    b.push_deletion_request(
+                        "sns_id".to_string(),
+                        idx as u32,
+                        BatchMetadata::default(),
+                    );
                 }
             }
         }
@@ -564,10 +568,11 @@ impl TestCaseGenerator {
                     idx,
                     req_id
                 );
+                let sns_id = || "sns_id".to_string();
 
-                batch0.push_reset_update_request(req_id.clone(), idx as u32, shares0);
-                batch1.push_reset_update_request(req_id.clone(), idx as u32, shares1);
-                batch2.push_reset_update_request(req_id, idx as u32, shares2);
+                batch0.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares0);
+                batch1.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares1);
+                batch2.push_reset_update_request(sns_id(), req_id, idx as u32, shares2);
             }
         }
 
@@ -1380,6 +1385,7 @@ fn prepare_batch(
     }
 
     batch.push_matching_request(
+        "sns_id".to_string(),
         request_id.clone(),
         &message_type,
         BatchMetadata::default(),

@@ -5,7 +5,7 @@ use iris_mpc_common::{
     },
     helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::iris::IrisCode,
-    job::{BatchMetadata, BatchQuery, RequestIndex},
+    job::{BatchMetadata, BatchQuery},
 };
 use iris_mpc_gpu::server::PreprocessedBatchQuery;
 use rand::thread_rng;
@@ -33,6 +33,7 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
             let mask_shares_db = mask_shares_request.all_rotations();
 
             batch_query.push_matching_request(
+                "sns_id".to_string(),
                 Uuid::new_v4().to_string(),
                 UNIQUENESS_MESSAGE_TYPE,
                 BatchMetadata::default(),

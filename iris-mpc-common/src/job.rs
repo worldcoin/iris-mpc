@@ -112,14 +112,17 @@ impl BatchQuery {
     /// Add a Uniqueness, Reauth, or Reset Check request to the batch.
     pub fn push_matching_request(
         &mut self,
+        sns_message_id: String,
         request_id: String,
         request_type: &str,
         metadata: BatchMetadata,
         or_rule_indices: Vec<u32>,
         skip_persistence: bool,
     ) {
+        self.sns_message_ids.push(sns_message_id);
         self.requests_order
             .push(RequestIndex::UniqueReauthResetCheck(self.request_ids.len()));
+
         self.request_ids.push(request_id);
         self.request_types.push(request_type.to_string());
         self.metadata.push(metadata);
@@ -128,9 +131,16 @@ impl BatchQuery {
     }
 
     /// Add a Deletion request to the batch.
-    pub fn push_deletion_request(&mut self, deletion_0_index: u32, metadata: BatchMetadata) {
+    pub fn push_deletion_request(
+        &mut self,
+        sns_message_id: String,
+        deletion_0_index: u32,
+        metadata: BatchMetadata,
+    ) {
+        self.sns_message_ids.push(sns_message_id);
         self.requests_order
             .push(RequestIndex::Deletion(self.deletion_requests_indices.len()));
+
         self.deletion_requests_indices.push(deletion_0_index);
         self.deletion_requests_metadata.push(metadata);
     }
@@ -138,13 +148,16 @@ impl BatchQuery {
     /// Add a Reset Update request to the batch.
     pub fn push_reset_update_request(
         &mut self,
+        sns_message_id: String,
         request_id: String,
         reset_update_0_index: u32,
         shares: GaloisSharesBothSides,
     ) {
+        self.sns_message_ids.push(sns_message_id);
         self.requests_order.push(RequestIndex::ResetUpdate(
             self.reset_update_request_ids.len(),
         ));
+
         self.reset_update_request_ids.push(request_id);
         self.reset_update_indices.push(reset_update_0_index);
         self.reset_update_shares.push(shares);
