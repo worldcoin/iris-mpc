@@ -1102,6 +1102,13 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
+        tracing::info!(
+            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            successful_reauths,
+            matches,
+            matches_with_skip_persistence
+        );
+
         let batch = self.batch;
         let batch_size = batch.request_ids.len();
 
@@ -1287,6 +1294,14 @@ impl HawkHandle {
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;
 
+        tracing::info!(
+            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
+            request.batch.request_types,
+            request.batch.reauth_target_indices,
+            request.batch.skip_persistence,
+            request.batch.reauth_use_or_rule,
+        );
+
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
@@ -1393,6 +1408,8 @@ impl HawkHandle {
                 RequestIndex::Deletion(_) => None,
             })
             .collect_vec();
+
+        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
         // Store plans for both sides using BothEyes structure
         let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =

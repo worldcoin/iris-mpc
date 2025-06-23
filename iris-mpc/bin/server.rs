@@ -525,6 +525,21 @@ async fn receive_batch(
                         if config.enable_reset {
                             msg_counter += 1;
 
+                            // Persist in progress reset_check message.
+                            // Note that reset_check is only a query and does not persist anything into the database.
+                            // We store modification so that the SNS result can be replayed.
+                            let modification = store
+                                .insert_modification(
+                                    None,
+                                    RESET_CHECK_MESSAGE_TYPE,
+                                    Some(reset_check_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_modifications.insert(
+                                RequestId(reset_check_request.reset_id.clone()),
+                                modification,
+                            );
+
                             if let Some(batch_size) = reset_check_request.batch_size {
                                 *CURRENT_BATCH_SIZE.lock().unwrap() =
                                     batch_size.clamp(1, max_batch_size);
@@ -1628,9 +1643,17 @@ async fn server_main(config: Config) -> Result<()> {
                         Some(partial_match_counters_right[i]),
                         Some(partial_match_counters_left[i]),
                     );
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset check result");
 
-                    serde_json::to_string(&result_event)
-                        .expect("failed to serialize reset check result")
+                    // Mark the reset check modification as completed. 
+                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // We store modification so that the SNS result can be replayed.
+                    modifications
+                        .get_mut(&RequestId(reset_id))
+                        .unwrap()
+                        .mark_completed(false, &result_string, None, None);
+                    result_string
                 })
                 .collect::<Vec<String>>();
 
