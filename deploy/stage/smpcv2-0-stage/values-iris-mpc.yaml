@@ -158,7 +158,7 @@ env:
     value: "true"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "reproduce-perfect-match"
+    value: "reproducePerfectMatch"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "5000"
