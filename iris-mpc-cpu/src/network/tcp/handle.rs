@@ -108,13 +108,6 @@ impl TcpNetworkHandle {
         let connection_parallelism = self.config.connection_parallelism;
         let sessions_per_connection = self.config.stream_parallelism;
 
-        let get_session_id = |tcp_stream_idx, session_idx| -> SessionId {
-            SessionId::from(
-                (tcp_stream_idx * sessions_per_connection + session_idx + self.next_session_id)
-                    as u32,
-            )
-        };
-
         // spawn the forwarders
         for peer_id in &self.peers {
             for tcp_stream in 0..connection_parallelism {
@@ -126,22 +119,8 @@ impl TcpNetworkHandle {
                     .remove(&stream_id)
                     .unwrap();
 
-                // Build inbound forwarder map for this stream
-                let mut inbound_forwarder = HashMap::new();
-                for session_idx in 0..sessions_per_connection {
-                    let session_id = get_session_id(tcp_stream, session_idx);
-                    let inbound_tx = sc
-                        .inbound_tx
-                        .get(peer_id)
-                        .unwrap()
-                        .get(&session_id)
-                        .cloned()
-                        .unwrap();
-                    inbound_forwarder.insert(session_id, inbound_tx);
-                }
-
+                let inbound_forwarder = sc.inbound_tx.get(peer_id).cloned().unwrap();
                 let ch = self.ch_map.get(peer_id).unwrap().get(&stream_id).unwrap();
-
                 let (rsp_tx, rsp_rx) = oneshot::channel();
                 ch.send(Cmd::NewSessions {
                     inbound_forwarder,
@@ -160,7 +139,10 @@ impl TcpNetworkHandle {
             for session_idx in 0..sessions_per_connection {
                 let mut tx_map = HashMap::new();
                 let mut rx_map = HashMap::new();
-                let session_id = get_session_id(tcp_stream, session_idx);
+                let session_id = SessionId::from(
+                    (tcp_stream * sessions_per_connection + session_idx + self.next_session_id)
+                        as u32,
+                );
 
                 for peer_id in &self.peers {
                     let outbound_tx = sc
