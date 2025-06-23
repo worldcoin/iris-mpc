@@ -1613,7 +1613,7 @@ mod tests {
             .collect_vec();
 
         let requests_order = (0..batch_size)
-            .map(|i| RequestIndex::UniqueReauthResetCheck(i))
+            .map(RequestIndex::UniqueReauthResetCheck)
             .collect_vec();
 
         let request_ids = {
