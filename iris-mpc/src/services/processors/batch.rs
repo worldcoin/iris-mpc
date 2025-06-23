@@ -373,6 +373,7 @@ impl<'a> BatchProcessor<'a> {
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
+        let sns_message_id = message.message_id.clone();
         self.delete_message(sqs_message).await?;
 
         if self.config.hawk_server_deletions_enabled {
@@ -409,8 +410,11 @@ impl<'a> BatchProcessor<'a> {
                 modification,
             );
 
-            self.batch_query
-                .push_deletion_request(identity_deletion_request.serial_id - 1, batch_metadata);
+            self.batch_query.push_deletion_request(
+                sns_message_id,
+                identity_deletion_request.serial_id - 1,
+                batch_metadata,
+            );
         } else {
             tracing::warn!("Identity deletions are disabled");
         }
@@ -424,6 +428,7 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let sns_message_id = message.message_id.clone();
         let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
 
@@ -450,6 +455,7 @@ impl<'a> BatchProcessor<'a> {
         self.msg_counter += 1;
 
         self.batch_query.push_matching_request(
+            sns_message_id,
             uniqueness_request.signup_id.clone(),
             UNIQUENESS_MESSAGE_TYPE,
             batch_metadata,
@@ -476,6 +482,7 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let sns_message_id = message.message_id.clone();
         let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Reauth request", e))?;
 
@@ -543,6 +550,7 @@ impl<'a> BatchProcessor<'a> {
         };
 
         self.batch_query.push_matching_request(
+            sns_message_id,
             reauth_request.reauth_id.clone(),
             REAUTH_MESSAGE_TYPE,
             batch_metadata,
@@ -561,6 +569,7 @@ impl<'a> BatchProcessor<'a> {
         batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let sns_message_id = message.message_id.clone();
         let reset_check_request: ResetCheckRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Reset check request", e))?;
 
@@ -593,6 +602,7 @@ impl<'a> BatchProcessor<'a> {
         self.msg_counter += 1;
 
         self.batch_query.push_matching_request(
+            sns_message_id,
             reset_check_request.reset_id.clone(),
             RESET_CHECK_MESSAGE_TYPE,
             batch_metadata,
@@ -611,7 +621,7 @@ impl<'a> BatchProcessor<'a> {
         _batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
-        let sns_message_id = &message.message_id;
+        let sns_message_id = message.message_id.clone();
         let reset_update_request: ResetUpdateRequest = serde_json::from_str(&message.message)
             .map_err(|e| ReceiveRequestError::json_parse_error("Reset update request", e))?;
 
@@ -681,6 +691,7 @@ impl<'a> BatchProcessor<'a> {
         self.msg_counter += 1;
 
         self.batch_query.push_reset_update_request(
+            sns_message_id,
             reset_update_request.reset_id,
             reset_update_request.serial_id - 1,
             GaloisSharesBothSides {
@@ -690,10 +701,6 @@ impl<'a> BatchProcessor<'a> {
                 mask_right: right_shares.mask,
             },
         );
-
-        self.batch_query
-            .sns_message_ids
-            .push(sns_message_id.clone());
         Ok(())
     }
 

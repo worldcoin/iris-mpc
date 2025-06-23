@@ -259,11 +259,10 @@ async fn receive_batch(
                         );
 
                         batch_query.push_deletion_request(
+                            sns_message_id,
                             identity_deletion_request.serial_id - 1,
                             batch_metadata,
                         );
-
-                        batch_query.sns_message_ids.push(sns_message_id);
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -356,14 +355,13 @@ async fn receive_batch(
                         };
 
                         batch_query.push_matching_request(
+                            sns_message_id,
                             uniqueness_request.signup_id.clone(),
                             UNIQUENESS_MESSAGE_TYPE,
                             batch_metadata,
                             or_rule_indices,
                             uniqueness_request.skip_persistence.unwrap_or(false),
                         );
-
-                        batch_query.sns_message_ids.push(sns_message_id);
 
                         let semaphore = Arc::clone(&semaphore);
                         let s3_client_arc = s3_client.clone();
@@ -457,7 +455,6 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
-                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let or_rule_indices = if reauth_request.use_or_rule {
                                 vec![reauth_request.serial_id - 1]
@@ -466,6 +463,7 @@ async fn receive_batch(
                             };
 
                             batch_query.push_matching_request(
+                                sns_message_id,
                                 reauth_request.reauth_id.clone(),
                                 REAUTH_MESSAGE_TYPE,
                                 batch_metadata,
@@ -534,14 +532,13 @@ async fn receive_batch(
                             }
 
                             batch_query.push_matching_request(
+                                sns_message_id,
                                 reset_check_request.reset_id.clone(),
                                 RESET_CHECK_MESSAGE_TYPE,
                                 batch_metadata,
                                 vec![], // use AND rule for reset check requests
                                 false,  // skip_persistence is only used for uniqueness requests
                             );
-
-                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = s3_client.clone();
@@ -638,6 +635,7 @@ async fn receive_batch(
                             );
 
                             batch_query.push_reset_update_request(
+                                sns_message_id,
                                 reset_update_request.reset_id,
                                 reset_update_request.serial_id - 1,
                                 GaloisSharesBothSides {
@@ -647,8 +645,6 @@ async fn receive_batch(
                                     mask_right: right_shares.mask,
                                 },
                             );
-
-                            batch_query.sns_message_ids.push(sns_message_id.clone());
                         }
                     }
 
