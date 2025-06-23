@@ -5,7 +5,7 @@ use iris_mpc_common::{
     },
     helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::iris::IrisCode,
-    job::{BatchMetadata, BatchQuery, RequestIndex},
+    job::{BatchMetadata, BatchQuery},
 };
 use iris_mpc_gpu::server::PreprocessedBatchQuery;
 use rand::thread_rng;
