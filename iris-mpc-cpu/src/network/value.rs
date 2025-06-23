@@ -378,7 +378,7 @@ where
     }
     if len % size_of::<T>() != 0 {
         bail!(
-            "invalid length for VecRing{}: length {} does not divide u{}",
+            "invalid length for VecRing{}: length {} does not divide type length {}",
             type_bits,
             len,
             type_bits
