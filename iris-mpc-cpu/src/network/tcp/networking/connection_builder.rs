@@ -75,7 +75,7 @@ impl PeerConnectionBuilder {
         if peer == self.id {
             return Err(eyre!("cannot connect to self"));
         }
-        for idx in 0..self.config.connection_parallelism {
+        for idx in 0..self.config.num_connections {
             let stream_id = StreamId::from(idx as u32);
             let (tx, rx) = oneshot::channel();
             self.cmd_tx.send(Cmd::Connect {

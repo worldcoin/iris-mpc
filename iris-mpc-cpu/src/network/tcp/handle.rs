@@ -11,6 +11,7 @@ use crate::{
 };
 use bytes::BytesMut;
 use eyre::Result;
+use itertools::Itertools;
 use std::{collections::HashMap, time::Instant};
 use std::{io, sync::Arc, time::Duration};
 use tokio::{
@@ -70,7 +71,7 @@ impl TcpNetworkHandle {
                 tokio::spawn(manage_connection(
                     connection,
                     rc,
-                    config.stream_parallelism,
+                    config.get_sessions_for_stream(&stream_id),
                     cmd_rx,
                 ));
             }
@@ -105,13 +106,13 @@ impl TcpNetworkHandle {
     }
 
     async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
-        let connection_parallelism = self.config.connection_parallelism;
-        let sessions_per_connection = self.config.stream_parallelism;
+        let num_connections = self.config.num_connections;
+        let max_sessions_per_connection = self.config.max_sessions_per_connection;
+        let request_parallelism = self.config.request_parallelism;
 
         // spawn the forwarders
         for peer_id in &self.peers {
-            for tcp_stream in 0..connection_parallelism {
-                let stream_id = StreamId::from(tcp_stream as u32);
+            for stream_id in (0..num_connections).map(|x| StreamId::from(x as u32)) {
                 let outbound_rx = sc
                     .outbound_rx
                     .get_mut(peer_id)
@@ -134,45 +135,40 @@ impl TcpNetworkHandle {
 
         // create the sessions
         let mut sessions = vec![];
-        for tcp_stream in 0..connection_parallelism {
-            let stream_id = StreamId::from(tcp_stream as u32);
-            for session_idx in 0..sessions_per_connection {
-                let mut tx_map = HashMap::new();
-                let mut rx_map = HashMap::new();
-                let session_id = SessionId::from(
-                    (tcp_stream * sessions_per_connection + session_idx + self.next_session_id)
-                        as u32,
-                );
+        for (idx, session_id) in (self.next_session_id..self.next_session_id + request_parallelism)
+            .map(|x| SessionId::from(x as u32))
+            .enumerate()
+        {
+            let mut tx_map = HashMap::new();
+            let mut rx_map = HashMap::new();
+            let stream_id = StreamId::from((idx / max_sessions_per_connection) as u32);
 
-                for peer_id in &self.peers {
-                    let outbound_tx = sc
-                        .outbound_tx
-                        .get(peer_id)
-                        .unwrap()
-                        .get(&stream_id)
-                        .cloned()
-                        .unwrap();
-                    tx_map.insert(peer_id.clone(), outbound_tx.clone());
-                    let inbound_rx = sc
-                        .inbound_rx
-                        .get_mut(peer_id)
-                        .unwrap()
-                        .remove(&session_id)
-                        .unwrap();
-                    rx_map.insert(peer_id.clone(), inbound_rx);
-                }
-
-                // Create the TcpSession for this stream
-                let session = TcpSession::new(session_id, tx_map, rx_map, self.config.clone());
-                sessions.push(session);
+            for peer_id in &self.peers {
+                let outbound_tx = sc
+                    .outbound_tx
+                    .get(peer_id)
+                    .unwrap()
+                    .get(&stream_id)
+                    .cloned()
+                    .unwrap();
+                tx_map.insert(peer_id.clone(), outbound_tx.clone());
+                let inbound_rx = sc
+                    .inbound_rx
+                    .get_mut(peer_id)
+                    .unwrap()
+                    .remove(&session_id)
+                    .unwrap();
+                rx_map.insert(peer_id.clone(), inbound_rx);
             }
+
+            // Create the TcpSession for this stream
+            let session = TcpSession::new(session_id, tx_map, rx_map, self.config.clone());
+            sessions.push(session);
         }
 
         // ensures that if new sessions are created, the setup process (which requires communication with peers) isn't
         // interfered with by communications from old sessions.
-        self.next_session_id = self
-            .next_session_id
-            .saturating_add(connection_parallelism * sessions_per_connection);
+        self.next_session_id = self.next_session_id.saturating_add(request_parallelism);
         if self.next_session_id > 1 << 30 {
             self.next_session_id = 0;
         }
@@ -187,24 +183,31 @@ fn make_channels(
     next_session_id: usize,
 ) -> SessionChannels {
     let mut sc = SessionChannels::default();
+
     for peer_id in peers {
         let mut outbound_tx = HashMap::new();
         let mut outbound_rx = HashMap::new();
         let mut inbound_tx = HashMap::new();
         let mut inbound_rx = HashMap::new();
 
-        for tcp_stream in 0..config.connection_parallelism {
+        let mut session_ids = (next_session_id..next_session_id + config.request_parallelism)
+            .map(|x| SessionId::from(x as u32))
+            .chunks(config.max_sessions_per_connection)
+            .into_iter()
+            .map(|chunk| chunk.collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+
+        for (stream_id, sessions) in (0..config.num_connections)
+            .map(|x| StreamId::from(x as u32))
+            .zip(session_ids.drain(..))
+        {
             // insert one pair of outbound channels per TcpStream
-            let stream_id = StreamId::from(tcp_stream as u32);
             let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
             outbound_tx.insert(stream_id, tx);
             outbound_rx.insert(stream_id, rx);
 
             // insert one pair of inbound channels per stream_parallelism
-            for session_idx in 0..config.stream_parallelism {
-                let session_id = SessionId::from(
-                    (tcp_stream * config.stream_parallelism + session_idx + next_session_id) as u32,
-                );
+            for session_id in sessions {
                 let (tx, rx) = mpsc::unbounded_channel::<NetworkMsg>();
                 inbound_tx.insert(session_id, tx);
                 inbound_rx.insert(session_id, rx);
