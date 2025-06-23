@@ -30,7 +30,7 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides, RequestIndex};
+use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -409,15 +409,8 @@ impl<'a> BatchProcessor<'a> {
                 modification,
             );
 
-            self.batch_query.requests_order.push(RequestIndex::Deletion(
-                self.batch_query.deletion_requests_indices.len(),
-            ));
             self.batch_query
-                .deletion_requests_indices
-                .push(identity_deletion_request.serial_id - 1);
-            self.batch_query
-                .deletion_requests_metadata
-                .push(batch_metadata);
+                .push_deletion_request(identity_deletion_request.serial_id - 1, batch_metadata);
         } else {
             tracing::warn!("Identity deletions are disabled");
         }
@@ -452,34 +445,26 @@ impl<'a> BatchProcessor<'a> {
             modification,
         );
 
-        self.update_luc_config_if_needed(&uniqueness_request);
+        let or_rule_indices = self.update_luc_config_if_needed(&uniqueness_request);
 
         self.msg_counter += 1;
 
-        self.batch_query
-            .requests_order
-            .push(RequestIndex::UniqueReauthResetCheck(
-                self.batch_query.request_ids.len(),
-            ));
-        self.batch_query
-            .request_ids
-            .push(uniqueness_request.signup_id.clone());
-        self.batch_query
-            .request_types
-            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
-        self.batch_query.metadata.push(batch_metadata);
+        self.batch_query.push_matching_request(
+            uniqueness_request.signup_id.clone(),
+            UNIQUENESS_MESSAGE_TYPE,
+            batch_metadata,
+            or_rule_indices,
+            uniqueness_request.skip_persistence.unwrap_or(false),
+        );
 
         self.add_iris_shares_task(uniqueness_request.s3_key)?;
-        // skip_persistence is only used for uniqueness requests
+
         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
             tracing::info!(
                 "Setting skip_persistence to {} for request id {}",
                 skip_persistence,
                 uniqueness_request.signup_id
             );
-            self.batch_query.skip_persistence.push(skip_persistence);
-        } else {
-            self.batch_query.skip_persistence.push(false);
         }
 
         Ok(())
@@ -542,19 +527,6 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
-        self.batch_query
-            .requests_order
-            .push(RequestIndex::UniqueReauthResetCheck(
-                self.batch_query.request_ids.len(),
-            ));
-        self.batch_query
-            .request_ids
-            .push(reauth_request.reauth_id.clone());
-        self.batch_query
-            .request_types
-            .push(REAUTH_MESSAGE_TYPE.to_string());
-        self.batch_query.metadata.push(batch_metadata);
-
         self.batch_query.reauth_target_indices.insert(
             reauth_request.reauth_id.clone(),
             reauth_request.serial_id - 1,
@@ -570,10 +542,15 @@ impl<'a> BatchProcessor<'a> {
             vec![]
         };
 
-        self.batch_query.or_rule_indices.push(or_rule_indices);
+        self.batch_query.push_matching_request(
+            reauth_request.reauth_id.clone(),
+            REAUTH_MESSAGE_TYPE,
+            batch_metadata,
+            or_rule_indices,
+            false, // skip_persistence is only used for uniqueness requests
+        );
+
         self.add_iris_shares_task(reauth_request.s3_key)?;
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
 
         Ok(())
     }
@@ -615,24 +592,14 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
-        self.batch_query
-            .requests_order
-            .push(RequestIndex::UniqueReauthResetCheck(
-                self.batch_query.request_ids.len(),
-            ));
-        self.batch_query
-            .request_ids
-            .push(reset_check_request.reset_id.clone());
-        self.batch_query
-            .request_types
-            .push(RESET_CHECK_MESSAGE_TYPE.to_string());
-        self.batch_query.metadata.push(batch_metadata);
+        self.batch_query.push_matching_request(
+            reset_check_request.reset_id.clone(),
+            RESET_CHECK_MESSAGE_TYPE,
+            batch_metadata,
+            vec![], // reset checks use the AND rule
+            false,  // skip_persistence is only used for uniqueness requests
+        );
 
-        // skip_persistence is only used for uniqueness requests
-        self.batch_query.skip_persistence.push(false);
-
-        // We need to use AND rule for reset check requests
-        self.batch_query.or_rule_indices.push(vec![]);
         self.add_iris_shares_task(reset_check_request.s3_key)?;
 
         Ok(())
@@ -641,7 +608,7 @@ impl<'a> BatchProcessor<'a> {
     async fn process_reset_update_request(
         &mut self,
         message: &SQSMessage,
-        batch_metadata: BatchMetadata,
+        _batch_metadata: BatchMetadata,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
         let sns_message_id = &message.message_id;
@@ -713,29 +680,20 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
-        self.batch_query
-            .requests_order
-            .push(RequestIndex::ResetUpdate(
-                self.batch_query.reset_update_indices.len(),
-            ));
-        self.batch_query
-            .reset_update_indices
-            .push(reset_update_request.serial_id - 1);
-        self.batch_query
-            .sns_message_ids
-            .push(sns_message_id.clone());
-        self.batch_query.metadata.push(batch_metadata);
-        self.batch_query
-            .reset_update_request_ids
-            .push(reset_update_request.reset_id);
-        self.batch_query
-            .reset_update_shares
-            .push(GaloisSharesBothSides {
+        self.batch_query.push_reset_update_request(
+            reset_update_request.reset_id,
+            reset_update_request.serial_id - 1,
+            GaloisSharesBothSides {
                 code_left: left_shares.code,
                 mask_left: left_shares.mask,
                 code_right: right_shares.code,
                 mask_right: right_shares.mask,
-            });
+            },
+        );
+
+        self.batch_query
+            .sns_message_ids
+            .push(sns_message_id.clone());
         Ok(())
     }
 
@@ -860,7 +818,7 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
-    fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) {
+    fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) -> Vec<u32> {
         let config = &self.config;
 
         if config.luc_enabled && config.luc_lookback_records > 0 {
@@ -880,8 +838,7 @@ impl<'a> BatchProcessor<'a> {
         } else {
             vec![]
         };
-
-        self.batch_query.or_rule_indices.push(or_rule_indices);
+        or_rule_indices
     }
 
     fn add_iris_shares_task(&mut self, s3_key: String) -> Result<(), ReceiveRequestError> {

@@ -108,6 +108,49 @@ pub struct BatchQuery {
     pub full_face_mirror_attacks_detection_enabled: bool,
 }
 
+impl BatchQuery {
+    /// Add a Uniqueness, Reauth, or Reset Check request to the batch.
+    pub fn push_matching_request(
+        &mut self,
+        request_id: String,
+        request_type: &str,
+        metadata: BatchMetadata,
+        or_rule_indices: Vec<u32>,
+        skip_persistence: bool,
+    ) {
+        self.requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(self.request_ids.len()));
+        self.request_ids.push(request_id);
+        self.request_types.push(request_type.to_string());
+        self.metadata.push(metadata);
+        self.or_rule_indices.push(or_rule_indices);
+        self.skip_persistence.push(skip_persistence);
+    }
+
+    /// Add a Deletion request to the batch.
+    pub fn push_deletion_request(&mut self, deletion_0_index: u32, metadata: BatchMetadata) {
+        self.requests_order
+            .push(RequestIndex::Deletion(self.deletion_requests_indices.len()));
+        self.deletion_requests_indices.push(deletion_0_index);
+        self.deletion_requests_metadata.push(metadata);
+    }
+
+    /// Add a Reset Update request to the batch.
+    pub fn push_reset_update_request(
+        &mut self,
+        request_id: String,
+        reset_update_0_index: u32,
+        shares: GaloisSharesBothSides,
+    ) {
+        self.requests_order.push(RequestIndex::ResetUpdate(
+            self.reset_update_request_ids.len(),
+        ));
+        self.reset_update_request_ids.push(request_id);
+        self.reset_update_indices.push(reset_update_0_index);
+        self.reset_update_shares.push(shares);
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RequestIndex {
     /// Request types: Uniqueness, Reauth, Reset Check.
