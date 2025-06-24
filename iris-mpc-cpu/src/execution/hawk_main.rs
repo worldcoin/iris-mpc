@@ -1629,36 +1629,20 @@ mod tests {
             })
             .collect_vec();
 
-        let requests_order = (0..batch_size)
-            .map(RequestIndex::UniqueReauthResetCheck)
-            .collect_vec();
-
-        let request_ids = {
-            (0..batch_size as u32)
-                .map(|i| format!("request_{i}"))
-                .collect_vec()
-        };
-
-        let batch_0 = BatchQuery {
-            // Batch details to be just copied to the result.
-            requests_order,
-            request_ids: request_ids.clone(),
-            request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
-            metadata: vec![
-                BatchMetadata {
-                    node_id: "X".to_string(),
-                    trace_id: "X".to_string(),
-                    span_id: "X".to_string(),
-                };
-                batch_size
-            ],
-
-            or_rule_indices: vec![vec![]; batch_size],
+        let mut batch_0 = BatchQuery {
             luc_lookback_records: 2,
-            skip_persistence: vec![false; batch_size],
-
             ..BatchQuery::default()
         };
+        for i in 0..batch_size {
+            batch_0.push_matching_request(
+                format!("sns_{i}"),
+                format!("request_{i}"),
+                UNIQUENESS_MESSAGE_TYPE,
+                BatchMetadata::default(),
+                vec![],
+                false,
+            );
+        }
 
         let all_results =
             parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
@@ -1701,10 +1685,11 @@ mod tests {
             request_types: vec![REAUTH_MESSAGE_TYPE.to_string(); batch_size],
 
             // Map the request ID to the inserted index.
-            reauth_target_indices: izip!(&request_ids, &inserted_indices)
+            reauth_target_indices: izip!(&batch_0.request_ids, &inserted_indices)
                 .map(|(req_id, inserted_index)| (req_id.clone(), *inserted_index))
                 .collect(),
-            reauth_use_or_rule: request_ids
+            reauth_use_or_rule: batch_0
+                .request_ids
                 .iter()
                 .map(|req_id| (req_id.clone(), false))
                 .collect(),
