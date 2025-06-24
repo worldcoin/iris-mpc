@@ -15,10 +15,14 @@ pub trait Networking {
 
 #[derive(Clone)]
 pub enum NetworkType {
-    LocalChannel,
-    GrpcChannel {
+    Local,
+    Grpc {
         connection_parallelism: usize,
         stream_parallelism: usize,
+        request_parallelism: usize,
+    },
+    Tcp {
+        connection_parallelism: usize,
         request_parallelism: usize,
     },
 }
@@ -37,7 +41,7 @@ impl NetworkType {
     }
 
     pub fn default_grpc() -> Self {
-        Self::GrpcChannel {
+        Self::Grpc {
             connection_parallelism: Self::default_connection_parallelism(),
             stream_parallelism: Self::default_stream_parallelism(),
             request_parallelism: Self::default_request_parallelism(),
@@ -47,4 +51,5 @@ impl NetworkType {
 
 pub mod grpc;
 pub mod local;
+pub mod tcp;
 pub mod value;
