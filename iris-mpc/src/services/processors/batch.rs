@@ -30,7 +30,7 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
+use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides, RequestIndex};
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -409,6 +409,9 @@ impl<'a> BatchProcessor<'a> {
                 modification,
             );
 
+            self.batch_query.requests_order.push(RequestIndex::Deletion(
+                self.batch_query.deletion_requests_indices.len(),
+            ));
             self.batch_query
                 .deletion_requests_indices
                 .push(identity_deletion_request.serial_id - 1);
@@ -453,6 +456,11 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
         self.batch_query
             .request_ids
             .push(uniqueness_request.signup_id.clone());
@@ -535,6 +543,11 @@ impl<'a> BatchProcessor<'a> {
         self.msg_counter += 1;
 
         self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
+        self.batch_query
             .request_ids
             .push(reauth_request.reauth_id.clone());
         self.batch_query
@@ -602,6 +615,11 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::UniqueReauthResetCheck(
+                self.batch_query.request_ids.len(),
+            ));
         self.batch_query
             .request_ids
             .push(reset_check_request.reset_id.clone());
@@ -695,6 +713,11 @@ impl<'a> BatchProcessor<'a> {
 
         self.msg_counter += 1;
 
+        self.batch_query
+            .requests_order
+            .push(RequestIndex::ResetUpdate(
+                self.batch_query.reset_update_indices.len(),
+            ));
         self.batch_query
             .reset_update_indices
             .push(reset_update_request.serial_id - 1);
