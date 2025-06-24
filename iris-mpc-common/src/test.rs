@@ -16,6 +16,7 @@ use crate::{
     IRIS_CODE_LENGTH,
 };
 use eyre::Result;
+use http::request;
 use itertools::izip;
 use rand::{
     rngs::StdRng,
@@ -1620,5 +1621,218 @@ pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
             &right.mask.coefs,
         );
         loader.increment_db_size(idx);
+    }
+}
+
+pub struct SimpleAnonStatsTestGenerator {
+    db_state: TestDb,
+    prepared_query_list: Vec<E2ETemplate>,
+    bucket_statistic_parameters: Option<BucketStatisticParameters>,
+    rng: StdRng,
+}
+
+impl SimpleAnonStatsTestGenerator {
+    pub fn new(db: TestDb, internal_seed: u64) -> Self {
+        Self {
+            db_state: db,
+            bucket_statistic_parameters: Some(BucketStatisticParameters {
+                num_gpus: 3,
+                num_buckets: 10,
+                match_buffer_size: 1000,
+            }),
+            prepared_query_list: Vec::new(),
+            rng: StdRng::seed_from_u64(internal_seed),
+        }
+    }
+
+    fn generate_query(&mut self) -> Option<(String, E2ETemplate, String)> {
+        let request_id = Uuid::new_v4();
+
+        Some((
+            request_id.to_string(),
+            self.prepared_query_list.pop()?,
+            UNIQUENESS_MESSAGE_TYPE.to_string(),
+        ))
+    }
+
+    fn generate_query_batch(
+        &mut self,
+    ) -> Result<Option<([BatchQuery; 3], HashMap<String, E2ETemplate>)>> {
+        let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
+        let mut batch0 = BatchQuery::default();
+        let mut batch1 = BatchQuery::default();
+        let mut batch2 = BatchQuery::default();
+        batch0.full_face_mirror_attacks_detection_enabled = true;
+        batch1.full_face_mirror_attacks_detection_enabled = true;
+        batch2.full_face_mirror_attacks_detection_enabled = true;
+
+        let (request_id, e2e_template, message_type) = match self.generate_query() {
+            Some((request_id, e2e_template, message_type)) => {
+                (request_id, e2e_template, message_type)
+            }
+            None => return Ok(None),
+        };
+
+        requests.insert(request_id.to_string(), e2e_template.clone());
+
+        let shared_template = e2e_template.to_shared_template(true, &mut self.rng);
+
+        prepare_batch(
+            &mut batch0,
+            true,
+            request_id.to_string(),
+            0,
+            shared_template.clone(),
+            vec![],
+            None,
+            false,
+            message_type.clone(),
+        )?;
+
+        prepare_batch(
+            &mut batch1,
+            true,
+            request_id.to_string(),
+            1,
+            shared_template.clone(),
+            vec![],
+            None,
+            false,
+            message_type.clone(),
+        )?;
+
+        prepare_batch(
+            &mut batch2,
+            true,
+            request_id.to_string(),
+            2,
+            shared_template,
+            vec![],
+            None,
+            false,
+            message_type,
+        )?;
+
+        Ok(Some(([batch0, batch1, batch2], requests)))
+    }
+
+    fn check_result(
+        &mut self,
+        _req_id: &str,
+        _idx: u32,
+        _was_match: bool,
+        _matched_batch_request_ids: &[String],
+        _requests: &HashMap<String, E2ETemplate>,
+    ) -> Result<()> {
+        // In this simple test, we don't have any specific checks to perform
+        // as we are not simulating any specific results.
+        Ok(())
+    }
+
+    pub async fn run_n_batches(
+        &mut self,
+        max_num_batches: usize,
+        handles: [&mut impl JobSubmissionHandle; 3],
+    ) -> Result<()> {
+        let [handle0, handle1, handle2] = handles;
+        for _ in 0..max_num_batches {
+            let ([batch0, batch1, batch2], requests) = match self.generate_query_batch()? {
+                Some(res) => res,
+                None => break,
+            };
+            if batch0.request_ids.is_empty() {
+                continue;
+            }
+
+            // send batches to servers
+            let (res0_fut, res1_fut, res2_fut) = tokio::join!(
+                handle0.submit_batch_query(batch0),
+                handle1.submit_batch_query(batch1),
+                handle2.submit_batch_query(batch2)
+            );
+
+            let res0 = res0_fut.await?;
+            let res1 = res1_fut.await?;
+            let res2 = res2_fut.await?;
+
+            let mut resp_counters = HashMap::new();
+            for req in requests.keys() {
+                resp_counters.insert(req, 0);
+            }
+
+            let results = [&res0, &res1, &res2];
+            for res in results.iter() {
+                let ServerJobResult {
+                    request_ids: thread_request_ids,
+                    matches,
+                    merged_results,
+                    matched_batch_request_ids,
+                    anonymized_bucket_statistics_left,
+                    anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_mirror,
+                    anonymized_bucket_statistics_right_mirror,
+                    ..
+                } = res;
+
+                if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
+                    // Check that normal orientation statistics have is_mirror_orientation set to false
+                    assert!(!anonymized_bucket_statistics_left.is_mirror_orientation,
+                        "Normal orientation left statistics should have is_mirror_orientation = false");
+                    assert!(!anonymized_bucket_statistics_right.is_mirror_orientation,
+                        "Normal orientation right statistics should have is_mirror_orientation = false");
+                    // Check that mirror orientation statistics have is_mirror_orientation set to true
+                    assert!(anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                        "Mirror orientation left statistics should have is_mirror_orientation = true");
+                    assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                        "Mirror orientation right statistics should have is_mirror_orientation = true");
+
+                    // TODO: calculate and check ground result of anonymized bucket statistics
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_left,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_right,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                    // Also check mirror orientation statistics
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_left_mirror,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_right_mirror,
+                        bucket_statistic_parameters.num_gpus,
+                        bucket_statistic_parameters.num_buckets,
+                        bucket_statistic_parameters.match_buffer_size,
+                    )?;
+                }
+
+                for (req_id, &was_match, &idx, matched_batch_req_ids) in izip!(
+                    thread_request_ids,
+                    matches,
+                    merged_results,
+                    matched_batch_request_ids,
+                ) {
+                    assert!(requests.contains_key(req_id));
+
+                    resp_counters.insert(req_id, resp_counters.get(req_id).unwrap() + 1);
+
+                    self.check_result(req_id, idx, was_match, matched_batch_req_ids, &requests)?;
+                }
+            }
+
+            // Check that we received a response from all actors
+            for (&id, &count) in resp_counters.iter() {
+                assert_eq!(count, 3, "Received {} responses for {}", count, id);
+            }
+        }
+        Ok(())
     }
 }
