@@ -5,6 +5,7 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
+use iris_mpc_store::StoredIrisVector;
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// Component name for logging purposes.
@@ -24,6 +25,9 @@ pub struct Batch {
 
     /// Array of vector ids of iris enrollments.
     pub vector_ids: Vec<VectorId>,
+
+    /// Iris data for persistence.
+    pub iris_data: Vec<StoredIrisVector>,
 }
 
 /// Constructor.
@@ -33,12 +37,14 @@ impl Batch {
         vector_ids: Vec<VectorId>,
         left_queries: Vec<QueryRef>,
         right_queries: Vec<QueryRef>,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
         Self {
             batch_id,
             vector_ids,
             left_queries,
             right_queries,
+            iris_data,
         }
     }
 }
@@ -280,6 +286,25 @@ impl BatchIterator for BatchGenerator {
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
 
+            let left_store = &imem_iris_stores[LEFT];
+            let right_store = &imem_iris_stores[RIGHT];
+            let mut codes_and_masks = Vec::new();
+
+            let left_data = left_store.get_vectors(vector_ids.clone().iter()).await;
+            let right_data = right_store.get_vectors(vector_ids.clone().iter()).await;
+            for (i, vector_id) in vector_ids.iter().enumerate() {
+                let left_iris = &left_data[i];
+                let right_iris = &right_data[i];
+
+                codes_and_masks.push(StoredIrisVector {
+                    id: vector_id.serial_id() as i64,
+                    version_id: vector_id.version_id(),
+                    left_code: Vec::from(&left_iris.code.coefs),
+                    left_mask: Vec::from(&left_iris.mask.coefs),
+                    right_code: Vec::from(&right_iris.code.coefs),
+                    right_mask: Vec::from(&right_iris.mask.coefs),
+                });
+            }
             // Update internal state.
             self.batch_count += 1;
 
@@ -288,6 +313,7 @@ impl BatchIterator for BatchGenerator {
                 vector_ids.clone(),
                 imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
                 imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
+                codes_and_masks,
             )))
         } else {
             Ok(None)

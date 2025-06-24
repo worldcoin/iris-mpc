@@ -5,6 +5,7 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
+use iris_mpc_store::StoredIrisVector;
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -33,6 +34,9 @@ pub enum JobRequest {
         // Incoming batch of iris identifiers for subsequent correlation.
         vector_ids: Vec<IrisVectorId>,
 
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
+
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
     },
@@ -50,6 +54,7 @@ impl JobRequest {
             vector_ids,
             left_queries,
             right_queries,
+            iris_data,
         }: Batch,
     ) -> Self {
         assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
@@ -58,6 +63,7 @@ impl JobRequest {
             batch_id,
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
+            iris_data,
         }
     }
 
@@ -79,6 +85,9 @@ pub enum JobResult {
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
 
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
+
         /// Iris serial id of batch's first element.
         first_serial_id: IrisSerialId,
 
@@ -86,8 +95,8 @@ pub enum JobResult {
         last_serial_id: IrisSerialId,
     },
     Modification {
-        /// Modification id of associated modifications table entry
-        modification_id: i64,
+        /// Modification entry for processing
+        modification: Modification,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -100,6 +109,7 @@ impl JobResult {
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
         connect_plans: HawkMutation,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
         let first_serial_id = vector_ids.first().unwrap().serial_id();
         let last_serial_id = vector_ids.last().unwrap().serial_id();
@@ -107,6 +117,7 @@ impl JobResult {
             connect_plans,
             batch_id,
             vector_ids,
+            iris_data,
             first_serial_id,
             last_serial_id,
         }
@@ -114,11 +125,11 @@ impl JobResult {
 
     #[allow(dead_code)]
     pub(crate) fn new_modification_result(
-        modification_id: i64,
+        modification: Modification,
         connect_plans: HawkMutation,
     ) -> Self {
         Self::Modification {
-            modification_id,
+            modification,
             connect_plans,
         }
     }
@@ -144,10 +155,8 @@ impl fmt::Display for JobResult {
                     last_serial_id
                 )
             }
-            JobResult::Modification {
-                modification_id, ..
-            } => {
-                write!(f, "modification-id={}", modification_id)
+            JobResult::Modification { modification, .. } => {
+                write!(f, "modification-id={}", modification.id)
             }
         }
     }

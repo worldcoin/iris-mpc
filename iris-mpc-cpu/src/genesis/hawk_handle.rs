@@ -108,6 +108,7 @@ impl Handle {
                 batch_id,
                 vector_ids,
                 queries,
+                iris_data,
             } => {
                 Self::log_info(format!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
@@ -199,6 +200,7 @@ impl Handle {
                     batch_id,
                     vector_ids,
                     HawkMutation(mutations),
+                    iris_data,
                 ))
             }
             JobRequest::Modification { modification } => {
@@ -246,6 +248,13 @@ impl Handle {
                                     ));
                                     bail!(msg);
                                 },
+                                smpc_request::UNIQUENESS_MESSAGE_TYPE => {
+                                    Self::log_warning(format!(
+                                        "Modifications should not contain uniqueness requests in: {:?}",
+                                        modification
+                                    ));
+                                    Ok(vec![])
+                                }
                                 _ => {
                                     let msg = Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
@@ -275,7 +284,7 @@ impl Handle {
                 }
 
                 Ok(JobResult::new_modification_result(
-                    modification.id,
+                    modification,
                     HawkMutation(mutations),
                 ))
             }
@@ -285,6 +294,11 @@ impl Handle {
     // Helper: component error logging.
     fn log_error(msg: String) -> String {
         utils::log_error(COMPONENT, msg)
+    }
+
+    // Helper: component warning logging.
+    fn log_warning(msg: String) -> String {
+        utils::log_warn(COMPONENT, msg)
     }
 
     // Helper: component logging.

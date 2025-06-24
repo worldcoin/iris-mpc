@@ -98,7 +98,30 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredIrisVector {
+    pub id: i64,
+    pub version_id: i16,
+    pub left_code: Vec<u16>,
+    pub left_mask: Vec<u16>,
+    pub right_code: Vec<u16>,
+    pub right_mask: Vec<u16>,
+}
+
+impl StoredIrisVector {
+    pub fn as_ref(&self) -> StoredIrisVectorRef<'_> {
+        StoredIrisVectorRef {
+            id: self.id,
+            version_id: self.version_id,
+            left_code: &self.left_code,
+            left_mask: &self.left_mask,
+            right_code: &self.right_code,
+            right_mask: &self.right_mask,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredIrisVectorRef<'a> {
     pub id: i64,
     pub version_id: i16,
@@ -304,8 +327,40 @@ impl Store {
             .iter()
             .map(|row| row.get::<i64, _>("id"))
             .collect::<Vec<_>>();
-
         Ok(ids)
+    }
+
+    pub async fn insert_copy_modification(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        modification: &Modification,
+    ) -> Result<Modification> {
+        let inserted: StoredModification = sqlx::query_as(
+            r#"
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted, result_message_body, graph_mutation)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING
+                id,
+                serial_id,
+                request_type,
+                s3_url,
+                status,
+                persisted,
+                result_message_body,
+                graph_mutation
+            "#,
+        )
+        .bind(modification.id)
+        .bind(modification.serial_id)
+        .bind(&modification.request_type)
+        .bind(&modification.s3_url)
+        .bind(&modification.status)
+        .bind(modification.persisted)
+        .bind(&modification.result_message_body)
+        .bind(&modification.graph_mutation)
+        .fetch_one(tx.deref_mut())
+        .await?;
+        Ok(inserted.into())
     }
 
     pub async fn insert_irises_overriding(

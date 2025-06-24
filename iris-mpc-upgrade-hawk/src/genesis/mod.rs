@@ -28,11 +28,9 @@ use iris_mpc_cpu::{
         IndexationError, JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::{self, graph::graph_store::GraphPg},
+    hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{
-    loader::load_iris_db, Store as IrisStore, StoredIrisRef, StoredIrisVectorRef,
-};
+use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
 use std::{
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, Instant},
@@ -326,7 +324,6 @@ async fn exec_setup(
 
     // create copy of iris data
 
-
     // Set in memory Iris stores.
     let imem_iris_stores: BothEyes<_> = [
         hawk_actor.iris_store(StoreId::Left),
@@ -338,8 +335,13 @@ async fn exec_setup(
     log_info(String::from("Hawk handle initialised"));
 
     // Set thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut task_monitor_bg, &shutdown_handler).await?;
+    let tx_results = get_results_thread(
+        hnsw_iris_store,
+        graph_store,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
     task_monitor_bg.check_tasks();
 
     Ok((
@@ -584,69 +586,6 @@ async fn exec_indexation(
     }
 }
 
-async fn post_upgrade_processing(
-    ctx: &ExecutionContextInfo,
-    hnsw_iris_store: IrisStore,
-    hawk_actor: &mut HawkActor,
-    aws_rds_client: &RDSClient,
-) -> Result<()> {
-    log_info(String::from("Post-processing tasks begin"));
-
-    // Step 1: Copy Iris data into Iris Table
-    // TODO: check if the highest serial id is the same as the start indexation id
-    // we do not want to copy twice therefore we use the highest serial id instead of original iris table
-    // This also means if any copying has failed then another Genesis run will cause a copy
-
-    let highest_serial_id = hnsw_iris_store.get_max_serial_id().await?;
-
-    let left_store = &hawk_actor.iris_store(StoreId::Left);
-    let right_store = &hawk_actor.iris_store(StoreId::Right);
-    let mut codes_and_masks = Vec::new();
-
-    // assume vectorIds are the same for both sides
-    let serial_ids: Vec<u32> = (highest_serial_id as u32..=ctx.args.max_indexation_id).collect();
-    let vector_ids = left_store
-        .get_vector_ids(&serial_ids)
-        .await
-        .into_iter()
-        .zip(serial_ids)
-        .map(|(id_opt, serial_id)| id_opt.ok_or(IndexationError::MissingSerialId(serial_id)))
-        .collect::<Result<Vec<_>, IndexationError>>()?;
-    if vector_ids.is_empty() {
-        log_info(String::from("No vectors to index, exiting."));
-        return Ok(());
-    }
-    let left_data = left_store.get_vectors(vector_ids.clone().iter()).await;
-    let right_data = right_store.get_vectors(vector_ids.clone().iter()).await;
-    for (i, vector_id) in vector_ids.iter().enumerate() {
-        let left_iris = &left_data[i];
-        let right_iris = &right_data[i];
-
-        codes_and_masks.push(StoredIrisVectorRef {
-            id: vector_id.serial_id() as i64,
-            version_id: vector_id.version_id(),
-            left_code: &left_iris.code.coefs[..],
-            left_mask: &left_iris.mask.coefs[..],
-            right_code: &right_iris.code.coefs[..],
-            right_mask: &right_iris.mask.coefs[..],
-        });
-    }
-    let mut iris_tx = hnsw_iris_store.tx().await?;
-    hnsw_iris_store
-        .insert_copy_iris(&mut iris_tx, &codes_and_masks)
-        .await?;
-    // Step 2: perform modifications iris updating
-    // TODO: perform modifications on iris for updating
-
-    // Step 3: perform modifications table copying
-    // TODO: perform modifications on modifications table copying
-
-    // Step 4 exec snapshot
-    exec_snapshot(ctx, aws_rds_client).await?;
-
-    Ok(())
-}
-
 /// Takes a dB snapshot.
 ///
 /// # Arguments
@@ -811,7 +750,7 @@ async fn get_service_clients(
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
                     .await?;
 
-            Ok(IrisStore::new(&db_client).await?)
+            IrisStore::new(&db_client).await
         }
 
         async fn get_hnsw_store_clients(
@@ -860,6 +799,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
+    hnsw_iris_store: IrisStore,
     graph_store: GraphPg<Aby3Store>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -873,11 +813,19 @@ async fn get_results_thread(
                     batch_id,
                     connect_plans,
                     last_serial_id,
+                    iris_data,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
 
                     let mut graph_tx = graph_store.tx().await?;
+                    hnsw_iris_store
+                        .insert_copy_iris(
+                            &mut graph_tx.tx,
+                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                        )
+                        .await?;
+
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: batch-id={batch_id}"
@@ -898,28 +846,36 @@ async fn get_results_thread(
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
                 JobResult::Modification {
-                    modification_id,
+                    modification,
                     connect_plans,
                 } => {
                     log_info(format!(
-                        "Job Results :: Received: modification-id={modification_id}",
+                        "Job Results :: Received: modification-id={}",
+                        modification.id
                     ));
 
                     let mut graph_tx = graph_store.tx().await?;
+                    hnsw_iris_store
+                        .insert_copy_modification(&mut graph_tx.tx, &modification)
+                        .await?;
+
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
-                        "Job Results :: Persisted graph updates: modification-id={modification_id}"
+                        "Job Results :: Persisted graph updates: modification-id={}",
+                        modification.id
                     ));
 
                     let mut db_tx = graph_tx.tx;
-                    set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
+                    set_last_indexed_modification_id(&mut db_tx, modification.id).await?;
                     db_tx.commit().await?;
                     log_info(format!(
-                        "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"
+                        "Job Results :: Persisted last indexed modification id: modification_id={}",
+                        modification.id
                     ));
 
                     log_info(format!(
-                        "Job Results :: Persisted to dB: modification_id={modification_id}"
+                        "Job Results :: Persisted to dB: modification_id={}",
+                        modification.id
                     ));
 
                     shutdown_handler_bg.decrement_batches_pending_completion();
