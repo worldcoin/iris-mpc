@@ -9,10 +9,7 @@ use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config},
-    helpers::{
-        shutdown_handler::ShutdownHandler, smpc_request::IDENTITY_DELETION_MESSAGE_TYPE,
-        sync::Modification, task_monitor::TaskMonitor,
-    },
+    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -22,14 +19,15 @@ use iris_mpc_cpu::{
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
+            set_last_indexed_modification_id,
         },
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
         utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
-        IndexationError, JobResult,
+        IndexationError, JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::Aby3Store,
+    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
@@ -132,23 +130,39 @@ impl ExecutionContextInfo {
 ///
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Phase 0: setup.
-    let (ctx, shutdown_handler, task_monitor_bg, hawk_actor, aws_rds_client, graph_store) =
-        exec_setup(&args, &config).await?;
+    let (
+        ctx,
+        shutdown_handler,
+        mut task_monitor_bg,
+        aws_rds_client,
+        imem_iris_stores,
+        mut hawk_handle,
+        tx_results,
+    ) = exec_setup(&args, &config).await?;
     log_info(String::from("Setup complete."));
 
     // Phase 1: apply delta.
     if ctx.modifications.is_empty() {
         log_info(String::from("Delta skipped ... no modifications to apply."));
     } else {
-        exec_delta(&ctx).await?;
+        hawk_handle = exec_delta(
+            &config,
+            &ctx,
+            hawk_handle,
+            &tx_results,
+            &mut task_monitor_bg,
+            &shutdown_handler,
+        )
+        .await?;
         log_info(String::from("Delta complete."));
     }
 
     // Phase 2: indexation.
     exec_indexation(
         &ctx,
-        hawk_actor,
-        graph_store,
+        &imem_iris_stores,
+        hawk_handle,
+        &tx_results,
         task_monitor_bg,
         &shutdown_handler,
     )
@@ -180,9 +194,10 @@ async fn exec_setup(
     ExecutionContextInfo,
     Arc<ShutdownHandler>,
     TaskMonitor,
-    HawkActor,
     RDSClient,
-    GraphPg<Aby3Store>,
+    BothEyes<SharedIrisesRef>,
+    GenesisHawkHandle,
+    Sender<JobResult>,
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
@@ -304,93 +319,6 @@ async fn exec_setup(
         bail!("Shutdown")
         // return Ok(());
     }
-    Ok((
-        ExecutionContextInfo::new(
-            args,
-            config,
-            last_indexed_id,
-            excluded_serial_ids.clone(),
-            modifications.clone(),
-            latest_modification_id,
-        ),
-        shutdown_handler,
-        task_monitor_bg,
-        hawk_actor,
-        aws_rds_client,
-        graph_store,
-    ))
-}
-
-/// Apply modifications since last indexation.
-///
-/// # Arguments
-///
-/// * `ctx` - Execution context information.
-/// * `modifications` - Set of indexation modifications to apply.
-///
-async fn exec_delta(ctx: &ExecutionContextInfo) -> Result<()> {
-    let ExecutionContextInfo {
-        modifications,
-        max_modification_id,
-        ..
-    } = ctx;
-    log_info(format!(
-        "Applying modifications: count={} :: max-id={}",
-        modifications.len(),
-        max_modification_id
-    ));
-
-    metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
-    metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
-
-    // TODO: implement applying modifications
-    for modification in modifications {
-        log_info(format!(
-            "Applying modification: type={} id={}, serial_id={:?}",
-            modification.request_type, modification.id, modification.serial_id
-        ));
-        if modification.request_type == IDENTITY_DELETION_MESSAGE_TYPE {
-            // throw an error
-            let msg = log_error(format!(
-                "HawkActor does not support deletion of identities: modification: {:?}",
-                modification
-            ));
-            bail!(msg);
-        }
-        // TODO: apply modification to the graph
-        // TODO: set last indexed modification id
-        // set_last_indexed_modification_id(&mut db_tx, _max_modification_id).await?;
-    }
-
-    Ok(())
-}
-
-/// Index Iris's from last indexation id.
-///
-/// # Arguments
-///
-/// * `ctx` - Execution context information.
-/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
-/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
-/// * `shutdown_handler` - Handler coordinating process shutdown.
-/// * `tx_results` - Channel to send job results to DB persistence thread.
-///
-async fn exec_indexation(
-    ctx: &ExecutionContextInfo,
-    hawk_actor: HawkActor,
-    graph_store: GraphPg<Aby3Store>,
-    mut task_monitor_bg: TaskMonitor,
-    shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<()> {
-    log_info(format!(
-        "Starting indexation: last_indexed_id={}, max_indexation_id={}",
-        ctx.last_indexed_id, ctx.args.max_indexation_id
-    ));
-
-    // Set thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut task_monitor_bg, shutdown_handler).await?;
-    task_monitor_bg.check_tasks();
 
     // Set in memory Iris stores.
     let imem_iris_stores: BothEyes<_> = [
@@ -399,8 +327,150 @@ async fn exec_indexation(
     ];
 
     // Set Hawk handle.
-    let mut hawk_handle = GenesisHawkHandle::new(ctx.config.party_id, hawk_actor).await?;
+    let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
+
+    // Set thread for persisting indexing results to DB.
+    let tx_results =
+        get_results_thread(graph_store, &mut task_monitor_bg, &shutdown_handler).await?;
+    task_monitor_bg.check_tasks();
+
+    Ok((
+        ExecutionContextInfo::new(
+            args,
+            config,
+            last_indexed_id,
+            excluded_serial_ids,
+            modifications,
+            latest_modification_id,
+        ),
+        shutdown_handler,
+        task_monitor_bg,
+        aws_rds_client,
+        imem_iris_stores,
+        hawk_handle,
+        tx_results,
+    ))
+}
+
+/// Apply modifications since last indexation.
+///
+/// # Arguments
+///
+/// * `config` - Application configuration struct.
+/// * `ctx` - Execution context information.
+/// * `hawk_handle` - Genesis hawk handle for processing queries with HNSW engine.
+/// * `tx_results` - Sender handle for persisting modifications to database.
+/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
+/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
+///
+async fn exec_delta(
+    config: &Config,
+    ctx: &ExecutionContextInfo,
+    mut hawk_handle: GenesisHawkHandle,
+    tx_results: &Sender<JobResult>,
+    task_monitor_bg: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<GenesisHawkHandle> {
+    let ExecutionContextInfo {
+        modifications,
+        max_modification_id,
+        ..
+    } = ctx;
+
+    let res: Result<()> = async {
+        log_info(format!(
+            "Applying modifications: count={} :: max-id={}",
+            modifications.len(),
+            max_modification_id
+        ));
+
+        metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
+        metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
+
+        let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+
+        for modification in modifications {
+            log_info(format!(
+                "Applying modification: type={} id={}, serial_id={:?}",
+                modification.request_type, modification.id, modification.serial_id
+            ));
+
+            // Submit modification to Hawk handle for processing.
+            let request = JobRequest::new_modification(modification.clone());
+            let result_future = hawk_handle.submit_request(request).await;
+            let result = timeout(processing_timeout, result_future)
+                .await
+                .map_err(|err| {
+                    eyre!(log_error(format!(
+                        "HawkActor processing timeout: {:?}",
+                        err
+                    )))
+                })??;
+
+            // Send results to processing thread responsible for persisting to database.
+            tx_results.send(result).await?;
+            shutdown_handler.increment_batches_pending_completion();
+        }
+
+        Ok(())
+    }
+    .await;
+
+    // Process delta result:
+    match res {
+        // Success.
+        Ok(_) => {
+            log_info(String::from(
+                "Waiting for last delta modifications to be processed...",
+            ));
+            shutdown_handler.wait_for_pending_batches_completion().await;
+            log_info(String::from("All delta modifications have been processed"));
+
+            Ok(hawk_handle)
+        }
+        // Error.
+        Err(err) => {
+            log_error(format!(
+                "HawkActor processing error while applying delta modifications: {:?}",
+                err
+            ));
+
+            // Clean up & shutdown.
+            log_info(String::from("Initiating shutdown"));
+            drop(hawk_handle);
+            task_monitor_bg.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            task_monitor_bg.check_tasks_finished();
+
+            Err(err)
+        }
+    }
+}
+
+/// Index Iris's from last indexation id.
+///
+/// # Arguments
+///
+/// * `ctx` - Execution context information.
+/// * `imem_iris_stores` - In-memory iris shares for indexation queries.
+/// * `hawk_actor` - Hawk actor managing indexation & search over an HNSW graph.
+/// * `tx_results` - Channel to send job results to DB persistence thread.
+/// * `task_monitor_bg` - Tokio task monitor to coordinate with process background threads.
+/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
+///
+async fn exec_indexation(
+    ctx: &ExecutionContextInfo,
+    imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    mut hawk_handle: GenesisHawkHandle,
+    tx_results: &Sender<JobResult>,
+    mut task_monitor_bg: TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<()> {
+    log_info(format!(
+        "Starting indexation: last_indexed_id={}, max_indexation_id={}",
+        ctx.last_indexed_id, ctx.args.max_indexation_id
+    ));
 
     // Set batch size.
     let batch_size = match ctx.args.batch_size {
@@ -433,7 +503,7 @@ async fn exec_indexation(
         // N.B. assumes that generator yields non-empty batches containing serial ids > last_indexed_id.
         let mut last_indexed_id = ctx.last_indexed_id;
         while let Some(batch) = batch_generator
-            .next_batch(last_indexed_id, &imem_iris_stores)
+            .next_batch(last_indexed_id, imem_iris_stores)
             .await?
         {
             // Coordinator: escape on shutdown.
@@ -456,7 +526,8 @@ async fn exec_indexation(
             last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
-            let result_future = hawk_handle.submit_batch(batch).await;
+            let request = JobRequest::new_batch_indexation(batch);
+            let result_future = hawk_handle.submit_request(request).await;
             let result = timeout(processing_timeout, result_future)
                 .await
                 .map_err(|err| {
@@ -488,6 +559,8 @@ async fn exec_indexation(
                 "All batches have been processed, \
                  shutting down...",
             ));
+
+            Ok(())
         }
         // Error.
         Err(err) => {
@@ -499,10 +572,10 @@ async fn exec_indexation(
             task_monitor_bg.abort_all();
             tokio::time::sleep(Duration::from_secs(5)).await;
             task_monitor_bg.check_tasks_finished();
+
+            Err(err)
         }
     }
-
-    Ok(())
 }
 
 /// Takes a dB snapshot.
@@ -718,37 +791,64 @@ async fn get_results_thread(
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let _result_sender_abort = task_monitor.spawn(async move {
-        while let Some(JobResult {
-            batch_id,
-            connect_plans,
-            last_serial_id,
-            ..
-        }) = rx.recv().await
-        {
-            log_info(format!("Job Results :: Received: batch-id={}", batch_id));
+        while let Some(result) = rx.recv().await {
+            match result {
+                JobResult::BatchIndexation {
+                    batch_id,
+                    connect_plans,
+                    last_serial_id,
+                    ..
+                } => {
+                    log_info(format!("Job Results :: Received: batch-id={batch_id}"));
 
-            let mut graph_tx = graph_store.tx().await?;
-            connect_plans.persist(&mut graph_tx).await?;
-            log_info(format!(
-                "Job Results :: Persisted graph updates: batch-id={}",
-                batch_id
-            ));
+                    let mut graph_tx = graph_store.tx().await?;
+                    connect_plans.persist(&mut graph_tx).await?;
+                    log_info(format!(
+                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
+                    ));
 
-            let mut db_tx = graph_tx.tx;
-            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-            db_tx.commit().await?;
-            log_info(format!(
-                "Job Results :: Persisted last indexed id: batch-id={}",
-                batch_id
-            ));
+                    let mut db_tx = graph_tx.tx;
+                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    db_tx.commit().await?;
+                    log_info(format!(
+                        "Job Results :: Persisted last indexed id: batch-id={batch_id}"
+                    ));
 
-            log_info(format!(
-                "Job Results :: Persisted to dB: batch-id={}",
-                batch_id
-            ));
+                    log_info(format!(
+                        "Job Results :: Persisted to dB: batch-id={batch_id}"
+                    ));
 
-            // Notify background task responsible for tracking pending batches.
-            shutdown_handler_bg.decrement_batches_pending_completion();
+                    // Notify background task responsible for tracking pending batches.
+                    shutdown_handler_bg.decrement_batches_pending_completion();
+                }
+                JobResult::Modification {
+                    modification_id,
+                    connect_plans,
+                } => {
+                    log_info(format!(
+                        "Job Results :: Received: modification-id={modification_id}",
+                    ));
+
+                    let mut graph_tx = graph_store.tx().await?;
+                    connect_plans.persist(&mut graph_tx).await?;
+                    log_info(format!(
+                        "Job Results :: Persisted graph updates: modification-id={modification_id}"
+                    ));
+
+                    let mut db_tx = graph_tx.tx;
+                    set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
+                    db_tx.commit().await?;
+                    log_info(format!(
+                        "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"
+                    ));
+
+                    log_info(format!(
+                        "Job Results :: Persisted to dB: modification_id={modification_id}"
+                    ));
+
+                    shutdown_handler_bg.decrement_batches_pending_completion();
+                }
+            }
         }
 
         Ok(())

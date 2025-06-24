@@ -1,14 +1,14 @@
 use super::{
-    batch_generator::Batch,
     hawk_job::{Job, JobRequest, JobResult},
-    utils::{self, PartyId},
+    utils,
 };
 use crate::execution::hawk_main::{
     insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
     STORE_IDS,
 };
-use eyre::{OptionExt, Result};
+use eyre::{bail, eyre, OptionExt, Result};
+use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -19,16 +19,13 @@ const COMPONENT: &str = "Hawk-Handle";
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
 pub struct Handle {
-    // Identifier of party participating in MPC protocol.
-    party_id: PartyId,
-
     // Queue of indexation jobs for processing.
     job_queue: mpsc::Sender<Job>,
 }
 
 /// Constructors.
 impl Handle {
-    pub async fn new(party_id: PartyId, mut actor: HawkActor) -> Result<Self> {
+    pub async fn new(mut actor: HawkActor) -> Result<Self> {
         /// Performs post job processing health checks:
         /// - resets Hawk sessions upon job failure
         /// - ensures system state is in sync.
@@ -57,11 +54,15 @@ impl Handle {
         let (tx, mut rx) = mpsc::channel::<Job>(1);
         tokio::spawn(async move {
             // Processing loop.
-            while let Some(job) = rx.recv().await {
-                let job_result = Self::handle_job(&mut actor, &sessions, &job.request).await;
+            while let Some(Job {
+                request,
+                return_channel,
+            }) = rx.recv().await
+            {
+                let job_result = Self::handle_job(&mut actor, &sessions, request).await;
                 let health = do_health_check(&mut actor, &mut sessions, job_result.is_err()).await;
                 let stop = health.is_err();
-                let _ = job.return_channel.send(health.and(job_result));
+                let _ = return_channel.send(health.and(job_result));
                 if stop {
                     Self::log_error(String::from(
                         "HawkActor is in an inconsistent state, therefore stopping.",
@@ -77,10 +78,7 @@ impl Handle {
             }
         });
 
-        Ok(Self {
-            party_id,
-            job_queue: tx,
-        })
+        Ok(Self { job_queue: tx })
     }
 }
 
@@ -101,111 +99,205 @@ impl Handle {
     pub async fn handle_job(
         actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSessionRef>>,
-        request: &JobRequest,
+        request: JobRequest,
     ) -> Result<JobResult> {
-        Self::log_info(format!(
-            "Hawk Job :: processing batch-id={}; batch-size={}",
-            request.batch_id,
-            request.batch_size()
-        ));
         let now = Instant::now();
 
-        // Use all sessions per iris side to search for insertion indices per
-        // batch, number configured by `args.request_parallelism`.
+        match request {
+            JobRequest::BatchIndexation {
+                batch_id,
+                vector_ids,
+                queries,
+            } => {
+                Self::log_info(format!(
+                    "Hawk Job :: processing batch-id={}; batch-size={}",
+                    batch_id,
+                    vector_ids.len(),
+                ));
 
-        // Iterate per side
-        let jobs_per_side = izip!(STORE_IDS, request.queries.iter(), sessions.iter())
-            .map(|(side, queries_side, sessions_side)| {
-                let searcher = actor.searcher();
-                let queries_with_ids =
-                    izip!(queries_side.clone(), request.vector_ids.clone()).collect_vec();
-                let sessions = sessions_side.clone();
+                // Use all sessions per iris side to search for insertion indices per
+                // batch, number configured by `args.request_parallelism`.
 
-                // Per side do searches and insertions
-                async move {
-                    let n_sessions = sessions.len();
-                    let insert_session =
-                        sessions.first().ok_or_eyre("Sessions for side are empty")?;
-                    let mut connect_plans = Vec::new();
+                // Iterate per side
+                let jobs_per_side = izip!(STORE_IDS, queries.iter(), sessions.iter())
+                    .map(|(side, queries_side, sessions_side)| {
+                        let searcher = actor.searcher();
+                        let queries_with_ids =
+                            izip!(queries_side.clone(), vector_ids.clone()).collect_vec();
+                        let sessions = sessions_side.clone();
 
-                    // Process queries in a logical insertion batch for this side
-                    for queries_batch in queries_with_ids.chunks(n_sessions) {
-                        let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
-                            |((query, id), session)| {
-                                let query = query.clone();
-                                let searcher = searcher.clone();
-                                let session = session.clone();
-                                let identifier = (*id, side);
-                                async move {
-                                    search_single_query_no_match_count(
-                                        session,
-                                        query,
-                                        &searcher,
-                                        &identifier,
-                                    )
-                                    .await
-                                }
-                            },
-                        );
+                        // Per side do searches and insertions
+                        async move {
+                            let n_sessions = sessions.len();
+                            let insert_session =
+                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                            let mut connect_plans = Vec::new();
 
-                        let plans = parallelize(search_jobs)
-                            .await?
-                            .into_iter()
-                            .map(Some)
-                            .collect_vec();
+                            // Process queries in a logical insertion batch for this side
+                            for queries_batch in queries_with_ids.chunks(n_sessions) {
+                                let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
+                                    |((query, id), session)| {
+                                        let query = query.clone();
+                                        let searcher = searcher.clone();
+                                        let session = session.clone();
+                                        let identifier = (*id, side);
+                                        async move {
+                                            search_single_query_no_match_count(
+                                                session,
+                                                query,
+                                                &searcher,
+                                                &identifier,
+                                            )
+                                            .await
+                                        }
+                                    },
+                                );
 
-                        let batch_ids = queries_batch
-                            .iter()
-                            .map(|(_query, id)| Some(*id))
-                            .collect_vec();
+                                let plans = parallelize(search_jobs)
+                                    .await?
+                                    .into_iter()
+                                    .map(Some)
+                                    .collect_vec();
 
-                        // Insert into in-memory store, and return insertion plans for use by DB
-                        let plans = insert(insert_session, &searcher, plans, &batch_ids).await?;
-                        connect_plans.extend(plans);
-                    }
+                                let batch_ids = queries_batch
+                                    .iter()
+                                    .map(|(_query, id)| Some(*id))
+                                    .collect_vec();
 
-                    Ok(connect_plans)
+                                // Insert into in-memory store, and return insertion plans for use by DB
+                                let plans =
+                                    insert(insert_session, &searcher, plans, &batch_ids).await?;
+                                connect_plans.extend(plans);
+                            }
+
+                            Ok(connect_plans)
+                        }
+                    })
+                    .collect_vec();
+
+                let results_ = parallelize(jobs_per_side.into_iter()).await?;
+                let results: [_; 2] = results_.try_into().unwrap();
+
+                // Convert the results into SingleHawkMutation format
+                let [left_plans, right_plans] = results;
+                assert_eq!(left_plans.len(), right_plans.len());
+                let mut mutations = Vec::new();
+
+                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    // Genesis doesn't use modification keys or request indices
+                    mutations.push(SingleHawkMutation {
+                        plans: [left_plan, right_plan],
+                        modification_key: None,
+                        request_index: None,
+                    });
                 }
-            })
-            .collect_vec();
 
-        let results_ = parallelize(jobs_per_side.into_iter()).await?;
-        let results: [_; 2] = results_.try_into().unwrap();
+                metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
+                metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
 
-        // Convert the results into SingleHawkMutation format
-        let [left_plans, right_plans] = results;
-        assert_eq!(left_plans.len(), right_plans.len());
-        let mut mutations = Vec::new();
+                Ok(JobResult::new_batch_result(
+                    batch_id,
+                    vector_ids,
+                    HawkMutation(mutations),
+                ))
+            }
+            JobRequest::Modification { modification } => {
+                let serial_id = modification.serial_id.ok_or(eyre!(
+                    "Genesis received modification with empty serial_id field"
+                ))? as u32;
 
-        for (left_plan, right_plan) in izip!(left_plans, right_plans) {
-            mutations.push(SingleHawkMutation {
-                plans: [left_plan, right_plan],
-                modification_key: None, // Genesis doesn't use modification keys
-                request_index: None,    // Genesis doesn't use request indices
-            });
+                let jobs_per_side =
+                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
+                        let sessions = sessions_side.clone();
+                        let vector = actor.iris_store(side);
+                        let modification = modification.clone();
+                        let searcher = actor.searcher();
+
+                        async move {
+                            let vector_id_ = vector.get_vector_id(serial_id).await;
+
+                            let session = sessions
+                                .first()
+                                .ok_or_eyre("Sessions for side are empty")?;
+
+                            match modification.request_type.as_str() {
+                                smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
+                                    let vector_id = vector_id_.ok_or_eyre("Expected vector serial id of update is missing from store")?;
+                                    let identifier = (vector_id, side);
+
+                                    // TODO remove any prior versions of this vector id from graph
+
+                                    let query = vector.get_query(&vector_id).await;
+                                    let insert_plan = search_single_query_no_match_count(
+                                                session.clone(), query, &searcher, &identifier
+                                        )
+                                        .await?;
+                                    let plans = vec![Some(insert_plan)];
+                                    let ids = vec![Some(vector_id)];
+
+                                    let connect_plan = insert(session, &searcher, plans, &ids).await?;
+
+                                    Ok(connect_plan)
+                                },
+                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                                    let msg = Self::log_error(format!(
+                                        "HawkActor does not support deletion of identities: modification: {:?}",
+                                        modification
+                                    ));
+                                    bail!(msg);
+                                },
+                                _ => {
+                                    let msg = Self::log_error(format!(
+                                        "Invalid modification type received: {:?}",
+                                        modification,
+                                    ));
+                                    bail!(msg);
+                                }
+                            }
+                        }
+                    });
+
+                let results_ = parallelize(jobs_per_side.into_iter()).await?;
+                let results: [_; 2] = results_.try_into().unwrap();
+
+                // Convert the results into SingleHawkMutation format
+                let [left_plans, right_plans] = results;
+                assert_eq!(left_plans.len(), right_plans.len());
+                let mut mutations = Vec::new();
+
+                for (left_plan, right_plan) in izip!(left_plans, right_plans) {
+                    // Genesis doesn't use modification keys or request indices
+                    mutations.push(SingleHawkMutation {
+                        plans: [left_plan, right_plan],
+                        modification_key: None,
+                        request_index: None,
+                    });
+                }
+
+                Ok(JobResult::new_modification_result(
+                    modification.id,
+                    HawkMutation(mutations),
+                ))
+            }
         }
-        metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
-        metrics::gauge!("genesis_batch_size").set(request.batch_size() as f64);
-
-        Ok(JobResult::new(request, HawkMutation(mutations)))
     }
 
     // Helper: component error logging.
-    fn log_error(msg: String) {
-        utils::log_error(COMPONENT, msg);
+    fn log_error(msg: String) -> String {
+        utils::log_error(COMPONENT, msg)
     }
 
     // Helper: component logging.
-    fn log_info(msg: String) {
-        utils::log_info(COMPONENT, msg);
+    fn log_info(msg: String) -> String {
+        utils::log_info(COMPONENT, msg)
     }
 
-    /// Enqueues a job to process a batch of Iris records pulled from a remote store. It returns
+    /// Enqueues a job request for the genesis indexer HNSW processing thread. It returns
     /// a future that resolves to the processed results.
     ///
     /// # Arguments
     ///
-    /// * `batch` - A set of `DbStoredIris` records to be processed.
+    /// * `request` - A request to be processed.
     ///
     /// # Returns
     ///
@@ -214,13 +306,16 @@ impl Handle {
     /// # Errors
     ///
     /// This method may return an error if the job queue channel is closed or if the job fails.
-    pub async fn submit_batch(&mut self, batch: Batch) -> impl Future<Output = Result<JobResult>> {
+    pub async fn submit_request(
+        &mut self,
+        request: JobRequest,
+    ) -> impl Future<Output = Result<JobResult>> {
         // Set job queue channel.
         let (tx, rx) = oneshot::channel();
 
         // Set job.
         let job = Job {
-            request: JobRequest::new(self.party_id, batch),
+            request,
             return_channel: tx,
         };
 
