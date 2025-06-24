@@ -2,6 +2,7 @@ use super::player::Identity;
 pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
+        hawk_main::search::SearchIds,
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -17,15 +18,14 @@ use crate::{
     network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
     proto_generated::party_node::party_node_server::PartyNodeServer,
     protocol::{
-        ops::{setup_replicated_prf, setup_shared_rng},
+        ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
-use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::helpers::{
     smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     statistics::BucketStatistics,
@@ -36,13 +36,14 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
 };
+use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
     RequestType, UniquenessRequest,
 };
-use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
@@ -113,7 +114,7 @@ pub struct HawkArgs {
     pub hnsw_param_ef_search: usize,
 
     #[clap(long)]
-    pub hnsw_prng_seed: Option<u64>,
+    pub hnsw_prf_key: Option<u64>,
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
@@ -132,6 +133,7 @@ pub struct HawkActor {
 
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
+    prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
     consensus: Consensus,
 
@@ -157,6 +159,20 @@ pub enum StoreId {
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
+
+impl TryFrom<usize> for StoreId {
+    type Error = Report;
+
+    fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(StoreId::Left),
+            1 => Ok(StoreId::Right),
+            _ => Err(eyre!(
+                "Invalid usize representation of StoreId, valid inputs are 0 (left) and 1 (right)"
+            )),
+        }
+    }
+}
 
 // TODO: Merge with the same in iris-mpc-gpu.
 // Orientation enum to indicate the orientation of the iris code during the batch processing.
@@ -204,7 +220,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: Box<dyn RngCore + Send + Sync>,
+    hnsw_prf_key: Arc<[u8; 16]>,
 }
 
 // Thread safe reference to a HakwSession instance.
@@ -353,6 +369,7 @@ impl HawkActor {
         Ok(HawkActor {
             args: args.clone(),
             searcher,
+            prf_key: None,
             db_size: 0,
             iris_store,
             graph_store,
@@ -377,13 +394,57 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
+    /// Initialize the shared PRF key for HNSW graph insertion layer selection.
+    ///
+    /// The PRF key is either statically injected via configuration in TEST environments or
+    /// mutually derived with other MPC parties in PROD environments.
+    ///
+    /// This PRF key is used to determine insertion heights for new elements added to the
+    /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
+    /// upon startup of the `HawkActor` instance.
+    async fn get_or_init_prf_key(&mut self) -> Result<Arc<[u8; 16]>> {
+        if self.prf_key.is_none() {
+            let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
+                tracing::info!("Initializing HNSW shared PRF key to static value {prf_key:?}");
+                (prf_key as u128).to_le_bytes()
+            } else {
+                let init_session_id = self.consensus.next_session_id();
+                let grpc_session = self.networking.create_session(init_session_id).await?;
+
+                let mut network_session = NetworkSession {
+                    session_id: init_session_id,
+                    role_assignments: self.role_assignments.clone(),
+                    networking: Box::new(grpc_session),
+                    own_role: Role::new(self.party_id),
+                };
+
+                tracing::info!("Initializing HNSW shared PRF key to mutually derived random value");
+                let my_prf_key = thread_rng().gen();
+                setup_shared_seed(&mut network_session, my_prf_key)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!("Unable to initialize shared HNSW PRF key: {err}");
+                        tracing::warn!("Using default PRF key value [0u8; 16]");
+                        [0u8; 16]
+                    })
+            };
+            let prf_key = Arc::new(prf_key_);
+
+            self.prf_key = Some(prf_key);
+        }
+
+        Ok(self.prf_key.as_ref().unwrap().clone())
+    }
+
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        let hnsw_prf_key = self.get_or_init_prf_key().await?;
+
         // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
         let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
             .map(|_| {
                 let mut new_for_side_future = |store_id: StoreId| {
                     let session_id = self.consensus.next_session_id();
-                    self.create_session(store_id, session_id)
+                    self.create_session(store_id, session_id, &hnsw_prf_key)
                 };
 
                 (
@@ -405,13 +466,14 @@ impl HawkActor {
         &self,
         store_id: StoreId,
         session_id: SessionId,
+        hnsw_prf_key: &Arc<[u8; 16]>,
     ) -> impl Future<Output = Result<HawkSessionRef>> {
         let networking = self.networking.clone();
         let role_assignments = self.role_assignments.clone();
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let party_id = self.party_id;
-        let hnsw_prng_seed = self.args.hnsw_prng_seed;
+        let hnsw_prf_key = hnsw_prf_key.clone();
 
         async move {
             let grpc_session = networking.create_session(session_id).await?;
@@ -426,18 +488,6 @@ impl HawkActor {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
 
-            // PRNG seed is either statically injected via configuration in TEST environments or
-            // mutually derived with other MPC parties in PROD environments.
-            let shared_rng: Box<dyn RngCore + Send + Sync> = if let Some(base_seed) = hnsw_prng_seed
-            {
-                let rng = session_seeded_rng(base_seed, store_id, session_id);
-                Box::new(rng)
-            } else {
-                let my_rng_seed = thread_rng().gen();
-                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
-                Box::new(rng)
-            };
-
             let hawk_session = HawkSession {
                 aby3_store: Aby3Store {
                     session: Session {
@@ -447,7 +497,7 @@ impl HawkActor {
                     storage,
                 },
                 graph_store,
-                shared_rng,
+                hnsw_prf_key,
             };
 
             Ok(Arc::new(RwLock::new(hawk_session)))
@@ -682,6 +732,7 @@ pub struct HawkRequest {
     batch: BatchQuery,
     queries: SearchQueries,
     queries_mirror: SearchQueries,
+    ids: SearchIds,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -759,12 +810,16 @@ impl From<BatchQuery> for HawkRequest {
             Arc::new(queries)
         };
 
+        let ids = Arc::new(batch.request_ids.clone());
+
+        assert!(n_queries <= batch.requests_order.len());
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
         Self {
             queries: extract_queries(Orientation::Normal),
             queries_mirror: extract_queries(Orientation::Mirror),
             batch,
+            ids,
         }
     }
 }
@@ -859,6 +914,7 @@ impl HawkRequest {
         });
         ResetRequests {
             vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
+            request_ids: Arc::new(self.batch.reset_update_request_ids.clone()),
             queries: Arc::new(queries),
         }
     }
@@ -918,12 +974,14 @@ impl HawkResult {
     }
 
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
-        self.connect_plans.0.get(request_i).and_then(|mutation| {
-            mutation.plans[LEFT]
-                .as_ref()
-                .or(mutation.plans[RIGHT].as_ref())
-                .map(|plan| plan.inserted_vector)
-        })
+        self.connect_plans
+            .get_by_request_index(RequestIndex::UniqueReauthResetCheck(request_i))
+            .and_then(|mutation| {
+                mutation.plans[LEFT]
+                    .as_ref()
+                    .or(mutation.plans[RIGHT].as_ref())
+                    .map(|plan| plan.inserted_vector)
+            })
     }
 
     fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
@@ -1044,6 +1102,13 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
+        tracing::info!(
+            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            successful_reauths,
+            matches,
+            matches_with_skip_persistence
+        );
+
         let batch = self.batch;
         let batch_size = batch.request_ids.len();
 
@@ -1106,6 +1171,9 @@ pub struct SingleHawkMutation {
 
     #[serde(skip)]
     pub modification_key: Option<ModificationKey>,
+
+    #[serde(skip)]
+    pub request_index: Option<RequestIndex>,
 }
 
 impl SingleHawkMutation {
@@ -1127,6 +1195,12 @@ impl HawkMutation {
         mutation
             .as_ref()
             .map(|m| m.serialize().expect("failed to serialize graph mutation"))
+    }
+
+    pub fn get_by_request_index(&self, req_index: RequestIndex) -> Option<&SingleHawkMutation> {
+        self.0
+            .iter()
+            .find(|mutation| mutation.request_index == Some(req_index))
     }
 
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
@@ -1220,6 +1294,14 @@ impl HawkHandle {
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;
 
+        tracing::info!(
+            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
+            request.batch.request_types,
+            request.batch.reauth_target_indices,
+            request.batch.skip_persistence,
+            request.batch.reauth_use_or_rule,
+        );
+
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
@@ -1235,11 +1317,13 @@ impl HawkHandle {
 
             // Search for nearest neighbors.
             // For both eyes, all requests, and rotations.
+            let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results = search::search(sessions, search_queries, search_params).await?;
+            let search_results =
+                search::search(sessions, search_queries, search_ids, search_params).await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1310,19 +1394,26 @@ impl HawkHandle {
     ) -> Result<HawkMutation> {
         use Decision::*;
         let decisions = match_result.decisions();
+        let requests_order = &request.batch.requests_order;
 
         // The vector IDs of reauths and resets, or None for uniqueness insertions.
-        let update_ids = decisions
+        let update_ids = requests_order
             .iter()
-            .map(|decision| match decision {
-                ReauthUpdate(update_id) => Some(*update_id),
-                _ => None,
+            .map(|req_index| match req_index {
+                RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
+                    ReauthUpdate(update_id) => Some(update_id),
+                    _ => None,
+                },
+                RequestIndex::ResetUpdate(i) => Some(resets.vector_ids[*i]),
+                RequestIndex::Deletion(_) => None,
             })
-            .chain(resets.vector_ids.clone().into_iter().map(Some))
             .collect_vec();
 
+        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
+
         // Store plans for both sides using BothEyes structure
-        let mut plans_both_sides: BothEyes<Vec<Option<ConnectPlan>>> = [Vec::new(), Vec::new()];
+        let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
+            vec![[None, None]; requests_order.len()];
 
         // For both eyes.
         for (side, sessions, search_results, reset_results) in
@@ -1352,12 +1443,16 @@ impl HawkHandle {
                 unique_insertions_persistence_skipped.len()
             );
 
-            let insert_plans = izip!(search_results, &decisions)
-                .map(|(search_result, &decision)| {
+            let insert_plans = requests_order
+                .iter()
+                .map(|req_index| match req_index {
                     // If the decision is a mutation, return the insertion plan.
-                    decision.is_mutation().then(|| search_result.into_center())
+                    RequestIndex::UniqueReauthResetCheck(i) => decisions[*i]
+                        .is_mutation()
+                        .then(|| search_results[*i].center().clone()),
+                    RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    RequestIndex::Deletion(_) => None,
                 })
-                .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
                 .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
@@ -1366,48 +1461,44 @@ impl HawkHandle {
                 .await?;
 
             // Store plans for this side
-            plans_both_sides[*side as usize] = plans;
+            for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
+                both_sides[*side as usize] = plan;
+            }
         }
 
-        // Combine left and right plans into SingleHawkMutation objects
-        // Note that reset update mutations are currently processed after all the other requests.
-        // For modifications to be synced correctly, we need to ensure that all requests are applied in the order they are received.
-        // TODO: https://linear.app/worldcoin/issue/POP-2588
+        // Combine ModificationKey and ConnectPlan into into SingleHawkMutation objects.
         let mut mutations = Vec::new();
-        assert_eq!(plans_both_sides[LEFT].len(), plans_both_sides[RIGHT].len());
 
-        for i in 0..plans_both_sides[LEFT].len() {
-            let left_plan = plans_both_sides[LEFT].get(i).cloned().flatten();
-            let right_plan = plans_both_sides[RIGHT].get(i).cloned().flatten();
-
-            // Determine modification key based on the mutation index
-            let modification_key = if i < decisions.len() {
-                // This is a batch request mutation
-                match decisions[i] {
-                    UniqueInsert => {
-                        let request_id = &request.batch.request_ids[i];
-                        Some(ModificationKey::RequestId(request_id.clone()))
+        for (req_index, modif_plan) in izip!(requests_order, plans_both_sides) {
+            let modification_key = match *req_index {
+                RequestIndex::UniqueReauthResetCheck(i) => {
+                    // This is a batch request mutation
+                    match decisions[i] {
+                        UniqueInsert => {
+                            let request_id = &request.batch.request_ids[i];
+                            Some(ModificationKey::RequestId(request_id.clone()))
+                        }
+                        ReauthUpdate(vector_id) => {
+                            Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
+                        }
+                        UniqueInsertSkipped | NoMutation => None,
                     }
-                    ReauthUpdate(vector_id) => {
+                }
+                RequestIndex::ResetUpdate(i) => {
+                    // This is a reset update mutation.
+                    if let Some(&vector_id) = resets.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
+                    } else {
+                        None
                     }
-                    _ => None,
                 }
-            } else {
-                // This is a reset update mutation. First N plans of size `decisions.len()` are for batch requests, and the rest are for reset updates.
-                // TODO: refactor BatchQuery to process requests in the order they are received.
-                let reset_idx = i - decisions.len();
-                if let Some(&vector_id) = resets.vector_ids.get(reset_idx) {
-                    let serial_id = vector_id.index() + 1;
-                    Some(ModificationKey::RequestSerialId(serial_id))
-                } else {
-                    None
-                }
+                RequestIndex::Deletion(_) => None,
             };
 
             mutations.push(SingleHawkMutation {
-                plans: [left_plan, right_plan],
+                plans: modif_plan,
                 modification_key,
+                request_index: Some(*req_index),
             });
         }
 
@@ -1538,6 +1629,10 @@ mod tests {
             })
             .collect_vec();
 
+        let requests_order = (0..batch_size)
+            .map(RequestIndex::UniqueReauthResetCheck)
+            .collect_vec();
+
         let request_ids = {
             (0..batch_size as u32)
                 .map(|i| format!("request_{i}"))
@@ -1546,6 +1641,7 @@ mod tests {
 
         let batch_0 = BatchQuery {
             // Batch details to be just copied to the result.
+            requests_order,
             request_ids: request_ids.clone(),
             request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
             metadata: vec![
@@ -1636,7 +1732,7 @@ mod tests {
 
         // --- Rejected Uniqueness ---
 
-        let batch_2 = batch_0.clone();
+        let batch_2 = batch_0;
 
         let all_results = parallelize((0..n_parties).map(|party_i| {
             let batch = batch_of_party(&batch_2, &irises[party_i]);
@@ -1845,6 +1941,7 @@ mod tests_db {
                 .map(|(left_plan, right_plan)| SingleHawkMutation {
                     plans: [left_plan, right_plan],
                     modification_key: None,
+                    request_index: None,
                 })
                 .collect();
 
@@ -1864,7 +1961,7 @@ mod tests_db {
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
-            hnsw_prng_seed: None,
+            hnsw_prf_key: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
@@ -1925,6 +2022,7 @@ mod hawk_mutation_tests {
                 None,
             ],
             modification_key: Some(modification_key.clone()),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
         };
 
         let hawk_mutation = HawkMutation(vec![mutation.clone()]);
@@ -1957,12 +2055,18 @@ mod hawk_mutation_tests {
         let key2 = ModificationKey::RequestId(request_id2.clone());
         let key3 = ModificationKey::RequestSerialId(serial_id);
 
+        let index1 = RequestIndex::UniqueReauthResetCheck(0);
+        let index2 = RequestIndex::UniqueReauthResetCheck(1);
+        let index3 = RequestIndex::ResetUpdate(0);
+        let index_wrong = RequestIndex::ResetUpdate(1);
+
         let mutation1 = SingleHawkMutation {
             plans: [
                 Some(create_test_connect_plan(VectorId::from_serial_id(1))),
                 None,
             ],
             modification_key: Some(key1.clone()),
+            request_index: Some(index1),
         };
 
         let mutation2 = SingleHawkMutation {
@@ -1971,6 +2075,7 @@ mod hawk_mutation_tests {
                 Some(create_test_connect_plan(VectorId::from_serial_id(2))),
             ],
             modification_key: Some(key2.clone()),
+            request_index: Some(index2),
         };
 
         let mutation3 = SingleHawkMutation {
@@ -1979,6 +2084,7 @@ mod hawk_mutation_tests {
                 Some(create_test_connect_plan(VectorId::from_serial_id(3))),
             ],
             modification_key: Some(key3.clone()),
+            request_index: Some(index3),
         };
 
         let hawk_mutation = HawkMutation(vec![
@@ -1998,11 +2104,17 @@ mod hawk_mutation_tests {
             .get_serialized_mutation_by_key(&key3)
             .is_some());
 
+        assert_eq!(hawk_mutation.get_by_request_index(index1), Some(&mutation1));
+        assert_eq!(hawk_mutation.get_by_request_index(index2), Some(&mutation2));
+        assert_eq!(hawk_mutation.get_by_request_index(index3), Some(&mutation3));
+
         // Test non-existent key
         let wrong_key = ModificationKey::RequestId("non-existent".to_string());
         assert!(hawk_mutation
             .get_serialized_mutation_by_key(&wrong_key)
             .is_none());
+
+        assert!(hawk_mutation.get_by_request_index(index_wrong).is_none());
     }
 
     #[test]
@@ -2013,6 +2125,7 @@ mod hawk_mutation_tests {
                 None,
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
         };
 
         let mutation_without_key = SingleHawkMutation {
@@ -2021,6 +2134,7 @@ mod hawk_mutation_tests {
                 Some(create_test_connect_plan(VectorId::from_serial_id(2))),
             ],
             modification_key: None,
+            request_index: None,
         };
 
         let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
@@ -2044,6 +2158,7 @@ mod hawk_mutation_tests {
                 None,
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
         };
 
         // Test serialization

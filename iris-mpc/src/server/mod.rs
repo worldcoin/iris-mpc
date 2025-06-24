@@ -1,11 +1,13 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
-use crate::services::processors::process_identity_deletions;
 use aws_sdk_sns::types::MessageAttributeValue;
 
+use crate::services::processors::modifications_sync::{
+    send_last_modifications_to_sns, sync_modifications,
+};
 use eyre::{bail, eyre, Report, Result};
-use iris_mpc_common::config::{CommonConfig, Config, ModeOfCompute, ModeOfDeployment};
+use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
@@ -17,7 +19,6 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
@@ -32,6 +33,7 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
+use std::process::exit;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -84,6 +86,33 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    // Handle modifications sync
+    if config.enable_modifications_sync {
+        sync_modifications(
+            &config,
+            &iris_store,
+            Some(&graph_store),
+            &aws_clients,
+            &shares_encryption_key_pair,
+            sync_result.clone(),
+        )
+        .await?;
+    }
+
+    if config.enable_modifications_replay {
+        // replay last `max_modification_lookback` modifications to SNS
+        if let Err(e) = send_last_modifications_to_sns(
+            &iris_store,
+            &aws_clients.sns_client,
+            &config,
+            max_sync_lookback(&config),
+        )
+        .await
+        {
+            tracing::error!("Failed to replay last modifications: {:?}", e);
+        }
+    }
 
     sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
 
@@ -153,161 +182,42 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 
 /// Validates server config and initializes associated static state.
 fn process_config(config: &Config) {
-    // Validate modes of compute/deployment.
-    if config.mode_of_compute != ModeOfCompute::Cpu {
-        panic!(
-            "Invalid config setting: compute_mode: actual: {:?} :: expected: ModeOfCompute::CPU",
-            config.mode_of_compute
-        );
-    } else {
-        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
+    if config.cpu_database.is_none() {
+        panic!("Missing CPU dB config settings",);
     }
-
-    // Make sure the configuration is in correct state, to avoid complex handling of ReadOnly
-    // during ShadowReadOnly deployment we panic if the base store persistence is enabled.
-    if config.mode_of_deployment == ModeOfDeployment::ShadowReadOnly && !config.disable_persistence
-    {
-        panic!(
-            "The system cannot start securely in ShadowReadOnly mode with enabled base persistence flag!"
-        )
-    }
-
     // Load batch_size config
-    tracing::info!("Set batch size to {}", config.max_batch_size);
+    tracing::info!("Set max batch size to {}", config.max_batch_size);
 }
 
 /// Returns computed maximum sync lookback size.
 fn max_sync_lookback(config: &Config) -> usize {
-    config.max_batch_size * 2
+    (config.max_deletions_per_batch + config.max_batch_size) * 2
 }
 
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store>), Report> {
-    let iris_schema_name = format!(
-        "{}{}_{}_{}",
-        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
-    );
-
     let hawk_schema_name = format!(
         "{}{}_{}_{}",
         config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
     );
 
-    match config.mode_of_deployment {
-        // use the hawk db for both stores
-        ModeOfDeployment::ShadowIsolation => {
-            // This mode uses only Hawk DB
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in ShadowIsolation"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &iris_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
+    // HNSW will always use the CPU__DATABASE_* both for irises and graph
+    let hawk_db_config = config
+        .cpu_database
+        .as_ref()
+        .ok_or(eyre!("Missing CPU database config"))?;
+    let hawk_postgres_client = PostgresClient::new(
+        &hawk_db_config.url,
+        &hawk_schema_name,
+        AccessMode::ReadWrite,
+    )
+    .await?;
 
-            // Store -> CPU
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let iris_store = Store::new(&hawk_postgres_client).await?;
+    let iris_store = Store::new(&hawk_postgres_client).await?;
+    let graph_store = GraphStore::new(&hawk_postgres_client).await?;
 
-            // Graph -> CPU
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-
-        // use base db for iris store and hawk db for graph store
-        ModeOfDeployment::ShadowReadOnly => {
-            let db_config = config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?;
-
-            let postgres_client =
-                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadOnly)
-                    .await?;
-
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                db_config,
-                config.mode_of_deployment
-            );
-
-            let iris_store = Store::new(&postgres_client).await?;
-
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in ShadowReadOnly"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &hawk_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
-
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-
-        ModeOfDeployment::Standard => {
-            let db_config = config
-                .database
-                .as_ref()
-                .ok_or(eyre!("Missing database config"))?;
-
-            let postgres_client =
-                PostgresClient::new(&db_config.url, &iris_schema_name, AccessMode::ReadWrite)
-                    .await?;
-
-            tracing::info!(
-                "Creating new iris store from: {:?} in mode {:?}",
-                db_config,
-                config.mode_of_deployment
-            );
-
-            let iris_store = Store::new(&postgres_client).await?;
-
-            let hawk_db_config = config
-                .cpu_database
-                .as_ref()
-                .ok_or(eyre!("Missing CPU database config in Standard"))?;
-            let hawk_postgres_client = PostgresClient::new(
-                &hawk_db_config.url,
-                &hawk_schema_name,
-                AccessMode::ReadWrite,
-            )
-            .await?;
-
-            tracing::info!(
-                "Creating new graph store from: {:?} in mode {:?}",
-                hawk_db_config,
-                config.mode_of_deployment
-            );
-            let graph_store = GraphStore::new(&hawk_postgres_client).await?;
-
-            Ok((iris_store, graph_store))
-        }
-    }
+    Ok((iris_store, graph_store))
 }
 
 /// Returns AWS service clients for SQS, SNS, S3, and Secrets Manager.
@@ -338,6 +248,8 @@ async fn get_shares_encryption_key_pair(
 struct SnsAttributesMaps {
     uniqueness_result_attributes: HashMap<String, MessageAttributeValue>,
     reauth_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_check_result_attributes: HashMap<String, MessageAttributeValue>,
+    reset_update_result_attributes: HashMap<String, MessageAttributeValue>,
     anonymized_statistics_attributes: HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: HashMap<String, MessageAttributeValue>,
 }
@@ -346,6 +258,10 @@ struct SnsAttributesMaps {
 fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
+    let reset_check_result_attributes = create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
+    let reset_update_result_attributes = create_message_type_attribute_map(
+        iris_mpc_common::helpers::smpc_request::RESET_UPDATE_MESSAGE_TYPE,
+    );
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
@@ -354,6 +270,8 @@ fn init_sns_attributes_maps() -> Result<SnsAttributesMaps> {
     Ok(SnsAttributesMaps {
         uniqueness_result_attributes,
         reauth_result_attributes,
+        reset_check_result_attributes,
+        reset_update_result_attributes,
         anonymized_statistics_attributes,
         identity_deletion_result_attributes,
     })
@@ -480,8 +398,8 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
-        hnsw_prng_seed: config.hawk_prng_seed,
-        disable_persistence: config.cpu_disable_persistence,
+        hnsw_prf_key: config.hawk_prf_key,
+        disable_persistence: config.disable_persistence,
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
     };
@@ -514,7 +432,7 @@ async fn load_database(
     }
 
     let parallelism = config
-        .database
+        .cpu_database
         .as_ref()
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
@@ -581,12 +499,15 @@ async fn start_results_thread(
                 &sns_attributes_maps.uniqueness_result_attributes,
                 &sns_attributes_maps.reauth_result_attributes,
                 &sns_attributes_maps.identity_deletion_result_attributes,
+                &sns_attributes_maps.reset_check_result_attributes,
+                &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.anonymized_statistics_attributes,
                 &shutdown_handler_bg,
             )
             .await
             {
-                tracing::error!("Error processing job result: {:?}", e);
+                tracing::error!("Error processing job result: {:?}. Exiting...", e);
+                exit(1);
             }
         }
 
@@ -649,8 +570,6 @@ async fn run_main_server_loop(
             iris_store.clone(),
         );
 
-        let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
-
         loop {
             let now = Instant::now();
 
@@ -670,14 +589,6 @@ async fn run_main_server_loop(
 
             metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
             metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
-
-            process_identity_deletions(
-                &batch,
-                iris_store,
-                &dummy_shares_for_deletions.0,
-                &dummy_shares_for_deletions.1,
-            )
-            .await?;
 
             // Iterate over a list of tracing payloads, and create logs with mappings to
             // payloads Log at least a "start" event using a log with trace.id and

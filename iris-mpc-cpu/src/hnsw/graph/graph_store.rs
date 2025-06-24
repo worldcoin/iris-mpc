@@ -634,7 +634,7 @@ mod tests {
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
-            let insertion_layer = db.select_layer(rng)?;
+            let insertion_layer = db.select_layer_rng(rng)?;
             let (neighbors, set_ep) = db
                 .search_to_insert(vector_store, graph_mem, query, insertion_layer)
                 .await?;
