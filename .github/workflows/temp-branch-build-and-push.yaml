@@ -3,10 +3,10 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2413/update-s3-importer-to-include-version-id-2"
+      - "leonidas/anon-stats-correctness-test-production-code"
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 env:
