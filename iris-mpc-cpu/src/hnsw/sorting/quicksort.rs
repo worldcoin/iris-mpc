@@ -40,7 +40,9 @@ impl PartialQuickSort {
             SortState::Sorted => {
                 bail!("PartialQuickSort instance is already sorted");
             }
-            SortState::Unsorted => Ok((1..self.right()).map(|x| (x, 0)).collect()),
+            SortState::Unsorted => Ok(((self.left + 1)..self.right())
+                .map(|x| (x, self.left))
+                .collect()),
             SortState::PartiallySorted => {
                 let pivot_idx = self.pivot_idx();
                 let left_u = self.left + self.sorted_len;
@@ -50,11 +52,11 @@ impl PartialQuickSort {
         }
     }
 
-    /// Update `lst` and step to the next layer of recursion for the sort, using
-    /// the comparison results for index pairs given by a call to `next_cmps`.
+    /// Update `src` list and step to the next layer of recursion using the
+    /// comparison results for index pairs given by a call to `next_cmps`.
     ///
-    /// This function copies elements of `lst` from the represented index
-    /// interval into the corresponding interval in `target` after partitioning
+    /// This function copies elements of `src` from the represented index
+    /// interval into the corresponding interval in `dst` after partitioning
     /// around the pivot element, as follows:
     ///
     /// - Moves the pivot element to the correct sorted index `pivot_idx`
@@ -67,18 +69,18 @@ impl PartialQuickSort {
     ///   particular positioning sorted sublists in the left part of the
     ///   resulting subintervals
     ///
-    /// - In particular, unsorted items "equal" to the pivot element are sorted
-    ///   to after the pivot element, and the overall sort is stable
+    /// - As a special case, unsorted items "equal" to the pivot element are
+    ///   sorted to after the pivot element, and the overall sort is stable
     ///
-    /// After the elements of `lst` are copied to `target` as described, the
+    /// After the elements of `src` are copied to `dst` as described, the
     /// current `PartialQuickSort` struct is mutated to represent the left
     /// recursive subinterval, and a new struct is returned representing the
     /// right recursive subinterval.
     pub fn step<Item: Clone>(
         &mut self,
         cmp_results: &[bool],
-        lst: &[Item],
-        target: &mut [Item],
+        src: &[Item],
+        dst: &mut [Item],
     ) -> Result<Self> {
         // Index of pivot element, and start index of the unsorted part of the
         // sort interval, inclusive.  If fully unsorted, then the first element
@@ -87,7 +89,7 @@ impl PartialQuickSort {
             SortState::Sorted => {
                 bail!("PartialQuickSort instance is already sorted");
             }
-            SortState::Unsorted => (0, 1),
+            SortState::Unsorted => (self.left, self.left + 1),
             SortState::PartiallySorted => (self.pivot_idx(), self.left + self.sorted_len),
         };
 
@@ -97,25 +99,25 @@ impl PartialQuickSort {
         let unsorted_len_left = cmp_results.iter().filter(|b| **b).count();
         let unsorted_len_right = cmp_results.len() - unsorted_len_left;
 
-        // Move pivot element to sorted index in `target`
+        // Move pivot element to sorted index in `dst`
         let pivot_target = self.left + sorted_len_left + unsorted_len_left;
-        target[pivot_target] = lst[pivot_idx].clone();
+        dst[pivot_target] = src[pivot_idx].clone();
 
-        // Copy sorted subintervals into `target`
-        target[(self.left)..pivot_idx].clone_from_slice(&lst[self.left..pivot_idx]);
-        target[(pivot_target + 1)..(pivot_target + 1 + sorted_len_right)]
-            .clone_from_slice(&lst[(pivot_idx + 1)..unsorted_start]);
+        // Copy sorted subintervals into `dst`
+        dst[(self.left)..pivot_idx].clone_from_slice(&src[self.left..pivot_idx]);
+        dst[(pivot_target + 1)..(pivot_target + 1 + sorted_len_right)]
+            .clone_from_slice(&src[(pivot_idx + 1)..unsorted_start]);
 
-        // Step through unsorted interval and copy elements into left and right sides
-        // of `target` depending on the outcomes in `cmp_results`
+        // Step through unsorted interval and copy elements into left and right
+        // sides of `dst` depending on the outcomes in `cmp_results`
         let mut l_idx = pivot_idx;
         let mut r_idx = pivot_target + 1 + sorted_len_right;
-        for (val, cmp) in izip!(lst[unsorted_start..self.right()].iter(), cmp_results) {
+        for (val, cmp) in izip!(src[unsorted_start..self.right()].iter(), cmp_results) {
             if *cmp {
-                target[l_idx] = val.clone();
+                dst[l_idx] = val.clone();
                 l_idx += 1;
             } else {
-                target[r_idx] = val.clone();
+                dst[r_idx] = val.clone();
                 r_idx += 1;
             }
         }
@@ -175,8 +177,51 @@ impl PartialQuickSort {
     /// part, and the unsorted part consists of items with relatively uniform
     /// ordering.
     pub fn pivot_idx(&self) -> usize {
-        self.left + self.sorted_len / 2
+        self.left + (self.sorted_len - 1) / 2
     }
+}
+
+/// Apply partial quicksort to a list of `PartialOrd` elements which has
+/// sorted prefix of length `sorted_len`, by recursive application.
+///
+/// Function is meant primarily for testing use.
+pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
+    list: &mut [T],
+    sorted_len: usize,
+) -> Result<()> {
+    let mut buffer: Vec<_> = list.into();
+    let initial_sort = PartialQuickSort {
+        left: 0,
+        sorted_len,
+        unsorted_len: list.len() - sorted_len,
+    };
+
+    fn apply_quicksort_recursive_interior<T: PartialOrd + Clone>(
+        list: &mut [T],
+        buffer: &mut [T],
+        mut sort: PartialQuickSort,
+    ) -> Result<()> {
+        if !sort.is_finished() {
+            let (left, right) = (sort.left, sort.right());
+
+            let cmps = sort.next_cmps()?;
+
+            let cmp_results: Vec<_> = cmps
+                .into_iter()
+                .map(|(idx1, idx2)| list[idx1] < list[idx2])
+                .collect();
+
+            let next_sort = sort.step(&cmp_results, list, buffer)?;
+            list[left..right].clone_from_slice(&buffer[left..right]);
+
+            apply_quicksort_recursive_interior(list, buffer, sort)?;
+            apply_quicksort_recursive_interior(list, buffer, next_sort)?;
+        }
+
+        Ok(())
+    }
+
+    apply_quicksort_recursive_interior(list, &mut buffer, initial_sort)
 }
 
 /// Apply the parallel quicksort algorithm to the given list using `store` as
@@ -191,12 +236,14 @@ pub async fn apply_quicksort<V: VectorStore>(
     sorted_len: usize,
 ) -> Result<()> {
     let len = list.len();
-    if buffer.len() < len {
-        bail!("Buffer is too small for the list being sorted")
-    }
     if len == 0 {
         return Ok(());
     }
+
+    if buffer.len() < len {
+        bail!("Buffer is too small for the list being sorted")
+    }
+    let buffer = &mut buffer[0..len];
 
     #[derive(Clone)]
     struct LocalSort {
@@ -224,14 +271,6 @@ pub async fn apply_quicksort<V: VectorStore>(
 
     // Main processing loop
     let mut cmps: Vec<(usize, usize)> = Vec::with_capacity(len);
-
-    // Src represents the current state of the sort, dst is the current buffer space
-    let mut src = list;
-    let mut dst = buffer;
-
-    // Keep track of how many times src and dst are swapped
-    let mut iterations: u32 = 0;
-
     while !sorts.is_empty() {
         // Collect comparisons
         for LocalSort {
@@ -246,16 +285,15 @@ pub async fn apply_quicksort<V: VectorStore>(
 
         // Collect distances and evaluate comparisons
         let distances: Vec<_> = cmps
-            .iter()
-            .filter_map(
-                |(idx1, idx2): &(usize, usize)| match (src.get(*idx1), src.get(*idx2)) {
-                    (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
-                    _ => None,
-                },
-            )
+            .drain(..)
+            .filter_map(|(idx1, idx2)| match (list.get(idx1), list.get(idx2)) {
+                (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
+                _ => None,
+            })
             .collect();
         let cmp_results = store.less_than_batch(&distances).await?;
 
+        // Execute quicksort steps for each active recursive sort
         let mut new_sorts = Vec::with_capacity(sorts.len());
         for LocalSort {
             sort,
@@ -265,24 +303,23 @@ pub async fn apply_quicksort<V: VectorStore>(
             let (local_cmps_left, local_cmps_right) = cmp_results_range
                 .take()
                 .ok_or_eyre("Unable to find expected local comparisons range")?;
-            let new_sort = sort.step(&cmp_results[local_cmps_left..local_cmps_right], src, dst)?;
+            let new_sort = sort.step(
+                &cmp_results[local_cmps_left..local_cmps_right],
+                list,
+                buffer,
+            )?;
             new_sorts.push(new_sort);
         }
+        list.clone_from_slice(buffer);
+
+        // Update with new recursive sorts
         sorts.extend(new_sorts.into_iter().map(|sort| LocalSort {
             sort,
             cmp_results_range: None,
         }));
 
-        std::mem::swap(&mut src, &mut dst);
-        iterations += 1;
-
+        // Remove all finished parts
         sorts.retain(|s| !s.sort.is_finished());
-    }
-
-    if iterations % 2 == 1 {
-        // If an odd number of swaps between src and dst, then copy src to dst
-        // one final time to put the sorted results into the original `list`.
-        dst.clone_from_slice(src);
     }
 
     Ok(())
@@ -292,10 +329,11 @@ pub async fn apply_quicksort<V: VectorStore>(
 mod tests {
     use super::*;
     use eyre::Result;
+    use rand::Rng;
 
     #[test]
     fn test_qs_step() -> Result<()> {
-        // sort by tuple first element, second element to check stability
+        // sort by tuple first element; second element used to check stability
         let lst = vec![
             (0u32, 7u32),
             (1, 3),
@@ -400,6 +438,31 @@ mod tests {
         );
 
         assert_eq!(lst2, lst2_after);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_qs_random() -> Result<()> {
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..10 {
+            let sorted_length = rng.gen_range(128..512);
+            let unsorted_length = rng.gen_range(128..512);
+            let length = sorted_length + unsorted_length;
+
+            for _ in 0..10 {
+                let mut vals1: Vec<u64> = (0..length).map(|_| rng.gen_range(0..100)).collect();
+                let mut vals2 = vals1.clone();
+
+                vals1.get_mut(0..sorted_length).unwrap().sort();
+                apply_quicksort_recursive(&mut vals1, sorted_length)?;
+
+                vals2.sort();
+
+                assert_eq!(vals1, vals2);
+            }
+        }
 
         Ok(())
     }
