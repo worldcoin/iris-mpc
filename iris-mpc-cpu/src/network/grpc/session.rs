@@ -60,7 +60,7 @@ impl Networking for GrpcSession {
         match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
             Ok(res) => res
                 .ok_or(eyre!("No message received"))
-                .and_then(|msg| NetworkValue::from_network(Ok(msg.data))),
+                .and_then(|msg| NetworkValue::from_network(&msg.data)),
             Err(_) => Err(eyre!(
                 "{:?}: Timeout while waiting for message from {sender:?} in \
                  {:?}",

@@ -41,13 +41,11 @@ impl TcpSession {
 #[async_trait]
 impl Networking for TcpSession {
     async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
-        // todo sw: change the channels to not need a Vec<u8>
-        let value = value.to_network();
         let outgoing_stream = self.tx.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
         ))?;
-        trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.len(), rounds = 1);
+        trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.byte_len(), rounds = 1);
         metrics::counter!(
             "smpc.rounds",
             "session_id" => self.session_id.0.to_string(),
@@ -57,7 +55,7 @@ impl Networking for TcpSession {
             "smpc.bytes",
             "session_id" => self.session_id.0.to_string(),
         )
-        .increment(value.len() as u64);
+        .increment(value.byte_len() as u64);
         if cfg!(feature = "networking_benchmark") {
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         }
@@ -73,10 +71,7 @@ impl Networking for TcpSession {
             self.session_id
         ))?;
         match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
-            Ok(res) => {
-                let r = res.ok_or(eyre!("No message received"))?;
-                NetworkValue::from_network(Ok(r))
-            }
+            Ok(res) => res.ok_or(eyre!("No message received")),
             Err(_) => Err(eyre!(
                 "Timeout while waiting for message from {sender:?} in \
                  {:?}",

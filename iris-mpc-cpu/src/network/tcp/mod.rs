@@ -1,6 +1,6 @@
 use std::{cmp, time::Duration};
 
-use crate::execution::session::SessionId;
+use crate::{execution::session::SessionId, network::value::NetworkValue};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 mod data;
@@ -10,11 +10,10 @@ pub mod session;
 
 use data::*;
 
-type NetworkMsg = Vec<u8>;
 // session multiplexing over a socket requires a SessionId
-type OutboundMsg = (SessionId, NetworkMsg);
-type OutStream = UnboundedSender<NetworkMsg>;
-type InStream = UnboundedReceiver<NetworkMsg>;
+type OutboundMsg = (SessionId, NetworkValue);
+type OutStream = UnboundedSender<NetworkValue>;
+type InStream = UnboundedReceiver<NetworkValue>;
 
 #[derive(Default, Clone, Debug)]
 pub struct TcpConfig {
