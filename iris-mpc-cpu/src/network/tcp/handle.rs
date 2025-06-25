@@ -398,7 +398,7 @@ async fn handle_outbound_traffic(
         let _wakeup_time = Instant::now();
         buffered_msgs += 1;
         buf.extend_from_slice(&session_id.0.to_le_bytes());
-        msg.write_to_buf(&mut buf);
+        msg.serialize(&mut buf);
 
         let loop_start_time = Instant::now();
         while buffered_msgs < num_sessions {
@@ -406,7 +406,7 @@ async fn handle_outbound_traffic(
                 Ok((session_id, msg)) => {
                     buffered_msgs += 1;
                     buf.extend_from_slice(&session_id.0.to_le_bytes());
-                    msg.write_to_buf(&mut buf);
+                    msg.serialize(&mut buf);
                     if buf.len() >= BUFFER_CAPACITY {
                         break;
                     }
@@ -509,7 +509,7 @@ async fn handle_inbound_traffic(
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            let nv = match NetworkValue::from_network(&buf[..total_len]) {
+            let nv = match NetworkValue::deserialize(&buf[..total_len]) {
                 Ok(m) => m,
                 Err(e) => {
                     tracing::error!("failed to deserialize message: {e}");

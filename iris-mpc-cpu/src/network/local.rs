@@ -91,7 +91,7 @@ impl Networking for LocalNetworking {
             .clone();
 
         let received_value = rx.recv().await?;
-        NetworkValue::from_network(&received_value.value)
+        NetworkValue::deserialize(&received_value.value)
     }
 }
 

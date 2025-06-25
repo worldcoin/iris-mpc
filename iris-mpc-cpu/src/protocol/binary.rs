@@ -313,7 +313,7 @@ where
 
     // Receive m0 or m1 from Receiver
     let m0_or_m1 = match network.receive_next().await {
-        Ok(nv) => T::vec_from_network(nv)?,
+        Ok(nv) => T::into_vec(nv)?,
         Err(e) => return Err(eyre!("Could not deserialize properly in bit inject: {e}")),
     };
 
@@ -336,8 +336,8 @@ where
     let network = &mut session.network_session;
 
     let (m0, m1, wc) = {
-        let m0_and_m1 = match network.receive_next().await? {
-            NetworkValue::NetworkVec(v) => v,
+        let m0_and_m1 = match network.receive_next().await {
+            Ok(v) => NetworkValue::vec_from_network(v)?,
             _ => bail!("Cannot deserialize m0 and m1 into vec"),
         };
         if m0_and_m1.len() != 2 {
@@ -353,7 +353,7 @@ where
             .ok_or(eyre!("Cannot deserialize m0 and m1 into tuple"))?;
 
         let wc = match network.receive_prev().await {
-            Ok(nv) => T::vec_from_network(nv),
+            Ok(v) => T::into_vec(v),
             Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         };
         (m0, m1, wc)
@@ -438,7 +438,7 @@ where
     // Send m0 and m1 to Receiver
     session
         .network_session
-        .send_prev(NetworkValue::NetworkVec(m0_and_m1))
+        .send_prev(NetworkValue::vec_to_network(m0_and_m1))
         .await?;
     Ok(shares)
 }
