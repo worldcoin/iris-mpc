@@ -242,7 +242,7 @@ impl Handle {
                                     Ok(connect_plan)
                                 },
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = Self::log_error(format!(
+                                    let msg = Self::log_warning(format!(
                                         "HawkActor does not support deletion of identities: modification: {:?}",
                                         modification
                                     ));

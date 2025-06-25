@@ -169,7 +169,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
     log_info(String::from("Indexation complete."));
 
-    // Phase 3: perform post processing tasks.
+    // Phase 3: snapshot.
     if !args.perform_snapshot {
         log_info(String::from("Snapshot skipped ... as requested."));
     } else {
@@ -321,8 +321,6 @@ async fn exec_setup(
         bail!("Shutdown")
         // return Ok(());
     }
-
-    // create copy of iris data
 
     // Set in memory Iris stores.
     let imem_iris_stores: BothEyes<_> = [
@@ -819,6 +817,7 @@ async fn get_results_thread(
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
 
                     let mut graph_tx = graph_store.tx().await?;
+                    // Persist batch of Iris's to the HNSW graph store.
                     hnsw_iris_store
                         .insert_copy_iris(
                             &mut graph_tx.tx,
@@ -855,6 +854,8 @@ async fn get_results_thread(
                     ));
 
                     let mut graph_tx = graph_store.tx().await?;
+
+                    // Persist modification to the HNSW graph store.
                     hnsw_iris_store
                         .insert_copy_modification(&mut graph_tx.tx, &modification)
                         .await?;
