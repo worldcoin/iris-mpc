@@ -863,7 +863,7 @@ pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Re
             .iter()
             .map(|x| NetworkValue::RingElementBit(x.b))
             .collect::<Vec<_>>();
-        NetworkValue::NetworkVec(bits)
+        NetworkValue::vec_to_network(bits)
     };
 
     network.send_next(message).await?;
@@ -878,8 +878,8 @@ pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Re
                 _ => Err(eyre!("Wrong value type is received in open_bin operation")),
             }
         } else {
-            match other_shares {
-                Ok(NetworkValue::NetworkVec(v)) => {
+            match NetworkValue::vec_from_network(other_shares) {
+                Ok(v) => {
                     if matches!(v[0], NetworkValue::RingElementBit(_)) {
                         Ok(v.into_iter()
                             .map(|x| match x {
@@ -892,7 +892,6 @@ pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Re
                     }
                 }
                 Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
-                _ => Err(eyre!("Wrong value type is received in open_bin operation")),
             }
         }
     }?;
