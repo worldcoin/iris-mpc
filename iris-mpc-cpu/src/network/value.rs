@@ -361,6 +361,7 @@ where
     fn new_network_element(element: RingElement<Self>) -> NetworkValue;
     fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue;
     fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>>;
+    fn vec_from_network(nv: NetworkValue) -> Result<Vec<RingElement<Self>>>;
 }
 
 macro_rules! impl_network_int {
@@ -372,6 +373,16 @@ macro_rules! impl_network_int {
             fn new_network_vec(v: Vec<RingElement<$t>>) -> NetworkValue {
                 NetworkValue::$vec(v)
             }
+            /*
+            // example implementation:
+             fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
+                match value {
+                    NetworkValue::VecRing16(x) => Ok(x),
+                    NetworkValue::RingElement16(x) => Ok(vec![x]),
+                    _ => Err(eyre!("Invalid conversion to Vec<RingElement<u16>>")),
+                }
+            }
+            */
             fn into_vec(val: NetworkValue) -> Result<Vec<RingElement<$t>>> {
                 match val {
                     NetworkValue::$vec(v) => Ok(v),
@@ -379,6 +390,15 @@ macro_rules! impl_network_int {
                     _ => Err(eyre!(
                         "Invalid conversion to Vec<RingElement<{}>>",
                         stringify!($t)
+                    )),
+                }
+            }
+            fn vec_from_network(nv: NetworkValue) -> Result<Vec<RingElement<$t>>> {
+                match nv {
+                    NetworkValue::$vec(v) => Ok(v),
+                    _ => Err(eyre!(
+                        "invalid network value in NetworkInt::vec_from_network: {}",
+                        nv.get_descriptor_byte()
                     )),
                 }
             }

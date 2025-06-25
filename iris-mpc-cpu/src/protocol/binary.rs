@@ -312,12 +312,10 @@ where
     network.send_next(T::new_network_vec(wc)).await?;
 
     // Receive m0 or m1 from Receiver
-    let m0_or_m1 = {
-        match network.receive_next().await {
-            Ok(v) => T::into_vec(v),
-            Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
-        }
-    }?;
+    let m0_or_m1 = match network.receive_next().await {
+        Ok(nv) => T::vec_from_network(nv)?,
+        Err(e) => return Err(eyre!("Could not deserialize properly in bit inject: {e}")),
+    };
 
     // Set the first share to the value of m0 or m1
     for (s, mb) in shares.iter_mut().zip(m0_or_m1) {
@@ -355,7 +353,7 @@ where
             .ok_or(eyre!("Cannot deserialize m0 and m1 into tuple"))?;
 
         let wc = match network.receive_prev().await {
-            Ok(v) => T::into_vec(v),
+            Ok(nv) => T::vec_from_network(nv),
             Err(e) => Err(eyre!("Could not deserialize properly in bit inject: {e}")),
         };
         (m0, m1, wc)
