@@ -207,8 +207,8 @@ mod tests {
 
     async fn all_parties_talk(identities: Vec<Identity>, sessions: Vec<TcpSession>) {
         let mut tasks = JoinSet::new();
-        let message_to_next = get_prf().to_network();
-        let message_to_prev = get_prf().to_network();
+        let message_to_next = get_prf();
+        let message_to_prev = get_prf();
 
         for (player_id, session) in sessions.into_iter().enumerate() {
             let role = Role::new(player_id);
@@ -282,14 +282,13 @@ mod tests {
 
                 // Send a message from the first party to the second party
                 let alice_prf = get_prf();
-                let alice_msg = alice_prf.to_network();
+                let alice_msg = alice_prf.clone();
 
                 let task1 = tokio::spawn(async move {
                     alice.send(alice_msg, &"bob".into()).await.unwrap();
                 });
                 let task2 = tokio::spawn(async move {
-                    let received_message = bob.receive(&"alice".into()).await;
-                    let rx_msg = NetworkValue::from_network(received_message).unwrap();
+                    let rx_msg = bob.receive(&"alice".into()).await.unwrap();
                     assert_eq!(alice_prf, rx_msg);
                 });
                 let _ = tokio::try_join!(task1, task2).unwrap();

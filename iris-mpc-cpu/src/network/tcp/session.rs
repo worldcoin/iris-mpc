@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use super::{InStream, OutboundMsg};
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::{tcp::TcpConfig, Networking},
+    network::{tcp::TcpConfig, value::NetworkValue, Networking},
 };
 use eyre::{eyre, Result};
 use tokio::{sync::mpsc::UnboundedSender, time::timeout};
@@ -40,7 +40,9 @@ impl TcpSession {
 
 #[async_trait]
 impl Networking for TcpSession {
-    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()> {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+        // todo sw: change the channels to not need a Vec<u8>
+        let value = value.to_network();
         let outgoing_stream = self.tx.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
@@ -65,13 +67,16 @@ impl Networking for TcpSession {
         Ok(())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
         let incoming_stream = self.rx.get_mut(sender).ok_or(eyre!(
             "Incoming stream for {sender:?} in session {:?} not found",
             self.session_id
         ))?;
         match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
-            Ok(res) => res.ok_or(eyre!("No message received")),
+            Ok(res) => {
+                let r = res.ok_or(eyre!("No message received"))?;
+                NetworkValue::from_network(Ok(r))
+            }
             Err(_) => Err(eyre!(
                 "Timeout while waiting for message from {sender:?} in \
                  {:?}",

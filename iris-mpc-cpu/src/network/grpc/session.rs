@@ -1,6 +1,6 @@
 use crate::{
     execution::player::Identity,
-    network::{Networking, SessionId},
+    network::{value::NetworkValue, Networking, SessionId},
     proto_generated::party_node::SendRequest,
 };
 use eyre::{eyre, Result};
@@ -22,7 +22,8 @@ pub struct GrpcSession {
 
 #[async_trait]
 impl Networking for GrpcSession {
-    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()> {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+        let value = value.to_network();
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in {:?} not found",
             self.session_id
@@ -51,13 +52,15 @@ impl Networking for GrpcSession {
         Ok(())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
         let incoming_stream = self.in_streams.get_mut(sender).ok_or(eyre!(
             "Incoming stream for {sender:?} in {:?} not found",
             self.session_id
         ))?;
         match timeout(self.config.timeout_duration, incoming_stream.recv()).await {
-            Ok(res) => res.ok_or(eyre!("No message received")).map(|msg| msg.data),
+            Ok(res) => res
+                .ok_or(eyre!("No message received"))
+                .and_then(|msg| NetworkValue::from_network(Ok(msg.data))),
             Err(_) => Err(eyre!(
                 "{:?}: Timeout while waiting for message from {sender:?} in \
                  {:?}",

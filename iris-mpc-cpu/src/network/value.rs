@@ -18,6 +18,7 @@ pub enum NetworkValue {
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
     StateChecksum(StateChecksum),
+    NetworkVec(Vec<Self>),
 }
 
 #[repr(u8)]
@@ -87,6 +88,7 @@ impl NetworkValue {
             NetworkValue::VecRing32(_) => DescriptorByte::VecRing32,
             NetworkValue::VecRing64(_) => DescriptorByte::VecRing64,
             NetworkValue::StateChecksum(_) => DescriptorByte::StateChecksum,
+            NetworkValue::NetworkVec(_) => DescriptorByte::NetworkVec,
         };
         descriptor_byte.into()
     }
@@ -138,18 +140,31 @@ impl NetworkValue {
                 res.extend_from_slice(&u64::to_le_bytes(checksums.irises));
                 res.extend_from_slice(&u64::to_le_bytes(checksums.graph));
             }
+            NetworkValue::NetworkVec(_v) => unreachable!(),
         }
     }
 
     pub fn to_network(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(self.byte_len());
-        self.to_network_inner(&mut res);
-        res
+        match &self {
+            NetworkValue::NetworkVec(v) => Self::vec_to_network(v),
+            _ => {
+                let mut res = Vec::with_capacity(self.byte_len());
+                self.to_network_inner(&mut res);
+                res
+            }
+        }
     }
 
     pub fn from_network(serialized: Result<Vec<u8>>) -> Result<Self> {
         let v = serialized?;
-        Self::from_network_slice(&v)
+        if v.first()
+            .map(|byte| *byte == DescriptorByte::NetworkVec as u8)
+            .unwrap_or_default()
+        {
+            Self::vec_from_network(Ok(v)).map(NetworkValue::NetworkVec)
+        } else {
+            Self::from_network_slice(&v)
+        }
     }
 
     fn from_network_slice(serialized: &[u8]) -> Result<Self> {

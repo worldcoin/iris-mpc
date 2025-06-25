@@ -1,4 +1,7 @@
-use crate::{execution::player::Identity, network::Networking};
+use crate::{
+    execution::player::Identity,
+    network::{value::NetworkValue, Networking},
+};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use eyre::{eyre, Result};
@@ -56,7 +59,8 @@ pub struct LocalNetworking {
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(&self, val: Vec<u8>, receiver: &Identity) -> Result<()> {
+    async fn send(&self, val: NetworkValue, receiver: &Identity) -> Result<()> {
+        let val = val.to_network();
         let (tx, _) = self
             .p2p_channels
             .get(&(self.owner.clone(), receiver.clone()))
@@ -73,7 +77,7 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))
@@ -87,7 +91,7 @@ impl Networking for LocalNetworking {
             .clone();
 
         let received_value = rx.recv().await?;
-        Ok(received_value.value)
+        NetworkValue::from_network(Ok(received_value.value))
     }
 }
 
@@ -106,14 +110,11 @@ mod tests {
 
         let task1 = tokio::spawn(async move {
             let recv = bob.receive(&"alice".into()).await;
-            assert_eq!(
-                NetworkValue::from_network(recv).unwrap(),
-                NetworkValue::RingElement16(RingElement(777))
-            );
+            assert_eq!(recv.unwrap(), NetworkValue::RingElement16(RingElement(777)));
         });
         let task2 = tokio::spawn(async move {
             let value = NetworkValue::RingElement16(RingElement(777));
-            alice.send(value.to_network(), &"bob".into()).await
+            alice.send(value, &"bob".into()).await
         });
 
         let _ = tokio::try_join!(task1, task2).unwrap();
