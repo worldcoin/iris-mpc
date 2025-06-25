@@ -3,6 +3,18 @@ use itertools::izip;
 
 use crate::hnsw::VectorStore;
 
+/// Internally represents the sorting state of a `PartialQuickSort` struct.
+enum SortState {
+    /// Sort interval is fully sorted
+    Sorted,
+
+    /// Sort interval is partially sorted, with specified number of sorted entries
+    PartiallySorted,
+
+    /// Sort interval is fully unsorted
+    Unsorted,
+}
+
 /// Represents a subcall of an ongoing execution of a quick-sort algorithm
 /// over a partially sorted list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,18 +27,6 @@ pub struct PartialQuickSort {
 
     /// Length of sort interval suffix which is a priori unsorted
     pub unsorted_len: usize,
-}
-
-/// Internally represents the sorting state of a `PartialQuickSort` struct.
-enum SortState {
-    /// Sort interval is fully sorted
-    Sorted,
-
-    /// Sort interval is partially sorted, with specified number of sorted entries
-    PartiallySorted,
-
-    /// Sort interval is fully unsorted
-    Unsorted,
 }
 
 impl PartialQuickSort {
@@ -181,49 +181,6 @@ impl PartialQuickSort {
     }
 }
 
-/// Apply partial quicksort to a list of `PartialOrd` elements which has
-/// sorted prefix of length `sorted_len`, by recursive application.
-///
-/// Function is meant primarily for testing use.
-pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
-    list: &mut [T],
-    sorted_len: usize,
-) -> Result<()> {
-    let mut buffer: Vec<_> = list.into();
-    let initial_sort = PartialQuickSort {
-        left: 0,
-        sorted_len,
-        unsorted_len: list.len() - sorted_len,
-    };
-
-    fn apply_quicksort_recursive_interior<T: PartialOrd + Clone>(
-        list: &mut [T],
-        buffer: &mut [T],
-        mut sort: PartialQuickSort,
-    ) -> Result<()> {
-        if !sort.is_finished() {
-            let (left, right) = (sort.left, sort.right());
-
-            let cmps = sort.next_cmps()?;
-
-            let cmp_results: Vec<_> = cmps
-                .into_iter()
-                .map(|(idx1, idx2)| list[idx1] < list[idx2])
-                .collect();
-
-            let next_sort = sort.step(&cmp_results, list, buffer)?;
-            list[left..right].clone_from_slice(&buffer[left..right]);
-
-            apply_quicksort_recursive_interior(list, buffer, sort)?;
-            apply_quicksort_recursive_interior(list, buffer, next_sort)?;
-        }
-
-        Ok(())
-    }
-
-    apply_quicksort_recursive_interior(list, &mut buffer, initial_sort)
-}
-
 /// Apply the parallel quicksort algorithm to the given list using `store` as
 /// the `VectorStore` for doing comparisons.  `buffer` is a mutable slice used
 /// for processing which must be at least as large as `list`, and `sorted_len`
@@ -323,6 +280,49 @@ pub async fn apply_quicksort<V: VectorStore>(
     }
 
     Ok(())
+}
+
+/// Apply partial quicksort to a list of `PartialOrd` elements which has
+/// sorted prefix of length `sorted_len`, by recursive application.
+///
+/// Function is meant primarily for testing use.
+pub fn apply_quicksort_recursive<T: PartialOrd + Clone>(
+    list: &mut [T],
+    sorted_len: usize,
+) -> Result<()> {
+    let mut buffer: Vec<_> = list.into();
+    let initial_sort = PartialQuickSort {
+        left: 0,
+        sorted_len,
+        unsorted_len: list.len() - sorted_len,
+    };
+
+    fn apply_quicksort_recursive_interior<T: PartialOrd + Clone>(
+        list: &mut [T],
+        buffer: &mut [T],
+        mut sort: PartialQuickSort,
+    ) -> Result<()> {
+        if !sort.is_finished() {
+            let (left, right) = (sort.left, sort.right());
+
+            let cmps = sort.next_cmps()?;
+
+            let cmp_results: Vec<_> = cmps
+                .into_iter()
+                .map(|(idx1, idx2)| list[idx1] < list[idx2])
+                .collect();
+
+            let next_sort = sort.step(&cmp_results, list, buffer)?;
+            list[left..right].clone_from_slice(&buffer[left..right]);
+
+            apply_quicksort_recursive_interior(list, buffer, sort)?;
+            apply_quicksort_recursive_interior(list, buffer, next_sort)?;
+        }
+
+        Ok(())
+    }
+
+    apply_quicksort_recursive_interior(list, &mut buffer, initial_sort)
 }
 
 #[cfg(test)]
