@@ -870,11 +870,13 @@ pub(crate) async fn open_bin(session: &mut Session, shares: &[Share<Bit>]) -> Re
 
     // Receiving `b` from previous party
     let b_from_previous = {
-        let other_shares = network.receive_prev().await;
+        let other_shares = network
+            .receive_prev()
+            .await
+            .map_err(|e| eyre!("Error in receiving in open_bin operation: {}", e))?;
         if shares.len() == 1 {
             match other_shares {
-                Ok(NetworkValue::RingElementBit(message)) => Ok(vec![message]),
-                Err(e) => Err(eyre!("Error in receiving in open_bin operation: {}", e)),
+                NetworkValue::RingElementBit(message) => Ok(vec![message]),
                 _ => Err(eyre!("Wrong value type is received in open_bin operation")),
             }
         } else {
