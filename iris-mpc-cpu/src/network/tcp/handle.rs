@@ -509,7 +509,13 @@ async fn handle_inbound_traffic(
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            let nv = NetworkValue::from_network(&buf[..total_len]).unwrap();
+            let nv = match NetworkValue::from_network(&buf[..total_len]) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("failed to deserialize message: {e}");
+                    continue;
+                }
+            };
             if ch.send(nv).is_err() {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
