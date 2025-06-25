@@ -1,6 +1,6 @@
 use eyre::Result;
 
-mod shared;
+mod utils;
 
 /// HNSW-100: Basic genesis test.
 ///   against:
@@ -13,14 +13,16 @@ mod shared;
 #[tokio::test]
 async fn test_100() -> Result<()> {
     // Generic setup.
-    shared::setup();
+    utils::setup();
 
-    // Set inputs.
-    let net_inputs = shared::factory::get_net_inputs();
-    let run_info = shared::types::TestRunInfo::new(net_inputs);
+    // Set run network inputs.
+    let net_inputs = utils::get_net_inputs();
+
+    // Set run context info.
+    let run_info = utils::get_test_info(net_inputs);
 
     // Execute tests.
-    shared::runner::exec_test(run_info).await;
+    utils::runner::exec_test(run_info).await;
 
     // Test code here
     assert!(true);
