@@ -184,7 +184,7 @@ impl PartialQuickSort {
 /// for processing which must be at least as large as `list`, and `sorted_len`
 /// gives the number of elements at the start of `list` which are known to be
 /// in sorted order already.
-pub async fn apply_quick_sort<V: VectorStore>(
+pub async fn apply_quicksort<V: VectorStore>(
     store: &mut V,
     list: &mut [(V::VectorRef, V::DistanceRef)],
     buffer: &mut [(V::VectorRef, V::DistanceRef)],
@@ -281,7 +281,7 @@ pub async fn apply_quick_sort<V: VectorStore>(
 
     if iterations % 2 == 1 {
         // If an odd number of swaps between src and dst, then copy src to dst
-        // one final time to place the sorted results into the original `list`.
+        // one final time to put the sorted results into the original `list`.
         dst.clone_from_slice(src);
     }
 
