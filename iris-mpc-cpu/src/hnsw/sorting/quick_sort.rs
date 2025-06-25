@@ -1,4 +1,4 @@
-use eyre::{bail, Result};
+use eyre::{bail, OptionExt, Result};
 use itertools::izip;
 
 use crate::hnsw::VectorStore;
@@ -177,6 +177,115 @@ impl PartialQuickSort {
     pub fn pivot_idx(&self) -> usize {
         self.left + self.sorted_len / 2
     }
+}
+
+/// Apply the parallel quicksort algorithm to the given list using `store` as
+/// the `VectorStore` for doing comparisons.  `buffer` is a mutable slice used
+/// for processing which must be at least as large as `list`, and `sorted_len`
+/// gives the number of elements at the start of `list` which are known to be
+/// in sorted order already.
+pub async fn apply_quick_sort<V: VectorStore>(
+    store: &mut V,
+    list: &mut [(V::VectorRef, V::DistanceRef)],
+    buffer: &mut [(V::VectorRef, V::DistanceRef)],
+    sorted_len: usize,
+) -> Result<()> {
+    let len = list.len();
+    if buffer.len() < len {
+        bail!("Buffer is too small for the list being sorted")
+    }
+    if len == 0 {
+        return Ok(());
+    }
+
+    #[derive(Clone)]
+    struct LocalSort {
+        // Base partial quicksort
+        pub sort: PartialQuickSort,
+
+        // Index range for pending comparison results
+        pub cmp_results_range: Option<(usize, usize)>,
+    }
+
+    let top_level_sort = PartialQuickSort {
+        left: 0,
+        sorted_len,
+        unsorted_len: len - sorted_len,
+    };
+    if top_level_sort.is_finished() {
+        return Ok(());
+    }
+
+    let mut sorts: Vec<LocalSort> = Vec::with_capacity(len);
+    sorts.push(LocalSort {
+        sort: top_level_sort,
+        cmp_results_range: None,
+    });
+
+    // Main processing loop
+    let mut cmps: Vec<(usize, usize)> = Vec::with_capacity(len);
+
+    // Src represents the current state of the sort, dst is the current buffer space
+    let mut src = list;
+    let mut dst = buffer;
+
+    // Keep track of how many times src and dst are swapped
+    let mut iterations: u32 = 0;
+
+    while !sorts.is_empty() {
+        // Collect comparisons
+        for LocalSort {
+            sort,
+            cmp_results_range,
+        } in sorts.iter_mut()
+        {
+            let local_cmps = sort.next_cmps()?;
+            *cmp_results_range = Some((cmps.len(), cmps.len() + local_cmps.len()));
+            cmps.extend(local_cmps);
+        }
+
+        // Collect distances and evaluate comparisons
+        let distances: Vec<_> = cmps
+            .iter()
+            .filter_map(
+                |(idx1, idx2): &(usize, usize)| match (src.get(*idx1), src.get(*idx2)) {
+                    (Some((_, d1)), Some((_, d2))) => Some((d1.clone(), d2.clone())),
+                    _ => None,
+                },
+            )
+            .collect();
+        let cmp_results = store.less_than_batch(&distances).await?;
+
+        let mut new_sorts = Vec::with_capacity(sorts.len());
+        for LocalSort {
+            sort,
+            cmp_results_range,
+        } in sorts.iter_mut()
+        {
+            let (local_cmps_left, local_cmps_right) = cmp_results_range
+                .take()
+                .ok_or_eyre("Unable to find expected local comparisons range")?;
+            let new_sort = sort.step(&cmp_results[local_cmps_left..local_cmps_right], src, dst)?;
+            new_sorts.push(new_sort);
+        }
+        sorts.extend(new_sorts.into_iter().map(|sort| LocalSort {
+            sort,
+            cmp_results_range: None,
+        }));
+
+        std::mem::swap(&mut src, &mut dst);
+        iterations += 1;
+
+        sorts.retain(|s| !s.sort.is_finished());
+    }
+
+    if iterations % 2 == 1 {
+        // If an odd number of swaps between src and dst, then copy src to dst
+        // one final time to place the sorted results into the original `list`.
+        dst.clone_from_slice(src);
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
