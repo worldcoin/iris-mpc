@@ -5,7 +5,7 @@
 
 use crate::hnsw::{
     sorting::{
-        batcher::partial_batcher_network, binary_search::BinarySearch, quick_sort::apply_quicksort,
+        batcher::partial_batcher_network, binary_search::BinarySearch, quicksort::apply_quicksort,
         swap_network::apply_swap_network,
     },
     VectorStore,
