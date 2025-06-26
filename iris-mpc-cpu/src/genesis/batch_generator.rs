@@ -89,13 +89,6 @@ impl BatchGenerator {
         batch_size: BatchSize,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
-        assert!(
-            end_id > start_id,
-            "Invalid indexation range: {}..{}.",
-            start_id,
-            end_id
-        );
-
         let range = start_id..=end_id;
 
         Self {

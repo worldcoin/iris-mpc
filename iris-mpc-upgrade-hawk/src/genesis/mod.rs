@@ -489,6 +489,13 @@ async fn exec_indexation(
         _ => BatchSize::new_static(ctx.args.batch_size),
     };
 
+    if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
+        log_warn(format!(
+            "Last indexed id {} is greater than max indexation id {}. \
+                 No indexation will be performed.",
+            ctx.last_indexed_id, ctx.args.max_indexation_id
+        ));
+    }
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
@@ -743,7 +750,10 @@ async fn get_service_clients(
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
-            log_info(format!("Creating new iris store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new iris store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
                     .await?;
@@ -765,7 +775,10 @@ async fn get_service_clients(
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-            log_info(format!("Creating new graph store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new graph store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;

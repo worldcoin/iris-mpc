@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 set -e
 
+# Arg :: Node ID :: MPC node ordinal identifier.
 NODE_ID="$1"
 if [ -z "$NODE_ID" ]; then
   echo "Usage: run-server.sh <node_id>"
   exit 1
 fi
 
+# Arg :: Binary :: Binary to run [standard | genesis].
+BINARY="$2"
+if [ -z "$BINARY" ]; then
+  echo "Usage: run-server-docker.sh <node_id> <binary>"
+  exit 1
+fi
+
+
 INIT_SERVERS=false
-if [ "$2" == "--init-servers" ]; then
+if [ "$3" == "--init-servers" ]; then
   INIT_SERVERS=true
 fi
 
@@ -31,4 +40,12 @@ fi
 # Set the stack size to 100MB to receive large messages.
 export RUST_MIN_STACK=104857600
 
-cargo run --bin iris-mpc-hawk
+
+if [ "$BINARY" == "genesis" ]; then
+    cargo run --bin iris-mpc-hawk-genesis -- --max-height "${GENESIS_MAX_HEIGHT}" --perform-snapshot=false
+else
+    cargo run --bin iris-mpc-hawk
+fi
+
+
+
