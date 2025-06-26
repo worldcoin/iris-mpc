@@ -1,4 +1,5 @@
 use crate::shares::{self, bit::Bit, ring_impl::RingElement, IntRing2k};
+use bytes::BytesMut;
 use eyre::{bail, eyre, Result};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::mem::size_of;
@@ -18,6 +19,8 @@ pub enum NetworkValue {
     VecRing32(Vec<RingElement<u32>>),
     VecRing64(Vec<RingElement<u64>>),
     StateChecksum(StateChecksum),
+    // outside of this module, use vec_to_network() and vec_from_network() instead of accessing this variant directly.
+    NetworkVec(Vec<Self>),
 }
 
 #[repr(u8)]
@@ -87,11 +90,12 @@ impl NetworkValue {
             NetworkValue::VecRing32(_) => DescriptorByte::VecRing32,
             NetworkValue::VecRing64(_) => DescriptorByte::VecRing64,
             NetworkValue::StateChecksum(_) => DescriptorByte::StateChecksum,
+            NetworkValue::NetworkVec(_) => DescriptorByte::NetworkVec,
         };
         descriptor_byte.into()
     }
 
-    fn byte_len(&self) -> usize {
+    pub fn byte_len(&self) -> usize {
         let db =
             DescriptorByte::try_from(self.get_descriptor_byte()).expect("invalid descriptor byte");
         let base_len = db.base_len();
@@ -100,12 +104,37 @@ impl NetworkValue {
             NetworkValue::VecRing16(v) => base_len + size_of::<u16>() * v.len(),
             NetworkValue::VecRing32(v) => base_len + size_of::<u32>() * v.len(),
             NetworkValue::VecRing64(v) => base_len + size_of::<u64>() * v.len(),
+            NetworkValue::NetworkVec(v) => base_len + v.iter().map(|x| x.byte_len()).sum::<usize>(),
             _ => base_len,
         }
     }
 
-    fn to_network_inner(&self, res: &mut Vec<u8>) {
-        res.push(self.get_descriptor_byte());
+    // serialize_internal() doesn't allow for NetworkValue::NetworkVec. a separate code path
+    // is used to handle that variant.
+    pub fn serialize(&self, res: &mut BytesMut) {
+        match &self {
+            NetworkValue::NetworkVec(v) => Self::serialize_vec(v, res),
+            _ => {
+                self.serialize_internal(res);
+            }
+        }
+    }
+
+    fn serialize_vec(values: &Vec<Self>, res: &mut BytesMut) {
+        let res_start = res.len();
+        res.extend_from_slice(&[DescriptorByte::NetworkVec.into()]);
+        // this is a placeholder
+        let len_idx = res.len();
+        res.extend_from_slice(&[0_u8; 4]);
+        for value in values {
+            value.serialize_internal(res);
+        }
+        let msg_len = res.len() - res_start;
+        res[len_idx..len_idx + 4].copy_from_slice(&((msg_len - 5) as u32).to_le_bytes());
+    }
+
+    fn serialize_internal(&self, res: &mut BytesMut) {
+        res.extend_from_slice(&[self.get_descriptor_byte()]);
 
         match self {
             NetworkValue::PrfKey(key) => res.extend_from_slice(key),
@@ -138,21 +167,71 @@ impl NetworkValue {
                 res.extend_from_slice(&u64::to_le_bytes(checksums.irises));
                 res.extend_from_slice(&u64::to_le_bytes(checksums.graph));
             }
+            NetworkValue::NetworkVec(_v) => unreachable!(),
         }
     }
 
-    pub fn to_network(&self) -> Vec<u8> {
-        let mut res = Vec::with_capacity(self.byte_len());
-        self.to_network_inner(&mut res);
-        res
+    pub fn deserialize(serialized: &[u8]) -> Result<Self> {
+        if serialized
+            .first()
+            .map(|byte| *byte == DescriptorByte::NetworkVec as u8)
+            .unwrap_or_default()
+        {
+            Self::deserialize_vec(serialized).map(NetworkValue::NetworkVec)
+        } else {
+            Self::deserialize_internal(serialized)
+        }
     }
 
-    pub fn from_network(serialized: Result<Vec<u8>>) -> Result<Self> {
-        let v = serialized?;
-        Self::from_network_slice(&v)
+    pub fn deserialize_vec(serialized: &[u8]) -> Result<Vec<Self>> {
+        if serialized.len() < 5 {
+            bail!("Can't parse vector length: buffer too short");
+        }
+        if serialized[0] != DescriptorByte::NetworkVec as u8 {
+            return Err(eyre!("called deserialize_vec() on invalid buffer"));
+        }
+        let payload_len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
+        if serialized.len() != 5 + payload_len {
+            bail!(
+                "NetworkVec length mismatch: {} vs expected {}",
+                serialized.len() - 5,
+                payload_len,
+            );
+        }
+
+        let mut res = Vec::new();
+        let mut idx = 5;
+        let end_idx = 5 + payload_len;
+
+        while idx < end_idx {
+            let descriptor_byte: DescriptorByte = serialized[idx].try_into()?;
+            let value_len = match descriptor_byte {
+                DescriptorByte::RingElementBit0 | DescriptorByte::RingElementBit1 => 1,
+                DescriptorByte::RingElement16 => 3,
+                DescriptorByte::RingElement32 => 5,
+                DescriptorByte::RingElement64 => 9,
+                DescriptorByte::VecRing16
+                | DescriptorByte::VecRing32
+                | DescriptorByte::VecRing64 => {
+                    if end_idx < idx + 5 {
+                        bail!("Invalid length for VecRing: can't parse vector length");
+                    }
+                    let len =
+                        u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[idx + 1..idx + 5])?)
+                            as usize;
+                    5 + len
+                }
+                _ => bail!("Invalid type for NetworkVec"),
+            };
+            res.push(NetworkValue::deserialize_internal(
+                &serialized[idx..idx + value_len],
+            )?);
+            idx += value_len;
+        }
+        Ok(res)
     }
 
-    fn from_network_slice(serialized: &[u8]) -> Result<Self> {
+    fn deserialize_internal(serialized: &[u8]) -> Result<Self> {
         if serialized.is_empty() {
             bail!("Empty serialized data");
         }
@@ -203,20 +282,20 @@ impl NetworkValue {
                 )))
             }
             DescriptorByte::VecRing16 => {
-                let res = get_vec_ring_elements::<u16, 2, _>(serialized, u16::from_le_bytes)?;
+                let res = deserialize_vec_ring::<u16, 2, _>(serialized, u16::from_le_bytes)?;
                 Ok(NetworkValue::VecRing16(res))
             }
             DescriptorByte::VecRing32 => {
-                let res = get_vec_ring_elements::<u32, 4, _>(serialized, u32::from_le_bytes)?;
+                let res = deserialize_vec_ring::<u32, 4, _>(serialized, u32::from_le_bytes)?;
                 Ok(NetworkValue::VecRing32(res))
             }
             DescriptorByte::VecRing64 => {
-                let res = get_vec_ring_elements::<u64, 8, _>(serialized, u64::from_le_bytes)?;
+                let res = deserialize_vec_ring::<u64, 8, _>(serialized, u64::from_le_bytes)?;
                 Ok(NetworkValue::VecRing64(res))
             }
             DescriptorByte::StateChecksum => {
                 let (a, b, c) = (1, 9, 17);
-                if serialized.len() != c {
+                if serialized.len() != 1 + size_of::<u64>() * 2 {
                     bail!("Invalid length for StateChecksum");
                 }
                 Ok(NetworkValue::StateChecksum(StateChecksum {
@@ -228,132 +307,30 @@ impl NetworkValue {
         }
     }
 
-    pub fn vec_to_network(values: &Vec<Self>) -> Vec<u8> {
-        // 4 extra bytes for the length of the vector, plus one for the descriptor byte.
-        let len = values.iter().map(|v| v.byte_len()).sum::<usize>() + 5;
-        let mut res = Vec::with_capacity(len);
-        res.extend_from_slice(&[DescriptorByte::NetworkVec.into()]);
-        // this is a placeholder
-        res.extend_from_slice(&[0_u8; 4]);
-        for value in values {
-            value.to_network_inner(&mut res);
-        }
-        let res_len = res.len();
-        res[1..5].copy_from_slice(&((res_len - 5) as u32).to_le_bytes());
-        res
+    // below are functions whose names have been preserved to not impact existing code.
+
+    pub fn to_network(&self) -> Vec<u8> {
+        let mut res = BytesMut::with_capacity(self.byte_len());
+        self.serialize(&mut res);
+        res.freeze().into()
     }
 
-    pub fn vec_from_network(serialized: Result<Vec<u8>>) -> Result<Vec<Self>> {
-        // note that the descriptor byte gets skipped here. (idx 0)
-        let serialized = serialized?;
-        if serialized.len() < 5 {
-            bail!("Can't parse vector length: buffer too short");
-        }
-        let payload_len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[1..5])?) as usize;
-        if serialized.len() != 5 + payload_len {
-            bail!(
-                "NetworkVec length mismatch: {} vs expected {}",
-                serialized.len() - 5,
-                payload_len,
-            );
-        }
-
-        let mut res = Vec::new();
-        let mut idx = 5;
-        let end_idx = 5 + payload_len;
-
-        while idx < end_idx {
-            let descriptor_byte: DescriptorByte = serialized[idx].try_into()?;
-            let value_len = match descriptor_byte {
-                DescriptorByte::PrfKey => 1 + PRF_KEY_SIZE,
-                DescriptorByte::RingElementBit0 | DescriptorByte::RingElementBit1 => 1,
-                DescriptorByte::RingElement16 => 3,
-                DescriptorByte::RingElement32 => 5,
-                DescriptorByte::RingElement64 => 9,
-                DescriptorByte::VecRing16
-                | DescriptorByte::VecRing32
-                | DescriptorByte::VecRing64 => get_vec_ring_len(idx, end_idx, &serialized)?,
-                _ => bail!("Invalid network value type"),
-            };
-            res.push(NetworkValue::from_network_slice(
-                &serialized[idx..idx + value_len],
-            )?);
-            idx += value_len;
-        }
-        Ok(res)
-    }
-}
-
-pub trait NetworkInt
-where
-    Self: IntRing2k,
-{
-    fn new_network_element(element: RingElement<Self>) -> NetworkValue;
-    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue;
-    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>>;
-}
-
-impl NetworkInt for u16 {
-    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
-        NetworkValue::RingElement16(element)
+    pub fn vec_to_network(v: Vec<Self>) -> Self {
+        Self::NetworkVec(v)
     }
 
-    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
-        NetworkValue::VecRing16(elements)
-    }
-
-    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
-        match value {
-            NetworkValue::VecRing16(x) => Ok(x),
-            NetworkValue::RingElement16(x) => Ok(vec![x]),
-            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u16>>")),
-        }
-    }
-}
-impl NetworkInt for u32 {
-    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
-        NetworkValue::RingElement32(element)
-    }
-
-    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
-        NetworkValue::VecRing32(elements)
-    }
-
-    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
-        match value {
-            NetworkValue::VecRing32(x) => Ok(x),
-            NetworkValue::RingElement32(x) => Ok(vec![x]),
-            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u32>>")),
-        }
-    }
-}
-impl NetworkInt for u64 {
-    fn new_network_element(element: RingElement<Self>) -> NetworkValue {
-        NetworkValue::RingElement64(element)
-    }
-
-    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue {
-        NetworkValue::VecRing64(elements)
-    }
-
-    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>> {
-        match value {
-            NetworkValue::VecRing64(x) => Ok(x),
-            NetworkValue::RingElement64(x) => Ok(vec![x]),
-            _ => Err(eyre!("Invalid conversion to Vec<RingElement<u64>>")),
+    pub fn vec_from_network(nv: Self) -> Result<Vec<Self>> {
+        match nv {
+            NetworkValue::NetworkVec(v) => Ok(v),
+            _ => Err(eyre!(
+                "expected NetworkVec but got {}",
+                nv.get_descriptor_byte()
+            )),
         }
     }
 }
 
-fn get_vec_ring_len(idx: usize, end_idx: usize, serialized: &[u8]) -> Result<usize> {
-    if end_idx < idx + 5 {
-        bail!("Invalid length for VecRing: can't parse vector length");
-    }
-    let len = u32::from_le_bytes(<[u8; 4]>::try_from(&serialized[idx + 1..idx + 5])?) as usize;
-    Ok(5 + len)
-}
-
-fn get_vec_ring_elements<T, const N: usize, F>(
+fn deserialize_vec_ring<T, const N: usize, F>(
     serialized: &[u8],
     from_bytes: F,
 ) -> Result<Vec<RingElement<T>>>
@@ -398,6 +375,42 @@ where
     Ok(res)
 }
 
+pub trait NetworkInt
+where
+    Self: IntRing2k,
+{
+    fn new_network_element(element: RingElement<Self>) -> NetworkValue;
+    fn new_network_vec(elements: Vec<RingElement<Self>>) -> NetworkValue;
+    fn into_vec(value: NetworkValue) -> Result<Vec<RingElement<Self>>>;
+}
+
+macro_rules! impl_network_int {
+    ($t:ty, $elem:ident, $vec:ident) => {
+        impl NetworkInt for $t {
+            fn new_network_element(e: RingElement<$t>) -> NetworkValue {
+                NetworkValue::$elem(e)
+            }
+            fn new_network_vec(v: Vec<RingElement<$t>>) -> NetworkValue {
+                NetworkValue::$vec(v)
+            }
+            fn into_vec(val: NetworkValue) -> Result<Vec<RingElement<$t>>> {
+                match val {
+                    NetworkValue::$elem(e) => Ok(vec![e]),
+                    NetworkValue::$vec(v) => Ok(v),
+                    _ => Err(eyre!(
+                        "Invalid conversion to Vec<RingElement<{}>>",
+                        stringify!($t)
+                    )),
+                }
+            }
+        }
+    };
+}
+
+impl_network_int!(u16, RingElement16, VecRing16);
+impl_network_int!(u32, RingElement32, VecRing32);
+impl_network_int!(u64, RingElement64, VecRing64);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,8 +422,10 @@ mod tests {
             .iter()
             .map(|v| NetworkValue::RingElement16(*v))
             .collect::<Vec<_>>();
-        let serialized = NetworkValue::vec_to_network(&network_values);
-        let result_vec = NetworkValue::vec_from_network(Ok(serialized))?;
+        let mut bm = BytesMut::new();
+        NetworkValue::NetworkVec(network_values.clone()).serialize(&mut bm);
+        let serialized = bm.freeze().to_vec();
+        let result_vec = NetworkValue::deserialize_vec(&serialized)?;
         assert_eq!(network_values, result_vec);
 
         Ok(())
@@ -419,7 +434,7 @@ mod tests {
     /// Test from_network with empty data
     #[test]
     fn test_from_network_empty() -> Result<()> {
-        let result = NetworkValue::from_network(Ok(vec![]));
+        let result = NetworkValue::deserialize(&[]);
         assert_eq!(result.unwrap_err().to_string(), "Empty serialized data");
         Ok(())
     }
