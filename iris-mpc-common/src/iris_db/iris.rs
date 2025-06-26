@@ -117,16 +117,14 @@ impl IrisCodeArray {
 
     pub fn rotate_left(&mut self, by: usize) {
         let mut bits = self.bits().collect::<Vec<_>>();
-        bits
-            .chunks_exact_mut(Self::CODE_COLS * 4)
+        bits.chunks_exact_mut(Self::CODE_COLS * 4)
             .for_each(|chunk| chunk.rotate_left(by * 4));
         *self = IrisCodeArray::from_bits(&bits);
     }
 
     pub fn rotate_right(&mut self, by: usize) {
         let mut bits = self.bits().collect::<Vec<_>>();
-        bits
-            .chunks_exact_mut(Self::CODE_COLS * 4)
+        bits.chunks_exact_mut(Self::CODE_COLS * 4)
             .for_each(|chunk| chunk.rotate_right(by * 4));
         *self = IrisCodeArray::from_bits(&bits);
     }
@@ -221,7 +219,8 @@ impl IrisCode {
             for j in (0..LEN).step_by(pattern_size * 4) {
                 for k in 0..pattern_size {
                     for l in 0..4 {
-                        code.code.set_bit(i + j + k * 4 + l, code.code.get_bit(i + j + l));
+                        code.code
+                            .set_bit(i + j + k * 4 + l, code.code.get_bit(i + j + l));
                     }
                 }
             }
@@ -280,6 +279,10 @@ impl IrisCode {
 
     pub fn is_close(&self, other: &Self) -> bool {
         self.get_distance(other) < MATCH_THRESHOLD_RATIO
+    }
+
+    pub fn is_close_with_rotations(&self, other: &Self) -> bool {
+        self.get_min_distance(other) < MATCH_THRESHOLD_RATIO
     }
 
     pub fn get_similar_iris<R: Rng>(&self, rng: &mut R) -> IrisCode {
@@ -456,7 +459,10 @@ mod tests {
     fn test_rotations() {
         let mut rng = rand::thread_rng();
         let iris = IrisCode::random_rng(&mut rng);
-        assert_eq!(iris, iris.all_rotations()[IrisCode::ROTATIONS_PER_DIRECTION]);
+        assert_eq!(
+            iris,
+            iris.all_rotations()[IrisCode::ROTATIONS_PER_DIRECTION]
+        );
     }
 
     #[test]
@@ -469,19 +475,52 @@ mod tests {
         for (i, rotation) in rotations0.iter().enumerate() {
             assert_float_eq!(
                 rotation.get_distance(&iris0),
-                min((IrisCode::ROTATIONS_PER_DIRECTION as f64 - i as f64).abs() as usize, pattern_size) as f64 / (2.0 * pattern_size as f64),
+                min(
+                    (IrisCode::ROTATIONS_PER_DIRECTION as f64 - i as f64).abs() as usize,
+                    pattern_size
+                ) as f64
+                    / (2.0 * pattern_size as f64),
                 abs <= 0.05
             );
         }
     }
 
     #[test]
-    fn test_min_distance() {
+    fn test_min_distance_random() {
         let mut rng = rand::thread_rng();
         let iris0 = IrisCode::random_rng(&mut rng);
         let mut iris1 = iris0.get_similar_iris(&mut rng);
         iris1.rotate_left(1);
         assert_float_eq!(iris0.get_distance(&iris1), 0.5, abs <= 0.05);
         assert_float_eq!(iris0.get_min_distance(&iris1), 0.0, abs <= 0.05);
+    }
+
+    #[test]
+    fn test_min_distance_example_data() {
+        let lines = include_str!("../example-data/random_codes.txt")
+            .lines()
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+
+        let t1_code = IrisCodeArray::from_base64(lines[0]).unwrap();
+        let t1_mask = IrisCodeArray::from_base64(lines[1]).unwrap();
+        let t2_code = IrisCodeArray::from_base64(lines[2]).unwrap();
+        let t2_mask = IrisCodeArray::from_base64(lines[3]).unwrap();
+
+        let dist_0 = lines[4].parse::<f64>().unwrap();
+        let dist_15 = lines[5].parse::<f64>().unwrap();
+
+        let t1_iris = IrisCode {
+            code: t1_code,
+            mask: t1_mask,
+        };
+        let t2_iris = IrisCode {
+            code: t2_code,
+            mask: t2_mask,
+        };
+
+        assert_float_eq!(t1_iris.get_distance(&t2_iris), dist_0, abs <= 1e-6);
+        assert_float_eq!(t1_iris.get_min_distance(&t2_iris), dist_15, abs <= 1e-6);
     }
 }
