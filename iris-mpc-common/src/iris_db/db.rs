@@ -53,10 +53,21 @@ impl IrisDB {
         self.db.iter().any(|x| iris.is_close(x))
     }
 
+    pub fn iris_in_db_with_rotations(&self, iris: &IrisCode) -> bool {
+        self.db.iter().any(|x| iris.is_close_with_rotations(x))
+    }
+
     pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<f64> {
         self.db
             .iter()
             .map(|other_code| iris.get_distance(other_code))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn calculate_min_distances(&self, iris: &IrisCode) -> Vec<f64> {
+        self.db
+            .iter()
+            .map(|other_code| iris.get_min_distance(other_code))
             .collect::<Vec<_>>()
     }
 }

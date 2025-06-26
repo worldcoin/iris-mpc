@@ -1,4 +1,6 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
+use crate::helpers::statistics::BucketResult;
+use crate::iris_db::iris::MATCH_THRESHOLD_RATIO;
 use crate::job::{BatchMetadata, GaloisSharesBothSides};
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -1626,7 +1628,10 @@ pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
 
 pub struct SimpleAnonStatsTestGenerator {
     db_state: TestDb,
-    prepared_query_list: Vec<E2ETemplate>,
+    plain_distances_left: Vec<f64>,
+    plain_distances_right: Vec<f64>,
+    plain_distances_left_mirror: Vec<f64>,
+    plain_distances_right_mirror: Vec<f64>,
     bucket_statistic_parameters: Option<BucketStatisticParameters>,
     rng: StdRng,
 }
@@ -1640,17 +1645,25 @@ impl SimpleAnonStatsTestGenerator {
                 num_buckets: 10,
                 match_buffer_size: 1000,
             }),
-            prepared_query_list: Vec::new(),
+            plain_distances_left: vec![],
+            plain_distances_right: vec![],
+            plain_distances_left_mirror: vec![],
+            plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
         }
     }
 
     fn generate_query(&mut self) -> Option<(String, E2ETemplate, String)> {
         let request_id = Uuid::new_v4();
+        let db_index = self.rng.gen_range(0..self.db_state.len());
+        let template = E2ETemplate {
+            left: self.db_state.plain_dbs[0].db[db_index].get_similar_iris(&mut self.rng),
+            right: self.db_state.plain_dbs[1].db[db_index].get_similar_iris(&mut self.rng),
+        };
 
         Some((
             request_id.to_string(),
-            self.prepared_query_list.pop()?,
+            template,
             UNIQUENESS_MESSAGE_TYPE.to_string(),
         ))
     }
@@ -1672,6 +1685,31 @@ impl SimpleAnonStatsTestGenerator {
             }
             None => return Ok(None),
         };
+
+        self.plain_distances_left.extend(
+            self.db_state.plain_dbs[0]
+                .calculate_min_distances(&e2e_template.left)
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_right.extend(
+            self.db_state.plain_dbs[1]
+                .calculate_min_distances(&e2e_template.right)
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_left_mirror.extend(
+            self.db_state.plain_dbs[0]
+                .calculate_min_distances(&e2e_template.left.mirrored())
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_right_mirror.extend(
+            self.db_state.plain_dbs[1]
+                .calculate_min_distances(&e2e_template.right.mirrored())
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
 
         requests.insert(request_id.to_string(), e2e_template.clone());
 
@@ -1727,6 +1765,22 @@ impl SimpleAnonStatsTestGenerator {
         // In this simple test, we don't have any specific checks to perform
         // as we are not simulating any specific results.
         Ok(())
+    }
+
+    fn calculate_distance_buckets(distances: &[f64], num_buckets: usize) -> Vec<BucketResult> {
+        let mut buckets = vec![];
+        let bucket_size = MATCH_THRESHOLD_RATIO / num_buckets as f64;
+        for i in 1..num_buckets {
+            buckets.push(BucketResult {
+                hamming_distance_bucket: [i as f64 * bucket_size, (i + 1) as f64 * bucket_size],
+                count: 0,
+            });
+        }
+        for &distance in distances {
+            let bucket = (distance / bucket_size) as usize;
+            buckets[bucket].count += 1;
+        }
+        buckets
     }
 
     pub async fn run_n_batches(
@@ -1786,7 +1840,6 @@ impl SimpleAnonStatsTestGenerator {
                     assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
                         "Mirror orientation right statistics should have is_mirror_orientation = true");
 
-                    // TODO: calculate and check ground result of anonymized bucket statistics
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left,
                         bucket_statistic_parameters.num_gpus,
@@ -1799,6 +1852,34 @@ impl SimpleAnonStatsTestGenerator {
                         bucket_statistic_parameters.num_buckets,
                         bucket_statistic_parameters.match_buffer_size,
                     )?;
+
+                    if !anonymized_bucket_statistics_left.is_empty() {
+                        let plain_bucket_statistics_left = Self::calculate_distance_buckets(
+                            &self.plain_distances_left,
+                            bucket_statistic_parameters.num_buckets,
+                        );
+                        assert_eq!(
+                            plain_bucket_statistics_left,
+                            anonymized_bucket_statistics_left.buckets
+                        );
+
+                        self.plain_distances_left.clear();
+                    }
+
+                    if !anonymized_bucket_statistics_right.is_empty() {
+                        let plain_bucket_statistics_right = Self::calculate_distance_buckets(
+                            &self.plain_distances_right,
+                            bucket_statistic_parameters.num_buckets,
+                        );
+
+                        assert_eq!(
+                            plain_bucket_statistics_right,
+                            anonymized_bucket_statistics_right.buckets
+                        );
+
+                        self.plain_distances_right.clear();
+                    }
+
                     // Also check mirror orientation statistics
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left_mirror,
@@ -1812,6 +1893,33 @@ impl SimpleAnonStatsTestGenerator {
                         bucket_statistic_parameters.num_buckets,
                         bucket_statistic_parameters.match_buffer_size,
                     )?;
+
+                    if !anonymized_bucket_statistics_left_mirror.is_empty() {
+                        let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
+                            &self.plain_distances_left_mirror,
+                            bucket_statistic_parameters.num_buckets,
+                        );
+                        assert_eq!(
+                            plain_bucket_statistics_left_mirror,
+                            anonymized_bucket_statistics_left_mirror.buckets
+                        );
+
+                        self.plain_distances_left_mirror.clear();
+                    }
+
+                    if !anonymized_bucket_statistics_right_mirror.is_empty() {
+                        let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
+                            &self.plain_distances_right_mirror,
+                            bucket_statistic_parameters.num_buckets,
+                        );
+
+                        assert_eq!(
+                            plain_bucket_statistics_right_mirror,
+                            anonymized_bucket_statistics_right_mirror.buckets
+                        );
+
+                        self.plain_distances_right_mirror.clear();
+                    }
                 }
 
                 for (req_id, &was_match, &idx, matched_batch_req_ids) in izip!(
