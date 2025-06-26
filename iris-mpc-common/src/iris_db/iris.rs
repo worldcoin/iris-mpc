@@ -22,6 +22,7 @@ impl Default for IrisCodeArray {
 
 impl IrisCodeArray {
     pub const IRIS_CODE_SIZE: usize = 12800;
+    pub const CODE_COLS: usize = 200;
     pub const IRIS_CODE_SIZE_BYTES: usize = (Self::IRIS_CODE_SIZE + 7) / 8;
     pub const IRIS_CODE_SIZE_U64: usize = (Self::IRIS_CODE_SIZE + 63) / 64;
     pub const ZERO: Self = IrisCodeArray([0; Self::IRIS_CODE_SIZE_U64]);
@@ -43,6 +44,15 @@ impl IrisCodeArray {
             index: 0,
         }
     }
+
+    pub fn from_bits(bits: &[bool]) -> Self {
+        let mut code = IrisCodeArray::ZERO;
+        for (i, bit) in bits.iter().enumerate() {
+            code.set_bit(i, *bit);
+        }
+        code
+    }
+
     #[inline]
     pub fn get_bit(&self, i: usize) -> bool {
         let word = i / 64;
@@ -104,6 +114,22 @@ impl IrisCodeArray {
                 .collect::<Vec<_>>(),
         ))
     }
+
+    pub fn rotate_left(&mut self, by: usize) {
+        let mut bits = self.bits().collect::<Vec<_>>();
+        bits
+            .chunks_exact_mut(Self::CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_left(by * 4));
+        *self = IrisCodeArray::from_bits(&bits);
+    }
+
+    pub fn rotate_right(&mut self, by: usize) {
+        let mut bits = self.bits().collect::<Vec<_>>();
+        bits
+            .chunks_exact_mut(Self::CODE_COLS * 4)
+            .for_each(|chunk| chunk.rotate_right(by * 4));
+        *self = IrisCodeArray::from_bits(&bits);
+    }
 }
 
 impl std::ops::BitAndAssign for IrisCodeArray {
@@ -161,6 +187,8 @@ impl Default for IrisCode {
 
 impl IrisCode {
     pub const IRIS_CODE_SIZE: usize = IrisCodeArray::IRIS_CODE_SIZE;
+    pub const CODE_COLS: usize = 200;
+    pub const ROTATIONS_PER_DIRECTION: usize = 15;
 
     pub fn random_rng<R: Rng>(rng: &mut R) -> Self {
         let mut code = IrisCode {
@@ -180,11 +208,44 @@ impl IrisCode {
         code
     }
 
+    /// Generate a random iris code but with pattern_size number of equal bits in each column.
+    /// The purpose of this is to have iris codes that keep similarity across rotations.
+    /// The distance between one of those iris codes and its nth rotation (in each direction)
+    /// is (min(n, pattern_size) * 1/(2 * pattern_size)).
+    pub fn random_rng_with_pattern<R: Rng>(rng: &mut R, pattern_size: usize) -> Self {
+        assert!(pattern_size <= IrisCode::CODE_COLS);
+        assert!(IrisCode::CODE_COLS % pattern_size == 0);
+        const LEN: usize = IrisCode::CODE_COLS * 4;
+        let mut code = IrisCode::random_rng(rng);
+        for i in (0..Self::IRIS_CODE_SIZE).step_by(LEN) {
+            for j in (0..LEN).step_by(pattern_size * 4) {
+                for k in 0..pattern_size {
+                    for l in 0..4 {
+                        code.code.set_bit(i + j + k * 4 + l, code.code.get_bit(i + j + l));
+                    }
+                }
+            }
+        }
+        code
+    }
+
     /// Return the fractional Hamming distance between two iris codes, represented
     /// as a single floating point value.
     pub fn get_distance(&self, other: &Self) -> f64 {
         let (code_distance, combined_mask_len) = self.get_distance_fraction(other);
         code_distance as f64 / combined_mask_len as f64
+    }
+
+    /// Return the minimum distance of an iris code against all rotations of another iris code.
+    pub fn get_min_distance(&self, other: &Self) -> f64 {
+        let mut min_distance = f64::INFINITY;
+        for rotation in self.all_rotations() {
+            let distance = rotation.get_distance(other);
+            if distance < min_distance {
+                min_distance = distance;
+            }
+        }
+        min_distance
     }
 
     /// Return the fractional Hamming distance between two iris codes, represented
@@ -252,6 +313,27 @@ impl IrisCode {
         }
         mirrored
     }
+
+    fn rotate_right(&mut self, by: usize) {
+        self.code.rotate_right(by);
+        self.mask.rotate_right(by);
+    }
+
+    fn rotate_left(&mut self, by: usize) {
+        self.code.rotate_left(by);
+        self.mask.rotate_left(by);
+    }
+
+    pub fn all_rotations(&self) -> Vec<IrisCode> {
+        let mut code = self.clone();
+        code.rotate_left(Self::ROTATIONS_PER_DIRECTION + 1);
+        let mut rotations = Vec::new();
+        for _ in 0..Self::ROTATIONS_PER_DIRECTION * 2 + 1 {
+            code.rotate_right(1);
+            rotations.push(code.clone());
+        }
+        rotations
+    }
 }
 
 pub struct Bits<'a> {
@@ -293,6 +375,7 @@ mod tests {
     use eyre::Result;
     use eyre::{Context, ContextCompat};
     use float_eq::assert_float_eq;
+    use std::cmp::min;
     use std::collections::HashMap;
 
     #[test]
@@ -367,5 +450,38 @@ mod tests {
         }
 
         Ok((code, rotations))
+    }
+
+    #[test]
+    fn test_rotations() {
+        let mut rng = rand::thread_rng();
+        let iris = IrisCode::random_rng(&mut rng);
+        assert_eq!(iris, iris.all_rotations()[IrisCode::ROTATIONS_PER_DIRECTION]);
+    }
+
+    #[test]
+    fn test_random_rng_with_pattern() {
+        let mut rng = rand::thread_rng();
+        let pattern_size = 4;
+        let iris0 = IrisCode::random_rng_with_pattern(&mut rng, pattern_size);
+        let rotations0 = iris0.all_rotations();
+
+        for (i, rotation) in rotations0.iter().enumerate() {
+            assert_float_eq!(
+                rotation.get_distance(&iris0),
+                min((IrisCode::ROTATIONS_PER_DIRECTION as f64 - i as f64).abs() as usize, pattern_size) as f64 / (2.0 * pattern_size as f64),
+                abs <= 0.05
+            );
+        }
+    }
+
+    #[test]
+    fn test_min_distance() {
+        let mut rng = rand::thread_rng();
+        let iris0 = IrisCode::random_rng(&mut rng);
+        let mut iris1 = iris0.get_similar_iris(&mut rng);
+        iris1.rotate_left(1);
+        assert_float_eq!(iris0.get_distance(&iris1), 0.5, abs <= 0.05);
+        assert_float_eq!(iris0.get_min_distance(&iris1), 0.0, abs <= 0.05);
     }
 }
