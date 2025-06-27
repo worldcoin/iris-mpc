@@ -1780,7 +1780,7 @@ impl SimpleAnonStatsTestGenerator {
     fn calculate_distance_buckets(distances: &[f64], num_buckets: usize) -> Vec<BucketResult> {
         let mut buckets = vec![];
         let bucket_size = MATCH_THRESHOLD_RATIO / num_buckets as f64;
-        for i in 1..num_buckets {
+        for i in 0..num_buckets {
             buckets.push(BucketResult {
                 hamming_distance_bucket: [i as f64 * bucket_size, (i + 1) as f64 * bucket_size],
                 count: 0,
