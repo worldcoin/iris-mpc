@@ -11,7 +11,7 @@ mod e2e_anon_stats_test {
     use rand::random;
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 
     const DB_SIZE: usize = 8 * 1000;
     const DB_BUFFER: usize = 8 * 1000;
@@ -27,7 +27,11 @@ mod e2e_anon_stats_test {
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info".into()),
             )
-            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
+                    .with_target(true),
+            )
             .init();
     }
 
