@@ -1868,21 +1868,19 @@ impl ServerActor {
             let match_distances_buffers_masks_view =
                 shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
-            self.phase2_buckets
-                .compare_multiple_thresholds_while_aggregating_per_query(
-                    &match_distances_buffers_codes_view,
-                    &match_distances_buffers_masks_view,
-                    &indices_bitmaps,
-                    streams,
-                    &(1..=self.n_buckets)
-                        .map(|x: usize| {
-                            Circuits::translate_threshold_a(
-                                MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
-                            ) as u16
-                        })
-                        .collect::<Vec<_>>(),
-                    &mut self.buckets,
-                );
+            self.phase2_buckets.compare_multiple_thresholds(
+                &match_distances_buffers_codes_view,
+                &match_distances_buffers_masks_view,
+                streams,
+                &(1..=self.n_buckets)
+                    .map(|x: usize| {
+                        Circuits::translate_threshold_a(
+                            MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                        ) as u16
+                    })
+                    .collect::<Vec<_>>(),
+                &mut self.buckets,
+            );
 
             let buckets = self.phase2_buckets.open_buckets(&self.buckets, streams);
 

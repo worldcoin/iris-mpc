@@ -2638,7 +2638,7 @@ impl Circuits {
         }
 
         // prepare bitmasks for rotations
-        let max_rotations_needed = 0;
+        let max_rotations_needed = 30;
         // incoming bitmask looks like this for given query_indices:
         // [1,1,2,3,3,3,4,4,5] -> [1,0,1,1,0,0,1,0,1]
         // i.e., it is one if it is the first match for a given query index
@@ -2700,7 +2700,7 @@ impl Circuits {
             }
             Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, tmp_rotated);
             // finally, mask out all of the bits that are not the first match, where we have accumulated
-            //self.mask_bitvec(&mut bits, &bitmasks, 0, streams);
+            self.mask_bitvec(&mut bits, &bitmasks, 0, streams);
 
             // Expand the result buffer to the x buffer and perform arithmetic xor
             self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
