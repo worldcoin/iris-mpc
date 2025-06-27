@@ -1709,13 +1709,13 @@ impl SimpleAnonStatsTestGenerator {
         );
         self.plain_distances_left_mirror.extend(
             self.db_state.plain_dbs[0]
-                .calculate_min_distances(&e2e_template.left.mirrored())
+                .calculate_min_distances(&e2e_template.right.mirrored())
                 .into_iter()
                 .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
         );
         self.plain_distances_right_mirror.extend(
             self.db_state.plain_dbs[1]
-                .calculate_min_distances(&e2e_template.right.mirrored())
+                .calculate_min_distances(&e2e_template.left.mirrored())
                 .into_iter()
                 .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
         );
