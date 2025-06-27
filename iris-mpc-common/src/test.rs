@@ -1676,6 +1676,7 @@ impl SimpleAnonStatsTestGenerator {
     fn generate_query_batch(
         &mut self,
     ) -> Result<Option<([BatchQuery; 3], HashMap<String, E2ETemplate>)>> {
+        tracing::info!("Generating query batch for simple anonymized statistics test");
         let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
@@ -1866,6 +1867,7 @@ impl SimpleAnonStatsTestGenerator {
                 )?;
 
                 if !anonymized_bucket_statistics_left.is_empty() {
+                    tracing::info!("Got anonymized bucket statistics for left side, checking...");
                     let plain_bucket_statistics_left = Self::calculate_distance_buckets(
                         &self.plain_distances_left,
                         self.bucket_statistic_parameters.num_buckets,
@@ -1879,6 +1881,7 @@ impl SimpleAnonStatsTestGenerator {
                 }
 
                 if !anonymized_bucket_statistics_right.is_empty() {
+                    tracing::info!("Got anonymized bucket statistics for right side, checking...");
                     let plain_bucket_statistics_right = Self::calculate_distance_buckets(
                         &self.plain_distances_right,
                         self.bucket_statistic_parameters.num_buckets,
@@ -1907,6 +1910,9 @@ impl SimpleAnonStatsTestGenerator {
                 )?;
 
                 if !anonymized_bucket_statistics_left_mirror.is_empty() {
+                    tracing::info!(
+                        "Got anonymized bucket statistics for left side (mirror), checking..."
+                    );
                     let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
                         &self.plain_distances_left_mirror,
                         self.bucket_statistic_parameters.num_buckets,
@@ -1920,6 +1926,9 @@ impl SimpleAnonStatsTestGenerator {
                 }
 
                 if !anonymized_bucket_statistics_right_mirror.is_empty() {
+                    tracing::info!(
+                        "Got anonymized bucket statistics for right side (mirror), checking..."
+                    );
                     let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
                         &self.plain_distances_right_mirror,
                         self.bucket_statistic_parameters.num_buckets,

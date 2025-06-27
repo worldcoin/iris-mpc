@@ -204,6 +204,7 @@ mod e2e_anon_stats_test {
             MATCH_DISTANCES_BUFFER_SIZE,
         );
 
+        tracing::info!("Setup done, starting tests");
         test_case_generator
             .run_n_batches(NUM_BATCHES, [&mut handle0, &mut handle1, &mut handle2])
             .await?;
