@@ -1801,6 +1801,10 @@ impl SimpleAnonStatsTestGenerator {
 
             tracing::info!("checking results");
             let results = [&res0, &res1, &res2];
+            let mut clear_left = false;
+            let mut clear_right = false;
+            let mut clear_left_mirror = false;
+            let mut clear_right_mirror = false;
             for res in results.iter() {
                 let ServerJobResult {
                     request_ids: thread_request_ids,
@@ -1857,7 +1861,7 @@ impl SimpleAnonStatsTestGenerator {
                         anonymized_bucket_statistics_left.buckets
                     );
 
-                    self.plain_distances_left.clear();
+                    clear_left = true;
                 }
 
                 if !anonymized_bucket_statistics_right.is_empty() {
@@ -1872,7 +1876,7 @@ impl SimpleAnonStatsTestGenerator {
                         anonymized_bucket_statistics_right.buckets
                     );
 
-                    self.plain_distances_right.clear();
+                    clear_right = true;
                 }
 
                 // Also check mirror orientation statistics
@@ -1902,7 +1906,7 @@ impl SimpleAnonStatsTestGenerator {
                         anonymized_bucket_statistics_left_mirror.buckets
                     );
 
-                    self.plain_distances_left_mirror.clear();
+                    clear_left_mirror = true;
                 }
 
                 if !anonymized_bucket_statistics_right_mirror.is_empty() {
@@ -1919,7 +1923,7 @@ impl SimpleAnonStatsTestGenerator {
                         anonymized_bucket_statistics_right_mirror.buckets
                     );
 
-                    self.plain_distances_right_mirror.clear();
+                    clear_right_mirror = true;
                 }
 
                 for (req_id, &was_match, &idx, matched_batch_req_ids) in izip!(
@@ -1934,6 +1938,19 @@ impl SimpleAnonStatsTestGenerator {
 
                     self.check_result(req_id, idx, was_match, matched_batch_req_ids, &requests)?;
                 }
+            }
+
+            if clear_left {
+                self.plain_distances_left.clear();
+            }
+            if clear_right {
+                self.plain_distances_right.clear();
+            }
+            if clear_left_mirror {
+                self.plain_distances_left_mirror.clear();
+            }
+            if clear_right_mirror {
+                self.plain_distances_right_mirror.clear();
             }
 
             // Check that we received a response from all actors
