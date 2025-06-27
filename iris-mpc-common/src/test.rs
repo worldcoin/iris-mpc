@@ -1864,6 +1864,7 @@ impl SimpleAnonStatsTestGenerator {
 
                 if !anonymized_bucket_statistics_left.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for left side, checking...");
+                    tracing::info!("Plain distances left : {:?}", self.plain_distances_left);
                     let plain_bucket_statistics_left = Self::calculate_distance_buckets(
                         &self.plain_distances_left,
                         self.bucket_statistic_parameters.num_buckets,
@@ -1908,10 +1909,6 @@ impl SimpleAnonStatsTestGenerator {
                 if !anonymized_bucket_statistics_left_mirror.is_empty() {
                     tracing::info!(
                         "Got anonymized bucket statistics for left side (mirror), checking..."
-                    );
-                    tracing::info!(
-                        "Plain distances left mirror: {:?}",
-                        self.plain_distances_left_mirror
                     );
                     let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
                         &self.plain_distances_left_mirror,
