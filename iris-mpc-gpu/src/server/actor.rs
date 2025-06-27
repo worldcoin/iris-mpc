@@ -46,7 +46,7 @@ use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
     fmt,
-    hash::Hash,
+    hash::{Hash, Hasher},
     mem,
     sync::Arc,
     time::Instant,
@@ -1838,7 +1838,8 @@ impl ServerActor {
                 .collect_vec();
 
             let mut hasher = std::hash::SipHasher::new_with_keys(123, 456);
-            tracing::info!("Sorted indices hash: {:?}", indices.hash(&mut hasher));
+            indices.hash(&mut hasher);
+            tracing::info!("Sorted indices hash: {:?}", hasher.finish());
 
             let indices_bitmaps = indices
                 .iter()
