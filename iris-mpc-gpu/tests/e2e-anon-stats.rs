@@ -17,7 +17,7 @@ mod e2e_anon_stats_test {
     const DB_BUFFER: usize = 8 * 1000;
     const NUM_BATCHES: usize = 300;
     const MAX_BATCH_SIZE: usize = 64;
-    const N_BUCKETS: usize = 10;
+    const N_BUCKETS: usize = 8;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
 
