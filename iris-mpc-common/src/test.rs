@@ -1693,34 +1693,6 @@ impl SimpleAnonStatsTestGenerator {
             None => return Ok(None),
         };
 
-        let span = tracing::span!(Level::INFO, "calculating ground truth distances");
-        let guard = span.enter();
-        self.plain_distances_left.extend(
-            self.db_state.plain_dbs[0]
-                .calculate_min_distances(&e2e_template.left)
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_right.extend(
-            self.db_state.plain_dbs[1]
-                .calculate_min_distances(&e2e_template.right)
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_left_mirror.extend(
-            self.db_state.plain_dbs[0]
-                .calculate_min_distances(&e2e_template.right.mirrored())
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_right_mirror.extend(
-            self.db_state.plain_dbs[1]
-                .calculate_min_distances(&e2e_template.left.mirrored())
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        drop(guard);
-
         requests.insert(request_id.to_string(), e2e_template.clone());
 
         let shared_template = e2e_template.to_shared_template(true, &mut self.rng);
@@ -1807,6 +1779,7 @@ impl SimpleAnonStatsTestGenerator {
             if batch0.request_ids.is_empty() {
                 continue;
             }
+            let e2e_template = requests.values().next().cloned().unwrap();
 
             tracing::info!("sending batch to servers");
             // send batches to servers
@@ -1967,6 +1940,35 @@ impl SimpleAnonStatsTestGenerator {
             for (&id, &count) in resp_counters.iter() {
                 assert_eq!(count, 3, "Received {} responses for {}", count, id);
             }
+
+            // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
+            let span = tracing::span!(Level::INFO, "calculating ground truth distances");
+            let guard = span.enter();
+            self.plain_distances_left.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.left)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.right)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_left_mirror.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.right.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right_mirror.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.left.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            drop(guard);
         }
         Ok(())
     }
