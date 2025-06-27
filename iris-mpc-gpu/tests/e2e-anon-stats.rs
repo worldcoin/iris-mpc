@@ -20,8 +20,6 @@ mod e2e_anon_stats_test {
     const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
-    const MAX_DELETIONS_PER_BATCH: usize = 10;
-    const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -198,7 +196,13 @@ mod e2e_anon_stats_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        let mut test_case_generator = SimpleAnonStatsTestGenerator::new(test_db, internal_seed);
+        let mut test_case_generator = SimpleAnonStatsTestGenerator::new(
+            test_db,
+            internal_seed,
+            num_devices,
+            N_BUCKETS,
+            MATCH_DISTANCES_BUFFER_SIZE,
+        );
 
         test_case_generator
             .run_n_batches(NUM_BATCHES, [&mut handle0, &mut handle1, &mut handle2])

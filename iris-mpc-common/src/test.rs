@@ -18,7 +18,6 @@ use crate::{
     IRIS_CODE_LENGTH,
 };
 use eyre::Result;
-use http::request;
 use itertools::izip;
 use rand::{
     rngs::StdRng,
@@ -1632,19 +1631,25 @@ pub struct SimpleAnonStatsTestGenerator {
     plain_distances_right: Vec<f64>,
     plain_distances_left_mirror: Vec<f64>,
     plain_distances_right_mirror: Vec<f64>,
-    bucket_statistic_parameters: Option<BucketStatisticParameters>,
+    bucket_statistic_parameters: BucketStatisticParameters,
     rng: StdRng,
 }
 
 impl SimpleAnonStatsTestGenerator {
-    pub fn new(db: TestDb, internal_seed: u64) -> Self {
+    pub fn new(
+        db: TestDb,
+        internal_seed: u64,
+        num_devices: usize,
+        num_buckets: usize,
+        match_buffer_size: usize,
+    ) -> Self {
         Self {
             db_state: db,
-            bucket_statistic_parameters: Some(BucketStatisticParameters {
-                num_gpus: 3,
-                num_buckets: 10,
-                match_buffer_size: 1000,
-            }),
+            bucket_statistic_parameters: BucketStatisticParameters {
+                num_gpus: num_devices,
+                num_buckets,
+                match_buffer_size,
+            },
             plain_distances_left: vec![],
             plain_distances_right: vec![],
             plain_distances_left_mirror: vec![],
@@ -1828,98 +1833,104 @@ impl SimpleAnonStatsTestGenerator {
                     ..
                 } = res;
 
-                if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
-                    // Check that normal orientation statistics have is_mirror_orientation set to false
-                    assert!(!anonymized_bucket_statistics_left.is_mirror_orientation,
-                        "Normal orientation left statistics should have is_mirror_orientation = false");
-                    assert!(!anonymized_bucket_statistics_right.is_mirror_orientation,
-                        "Normal orientation right statistics should have is_mirror_orientation = false");
-                    // Check that mirror orientation statistics have is_mirror_orientation set to true
-                    assert!(anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                        "Mirror orientation left statistics should have is_mirror_orientation = true");
-                    assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                        "Mirror orientation right statistics should have is_mirror_orientation = true");
+                // Check that normal orientation statistics have is_mirror_orientation set to false
+                assert!(
+                    !anonymized_bucket_statistics_left.is_mirror_orientation,
+                    "Normal orientation left statistics should have is_mirror_orientation = false"
+                );
+                assert!(
+                    !anonymized_bucket_statistics_right.is_mirror_orientation,
+                    "Normal orientation right statistics should have is_mirror_orientation = false"
+                );
+                // Check that mirror orientation statistics have is_mirror_orientation set to true
+                assert!(
+                    anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                    "Mirror orientation left statistics should have is_mirror_orientation = true"
+                );
+                assert!(
+                    anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                    "Mirror orientation right statistics should have is_mirror_orientation = true"
+                );
 
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_left,
-                        bucket_statistic_parameters.num_gpus,
-                        bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
-                    )?;
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_right,
-                        bucket_statistic_parameters.num_gpus,
-                        bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
-                    )?;
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_left,
+                    self.bucket_statistic_parameters.num_gpus,
+                    self.bucket_statistic_parameters.num_buckets,
+                    self.bucket_statistic_parameters.match_buffer_size,
+                )?;
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_right,
+                    self.bucket_statistic_parameters.num_gpus,
+                    self.bucket_statistic_parameters.num_buckets,
+                    self.bucket_statistic_parameters.match_buffer_size,
+                )?;
 
-                    if !anonymized_bucket_statistics_left.is_empty() {
-                        let plain_bucket_statistics_left = Self::calculate_distance_buckets(
-                            &self.plain_distances_left,
-                            bucket_statistic_parameters.num_buckets,
-                        );
-                        assert_eq!(
-                            plain_bucket_statistics_left,
-                            anonymized_bucket_statistics_left.buckets
-                        );
+                if !anonymized_bucket_statistics_left.is_empty() {
+                    let plain_bucket_statistics_left = Self::calculate_distance_buckets(
+                        &self.plain_distances_left,
+                        self.bucket_statistic_parameters.num_buckets,
+                    );
+                    assert_eq!(
+                        plain_bucket_statistics_left,
+                        anonymized_bucket_statistics_left.buckets
+                    );
 
-                        self.plain_distances_left.clear();
-                    }
+                    self.plain_distances_left.clear();
+                }
 
-                    if !anonymized_bucket_statistics_right.is_empty() {
-                        let plain_bucket_statistics_right = Self::calculate_distance_buckets(
-                            &self.plain_distances_right,
-                            bucket_statistic_parameters.num_buckets,
-                        );
+                if !anonymized_bucket_statistics_right.is_empty() {
+                    let plain_bucket_statistics_right = Self::calculate_distance_buckets(
+                        &self.plain_distances_right,
+                        self.bucket_statistic_parameters.num_buckets,
+                    );
 
-                        assert_eq!(
-                            plain_bucket_statistics_right,
-                            anonymized_bucket_statistics_right.buckets
-                        );
+                    assert_eq!(
+                        plain_bucket_statistics_right,
+                        anonymized_bucket_statistics_right.buckets
+                    );
 
-                        self.plain_distances_right.clear();
-                    }
+                    self.plain_distances_right.clear();
+                }
 
-                    // Also check mirror orientation statistics
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_left_mirror,
-                        bucket_statistic_parameters.num_gpus,
-                        bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
-                    )?;
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_right_mirror,
-                        bucket_statistic_parameters.num_gpus,
-                        bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
-                    )?;
+                // Also check mirror orientation statistics
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_left_mirror,
+                    self.bucket_statistic_parameters.num_gpus,
+                    self.bucket_statistic_parameters.num_buckets,
+                    self.bucket_statistic_parameters.match_buffer_size,
+                )?;
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_right_mirror,
+                    self.bucket_statistic_parameters.num_gpus,
+                    self.bucket_statistic_parameters.num_buckets,
+                    self.bucket_statistic_parameters.match_buffer_size,
+                )?;
 
-                    if !anonymized_bucket_statistics_left_mirror.is_empty() {
-                        let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
-                            &self.plain_distances_left_mirror,
-                            bucket_statistic_parameters.num_buckets,
-                        );
-                        assert_eq!(
-                            plain_bucket_statistics_left_mirror,
-                            anonymized_bucket_statistics_left_mirror.buckets
-                        );
+                if !anonymized_bucket_statistics_left_mirror.is_empty() {
+                    let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
+                        &self.plain_distances_left_mirror,
+                        self.bucket_statistic_parameters.num_buckets,
+                    );
+                    assert_eq!(
+                        plain_bucket_statistics_left_mirror,
+                        anonymized_bucket_statistics_left_mirror.buckets
+                    );
 
-                        self.plain_distances_left_mirror.clear();
-                    }
+                    self.plain_distances_left_mirror.clear();
+                }
 
-                    if !anonymized_bucket_statistics_right_mirror.is_empty() {
-                        let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
-                            &self.plain_distances_right_mirror,
-                            bucket_statistic_parameters.num_buckets,
-                        );
+                if !anonymized_bucket_statistics_right_mirror.is_empty() {
+                    let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
+                        &self.plain_distances_right_mirror,
+                        self.bucket_statistic_parameters.num_buckets,
+                    );
 
-                        assert_eq!(
-                            plain_bucket_statistics_right_mirror,
-                            anonymized_bucket_statistics_right_mirror.buckets
-                        );
+                    assert_eq!(
+                        plain_bucket_statistics_right_mirror,
+                        anonymized_bucket_statistics_right_mirror.buckets
+                    );
 
-                        self.plain_distances_right_mirror.clear();
-                    }
+                    self.plain_distances_right_mirror.clear();
                 }
 
                 for (req_id, &was_match, &idx, matched_batch_req_ids) in izip!(
