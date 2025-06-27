@@ -874,18 +874,18 @@ async fn get_results_thread(
                     let mut graph_tx = graph_store.tx().await?;
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
-                        "Job Results :: Persisted graph updates: modification-id={modification_id}",
+                        "Job Results :: Persisted graph updates: modification-id={modification_id}"
                     ));
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
                     db_tx.commit().await?;
                     log_info(format!(
-                        "Job Results :: Persisted last indexed modification id: modification_id={modification_id}",
+                        "Job Results :: Persisted last indexed modification id: modification_id={modification_id}"
                     ));
 
                     log_info(format!(
-                        "Job Results :: Persisted to dB: modification_id={modification_id}",
+                        "Job Results :: Persisted to dB: modification_id={modification_id}"
                     ));
 
                     shutdown_handler_bg.decrement_batches_pending_completion();

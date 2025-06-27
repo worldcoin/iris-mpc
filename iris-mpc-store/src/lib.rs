@@ -331,39 +331,6 @@ impl Store {
         Ok(ids)
     }
 
-    pub async fn insert_copy_modification(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        modification: &Modification,
-    ) -> Result<Modification> {
-        let inserted: StoredModification = sqlx::query_as(
-            r#"
-            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted, result_message_body, graph_mutation)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            RETURNING
-                id,
-                serial_id,
-                request_type,
-                s3_url,
-                status,
-                persisted,
-                result_message_body,
-                graph_mutation
-            "#,
-        )
-        .bind(modification.id)
-        .bind(modification.serial_id)
-        .bind(&modification.request_type)
-        .bind(&modification.s3_url)
-        .bind(&modification.status)
-        .bind(modification.persisted)
-        .bind(&modification.result_message_body)
-        .bind(&modification.graph_mutation)
-        .fetch_one(tx.deref_mut())
-        .await?;
-        Ok(inserted.into())
-    }
-
     pub async fn insert_irises_overriding(
         &self,
         tx: &mut Transaction<'_, Postgres>,
