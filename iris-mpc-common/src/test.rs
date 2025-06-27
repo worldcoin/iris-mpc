@@ -29,6 +29,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
+use tracing::Level;
 use uuid::Uuid;
 
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 375 / 1000; // 0.375 * 12800
@@ -1692,6 +1693,8 @@ impl SimpleAnonStatsTestGenerator {
             None => return Ok(None),
         };
 
+        let span = tracing::span!(Level::INFO, "calculating ground truth distances");
+        let guard = span.enter();
         self.plain_distances_left.extend(
             self.db_state.plain_dbs[0]
                 .calculate_min_distances(&e2e_template.left)
@@ -1716,6 +1719,7 @@ impl SimpleAnonStatsTestGenerator {
                 .into_iter()
                 .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
         );
+        drop(guard);
 
         requests.insert(request_id.to_string(), e2e_template.clone());
 
