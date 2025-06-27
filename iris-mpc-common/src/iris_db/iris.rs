@@ -287,7 +287,6 @@ impl IrisCode {
 
     pub fn get_similar_iris<R: Rng>(&self, rng: &mut R, approx_diff_factor: f64) -> IrisCode {
         let mut res = self.clone();
-        // flip a few bits in mask and code (like 5%)
         let dist = Bernoulli::new(approx_diff_factor).unwrap();
         for i in 0..IrisCode::IRIS_CODE_SIZE {
             if dist.sample(rng) {
@@ -489,7 +488,7 @@ mod tests {
     fn test_min_distance_random() {
         let mut rng = rand::thread_rng();
         let iris0 = IrisCode::random_rng(&mut rng);
-        let mut iris1 = iris0.get_similar_iris(&mut rng);
+        let mut iris1 = iris0.get_similar_iris(&mut rng, 0.025);
         iris1.rotate_left(1);
         assert_float_eq!(iris0.get_distance(&iris1), 0.5, abs <= 0.05);
         assert_float_eq!(iris0.get_min_distance(&iris1), 0.0, abs <= 0.05);

@@ -87,7 +87,7 @@ mod iris_test {
             let iris = IrisCode::random_rng(&mut rng);
             assert_eq!(db.iris_in_db(&iris), db.db.iter().any(|x| iris.is_close(x)));
             let index = rng.gen_range(0..DB_SIZE);
-            let iris = db.db[index].get_similar_iris(&mut rng);
+            let iris = db.db[index].get_similar_iris(&mut rng, 0.05);
             let in_db = db.iris_in_db(&iris);
             assert!(in_db);
             assert_eq!(in_db, db.db.iter().any(|x| iris.is_close(x)));
