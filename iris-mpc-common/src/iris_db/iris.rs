@@ -238,8 +238,8 @@ impl IrisCode {
     /// Return the minimum distance of an iris code against all rotations of another iris code.
     pub fn get_min_distance(&self, other: &Self) -> f64 {
         let mut min_distance = f64::INFINITY;
-        for rotation in self.all_rotations() {
-            let distance = rotation.get_distance(other);
+        for rotation in other.all_rotations() {
+            let distance = rotation.get_distance(self);
             if distance < min_distance {
                 min_distance = distance;
             }
