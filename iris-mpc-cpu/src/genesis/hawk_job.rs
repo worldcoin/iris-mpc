@@ -101,8 +101,8 @@ pub enum JobResult {
         last_serial_id: Option<IrisSerialId>,
     },
     Modification {
-        /// Modification entry for processing
-        modification: Modification,
+        /// Modification id of associated modifications table entry
+        modification_id: i64,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -144,11 +144,11 @@ impl JobResult {
 
     #[allow(dead_code)]
     pub(crate) fn new_modification_result(
-        modification: Modification,
+        modification_id: i64,
         connect_plans: HawkMutation,
     ) -> Self {
         Self::Modification {
-            modification,
+            modification_id,
             connect_plans,
         }
     }
@@ -174,8 +174,10 @@ impl fmt::Display for JobResult {
                     Some(last_serial_id)
                 )
             }
-            JobResult::Modification { modification, .. } => {
-                write!(f, "modification-id={}", modification.id)
+            JobResult::Modification {
+                modification_id, ..
+            } => {
+                write!(f, "modification-id={}", modification_id)
             }
         }
     }

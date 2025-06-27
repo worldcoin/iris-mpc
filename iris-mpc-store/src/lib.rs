@@ -7,6 +7,7 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
+use iris_mpc_common::helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -528,6 +529,7 @@ WHERE id = $1;
             RESET_UPDATE_MESSAGE_TYPE,
             REAUTH_MESSAGE_TYPE,
             IDENTITY_DELETION_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
         ];
 
         let rows = sqlx::query_as::<_, StoredModification>(

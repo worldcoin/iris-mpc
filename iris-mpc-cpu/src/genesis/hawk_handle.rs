@@ -7,7 +7,7 @@ use crate::execution::hawk_main::{
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
     STORE_IDS,
 };
-use eyre::{bail, eyre, OptionExt, Result};
+use eyre::{eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
@@ -242,11 +242,11 @@ impl Handle {
                                     Ok(connect_plan)
                                 },
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = Self::log_warning(format!(
+                                    Self::log_warning(format!(
                                         "HawkActor does not support deletion of identities: modification: {:?}",
                                         modification
                                     ));
-                                    bail!(msg);
+                                    Ok(vec![])
                                 },
                                 smpc_request::UNIQUENESS_MESSAGE_TYPE => {
                                     Self::log_warning(format!(
@@ -256,11 +256,11 @@ impl Handle {
                                     Ok(vec![])
                                 }
                                 _ => {
-                                    let msg = Self::log_error(format!(
+                                    Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
                                     ));
-                                    bail!(msg);
+                                    Ok(vec![])
                                 }
                             }
                         }
@@ -284,7 +284,7 @@ impl Handle {
                 }
 
                 Ok(JobResult::new_modification_result(
-                    modification,
+                    modification.id,
                     HawkMutation(mutations),
                 ))
             }
