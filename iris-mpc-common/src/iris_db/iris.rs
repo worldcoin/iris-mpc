@@ -317,7 +317,9 @@ impl IrisCode {
                 res.code.flip_bit(i);
             }
             if dist.sample(rng) {
-                res.mask.flip_bit(i);
+                // flip both the imaginary and real bits
+                res.mask.flip_bit(i - (i % 2));
+                res.mask.flip_bit(i - (i % 2) + 1);
             }
         }
 
