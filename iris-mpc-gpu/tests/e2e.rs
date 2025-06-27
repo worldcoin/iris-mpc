@@ -113,6 +113,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                true,
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
@@ -146,6 +147,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                true,
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
@@ -179,6 +181,7 @@ mod e2e_test {
                 true,
                 false,
                 false,
+                true,
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {

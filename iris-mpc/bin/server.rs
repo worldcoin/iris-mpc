@@ -1305,6 +1305,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
+            true, // flipping full scan side or not, TODO: from config
             config.full_scan_side,
         ) {
             Ok((mut actor, handle)) => {

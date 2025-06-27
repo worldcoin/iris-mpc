@@ -115,6 +115,7 @@ mod e2e_anon_stats_test {
                 true,
                 false,
                 false,
+                false,
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
@@ -148,6 +149,7 @@ mod e2e_anon_stats_test {
                 true,
                 false,
                 false,
+                false,
                 Eye::Left,
             ) {
                 Ok((mut actor, handle)) => {
@@ -179,6 +181,7 @@ mod e2e_anon_stats_test {
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 N_BUCKETS,
                 true,
+                false,
                 false,
                 false,
                 Eye::Left,
