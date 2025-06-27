@@ -59,14 +59,14 @@ impl IrisDB {
 
     pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<f64> {
         self.db
-            .iter()
+            .par_iter()
             .map(|other_code| iris.get_distance(other_code))
             .collect::<Vec<_>>()
     }
 
     pub fn calculate_min_distances(&self, iris: &IrisCode) -> Vec<f64> {
         self.db
-            .iter()
+            .par_iter()
             .map(|other_code| iris.get_min_distance(other_code))
             .collect::<Vec<_>>()
     }
