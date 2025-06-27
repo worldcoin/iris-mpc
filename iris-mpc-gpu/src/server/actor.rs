@@ -45,7 +45,9 @@ use itertools::{izip, Itertools};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
-    fmt, mem,
+    fmt,
+    hash::Hash,
+    mem,
     sync::Arc,
     time::Instant,
 };
@@ -1826,13 +1828,20 @@ impl ServerActor {
                 result
             }
             // sort all indices, and create bitmaps from them
-            let indices_bitmaps = indices
+            let indices = indices
                 .into_iter()
                 .map(|mut x| {
                     x.sort();
                     x.truncate(self.match_distances_buffer_size);
                     x
                 })
+                .collect_vec();
+
+            let mut hasher = std::hash::SipHasher::new_with_keys(123, 456);
+            tracing::info!("Sorted indices hash: {:?}", indices.hash(&mut hasher));
+
+            let indices_bitmaps = indices
+                .iter()
                 .map(|sorted| ids_to_bitvec(&sorted))
                 .collect_vec();
 
