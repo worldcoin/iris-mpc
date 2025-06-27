@@ -3284,7 +3284,7 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| a[i][j])
                 .collect::<Vec<_>>();
-            tracing::info!("Shares a: {:?}", new_a);
+            tracing::info!("Shares a: {:?}", &new_a[..length]);
             let a = htod_on_stream_sync(&new_a[..length], &device_manager.device(i), &streams[i])
                 .unwrap();
 
@@ -3292,7 +3292,7 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| b[i][j])
                 .collect::<Vec<_>>();
-            tracing::info!("Shares b: {:?}", new_b);
+            tracing::info!("Shares b: {:?}", &new_b[..length]);
             let b = htod_on_stream_sync(&new_b[..length], &device_manager.device(i), &streams[i])
                 .unwrap();
 
