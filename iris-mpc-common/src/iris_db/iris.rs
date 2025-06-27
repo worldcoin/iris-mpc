@@ -247,6 +247,18 @@ impl IrisCode {
         min_distance
     }
 
+    /// Return the minimum distance of an iris code against all rotations of another iris code.
+    pub fn get_min_distance_against_many(&self, others: &[Self]) -> f64 {
+        let mut min_distance = f64::INFINITY;
+        for rotation in others {
+            let distance = rotation.get_distance(self);
+            if distance < min_distance {
+                min_distance = distance;
+            }
+        }
+        min_distance
+    }
+
     /// Return the fractional Hamming distance between two iris codes, represented
     /// as `u16` numerator and denominator.
     pub fn get_distance_fraction(&self, other: &Self) -> (u16, u16) {
