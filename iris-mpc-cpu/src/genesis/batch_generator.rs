@@ -28,6 +28,9 @@ pub struct Batch {
 
     /// Iris data for persistence.
     pub iris_data: Vec<StoredIrisVector>,
+
+    /// if it is only an iris indexation job
+    pub iris_indexation_only: bool,
 }
 
 /// Constructor.
@@ -39,12 +42,17 @@ impl Batch {
         right_queries: Vec<QueryRef>,
         iris_data: Vec<StoredIrisVector>,
     ) -> Self {
+        let mut iris_indexation_only = false;
+        if vector_ids.is_empty() && !iris_data.is_empty() {
+            iris_indexation_only = true;
+        }
         Self {
             batch_id,
             vector_ids,
             left_queries,
             right_queries,
             iris_data,
+            iris_indexation_only,
         }
     }
 }
@@ -206,12 +214,18 @@ impl fmt::Display for BatchSize {
 impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
-        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
+        self.vector_ids
+            .last()
+            .map(|id| id.serial_id())
+            .unwrap_or_default()
     }
 
     // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
-        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
+        self.vector_ids
+            .first()
+            .map(|id| id.serial_id())
+            .unwrap_or_default()
     }
 
     // Returns serial identifiers within batch.
@@ -252,12 +266,12 @@ impl BatchGenerator {
         while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
             identifiers_for_indexation.push(next_id);
-            println!("identifiers={:?}", identifiers);
             println!(
-                "identififers_for_indexation={:?}",
+                "identifiers_for_indexation={:?}",
                 identifiers_for_indexation
             );
             if !self.exclusions.contains(&next_id) {
+                println!("identifiers={:?}", identifiers);
                 identifiers.push(next_id);
             } else {
                 log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
@@ -321,11 +335,24 @@ impl BatchIterator for BatchGenerator {
         last_indexed_id: IrisSerialId,
         imem_iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
-        if let (Some(identifiers), Some(identifiers_for_indexation)) =
-            self.next_identifiers(last_indexed_id)
-        {
+        let (identifiers_opt, identifiers_for_indexation_opt) =
+            self.next_identifiers(last_indexed_id);
+
+        if identifiers_opt.is_none() && identifiers_for_indexation_opt.is_none() {
+            log_info(format!(
+                "Exhausted identifiers: last-indexed-id={}",
+                last_indexed_id
+            ));
+            return Ok(None);
+        }
+
+        let vector_ids: Vec<VectorId>;
+        let vector_ids_for_indexation: Vec<VectorId>;
+        let codes_and_masks: Vec<StoredIrisVector>;
+
+        if let Some(identifiers) = identifiers_opt {
             // Set vector identifiers - assumes left/right store equivalence.
-            let vector_ids = imem_iris_stores[LEFT]
+            vector_ids = imem_iris_stores[LEFT]
                 .get_vector_ids(&identifiers)
                 .await
                 .into_iter()
@@ -334,8 +361,12 @@ impl BatchIterator for BatchGenerator {
                     id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
-            // Set vector identifiers - assumes left/right store equivalence.
-            let vector_ids_for_indexation = imem_iris_stores[LEFT]
+        } else {
+            vector_ids = Vec::new();
+        }
+
+        if let Some(identifiers_for_indexation) = identifiers_for_indexation_opt {
+            vector_ids_for_indexation = imem_iris_stores[LEFT]
                 .get_vector_ids(&identifiers_for_indexation)
                 .await
                 .into_iter()
@@ -344,25 +375,22 @@ impl BatchIterator for BatchGenerator {
                     id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
-
-            // Get iris codes and masks using the extracted method
-            let codes_and_masks = self
+            codes_and_masks = self
                 .get_indexation_iris_codes(&vector_ids_for_indexation, imem_iris_stores)
                 .await;
-
-            // Update internal state.
-            self.batch_count += 1;
-
-            Ok(Some(Batch::new(
-                self.batch_count,
-                vector_ids.clone(),
-                imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
-                imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
-                codes_and_masks,
-            )))
         } else {
-            Ok(None)
+            codes_and_masks = Vec::new();
         }
+
+        self.batch_count += 1;
+
+        Ok(Some(Batch::new(
+            self.batch_count,
+            vector_ids.clone(),
+            imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
+            imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
+            codes_and_masks,
+        )))
     }
 }
 

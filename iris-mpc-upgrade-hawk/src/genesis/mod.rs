@@ -536,8 +536,9 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            // Set next last indexed id.
-            last_indexed_id = batch.id_end();
+            if !batch.iris_indexation_only {
+                last_indexed_id = batch.id_end();
+            }
 
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(batch);
@@ -825,6 +826,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     iris_data,
+                    iris_indexation_only,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
@@ -837,25 +839,29 @@ async fn get_results_thread(
                             &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
                         )
                         .await?;
+                    if iris_indexation_only {
+                        graph_tx.tx.commit().await?;
+                        shutdown_handler_bg.decrement_batches_pending_completion();
+                    } else {
+                        connect_plans.persist(&mut graph_tx).await?;
+                        log_info(format!(
+                            "Job Results :: Persisted graph updates: batch-id={batch_id}"
+                        ));
 
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
-                    ));
+                        let mut db_tx = graph_tx.tx;
+                        set_last_indexed_iris_id(&mut db_tx, last_serial_id.unwrap()).await?;
+                        db_tx.commit().await?;
+                        log_info(format!(
+                            "Job Results :: Persisted last indexed id: batch-id={batch_id}"
+                        ));
 
-                    let mut db_tx = graph_tx.tx;
-                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-                    db_tx.commit().await?;
-                    log_info(format!(
-                        "Job Results :: Persisted last indexed id: batch-id={batch_id}"
-                    ));
+                        log_info(format!(
+                            "Job Results :: Persisted to dB: batch-id={batch_id}"
+                        ));
 
-                    log_info(format!(
-                        "Job Results :: Persisted to dB: batch-id={batch_id}"
-                    ));
-
-                    // Notify background task responsible for tracking pending batches.
-                    shutdown_handler_bg.decrement_batches_pending_completion();
+                        // Notify background task responsible for tracking pending batches.
+                        shutdown_handler_bg.decrement_batches_pending_completion();
+                    }
                 }
                 JobResult::Modification {
                     modification,

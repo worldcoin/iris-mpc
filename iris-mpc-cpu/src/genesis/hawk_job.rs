@@ -55,9 +55,13 @@ impl JobRequest {
             left_queries,
             right_queries,
             iris_data,
+            iris_indexation_only,
         }: Batch,
     ) -> Self {
-        assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
+        assert!(
+            !vector_ids.is_empty() || iris_indexation_only,
+            "Invalid batch: is empty"
+        );
 
         Self::BatchIndexation {
             batch_id,
@@ -88,11 +92,13 @@ pub enum JobResult {
         /// Iris data for persistence.
         iris_data: Vec<StoredIrisVector>,
 
-        /// Iris serial id of batch's first element.
-        first_serial_id: IrisSerialId,
+        /// if it is a batch indexation only, then this is true.
+        iris_indexation_only: bool,
 
+        /// Iris serial id of batch's first element.
+        first_serial_id: Option<IrisSerialId>,
         /// Iris serial id of batch's last element.
-        last_serial_id: IrisSerialId,
+        last_serial_id: Option<IrisSerialId>,
     },
     Modification {
         /// Modification entry for processing
@@ -111,8 +117,20 @@ impl JobResult {
         connect_plans: HawkMutation,
         iris_data: Vec<StoredIrisVector>,
     ) -> Self {
-        let first_serial_id = vector_ids.first().unwrap().serial_id();
-        let last_serial_id = vector_ids.last().unwrap().serial_id();
+        let iris_indexation_only = vector_ids.is_empty();
+
+        let first_serial_id = if iris_indexation_only {
+            None
+        } else {
+            Some(vector_ids.first().unwrap().serial_id())
+        };
+
+        let last_serial_id = if iris_indexation_only {
+            None
+        } else {
+            Some(vector_ids.last().unwrap().serial_id())
+        };
+
         Self::BatchIndexation {
             connect_plans,
             batch_id,
@@ -120,6 +138,7 @@ impl JobResult {
             iris_data,
             first_serial_id,
             last_serial_id,
+            iris_indexation_only,
         }
     }
 
@@ -148,11 +167,11 @@ impl fmt::Display for JobResult {
             } => {
                 write!(
                     f,
-                    "batch-id={}, batch-size={}, range=({}..{})",
+                    "batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
-                    first_serial_id,
-                    last_serial_id
+                    Some(first_serial_id),
+                    Some(last_serial_id)
                 )
             }
             JobResult::Modification { modification, .. } => {
