@@ -232,7 +232,11 @@ impl IrisCode {
     /// as a single floating point value.
     pub fn get_distance(&self, other: &Self) -> f64 {
         let (code_distance, combined_mask_len) = self.get_distance_fraction(other);
-        code_distance as f64 / combined_mask_len as f64
+        let dist = code_distance as f64 / combined_mask_len as f64;
+        if dist <= MATCH_THRESHOLD_RATIO {
+            tracing::warn!("have {code_distance}/{combined_mask_len} = {dist} distance");
+        }
+        dist
     }
 
     /// Return the minimum distance of an iris code against all rotations of another iris code.
