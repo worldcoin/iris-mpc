@@ -71,6 +71,14 @@ impl IrisDB {
             .map(|db_code| db_code.get_min_distance_against_many(&rotations))
             .collect::<Vec<_>>()
     }
+
+    pub fn calculate_all_distances(&self, iris: &IrisCode) -> Vec<f64> {
+        let rotations = iris.all_rotations();
+        self.db
+            .par_iter()
+            .flat_map(|db_code| db_code.get_distances_against_many(&rotations))
+            .collect::<Vec<_>>()
+    }
 }
 
 #[cfg(test)]
