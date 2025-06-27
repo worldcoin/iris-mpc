@@ -9,6 +9,7 @@ use crate::execution::hawk_main::{
 };
 use eyre::{eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_store::{OneSidedStoredIrisVector, StoredIrisVector};
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -218,49 +219,58 @@ impl Handle {
                         async move {
                             let vector_id_ = vector.get_vector_id(serial_id).await;
 
-                            let session = sessions
-                                .first()
-                                .ok_or_eyre("Sessions for side are empty")?;
+                            let session =
+                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
 
                             match modification.request_type.as_str() {
-                                smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
-                                    let vector_id = vector_id_.ok_or_eyre("Expected vector serial id of update is missing from store")?;
+                                smpc_request::RESET_UPDATE_MESSAGE_TYPE
+                                | smpc_request::REAUTH_MESSAGE_TYPE => {
+                                    let vector_id = vector_id_.ok_or_eyre(
+                                        "Expected vector serial id of update is missing from store",
+                                    )?;
                                     let identifier = (vector_id, side);
 
                                     // TODO remove any prior versions of this vector id from graph
 
                                     let query = vector.get_query(&vector_id).await;
                                     let insert_plan = search_single_query_no_match_count(
-                                                session.clone(), query, &searcher, &identifier
-                                        )
-                                        .await?;
+                                        session.clone(),
+                                        query,
+                                        &searcher,
+                                        &identifier,
+                                    )
+                                    .await?;
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
-                                    let connect_plan = insert(session, &searcher, plans, &ids).await?;
+                                    let connect_plan =
+                                        insert(session, &searcher, plans, &ids).await?;
 
-                                    Ok(connect_plan)
-                                },
-                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    Self::log_warning(format!(
-                                        "HawkActor does not support deletion of identities: modification: {:?}",
-                                        modification
-                                    ));
-                                    Ok(vec![])
-                                },
-                                smpc_request::UNIQUENESS_MESSAGE_TYPE => {
-                                    Self::log_warning(format!(
-                                        "Modifications should not contain uniqueness requests in: {:?}",
-                                        modification
-                                    ));
-                                    Ok(vec![])
+                                    let iris_data = vector.get_vector(&vector_id).await;
+
+                                    let one_sided_iris_data = OneSidedStoredIrisVector {
+                                        id: vector_id.serial_id() as i64,
+                                        version_id: vector_id.version_id(),
+                                        code: Vec::from(&iris_data.code.coefs),
+                                        mask: Vec::from(&iris_data.mask.coefs),
+                                    };
+
+                                    Ok((connect_plan, one_sided_iris_data))
                                 }
                                 _ => {
                                     Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
                                     ));
-                                    Ok(vec![])
+                                    Ok((
+                                        vec![],
+                                        OneSidedStoredIrisVector {
+                                            id: serial_id as i64,
+                                            version_id: 0,
+                                            code: vec![],
+                                            mask: vec![],
+                                        },
+                                    ))
                                 }
                             }
                         }
@@ -270,9 +280,26 @@ impl Handle {
                 let results: [_; 2] = results_.try_into().unwrap();
 
                 // Convert the results into SingleHawkMutation format
-                let [left_plans, right_plans] = results;
-                assert_eq!(left_plans.len(), right_plans.len());
+                let [left_plans_and_irises, right_plans_and_irises] = results;
+                let left_plans = left_plans_and_irises.0;
+                let right_plans = right_plans_and_irises.0;
+                let left_irises = left_plans_and_irises.1;
+                let right_irises = right_plans_and_irises.1;
+
+                assert_eq!(left_irises.version_id, right_irises.version_id);
+                assert_eq!(left_irises.id, right_irises.id);
+
+                let iris_data = StoredIrisVector {
+                    id: left_irises.id,
+                    version_id: left_irises.version_id,
+                    left_code: left_irises.code,
+                    left_mask: left_irises.mask,
+                    right_code: right_irises.code,
+                    right_mask: right_irises.mask,
+                };
+
                 let mut mutations = Vec::new();
+                let iris_data_vec = vec![iris_data.clone()];
 
                 for (left_plan, right_plan) in izip!(left_plans, right_plans) {
                     // Genesis doesn't use modification keys or request indices
@@ -286,6 +313,7 @@ impl Handle {
                 Ok(JobResult::new_modification_result(
                     modification.id,
                     HawkMutation(mutations),
+                    iris_data_vec,
                 ))
             }
         }
@@ -295,12 +323,6 @@ impl Handle {
     fn log_error(msg: String) -> String {
         utils::log_error(COMPONENT, msg)
     }
-
-    // Helper: component warning logging.
-    fn log_warning(msg: String) -> String {
-        utils::log_warn(COMPONENT, msg)
-    }
-
     // Helper: component logging.
     fn log_info(msg: String) -> String {
         utils::log_info(COMPONENT, msg)

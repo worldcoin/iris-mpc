@@ -866,12 +866,20 @@ async fn get_results_thread(
                 JobResult::Modification {
                     modification_id,
                     connect_plans,
+                    iris_data
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id}",
                     ));
 
                     let mut graph_tx = graph_store.tx().await?;
+                    // Persist batch of Iris's to the HNSW graph store.
+                    hnsw_iris_store
+                        .insert_copy_iris(
+                            &mut graph_tx.tx,
+                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                        )
+                        .await?;
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: modification-id={modification_id}"

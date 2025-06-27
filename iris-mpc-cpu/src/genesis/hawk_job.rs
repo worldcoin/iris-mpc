@@ -101,8 +101,11 @@ pub enum JobResult {
         last_serial_id: Option<IrisSerialId>,
     },
     Modification {
-        /// Modification id of associated modifications table entry
+        /// Modification id of associated modifications table entry.
         modification_id: i64,
+
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -146,10 +149,12 @@ impl JobResult {
     pub(crate) fn new_modification_result(
         modification_id: i64,
         connect_plans: HawkMutation,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
         Self::Modification {
             modification_id,
             connect_plans,
+            iris_data,
         }
     }
 }

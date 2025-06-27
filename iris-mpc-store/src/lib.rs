@@ -100,6 +100,14 @@ pub struct StoredIrisRef<'a> {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OneSidedStoredIrisVector {
+    pub id: i64,
+    pub version_id: i16,
+    pub code: Vec<u16>,
+    pub mask: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StoredIrisVector {
     pub id: i64,
     pub version_id: i16,
