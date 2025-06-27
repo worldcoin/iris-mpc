@@ -285,10 +285,10 @@ impl IrisCode {
         self.get_min_distance(other) < MATCH_THRESHOLD_RATIO
     }
 
-    pub fn get_similar_iris<R: Rng>(&self, rng: &mut R) -> IrisCode {
+    pub fn get_similar_iris<R: Rng>(&self, rng: &mut R, approx_diff_factor: f64) -> IrisCode {
         let mut res = self.clone();
         // flip a few bits in mask and code (like 5%)
-        let dist = Bernoulli::new(0.05).unwrap();
+        let dist = Bernoulli::new(approx_diff_factor).unwrap();
         for i in 0..IrisCode::IRIS_CODE_SIZE {
             if dist.sample(rng) {
                 res.code.flip_bit(i);

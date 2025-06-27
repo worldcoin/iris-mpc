@@ -1662,9 +1662,12 @@ impl SimpleAnonStatsTestGenerator {
     fn generate_query(&mut self) -> Option<(String, E2ETemplate, String)> {
         let request_id = Uuid::new_v4();
         let db_index = self.rng.gen_range(0..self.db_state.len());
+        let approx_diff_factor = self.rng.gen_range(0.0..0.35);
         let template = E2ETemplate {
-            left: self.db_state.plain_dbs[0].db[db_index].get_similar_iris(&mut self.rng),
-            right: self.db_state.plain_dbs[1].db[db_index].get_similar_iris(&mut self.rng),
+            left: self.db_state.plain_dbs[0].db[db_index]
+                .get_similar_iris(&mut self.rng, approx_diff_factor),
+            right: self.db_state.plain_dbs[1].db[db_index]
+                .get_similar_iris(&mut self.rng, approx_diff_factor),
         };
 
         Some((
