@@ -1762,8 +1762,17 @@ impl SimpleAnonStatsTestGenerator {
             });
         }
         for &distance in distances {
-            let bucket = (distance / bucket_size) as usize;
-            buckets[bucket].count += 1;
+            let mut bucket_idx = 0;
+            let mut comparison = bucket_size;
+            loop {
+                if distance <= comparison {
+                    break;
+                }
+                bucket_idx += 1;
+                comparison += bucket_size;
+            }
+
+            buckets[bucket_idx].count += 1;
         }
         buckets
     }
