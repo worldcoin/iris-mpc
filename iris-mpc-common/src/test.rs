@@ -1804,6 +1804,7 @@ impl SimpleAnonStatsTestGenerator {
                 continue;
             }
 
+            tracing::info!("sending batch to servers");
             // send batches to servers
             let (res0_fut, res1_fut, res2_fut) = tokio::join!(
                 handle0.submit_batch_query(batch0),
@@ -1811,6 +1812,7 @@ impl SimpleAnonStatsTestGenerator {
                 handle2.submit_batch_query(batch2)
             );
 
+            tracing::info!("waiting for server responses");
             let res0 = res0_fut.await?;
             let res1 = res1_fut.await?;
             let res2 = res2_fut.await?;
@@ -1820,6 +1822,7 @@ impl SimpleAnonStatsTestGenerator {
                 resp_counters.insert(req, 0);
             }
 
+            tracing::info!("checking results");
             let results = [&res0, &res1, &res2];
             for res in results.iter() {
                 let ServerJobResult {
