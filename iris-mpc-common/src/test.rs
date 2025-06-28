@@ -2,6 +2,7 @@ use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
 use crate::helpers::statistics::BucketResult;
 use crate::iris_db::iris::MATCH_THRESHOLD_RATIO;
 use crate::job::{BatchMetadata, GaloisSharesBothSides};
+use crate::ROTATIONS;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -1663,12 +1664,18 @@ impl SimpleAnonStatsTestGenerator {
         let request_id = Uuid::new_v4();
         let db_index = self.rng.gen_range(0..self.db_state.len());
         let approx_diff_factor = self.rng.gen_range(0.0..0.35);
-        let template = E2ETemplate {
+        let mut template = E2ETemplate {
             left: self.db_state.plain_dbs[0].db[db_index]
                 .get_similar_iris(&mut self.rng, approx_diff_factor),
             right: self.db_state.plain_dbs[1].db[db_index]
                 .get_similar_iris(&mut self.rng, approx_diff_factor),
         };
+
+        let rotation = self.rng.gen_range(0..ROTATIONS);
+        // Rotate the query iris codes
+        template.left = template.left.all_rotations()[rotation].clone();
+        let rotation = self.rng.gen_range(0..ROTATIONS);
+        template.right = template.left.all_rotations()[rotation].clone();
 
         Some((
             request_id.to_string(),
