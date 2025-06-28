@@ -49,6 +49,24 @@ impl IrisDB {
         Self { db }
     }
 
+    /// Only use for testing
+    pub fn new_random_par_with_pattern<R: Rng>(size: usize, rng: &mut R) -> Self {
+        // Fork out the rngs to be able to use them concurrently
+        let rng_seeds = (0..size).map(|_| rng.gen()).collect::<Vec<_>>();
+
+        let db = (0..size)
+            .into_par_iter()
+            .map(|i| {
+                let mut rng = StdRng::from_seed(rng_seeds[i]);
+                const PATTERN_SIZES: [usize; 4] = [2, 4, 8, 10];
+                let pattern_size = PATTERN_SIZES[rng.gen_range(0..PATTERN_SIZES.len())];
+                IrisCode::random_rng_with_pattern(&mut rng, pattern_size)
+            })
+            .collect::<Vec<_>>();
+
+        Self { db }
+    }
+
     pub fn iris_in_db(&self, iris: &IrisCode) -> bool {
         self.db.iter().any(|x| iris.is_close(x))
     }

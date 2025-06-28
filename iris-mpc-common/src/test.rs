@@ -1559,8 +1559,8 @@ impl TestDb {
 
 pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
-    let mut db_left = IrisDB::new_random_par(db_size, &mut rng);
-    let mut db_right = IrisDB::new_random_par(db_size, &mut rng);
+    let mut db_left = IrisDB::new_random_par_with_pattern(db_size, &mut rng);
+    let mut db_right = IrisDB::new_random_par_with_pattern(db_size, &mut rng);
 
     // Set the masks to all 1s for the first 10%
     for i in 0..db_size / 10 {
@@ -1836,6 +1836,9 @@ impl SimpleAnonStatsTestGenerator {
                     anonymized_bucket_statistics_right_mirror,
                     ..
                 } = res;
+
+                // only expect matches
+                assert_eq!(matches.iter().all(|&x| x), true);
 
                 // Check that normal orientation statistics have is_mirror_orientation set to false
                 assert!(
