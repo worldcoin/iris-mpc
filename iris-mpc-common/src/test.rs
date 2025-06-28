@@ -1675,7 +1675,7 @@ impl SimpleAnonStatsTestGenerator {
         // Rotate the query iris codes
         template.left = template.left.all_rotations()[rotation].clone();
         let rotation = self.rng.gen_range(0..ROTATIONS);
-        template.right = template.left.all_rotations()[rotation].clone();
+        template.right = template.right.all_rotations()[rotation].clone();
 
         Some((
             request_id.to_string(),
