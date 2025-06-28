@@ -1557,10 +1557,19 @@ impl TestDb {
     }
 }
 
-pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64) -> TestDb {
+pub fn generate_full_test_db(db_size: usize, db_rng_seed: u64, with_pattern: bool) -> TestDb {
     let mut rng = StdRng::seed_from_u64(db_rng_seed);
-    let mut db_left = IrisDB::new_random_par_with_pattern(db_size, &mut rng);
-    let mut db_right = IrisDB::new_random_par_with_pattern(db_size, &mut rng);
+    let (mut db_left, mut db_right) = if with_pattern {
+        (
+            IrisDB::new_random_par_with_pattern(db_size, &mut rng),
+            IrisDB::new_random_par_with_pattern(db_size, &mut rng),
+        )
+    } else {
+        (
+            IrisDB::new_random_par(db_size, &mut rng),
+            IrisDB::new_random_par(db_size, &mut rng),
+        )
+    };
 
     // Set the masks to all 1s for the first 10%
     for i in 0..db_size / 10 {
@@ -1790,6 +1799,7 @@ impl SimpleAnonStatsTestGenerator {
         handles: [&mut impl JobSubmissionHandle; 3],
     ) -> Result<()> {
         let [handle0, handle1, handle2] = handles;
+        let mut request_counter = 0;
         for _ in 0..max_num_batches {
             let ([batch0, batch1, batch2], requests) = match self.generate_query_batch()? {
                 Some(res) => res,
@@ -1798,6 +1808,8 @@ impl SimpleAnonStatsTestGenerator {
             if batch0.request_ids.is_empty() {
                 continue;
             }
+
+            request_counter += batch0.request_ids.len();
             let e2e_template = requests.values().next().cloned().unwrap();
 
             tracing::info!("sending batch to servers");
@@ -1879,6 +1891,16 @@ impl SimpleAnonStatsTestGenerator {
                         &self.plain_distances_left,
                         self.bucket_statistic_parameters.num_buckets,
                     );
+
+                    // there must be exactly one match per request
+                    assert_eq!(
+                        plain_bucket_statistics_left
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        request_counter - 1,
+                    );
+
                     assert_eq!(
                         plain_bucket_statistics_left,
                         anonymized_bucket_statistics_left.buckets
@@ -1892,6 +1914,15 @@ impl SimpleAnonStatsTestGenerator {
                     let plain_bucket_statistics_right = Self::calculate_distance_buckets(
                         &self.plain_distances_right,
                         self.bucket_statistic_parameters.num_buckets,
+                    );
+
+                    // there must be exactly one match per request
+                    assert_eq!(
+                        plain_bucket_statistics_right
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        request_counter - 1,
                     );
 
                     assert_eq!(
@@ -1924,6 +1955,16 @@ impl SimpleAnonStatsTestGenerator {
                         &self.plain_distances_left_mirror,
                         self.bucket_statistic_parameters.num_buckets,
                     );
+
+                    // there must be exactly one match per request
+                    assert_eq!(
+                        plain_bucket_statistics_left_mirror
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        request_counter - 1,
+                    );
+
                     assert_eq!(
                         plain_bucket_statistics_left_mirror,
                         anonymized_bucket_statistics_left_mirror.buckets
@@ -1939,6 +1980,15 @@ impl SimpleAnonStatsTestGenerator {
                     let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
                         &self.plain_distances_right_mirror,
                         self.bucket_statistic_parameters.num_buckets,
+                    );
+
+                    // there must be exactly one match per request
+                    assert_eq!(
+                        plain_bucket_statistics_right_mirror
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        request_counter - 1,
                     );
 
                     assert_eq!(
