@@ -48,6 +48,7 @@ use std::{
     fmt,
     hash::{Hash, Hasher},
     mem,
+    ops::Div,
     sync::Arc,
     time::Instant,
 };
@@ -152,7 +153,7 @@ pub struct ServerActor {
     max_batch_size: usize,
     max_db_size: usize,
     match_distances_buffer_size: usize,
-    match_distances_buffer_size_extra_percent: usize,
+    distance_buffer_size: usize,
     n_buckets: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -430,10 +431,14 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let distance_buffer_len =
+            match_distances_buffer_size * (100 + match_distances_buffer_size_extra_percent) / 100;
+        let distance_buffer_len = distance_buffer_len.div_ceil(64) * 64;
+
         let phase2_buckets = Circuits::new(
             party_id,
-            match_distances_buffer_size,
-            match_distances_buffer_size / 64,
+            distance_buffer_len,
+            distance_buffer_len / 64,
             Some(n_buckets),
             next_chacha_seeds(chacha_seeds)?,
             device_manager.clone(),
@@ -478,8 +483,6 @@ impl ServerActor {
         let phase2_events = vec![device_manager.create_events(); 2];
 
         // Buffers and counters for match distribution
-        let distance_buffer_len =
-            match_distances_buffer_size * (100 + match_distances_buffer_size_extra_percent) / 100;
         let match_distances_buffer_codes_left =
             distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
         let match_distances_buffer_codes_right =
@@ -566,7 +569,7 @@ impl ServerActor {
             max_batch_size,
             max_db_size,
             match_distances_buffer_size,
-            match_distances_buffer_size_extra_percent,
+            distance_buffer_size: distance_buffer_len,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -1859,6 +1862,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_codes,
                 &bucket_distance_counters,
+                self.distance_buffer_size,
                 streams,
             );
 
@@ -1870,6 +1874,7 @@ impl ServerActor {
                 &resort_indices,
                 match_distances_buffers_masks,
                 &bucket_distance_counters,
+                self.distance_buffer_size,
                 streams,
             );
 
@@ -2599,9 +2604,7 @@ impl ServerActor {
                             &code_dots,
                             &mask_dots,
                             batch_size,
-                            self.match_distances_buffer_size
-                                * (100 + self.match_distances_buffer_size_extra_percent)
-                                / 100,
+                            self.distance_buffer_size,
                             request_streams,
                         );
                         self.phase2.return_result_buffer(res);
@@ -3274,6 +3277,7 @@ fn sort_shares_by_indices(
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
     length: &[usize],
+    padded_len: usize,
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
     let a = shares
@@ -3290,7 +3294,6 @@ fn sort_shares_by_indices(
 
     (0..a.len())
         .map(|i| {
-            let padded_len = length[i].div_ceil(64) * 64;
             let new_a = resort_indices[i]
                 .iter()
                 .map(|&j| a[i][j])
