@@ -37,6 +37,7 @@ pub struct DistanceComparator {
     pub merge_batch_kernels: Vec<CudaFunction>,
     pub merge_batch_with_bitmap_kernels: Vec<CudaFunction>,
     pub query_length: usize,
+    pub max_db_size: usize,
     pub opened_results: Vec<CudaSlice<u32>>,
     pub final_results: Vec<CudaSlice<u32>>,
     pub results_init_host: Vec<u32>,
@@ -55,7 +56,11 @@ pub struct DistanceComparator {
 }
 
 impl DistanceComparator {
-    pub fn init(query_length: usize, device_manager: Arc<DeviceManager>) -> Self {
+    pub fn init(
+        query_length: usize,
+        max_db_size: usize,
+        device_manager: Arc<DeviceManager>,
+    ) -> Self {
         let ptx = compile_ptx(PTX_SRC).unwrap();
         let mut open_kernels: Vec<CudaFunction> = Vec::new();
         let mut open_batch_kernels: Vec<CudaFunction> = Vec::new();
@@ -162,6 +167,7 @@ impl DistanceComparator {
             merge_batch_kernels,
             merge_batch_with_bitmap_kernels,
             query_length,
+            max_db_size,
             opened_results,
             final_results,
             results_init_host,
@@ -252,6 +258,7 @@ impl DistanceComparator {
                             max_bucket_distances,
                             batch_id,
                             self.query_length,
+                            self.max_db_size as u64,
                         ),
                     )
                     .unwrap();
