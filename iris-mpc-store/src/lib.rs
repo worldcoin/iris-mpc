@@ -500,12 +500,7 @@ WHERE id = $1;
         after_modification_id: i64,
         serial_id_less_than: u32,
     ) -> Result<Vec<Modification>> {
-        let message_types = &[
-            RESET_UPDATE_MESSAGE_TYPE,
-            REAUTH_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE,
-            UNIQUENESS_MESSAGE_TYPE,
-        ];
+        let message_types = &[RESET_UPDATE_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE];
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
