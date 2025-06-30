@@ -14,8 +14,6 @@ use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
     decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, ReceiveRequestError,
 };
-use iris_mpc_common::job::BatchQuery;
-use iris_mpc_store::Store;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::{spawn_blocking, JoinHandle};
@@ -126,52 +124,4 @@ pub fn get_iris_shares_parse_task(
             ))
         });
     Ok(handle)
-}
-
-pub async fn process_identity_deletions(
-    batch: &BatchQuery,
-    store: &Store,
-    dummy_iris_share: &GaloisRingIrisCodeShare,
-    dummy_mask_share: &GaloisRingTrimmedMaskCodeShare,
-) -> Result<()> {
-    if batch.deletion_requests_indices.is_empty() {
-        return Ok(());
-    }
-
-    for (&entry_idx, tracing_payload) in batch
-        .deletion_requests_indices
-        .iter()
-        .zip(batch.deletion_requests_metadata.iter())
-    {
-        let serial_id = entry_idx + 1; // DB serial_id is 1-indexed
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Started processing deletion request",
-        );
-
-        // overwrite postgres db with dummy values.
-        // note that both serial_id and postgres db are 1-indexed.
-        store
-            .update_iris(
-                None,
-                serial_id as i64,
-                dummy_iris_share,
-                dummy_mask_share,
-                dummy_iris_share,
-                dummy_mask_share,
-            )
-            .await?;
-
-        tracing::info!(
-            node_id = tracing_payload.node_id,
-            dd.trace_id = tracing_payload.trace_id,
-            dd.span_id = tracing_payload.span_id,
-            "Deleted identity with serial id {}",
-            serial_id,
-        );
-    }
-
-    Ok(())
 }

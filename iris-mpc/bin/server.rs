@@ -21,12 +21,12 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
-    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
+    config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
@@ -179,7 +179,6 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let batch_modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -236,7 +235,8 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if batch_modifications
+                        if batch_query
+                            .modifications
                             .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
                         {
                             tracing::warn!(
@@ -253,16 +253,16 @@ async fn receive_batch(
                                 None,
                             )
                             .await?;
-                        batch_modifications.insert(
+                        batch_query.modifications.insert(
                             RequestSerialId(identity_deletion_request.serial_id),
                             modification,
                         );
 
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
+                        batch_query.push_deletion_request(
+                            sns_message_id,
+                            identity_deletion_request.serial_id - 1,
+                            batch_metadata,
+                        );
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -304,7 +304,7 @@ async fn receive_batch(
                                 Some(uniqueness_request.s3_key.as_str()),
                             )
                             .await?;
-                        batch_modifications.insert(
+                        batch_query.modifications.insert(
                             RequestId(uniqueness_request.signup_id.clone()),
                             modification,
                         );
@@ -326,14 +326,11 @@ async fn receive_batch(
                         }
 
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
-                            batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(
                                 "Setting skip_persistence to {} for request id {}",
                                 skip_persistence,
                                 uniqueness_request.signup_id
                             );
-                        } else {
-                            batch_query.skip_persistence.push(false);
                         }
 
                         if config.luc_enabled && config.luc_lookback_records > 0 {
@@ -356,16 +353,15 @@ async fn receive_batch(
                         } else {
                             vec![]
                         };
-                        batch_query.or_rule_indices.push(or_rule_indices);
 
-                        batch_query
-                            .request_ids
-                            .push(uniqueness_request.signup_id.clone());
-                        batch_query
-                            .request_types
-                            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
-                        batch_query.metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
+                        batch_query.push_matching_request(
+                            sns_message_id,
+                            uniqueness_request.signup_id.clone(),
+                            UNIQUENESS_MESSAGE_TYPE,
+                            batch_metadata,
+                            or_rule_indices,
+                            uniqueness_request.skip_persistence.unwrap_or(false),
+                        );
 
                         let semaphore = Arc::clone(&semaphore);
                         let s3_client_arc = s3_client.clone();
@@ -413,7 +409,8 @@ async fn receive_batch(
                                 continue;
                             }
 
-                            if batch_modifications
+                            if batch_query
+                                .modifications
                                 .contains_key(&RequestSerialId(reauth_request.serial_id))
                             {
                                 tracing::warn!(
@@ -433,7 +430,8 @@ async fn receive_batch(
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications
+                            batch_query
+                                .modifications
                                 .insert(RequestSerialId(reauth_request.serial_id), modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
@@ -449,13 +447,6 @@ async fn receive_batch(
                                 tracing::info!("Updating batch size to {}", batch_size);
                             }
 
-                            batch_query
-                                .request_ids
-                                .push(reauth_request.reauth_id.clone());
-                            batch_query
-                                .request_types
-                                .push(REAUTH_MESSAGE_TYPE.to_string());
-                            batch_query.metadata.push(batch_metadata);
                             batch_query.reauth_target_indices.insert(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.serial_id - 1,
@@ -464,15 +455,22 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
-                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let or_rule_indices = if reauth_request.use_or_rule {
                                 vec![reauth_request.serial_id - 1]
                             } else {
                                 vec![]
                             };
-                            batch_query.or_rule_indices.push(or_rule_indices);
-                            batch_query.skip_persistence.push(false);
+
+                            batch_query.push_matching_request(
+                                sns_message_id,
+                                reauth_request.reauth_id.clone(),
+                                REAUTH_MESSAGE_TYPE,
+                                batch_metadata,
+                                or_rule_indices,
+                                false, // skip_persistence is only used for uniqueness requests
+                            );
+
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
@@ -512,26 +510,35 @@ async fn receive_batch(
                         if config.enable_reset {
                             msg_counter += 1;
 
+                            // Persist in progress reset_check message.
+                            // Note that reset_check is only a query and does not persist anything into the database.
+                            // We store modification so that the SNS result can be replayed.
+                            let modification = store
+                                .insert_modification(
+                                    None,
+                                    RESET_CHECK_MESSAGE_TYPE,
+                                    Some(reset_check_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_query.modifications.insert(
+                                RequestId(reset_check_request.reset_id.clone()),
+                                modification,
+                            );
+
                             if let Some(batch_size) = reset_check_request.batch_size {
                                 *CURRENT_BATCH_SIZE.lock().unwrap() =
                                     batch_size.clamp(1, max_batch_size);
                                 tracing::info!("Updating batch size to {}", batch_size);
                             }
 
-                            batch_query
-                                .request_ids
-                                .push(reset_check_request.reset_id.clone());
-                            batch_query
-                                .request_types
-                                .push(RESET_CHECK_MESSAGE_TYPE.to_string());
-                            batch_query.metadata.push(batch_metadata);
-                            batch_query.sns_message_ids.push(sns_message_id);
-
-                            // skip_persistence is only used for uniqueness requests
-                            batch_query.skip_persistence.push(false);
-
-                            // We need to use AND rule for reset check requests
-                            batch_query.or_rule_indices.push(vec![]);
+                            batch_query.push_matching_request(
+                                sns_message_id,
+                                reset_check_request.reset_id.clone(),
+                                RESET_CHECK_MESSAGE_TYPE,
+                                batch_metadata,
+                                vec![], // use AND rule for reset check requests
+                                false,  // skip_persistence is only used for uniqueness requests
+                            );
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = s3_client.clone();
@@ -603,7 +610,8 @@ async fn receive_batch(
                                 }
                             };
 
-                            if batch_modifications
+                            if batch_query
+                                .modifications
                                 .contains_key(&RequestSerialId(reset_update_request.serial_id))
                             {
                                 tracing::warn!(
@@ -621,24 +629,22 @@ async fn receive_batch(
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications.insert(
+                            batch_query.modifications.insert(
                                 RequestSerialId(reset_update_request.serial_id),
                                 modification,
                             );
 
-                            batch_query
-                                .reset_update_indices
-                                .push(reset_update_request.serial_id - 1);
-                            batch_query.sns_message_ids.push(sns_message_id.clone());
-                            batch_query
-                                .reset_update_request_ids
-                                .push(reset_update_request.reset_id);
-                            batch_query.reset_update_shares.push(GaloisSharesBothSides {
-                                code_left: left_shares.code,
-                                mask_left: left_shares.mask,
-                                code_right: right_shares.code,
-                                mask_right: right_shares.mask,
-                            });
+                            batch_query.push_reset_update_request(
+                                sns_message_id,
+                                reset_update_request.reset_id,
+                                reset_update_request.serial_id - 1,
+                                GaloisSharesBothSides {
+                                    code_left: left_shares.code,
+                                    mask_left: left_shares.mask,
+                                    code_right: right_shares.code,
+                                    mask_right: right_shares.mask,
+                                },
+                            );
                         }
                     }
 
@@ -833,20 +839,6 @@ async fn server_main(config: Config) -> Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
-
-    // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::Gpu
-        || config.mode_of_deployment != ModeOfDeployment::Standard
-    {
-        panic!(
-            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
-             :: ModeOfDeployment::STANDARD"
-        );
-    } else {
-        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
-    }
-
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
@@ -1621,9 +1613,17 @@ async fn server_main(config: Config) -> Result<()> {
                         Some(partial_match_counters_right[i]),
                         Some(partial_match_counters_left[i]),
                     );
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset check result");
 
-                    serde_json::to_string(&result_event)
-                        .expect("failed to serialize reset check result")
+                    // Mark the reset check modification as completed. 
+                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // We store modification so that the SNS result can be replayed.
+                    modifications
+                        .get_mut(&RequestId(reset_id))
+                        .unwrap()
+                        .mark_completed(false, &result_string, None, None);
+                    result_string
                 })
                 .collect::<Vec<String>>();
 

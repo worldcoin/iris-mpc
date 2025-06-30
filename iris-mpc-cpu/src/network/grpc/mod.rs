@@ -8,6 +8,7 @@ mod handle;
 mod networking;
 mod session;
 
+#[allow(unused_imports)]
 pub use handle::*;
 pub use networking::*;
 
@@ -38,14 +39,23 @@ mod tests {
         execution::{local::generate_local_identities, player::Role, session::SessionId},
         hawkers::aby3::{aby3_store::prepare_query, test_utils::shared_random_setup},
         hnsw::HnswSearcher,
-        network::{NetworkType, Networking},
+        network::{value::NetworkValue, NetworkType, Networking},
     };
     use aes_prng::AesRng;
     use futures::future::join_all;
     use iris_mpc_common::vector_id::VectorId;
+    use rand::Rng;
     use rand::SeedableRng;
     use tokio::{task::JoinSet, time::sleep};
     use tracing_test::traced_test;
+
+    // can only send NetworkValue over the network. PrfKey is easy to make so this is used here.
+    fn get_prf() -> NetworkValue {
+        let mut rng = rand::thread_rng();
+        let mut key = [0u8; 16];
+        rng.fill(&mut key);
+        NetworkValue::PrfKey(key)
+    }
 
     async fn create_session_helper(
         session_id: SessionId,
@@ -100,7 +110,7 @@ mod tests {
                 let alice = players.pop().unwrap();
 
                 // Send a message from the first party to the second party
-                let message = b"Hey, Bob. I'm Alice. Do you copy?".to_vec();
+                let message = get_prf();
                 let message_copy = message.clone();
 
                 let task1 = tokio::spawn(async move {
@@ -117,6 +127,8 @@ mod tests {
         // Multiple parties sending messages to each other
         let all_parties_talk = |identities: Vec<Identity>, sessions: Vec<GrpcSession>| async move {
             let mut tasks = JoinSet::new();
+            let message_to_next = get_prf();
+            let message_to_prev = get_prf();
             for (player_id, session) in sessions.into_iter().enumerate() {
                 let role = Role::new(player_id);
                 let next = role.next(3).index();
@@ -125,34 +137,19 @@ mod tests {
                 let next_id = identities[next].clone();
                 let prev_id = identities[prev].clone();
 
-                let message_to_next =
-                    format!("From player {} to player {} with love", player_id, next).into_bytes();
-                let message_to_prev =
-                    format!("From player {} to player {} with love", player_id, prev).into_bytes();
-
                 let mut session = session;
+                let msg_next = message_to_next.clone();
+                let msg_prev = message_to_prev.clone();
                 tasks.spawn(async move {
                     // Sending
-                    session
-                        .send(message_to_next.clone(), &next_id)
-                        .await
-                        .unwrap();
-                    session
-                        .send(message_to_prev.clone(), &prev_id)
-                        .await
-                        .unwrap();
+                    session.send(msg_next.clone(), &next_id).await.unwrap();
+                    session.send(msg_prev.clone(), &prev_id).await.unwrap();
 
                     // Receiving
                     let received_message_from_prev = session.receive(&prev_id).await.unwrap();
-                    let expected_message_from_prev =
-                        format!("From player {} to player {} with love", prev, player_id)
-                            .into_bytes();
-                    assert_eq!(received_message_from_prev, expected_message_from_prev);
+                    assert_eq!(received_message_from_prev, msg_next);
                     let received_message_from_next = session.receive(&next_id).await.unwrap();
-                    let expected_message_from_next =
-                        format!("From player {} to player {} with love", next, player_id)
-                            .into_bytes();
-                    assert_eq!(received_message_from_next, expected_message_from_next);
+                    assert_eq!(received_message_from_next, msg_prev);
                 });
             }
             tasks.join_all().await;
@@ -229,7 +226,7 @@ mod tests {
                 let session_id = SessionId::from(0);
                 let sessions = create_session_helper(session_id, &players).await.unwrap();
 
-                let message = b"Hey, Eve. I'm Alice. Do you copy?".to_vec();
+                let message = get_prf();
                 let res = sessions[0]
                     .send(message.clone(), &Identity::from("eve"))
                     .await;
@@ -262,7 +259,7 @@ mod tests {
                 let session_id = SessionId::from(2);
                 let sessions = create_session_helper(session_id, &players).await.unwrap();
 
-                let message = b"Hey, Alice. I'm Alice. Do you copy?".to_vec();
+                let message = get_prf();
                 let res = sessions[0]
                     .send(message.clone(), &Identity::from("alice"))
                     .await;

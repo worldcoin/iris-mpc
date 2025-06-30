@@ -3,7 +3,12 @@ use crate::{
         player::*,
         session::{NetworkSession, Session, SessionId},
     },
-    network::{grpc::setup_local_grpc_networking, local::LocalNetworkingStore, NetworkType},
+    network::{
+        grpc::setup_local_grpc_networking,
+        local::LocalNetworkingStore,
+        tcp::testing::{interleave_vecs, setup_local_tcp_networking},
+        NetworkType,
+    },
     protocol::{
         ops::setup_replicated_prf,
         prf::{Prf, PrfSeed},
@@ -66,7 +71,7 @@ impl LocalRuntime {
     }
 
     pub async fn mock_setup_with_channel() -> Result<Self> {
-        Self::mock_setup(NetworkType::LocalChannel).await
+        Self::mock_setup(NetworkType::Local).await
     }
 
     pub async fn mock_setup_with_grpc(
@@ -74,7 +79,7 @@ impl LocalRuntime {
         stream_parallelism: usize,
         request_parallelism: usize,
     ) -> Result<Self> {
-        Self::mock_setup(NetworkType::GrpcChannel {
+        Self::mock_setup(NetworkType::Grpc {
             connection_parallelism,
             stream_parallelism,
             request_parallelism,
@@ -93,7 +98,7 @@ impl LocalRuntime {
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
         let network_sessions = match network_type {
-            NetworkType::LocalChannel => {
+            NetworkType::Local => {
                 let sess_id = SessionId::from(0_u32);
                 let network = LocalNetworkingStore::from_host_ids(&identities);
                 let network_sessions: Vec<NetworkSession> = (0..seeds.len())
@@ -109,7 +114,7 @@ impl LocalRuntime {
                     .collect();
                 network_sessions
             }
-            NetworkType::GrpcChannel {
+            NetworkType::Grpc {
                 connection_parallelism,
                 stream_parallelism,
                 request_parallelism,
@@ -147,6 +152,38 @@ impl LocalRuntime {
                     .collect();
                 network_sessions
             }
+            NetworkType::Tcp {
+                connection_parallelism,
+                request_parallelism,
+            } => {
+                let (handles, sessions) = setup_local_tcp_networking(
+                    identities.clone(),
+                    connection_parallelism,
+                    request_parallelism,
+                )
+                .await?;
+                // the TcpNetworkHandle needs to live as long as its sessions do. the GrpcHandle
+                // doesn't have to worry about this because each handle is also a gRPC server,
+                // which lives in another task.
+                //
+                // std::mem::forget will prevent drop from being called and the memory will be reclaimed
+                // when the process ends.
+                let h = Arc::new(handles);
+                std::mem::forget(h);
+
+                let interleaved = interleave_vecs(sessions);
+                let network_sessions: Vec<NetworkSession> = interleaved
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, session)| NetworkSession {
+                        session_id: session.id(),
+                        role_assignments: Arc::new(role_assignments.clone()),
+                        networking: Box::new(session),
+                        own_role: Role::new(id % seeds.len()),
+                    })
+                    .collect();
+                network_sessions
+            }
         };
 
         let mut jobs = vec![];
@@ -173,7 +210,7 @@ impl LocalRuntime {
     }
 
     pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Result<Self> {
-        Self::new_with_network_type(identities, seeds, NetworkType::LocalChannel).await
+        Self::new_with_network_type(identities, seeds, NetworkType::Local).await
     }
 
     fn into_sessions(self) -> Vec<SessionRef> {
@@ -190,7 +227,7 @@ impl LocalRuntime {
     }
 
     pub async fn mock_sessions_with_channel() -> Result<Vec<SessionRef>> {
-        Self::mock_sessions(NetworkType::LocalChannel).await
+        Self::mock_sessions(NetworkType::Local).await
     }
 
     pub async fn mock_sessions_with_grpc(
@@ -198,9 +235,20 @@ impl LocalRuntime {
         stream_parallelism: usize,
         request_parallelism: usize,
     ) -> Result<Vec<SessionRef>> {
-        Self::mock_sessions(NetworkType::GrpcChannel {
+        Self::mock_sessions(NetworkType::Grpc {
             connection_parallelism,
             stream_parallelism,
+            request_parallelism,
+        })
+        .await
+    }
+
+    pub async fn mock_sessions_with_tcp(
+        connection_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Result<Vec<SessionRef>> {
+        Self::mock_sessions(NetworkType::Tcp {
+            connection_parallelism,
             request_parallelism,
         })
         .await

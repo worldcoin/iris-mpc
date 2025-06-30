@@ -419,6 +419,7 @@ WHERE id = $1;
     /// # Returns
     ///
     /// An ordered vector of `Modification` instances in ascending order of their IDs.
+    /// Serial ids are initialized for all returned modifications.
     ///
     pub async fn get_persisted_modifications_after_id(
         &self,
@@ -473,7 +474,7 @@ WHERE id = $1;
 
         let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
         let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
-        let persisteds: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
+        let persisted: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
         let result_message_bodies: Vec<Option<String>> = modifications
             .iter()
             .map(|m| m.result_message_body.clone())
@@ -506,7 +507,7 @@ WHERE id = $1;
         )
         .bind(&ids)
         .bind(&statuses)
-        .bind(&persisteds)
+        .bind(&persisted)
         .bind(&result_message_bodies)
         .bind(&serial_ids)
         .bind(&graph_mutations)

@@ -21,9 +21,7 @@ struct Signup {
     iris_code_shares_right: Option<[String; 3]>,
     mask_code_right: String,
     mask_code_shares_right: Option<[String; 3]>,
-    matched_with: Vec<Match>,
     whitelisted: bool,
-    closest_signups: Vec<Match>,
     zkp: String,
     idcomm: String,
 }
@@ -56,15 +54,6 @@ impl Signup {
             GaloisRingIrisCodeShare::encode_mask_code(&mask_code_right, &mut rng);
         self.mask_code_shares_right = Some(shares_mask_code_right.map(|x| x.to_base64()));
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Match {
-    signup_id: String,
-    distance_left: f64,
-    distance_right: f64,
-    manipulation_type: String,
-    normalization_used: bool,
 }
 
 fn read_json_file(file_path: &str) -> serde_json::Result<Vec<Signup>> {
