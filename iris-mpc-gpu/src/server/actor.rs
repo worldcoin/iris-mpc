@@ -1857,7 +1857,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_codes,
-                self.match_distances_buffer_size,
+                &bucket_distance_counters,
                 streams,
             );
 
@@ -1868,7 +1868,7 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_indices,
                 match_distances_buffers_masks,
-                self.match_distances_buffer_size,
+                &bucket_distance_counters,
                 streams,
             );
 
@@ -3272,7 +3272,7 @@ fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
-    length: usize,
+    length: &[usize],
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
     let a = shares
@@ -3289,21 +3289,26 @@ fn sort_shares_by_indices(
 
     (0..a.len())
         .map(|i| {
+            let padded_len = length[i].div_ceil(64) * 64;
             let new_a = resort_indices[i]
                 .iter()
                 .map(|&j| a[i][j])
+                .chain(std::iter::repeat(0u16))
+                .take(padded_len)
                 .collect::<Vec<_>>();
-            tracing::info!("Shares a: {:?}", &new_a[..length]);
-            let a = htod_on_stream_sync(&new_a[..length], &device_manager.device(i), &streams[i])
-                .unwrap();
+            tracing::info!("Shares a: {:?}", &new_a[..length[i]]);
+            let a =
+                htod_on_stream_sync(&new_a[..], &device_manager.device(i), &streams[i]).unwrap();
 
             let new_b = resort_indices[i]
                 .iter()
                 .map(|&j| b[i][j])
+                .chain(std::iter::repeat(0u16))
+                .take(padded_len)
                 .collect::<Vec<_>>();
-            tracing::info!("Shares b: {:?}", &new_b[..length]);
-            let b = htod_on_stream_sync(&new_b[..length], &device_manager.device(i), &streams[i])
-                .unwrap();
+            tracing::info!("Shares b: {:?}", &new_b[..length[i]]);
+            let b =
+                htod_on_stream_sync(&new_b[..], &device_manager.device(i), &streams[i]).unwrap();
 
             ChunkShare::new(a, b)
         })
