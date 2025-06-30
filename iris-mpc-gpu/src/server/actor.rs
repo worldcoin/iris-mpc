@@ -1842,7 +1842,14 @@ impl ServerActor {
             tracing::info!("Sorted indices hash: {:?}", hasher.finish());
 
             let indices_bitmaps = indices
-                .iter()
+                .into_iter()
+                .map(|mut sorted| {
+                    for id in &mut sorted {
+                        // re-map the ids to remove the ROTATION aspect from them
+                        *id /= ROTATIONS as u64;
+                    }
+                    sorted
+                })
                 .map(|sorted| ids_to_bitvec(&sorted))
                 .collect_vec();
 
