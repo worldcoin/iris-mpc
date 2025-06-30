@@ -3296,7 +3296,10 @@ fn sort_shares_by_indices(
                 .chain(std::iter::repeat(0u16))
                 .take(padded_len)
                 .collect::<Vec<_>>();
-            tracing::info!("Shares a: {:?}", &new_a[..length[i]]);
+            tracing::info!(
+                "Shares a: {:?} (padded to {padded_len})",
+                &new_a[..length[i]]
+            );
             let a =
                 htod_on_stream_sync(&new_a[..], &device_manager.device(i), &streams[i]).unwrap();
 
@@ -3306,7 +3309,10 @@ fn sort_shares_by_indices(
                 .chain(std::iter::repeat(0u16))
                 .take(padded_len)
                 .collect::<Vec<_>>();
-            tracing::info!("Shares b: {:?}", &new_b[..length[i]]);
+            tracing::info!(
+                "Shares b: {:?} (padded to {padded_len})",
+                &new_b[..length[i]]
+            );
             let b =
                 htod_on_stream_sync(&new_b[..], &device_manager.device(i), &streams[i]).unwrap();
 
