@@ -2040,6 +2040,7 @@ impl SimpleAnonStatsTestGenerator {
 
             if clear_left {
                 self.plain_distances_left.clear();
+                request_counter = 1;
             }
             if clear_right {
                 self.plain_distances_right.clear();
