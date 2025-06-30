@@ -45,13 +45,13 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "512"
+    value: "128"
 
   - name: SMPC__N_BUCKETS
     value: "16"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
