@@ -5,6 +5,7 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
+use iris_mpc_store::StoredIrisVector;
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// Component name for logging purposes.
@@ -24,6 +25,12 @@ pub struct Batch {
 
     /// Array of vector ids of iris enrollments.
     pub vector_ids: Vec<VectorId>,
+
+    /// Iris data for persistence.
+    pub iris_data: Vec<StoredIrisVector>,
+
+    /// if it is only an iris indexation job
+    pub iris_indexation_only: bool,
 }
 
 /// Constructor.
@@ -33,12 +40,19 @@ impl Batch {
         vector_ids: Vec<VectorId>,
         left_queries: Vec<QueryRef>,
         right_queries: Vec<QueryRef>,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
+        let mut iris_indexation_only = false;
+        if vector_ids.is_empty() && !iris_data.is_empty() {
+            iris_indexation_only = true;
+        }
         Self {
             batch_id,
             vector_ids,
             left_queries,
             right_queries,
+            iris_data,
+            iris_indexation_only,
         }
     }
 }
@@ -83,13 +97,6 @@ impl BatchGenerator {
         batch_size: BatchSize,
         exclusions: Vec<IrisSerialId>,
     ) -> Self {
-        assert!(
-            end_id > start_id,
-            "Invalid indexation range: {}..{}.",
-            start_id,
-            end_id
-        );
-
         let range = start_id..=end_id;
 
         Self {
@@ -207,12 +214,18 @@ impl fmt::Display for BatchSize {
 impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
-        self.vector_ids.last().map(|id| id.serial_id()).unwrap()
+        self.vector_ids
+            .last()
+            .map(|id| id.serial_id())
+            .unwrap_or_default()
     }
 
     // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
-        self.vector_ids.first().map(|id| id.serial_id()).unwrap()
+        self.vector_ids
+            .first()
+            .map(|id| id.serial_id())
+            .unwrap_or_default()
     }
 
     // Returns serial identifiers within batch.
@@ -229,29 +242,83 @@ impl Batch {
 /// Methods.
 impl BatchGenerator {
     /// Returns next batch of Iris serial identifiers to be indexed.
-    fn next_identifiers(&mut self, last_indexed_id: IrisSerialId) -> Option<Vec<IrisSerialId>> {
+    fn next_identifiers(
+        &mut self,
+        last_indexed_id: IrisSerialId,
+    ) -> (Option<Vec<IrisSerialId>>, Option<Vec<IrisSerialId>>) {
         // Escape if exhausted.
-        self.range_iter.peek()?;
+        if self.range_iter.peek().is_none() {
+            log_info(format!(
+                "Exhausted range iterator: last-indexed-id={}",
+                last_indexed_id
+            ));
+            return (None, None);
+        }
 
         // Calculate batch size.
         let batch_size_max = self.batch_size.next_max(last_indexed_id);
 
         // Construct next batch.
+        println!("exclusions={:?}", self.exclusions);
+
         let mut identifiers = Vec::<IrisSerialId>::new();
+        let mut identifiers_for_indexation = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
+            identifiers_for_indexation.push(next_id);
+            println!(
+                "identifiers_for_indexation={:?}",
+                identifiers_for_indexation
+            );
             if !self.exclusions.contains(&next_id) {
+                println!("identifiers={:?}", identifiers);
                 identifiers.push(next_id);
             } else {
                 log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
             }
         }
 
-        if identifiers.is_empty() {
-            None
+        if identifiers_for_indexation.is_empty() {
+            (None, None)
+        } else if identifiers.is_empty() {
+            (None, Some(identifiers_for_indexation))
         } else {
-            Some(identifiers)
+            (Some(identifiers), Some(identifiers_for_indexation))
         }
+    }
+
+    /// Extract iris codes and masks for the given vector IDs
+    async fn get_indexation_iris_codes(
+        &self,
+        vector_ids_for_indexation: &[VectorId],
+        imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    ) -> Vec<StoredIrisVector> {
+        let left_store = &imem_iris_stores[LEFT];
+        let right_store = &imem_iris_stores[RIGHT];
+        let mut codes_and_masks = Vec::new();
+
+        let left_data = left_store
+            .get_vectors(vector_ids_for_indexation.iter())
+            .await;
+        let right_data = right_store
+            .get_vectors(vector_ids_for_indexation.iter())
+            .await;
+
+        for (i, vector_id) in vector_ids_for_indexation.iter().enumerate() {
+            let left_iris = &left_data[i];
+            let right_iris = &right_data[i];
+
+            codes_and_masks.push(StoredIrisVector {
+                id: vector_id.serial_id() as i64,
+                version_id: vector_id.version_id(),
+                left_code: Vec::from(&left_iris.code.coefs),
+                left_mask: Vec::from(&left_iris.mask.coefs),
+                right_code: Vec::from(&right_iris.code.coefs),
+                right_mask: Vec::from(&right_iris.mask.coefs),
+            });
+        }
+
+        codes_and_masks
     }
 }
 
@@ -268,9 +335,24 @@ impl BatchIterator for BatchGenerator {
         last_indexed_id: IrisSerialId,
         imem_iris_stores: &BothEyes<SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
-        if let Some(identifiers) = self.next_identifiers(last_indexed_id) {
+        let (identifiers_opt, identifiers_for_indexation_opt) =
+            self.next_identifiers(last_indexed_id);
+
+        if identifiers_opt.is_none() && identifiers_for_indexation_opt.is_none() {
+            log_info(format!(
+                "Exhausted identifiers: last-indexed-id={}",
+                last_indexed_id
+            ));
+            return Ok(None);
+        }
+
+        let vector_ids: Vec<VectorId>;
+        let vector_ids_for_indexation: Vec<VectorId>;
+        let codes_and_masks: Vec<StoredIrisVector>;
+
+        if let Some(identifiers) = identifiers_opt {
             // Set vector identifiers - assumes left/right store equivalence.
-            let vector_ids = imem_iris_stores[LEFT]
+            vector_ids = imem_iris_stores[LEFT]
                 .get_vector_ids(&identifiers)
                 .await
                 .into_iter()
@@ -279,19 +361,36 @@ impl BatchIterator for BatchGenerator {
                     id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
                 })
                 .collect::<Result<Vec<_>, IndexationError>>()?;
-
-            // Update internal state.
-            self.batch_count += 1;
-
-            Ok(Some(Batch::new(
-                self.batch_count,
-                vector_ids.clone(),
-                imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
-                imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
-            )))
         } else {
-            Ok(None)
+            vector_ids = Vec::new();
         }
+
+        if let Some(identifiers_for_indexation) = identifiers_for_indexation_opt {
+            vector_ids_for_indexation = imem_iris_stores[LEFT]
+                .get_vector_ids(&identifiers_for_indexation)
+                .await
+                .into_iter()
+                .zip(identifiers_for_indexation)
+                .map(|(id_opt, serial_id)| {
+                    id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
+                })
+                .collect::<Result<Vec<_>, IndexationError>>()?;
+            codes_and_masks = self
+                .get_indexation_iris_codes(&vector_ids_for_indexation, imem_iris_stores)
+                .await;
+        } else {
+            codes_and_masks = Vec::new();
+        }
+
+        self.batch_count += 1;
+
+        Ok(Some(Batch::new(
+            self.batch_count,
+            vector_ids.clone(),
+            imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
+            imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
+            codes_and_masks,
+        )))
     }
 }
 
@@ -501,9 +600,12 @@ mod tests {
         let mut generator = BatchGenerator::new_1();
         let mut last_indexed_id = 0 as IrisSerialId;
 
-        while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
+        while let (Some(identifiers), Some(identifiers_for_indexation)) =
+            generator.next_identifiers(last_indexed_id)
+        {
             batch_id += 1;
             assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10);
+            assert_eq!(identifiers_for_indexation.len(), STATIC_BATCH_SIZE_10);
             last_indexed_id += identifiers.len() as IrisSerialId;
         }
         assert_eq!(batch_id, 10);
@@ -516,12 +618,42 @@ mod tests {
         let mut generator = BatchGenerator::new_2();
         let mut last_indexed_id = 0 as IrisSerialId;
 
-        while let Some(identifiers) = generator.next_identifiers(last_indexed_id) {
+        while let (Some(identifiers), Some(identifiers_for_indexation)) =
+            generator.next_identifiers(last_indexed_id)
+        {
             batch_id += 1;
             assert_eq!(identifiers.len(), 1);
+            assert_eq!(identifiers_for_indexation.len(), 1);
             last_indexed_id += 1;
         }
         assert_eq!(batch_id, 100);
+    }
+
+    /// Test next identifiers: batch-size=1.
+    #[test]
+    fn test_next_identifiers_for_indexation_with_exclusions() {
+        let mut batch_id: usize = 0;
+        let mut generator = BatchGenerator::new_4();
+        let mut last_indexed_id = 0 as IrisSerialId;
+
+        let mut all_identifiers: Vec<IrisSerialId> = vec![];
+        let mut all_identifiers_for_indexation: Vec<IrisSerialId> = vec![];
+
+        while let (Some(identifiers), Some(identifiers_for_indexation)) =
+            generator.next_identifiers(last_indexed_id)
+        {
+            batch_id += 1;
+            last_indexed_id += 1;
+            assert!(identifiers.len() <= identifiers_for_indexation.len());
+
+            all_identifiers_for_indexation.extend(identifiers_for_indexation.clone());
+            all_identifiers.extend(identifiers.clone());
+        }
+        assert_eq!(batch_id, 10);
+        EXCLUSIONS.map(|id| {
+            assert!(!all_identifiers.contains(&id));
+            assert!(all_identifiers_for_indexation.contains(&id));
+        });
     }
 
     /// Test batch generation: store length=100 :: batch-size=10.

@@ -98,6 +98,47 @@ pub struct StoredIrisRef<'a> {
     pub right_mask: &'a [u16],
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OneSidedStoredIrisVector {
+    pub id: i64,
+    pub version_id: i16,
+    pub code: Vec<u16>,
+    pub mask: Vec<u16>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredIrisVector {
+    pub id: i64,
+    pub version_id: i16,
+    pub left_code: Vec<u16>,
+    pub left_mask: Vec<u16>,
+    pub right_code: Vec<u16>,
+    pub right_mask: Vec<u16>,
+}
+
+impl StoredIrisVector {
+    pub fn as_ref(&self) -> StoredIrisVectorRef<'_> {
+        StoredIrisVectorRef {
+            id: self.id,
+            version_id: self.version_id,
+            left_code: &self.left_code,
+            left_mask: &self.left_mask,
+            right_code: &self.right_code,
+            right_mask: &self.right_mask,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StoredIrisVectorRef<'a> {
+    pub id: i64,
+    pub version_id: i16,
+    pub left_code: &'a [u16],
+    pub left_mask: &'a [u16],
+    pub right_code: &'a [u16],
+    pub right_mask: &'a [u16],
+}
+
 // Convertor: DbStoredIris -> IrisIdentifiers.
 impl From<&DbStoredIris> for VectorId {
     fn from(value: &DbStoredIris) -> Self {
@@ -262,6 +303,38 @@ impl Store {
             .map(|row| row.get::<i64, _>("id"))
             .collect::<Vec<_>>();
 
+        Ok(ids)
+    }
+
+    pub async fn insert_copy_iris(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        codes_and_masks: &[StoredIrisVectorRef<'_>],
+    ) -> Result<Vec<i64>> {
+        if codes_and_masks.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO irises (id, version_id, left_code, left_mask, right_code, right_mask)",
+        );
+        query.push_values(codes_and_masks, |mut query, iris| {
+            query.push_bind(iris.id);
+            query.push_bind(iris.version_id);
+            query.push_bind(cast_slice::<u16, u8>(iris.left_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_code));
+            query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
+        });
+
+        query.push(" RETURNING id");
+
+        let ids = query
+            .build()
+            .fetch_all(tx.deref_mut())
+            .await?
+            .iter()
+            .map(|row| row.get::<i64, _>("id"))
+            .collect::<Vec<_>>();
         Ok(ids)
     }
 
@@ -640,7 +713,9 @@ pub mod tests {
     use futures::TryStreamExt;
     use iris_mpc_common::{
         helpers::{
-            smpc_request::{RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+            smpc_request::{
+                IDENTITY_DELETION_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            },
             sync::ModificationStatus,
         },
         postgres::AccessMode,

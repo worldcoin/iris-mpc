@@ -15,6 +15,8 @@ services:
     working_dir: /workspace
     entrypoint: [ "bash", "-c", "apt-get update && apt-get install -y build-essential pkg-config autoconf automake libtool libssl-dev protobuf-compiler && /init_db.sh && mkdir -p /tmp && touch /tmp/init_db_complete && tail -f /dev/null" ]
     depends_on:
+      localstack:
+        condition: service_healthy
       dev_db:
         condition: service_healthy
     healthcheck:

@@ -5,6 +5,7 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
+use iris_mpc_store::StoredIrisVector;
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -33,6 +34,9 @@ pub enum JobRequest {
         // Incoming batch of iris identifiers for subsequent correlation.
         vector_ids: Vec<IrisVectorId>,
 
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
+
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
     },
@@ -50,14 +54,20 @@ impl JobRequest {
             vector_ids,
             left_queries,
             right_queries,
+            iris_data,
+            iris_indexation_only,
         }: Batch,
     ) -> Self {
-        assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
+        assert!(
+            !vector_ids.is_empty() || iris_indexation_only,
+            "Invalid batch: is empty"
+        );
 
         Self::BatchIndexation {
             batch_id,
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
+            iris_data,
         }
     }
 
@@ -79,15 +89,23 @@ pub enum JobResult {
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
 
-        /// Iris serial id of batch's first element.
-        first_serial_id: IrisSerialId,
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
 
+        /// if it is a batch indexation only, then this is true.
+        iris_indexation_only: bool,
+
+        /// Iris serial id of batch's first element.
+        first_serial_id: Option<IrisSerialId>,
         /// Iris serial id of batch's last element.
-        last_serial_id: IrisSerialId,
+        last_serial_id: Option<IrisSerialId>,
     },
     Modification {
-        /// Modification id of associated modifications table entry
+        /// Modification id of associated modifications table entry.
         modification_id: i64,
+
+        /// Iris data for persistence.
+        iris_data: Vec<StoredIrisVector>,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -100,15 +118,30 @@ impl JobResult {
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
         connect_plans: HawkMutation,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
-        let first_serial_id = vector_ids.first().unwrap().serial_id();
-        let last_serial_id = vector_ids.last().unwrap().serial_id();
+        let iris_indexation_only = vector_ids.is_empty();
+
+        let first_serial_id = if iris_indexation_only {
+            None
+        } else {
+            Some(vector_ids.first().unwrap().serial_id())
+        };
+
+        let last_serial_id = if iris_indexation_only {
+            None
+        } else {
+            Some(vector_ids.last().unwrap().serial_id())
+        };
+
         Self::BatchIndexation {
             connect_plans,
             batch_id,
             vector_ids,
+            iris_data,
             first_serial_id,
             last_serial_id,
+            iris_indexation_only,
         }
     }
 
@@ -116,10 +149,12 @@ impl JobResult {
     pub(crate) fn new_modification_result(
         modification_id: i64,
         connect_plans: HawkMutation,
+        iris_data: Vec<StoredIrisVector>,
     ) -> Self {
         Self::Modification {
             modification_id,
             connect_plans,
+            iris_data,
         }
     }
 }
@@ -137,11 +172,11 @@ impl fmt::Display for JobResult {
             } => {
                 write!(
                     f,
-                    "batch-id={}, batch-size={}, range=({}..{})",
+                    "batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
-                    first_serial_id,
-                    last_serial_id
+                    Some(first_serial_id),
+                    Some(last_serial_id)
                 )
             }
             JobResult::Modification {

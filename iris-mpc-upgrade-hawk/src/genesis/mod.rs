@@ -209,8 +209,10 @@ async fn exec_setup(
     let mut task_monitor_bg = coordinator::init_task_monitor();
 
     // Set service clients.
-    let ((aws_s3_client, aws_sqs_client, aws_rds_client), (iris_store, graph_store)) =
-        get_service_clients(config).await?;
+    let (
+        (aws_s3_client, aws_sqs_client, aws_rds_client),
+        (iris_store, (hnsw_iris_store, graph_store)),
+    ) = get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
 
     // Set serial identifier of last indexed Iris.
@@ -331,8 +333,13 @@ async fn exec_setup(
     log_info(String::from("Hawk handle initialised"));
 
     // Set thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut task_monitor_bg, &shutdown_handler).await?;
+    let tx_results = get_results_thread(
+        hnsw_iris_store,
+        graph_store,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
     task_monitor_bg.check_tasks();
 
     Ok((
@@ -482,6 +489,13 @@ async fn exec_indexation(
         _ => BatchSize::new_static(ctx.args.batch_size),
     };
 
+    if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
+        log_warn(format!(
+            "Last indexed id {} is greater than max indexation id {}. \
+                 No indexation will be performed.",
+            ctx.last_indexed_id, ctx.args.max_indexation_id
+        ));
+    }
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
@@ -522,8 +536,9 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            // Set next last indexed id.
-            last_indexed_id = batch.id_end();
+            if !batch.iris_indexation_only {
+                last_indexed_id = batch.id_end();
+            }
 
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(batch);
@@ -541,7 +556,6 @@ async fn exec_indexation(
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
         }
-
         Ok(())
     }
     .await;
@@ -693,7 +707,7 @@ async fn get_service_clients(
 ) -> Result<
     (
         (S3Client, SQSClient, RDSClient),
-        (IrisStore, GraphPg<Aby3Store>),
+        (IrisStore, (IrisStore, GraphPg<Aby3Store>)),
     ),
     Report,
 > {
@@ -721,8 +735,10 @@ async fn get_service_clients(
     }
 
     /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.
-    async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
-        async fn get_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
+    async fn get_pgres_clients(
+        config: &Config,
+    ) -> Result<(IrisStore, (IrisStore, GraphPg<Aby3Store>)), Report> {
+        async fn get_mpc_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
                 config.schema_name,
@@ -734,7 +750,10 @@ async fn get_service_clients(
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
-            log_info(format!("Creating new iris store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new iris store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
                     .await?;
@@ -742,7 +761,9 @@ async fn get_service_clients(
             IrisStore::new(&db_client).await
         }
 
-        async fn get_graph_store_client(config: &Config) -> Result<GraphPg<Aby3Store>, Report> {
+        async fn get_hnsw_store_clients(
+            config: &Config,
+        ) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
                 config.schema_name,
@@ -754,17 +775,23 @@ async fn get_service_clients(
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-            log_info(format!("Creating new graph store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new graph store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
 
-            GraphStore::new(&db_client).await
+            Ok((
+                IrisStore::new(&db_client).await?,
+                GraphStore::new(&db_client).await?,
+            ))
         }
 
         Ok((
-            get_iris_store_client(config).await?,
-            get_graph_store_client(config).await?,
+            get_mpc_iris_store_client(config).await?,
+            get_hnsw_store_clients(config).await?,
         ))
     }
 
@@ -783,6 +810,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
+    hnsw_iris_store: IrisStore,
     graph_store: GraphPg<Aby3Store>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -796,39 +824,61 @@ async fn get_results_thread(
                     batch_id,
                     connect_plans,
                     last_serial_id,
+                    iris_data,
+                    iris_indexation_only,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
 
                     let mut graph_tx = graph_store.tx().await?;
-                    connect_plans.persist(&mut graph_tx).await?;
-                    log_info(format!(
-                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
-                    ));
+                    // Persist batch of Iris's to the HNSW graph store.
+                    hnsw_iris_store
+                        .insert_copy_iris(
+                            &mut graph_tx.tx,
+                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    if iris_indexation_only {
+                        graph_tx.tx.commit().await?;
+                        shutdown_handler_bg.decrement_batches_pending_completion();
+                    } else {
+                        connect_plans.persist(&mut graph_tx).await?;
+                        log_info(format!(
+                            "Job Results :: Persisted graph updates: batch-id={batch_id}"
+                        ));
 
-                    let mut db_tx = graph_tx.tx;
-                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-                    db_tx.commit().await?;
-                    log_info(format!(
-                        "Job Results :: Persisted last indexed id: batch-id={batch_id}"
-                    ));
+                        let mut db_tx = graph_tx.tx;
+                        set_last_indexed_iris_id(&mut db_tx, last_serial_id.unwrap()).await?;
+                        db_tx.commit().await?;
+                        log_info(format!(
+                            "Job Results :: Persisted last indexed id: batch-id={batch_id}"
+                        ));
 
-                    log_info(format!(
-                        "Job Results :: Persisted to dB: batch-id={batch_id}"
-                    ));
+                        log_info(format!(
+                            "Job Results :: Persisted to dB: batch-id={batch_id}"
+                        ));
 
-                    // Notify background task responsible for tracking pending batches.
-                    shutdown_handler_bg.decrement_batches_pending_completion();
+                        // Notify background task responsible for tracking pending batches.
+                        shutdown_handler_bg.decrement_batches_pending_completion();
+                    }
                 }
                 JobResult::Modification {
                     modification_id,
                     connect_plans,
+                    iris_data
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id}",
                     ));
 
                     let mut graph_tx = graph_store.tx().await?;
+                    // Persist batch of Iris's to the HNSW graph store.
+                    hnsw_iris_store
+                        .insert_copy_iris(
+                            &mut graph_tx.tx,
+                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                        )
+                        .await?;
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: modification-id={modification_id}"
