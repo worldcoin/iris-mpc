@@ -826,7 +826,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     iris_data,
-                    iris_indexation_only,
+                    iris_copy_only: iris_indexation_only,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));

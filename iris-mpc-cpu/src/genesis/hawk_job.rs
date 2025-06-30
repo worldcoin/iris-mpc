@@ -93,7 +93,7 @@ pub enum JobResult {
         iris_data: Vec<StoredIrisVector>,
 
         /// if it is a batch indexation only, then this is true.
-        iris_indexation_only: bool,
+        iris_copy_only: bool,
 
         /// Iris serial id of batch's first element.
         first_serial_id: Option<IrisSerialId>,
@@ -120,15 +120,15 @@ impl JobResult {
         connect_plans: HawkMutation,
         iris_data: Vec<StoredIrisVector>,
     ) -> Self {
-        let iris_indexation_only = vector_ids.is_empty();
+        let iris_copy_only = vector_ids.is_empty();
 
-        let first_serial_id = if iris_indexation_only {
+        let first_serial_id = if iris_copy_only {
             None
         } else {
             Some(vector_ids.first().unwrap().serial_id())
         };
 
-        let last_serial_id = if iris_indexation_only {
+        let last_serial_id = if iris_copy_only {
             None
         } else {
             Some(vector_ids.last().unwrap().serial_id())
@@ -141,7 +141,7 @@ impl JobResult {
             iris_data,
             first_serial_id,
             last_serial_id,
-            iris_indexation_only,
+            iris_copy_only,
         }
     }
 
