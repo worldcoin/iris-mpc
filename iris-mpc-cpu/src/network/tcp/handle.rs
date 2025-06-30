@@ -1,12 +1,11 @@
 use super::{
-    session::TcpSession, NetworkMsg, OutStream, OutboundMsg, PeerConnections, StreamId,
-    TcpConnection,
+    session::TcpSession, OutStream, OutboundMsg, PeerConnections, StreamId, TcpConnection,
 };
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
         tcp::{networking::connection_builder::Reconnector, TcpConfig},
-        value::DescriptorByte,
+        value::{DescriptorByte, NetworkValue},
     },
 };
 use bytes::BytesMut;
@@ -32,8 +31,8 @@ const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
 struct SessionChannels {
     outbound_tx: HashMap<Identity, HashMap<StreamId, UnboundedSender<OutboundMsg>>>,
     outbound_rx: HashMap<Identity, HashMap<StreamId, UnboundedReceiver<OutboundMsg>>>,
-    inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkMsg>>>,
-    inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkMsg>>>,
+    inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
+    inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
 }
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
@@ -208,7 +207,7 @@ fn make_channels(
 
             // insert one pair of inbound channels per stream_parallelism
             for session_id in sessions {
-                let (tx, rx) = mpsc::unbounded_channel::<NetworkMsg>();
+                let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
                 inbound_tx.insert(session_id, tx);
                 inbound_rx.insert(session_id, rx);
             }
@@ -337,8 +336,8 @@ async fn manage_connection(
 fn spawn_forwarders(
     reader: Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
     writer: Arc<Mutex<Option<OwnedWriteHalf>>>,
-    inbound_forwarder: Arc<Mutex<HashMap<SessionId, UnboundedSender<Vec<u8>>>>>,
-    outbound_rx: Arc<Mutex<UnboundedReceiver<(SessionId, Vec<u8>)>>>,
+    inbound_forwarder: Arc<Mutex<HashMap<SessionId, UnboundedSender<NetworkValue>>>>,
+    outbound_rx: Arc<Mutex<UnboundedReceiver<(SessionId, NetworkValue)>>>,
     num_sessions: usize,
 ) -> JoinSet<()> {
     let mut join_set = JoinSet::new();
@@ -399,7 +398,7 @@ async fn handle_outbound_traffic(
         let _wakeup_time = Instant::now();
         buffered_msgs += 1;
         buf.extend_from_slice(&session_id.0.to_le_bytes());
-        buf.extend_from_slice(&msg);
+        msg.serialize(&mut buf);
 
         let loop_start_time = Instant::now();
         while buffered_msgs < num_sessions {
@@ -407,7 +406,7 @@ async fn handle_outbound_traffic(
                 Ok((session_id, msg)) => {
                     buffered_msgs += 1;
                     buf.extend_from_slice(&session_id.0.to_le_bytes());
-                    buf.extend_from_slice(&msg);
+                    msg.serialize(&mut buf);
                     if buf.len() >= BUFFER_CAPACITY {
                         break;
                     }
@@ -459,7 +458,7 @@ async fn handle_outbound_traffic(
 /// Inbound: read from the socket and send to tx.
 async fn handle_inbound_traffic(
     reader: &mut BufReader<OwnedReadHalf>,
-    inbound_tx: &HashMap<SessionId, UnboundedSender<NetworkMsg>>,
+    inbound_tx: &HashMap<SessionId, UnboundedSender<NetworkValue>>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; READ_BUF_SIZE];
 
@@ -510,7 +509,14 @@ async fn handle_inbound_traffic(
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            if ch.send(buf[..total_len].to_vec()).is_err() {
+            let nv = match NetworkValue::deserialize(&buf[..total_len]) {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::error!("failed to deserialize message: {e}");
+                    continue;
+                }
+            };
+            if ch.send(nv).is_err() {
                 return Err(io::Error::new(
                     io::ErrorKind::Other,
                     "failed to forward message",

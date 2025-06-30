@@ -175,8 +175,8 @@ impl TryFrom<usize> for StoreId {
 // Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
-    Normal,
-    Mirror,
+    Normal = 0,
+    Mirror = 1,
 }
 
 // TODO: Merge with the same in iris-mpc-gpu.
@@ -198,6 +198,8 @@ impl std::fmt::Display for StoreId {
 
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
+/// BothOrient is an alias for types that apply to both orientations (normal and mirror).
+pub type BothOrient<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
 pub(crate) type VecRequests<T> = Vec<T>;
 type VecBuckets = Vec<u32>;
@@ -305,7 +307,7 @@ impl HawkActor {
         let tcp_config = TcpConfig::new(
             Duration::from_secs(10),
             args.connection_parallelism,
-            args.request_parallelism,
+            args.request_parallelism * 2, // x2 for both orientations.
         );
         tracing::debug!("{:?}", tcp_config);
 
@@ -409,6 +411,16 @@ impl HawkActor {
         }
 
         Ok(self.prf_key.as_ref().unwrap().clone())
+    }
+
+    pub async fn new_sessions_orient(
+        &mut self,
+    ) -> Result<BothOrient<BothEyes<Vec<HawkSessionRef>>>> {
+        let [mut left, mut right] = self.new_sessions().await?;
+
+        let left_mirror = left.split_off(left.len() / 2);
+        let right_mirror = right.split_off(right.len() / 2);
+        Ok([[left, right], [left_mirror, right_mirror]])
     }
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
@@ -1227,10 +1239,10 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        let mut sessions = hawk_actor.new_sessions().await?;
+        let mut sessions = hawk_actor.new_sessions_orient().await?;
 
         // Validate the common state before starting.
-        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
+        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -1262,7 +1274,7 @@ impl HawkHandle {
 
     async fn handle_job(
         hawk_actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions_orient: &BothOrient<BothEyes<Vec<HawkSessionRef>>>,
         request: HawkRequest,
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
@@ -1280,6 +1292,7 @@ impl HawkHandle {
         );
 
         let do_search = async |orient| -> Result<_> {
+            let sessions = &sessions_orient[orient as usize];
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
                 // The store to find vector ids (same left or right).
@@ -1320,11 +1333,14 @@ impl HawkHandle {
         };
 
         let (search_results, match_result) = {
-            let (search_normal, matches_normal) = do_search(Orientation::Normal).await?;
-            let (_, matches_mirror) = do_search(Orientation::Mirror).await?;
+            let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
+                do_search(Orientation::Normal),
+                do_search(Orientation::Mirror),
+            )?;
 
             (search_normal, matches_normal.step3(matches_mirror))
         };
+        let sessions = &sessions_orient[Orientation::Normal as usize];
 
         hawk_actor
             .update_anon_stats(sessions, &search_results)
@@ -1484,16 +1500,16 @@ impl HawkHandle {
 
     async fn health_check(
         hawk_actor: &mut HawkActor,
-        sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+        sessions: &mut BothOrient<BothEyes<Vec<HawkSessionRef>>>,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
             // There is some error so the sessions may be somehow invalid. Make new ones.
-            *sessions = hawk_actor.new_sessions().await?;
+            *sessions = hawk_actor.new_sessions_orient().await?;
         }
 
         // Validate the common state after processing the requests.
-        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
+        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
         Ok(())
     }
 }

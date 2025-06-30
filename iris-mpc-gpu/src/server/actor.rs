@@ -440,7 +440,8 @@ impl ServerActor {
             comms.clone(),
         );
 
-        let distance_comparator = DistanceComparator::init(n_queries, device_manager.clone());
+        let distance_comparator =
+            DistanceComparator::init(n_queries, max_db_size, device_manager.clone());
         // Prepare streams etc.
         let mut streams = vec![];
         let mut cublas_handles = vec![];
@@ -1842,7 +1843,14 @@ impl ServerActor {
             tracing::info!("Sorted indices hash: {:?}", hasher.finish());
 
             let indices_bitmaps = indices
-                .iter()
+                .into_iter()
+                .map(|mut sorted| {
+                    for id in &mut sorted {
+                        // re-map the ids to remove the ROTATION aspect from them
+                        *id /= ROTATIONS as u64;
+                    }
+                    sorted
+                })
                 .map(|sorted| ids_to_bitvec(&sorted))
                 .collect_vec();
 

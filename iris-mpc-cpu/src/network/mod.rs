@@ -1,6 +1,9 @@
-use crate::execution::{
-    player::Identity,
-    session::{SessionId, StreamId},
+use crate::{
+    execution::{
+        player::Identity,
+        session::{SessionId, StreamId},
+    },
+    network::value::NetworkValue,
 };
 use async_trait::async_trait;
 use eyre::Result;
@@ -8,9 +11,9 @@ use eyre::Result;
 /// Requirements for networking.
 #[async_trait]
 pub trait Networking {
-    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()>;
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()>;
 
-    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>>;
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue>;
 }
 
 #[derive(Clone)]
