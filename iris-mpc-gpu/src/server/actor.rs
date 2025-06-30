@@ -1852,6 +1852,7 @@ impl ServerActor {
                         // re-map the ids to remove the ROTATION aspect from them
                         *id /= ROTATIONS as u64;
                     }
+                    tracing::info!("Sorted indices: {:?}", sorted);
                     sorted
                 })
                 .map(|sorted| ids_to_bitvec(&sorted))
