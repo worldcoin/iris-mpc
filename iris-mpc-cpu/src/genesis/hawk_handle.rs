@@ -257,6 +257,13 @@ impl Handle {
 
                                     Ok((connect_plan, one_sided_iris_data))
                                 }
+                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
+                                    let msg = Self::log_error(format!(
+                                        "HawkActor does not support deletion of identities: modification: {:?}",
+                                        modification
+                                    ));
+                                    Err(eyre!(msg))
+                                }
                                 _ => {
                                     Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
