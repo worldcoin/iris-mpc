@@ -1930,6 +1930,12 @@ impl SimpleAnonStatsTestGenerator {
                     assert!(diff.iter().sum::<i64>() == 0);
                     // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
                     assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
+                    // if we have a diff, then the diff must be 1 followed by -1 (plain is earlier than anonymized)
+                    if diff.iter().any(|&x| x != 0) {
+                        let pos_plain = diff.iter().position(|&x| x == 1).unwrap();
+                        let pos_anon = diff.iter().position(|&x| x == -1).unwrap();
+                        assert!(pos_plain < pos_anon, "If there is an error, Plain statistics must be better than anonymized statistics");
+                    }
 
                     clear_left = true;
                 }
