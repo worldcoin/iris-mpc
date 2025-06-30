@@ -1830,9 +1830,10 @@ impl ServerActor {
             // sort all indices, and create bitmaps from them
             let indices = indices
                 .into_iter()
-                .map(|mut x| {
+                .enumerate()
+                .map(|(i, mut x)| {
                     x.sort();
-                    x.truncate(self.match_distances_buffer_size);
+                    x.truncate(bucket_distance_counters[i]);
                     x
                 })
                 .collect_vec();
