@@ -30,7 +30,7 @@ pub struct Batch {
     pub iris_data: Vec<StoredIrisVector>,
 
     /// if it is only an iris indexation job
-    pub iris_indexation_only: bool,
+    pub iris_copy_only: bool,
 }
 
 /// Constructor.
@@ -42,9 +42,9 @@ impl Batch {
         right_queries: Vec<QueryRef>,
         iris_data: Vec<StoredIrisVector>,
     ) -> Self {
-        let mut iris_indexation_only = false;
+        let mut iris_copy_only = false;
         if vector_ids.is_empty() && !iris_data.is_empty() {
-            iris_indexation_only = true;
+            iris_copy_only = true;
         }
         Self {
             batch_id,
@@ -52,7 +52,7 @@ impl Batch {
             left_queries,
             right_queries,
             iris_data,
-            iris_indexation_only,
+            iris_copy_only,
         }
     }
 }

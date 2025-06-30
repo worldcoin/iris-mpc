@@ -55,11 +55,11 @@ impl JobRequest {
             left_queries,
             right_queries,
             iris_data,
-            iris_indexation_only,
+            iris_copy_only,
         }: Batch,
     ) -> Self {
         assert!(
-            !vector_ids.is_empty() || iris_indexation_only,
+            !vector_ids.is_empty() || iris_copy_only,
             "Invalid batch: is empty"
         );
 

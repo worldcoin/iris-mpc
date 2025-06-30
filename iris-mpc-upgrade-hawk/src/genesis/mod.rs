@@ -536,7 +536,7 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            if !batch.iris_indexation_only {
+            if !batch.iris_copy_only {
                 last_indexed_id = batch.id_end();
             }
 
@@ -826,7 +826,7 @@ async fn get_results_thread(
                     connect_plans,
                     last_serial_id,
                     iris_data,
-                    iris_copy_only: iris_indexation_only,
+                    iris_copy_only,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
@@ -839,7 +839,7 @@ async fn get_results_thread(
                             &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
                         )
                         .await?;
-                    if iris_indexation_only {
+                    if iris_copy_only {
                         graph_tx.tx.commit().await?;
                         shutdown_handler_bg.decrement_batches_pending_completion();
                     } else {
