@@ -11,7 +11,9 @@ use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE},
+        smpc_request::{
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        },
         sync::{Modification, ModificationStatus},
     },
     iris_db::iris::IrisCode,
@@ -497,7 +499,11 @@ WHERE id = $1;
         after_modification_id: i64,
         serial_id_less_than: u32,
     ) -> Result<Vec<Modification>> {
-        let message_types = &[RESET_UPDATE_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE];
+        let message_types = &[
+            RESET_UPDATE_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        ];
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
@@ -701,7 +707,7 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
 }
 
 #[cfg(test)]
-// #[cfg(feature = "db_dependent")]
+#[cfg(feature = "db_dependent")]
 pub mod tests {
     use super::{test_utils::*, *};
     use futures::TryStreamExt;
@@ -1383,7 +1389,7 @@ pub mod tests {
         let modifications = store.get_persisted_modifications_after_id(0, 106).await?;
         assert_eq!(
             modifications.len(),
-            2,
+            3,
             "Should return 3 persisted modifications"
         );
 
