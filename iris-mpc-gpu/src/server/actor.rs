@@ -1864,6 +1864,7 @@ impl ServerActor {
                 match_distances_buffers_codes,
                 &bucket_distance_counters,
                 self.distance_buffer_size,
+                0u16,
                 streams,
             );
 
@@ -1876,6 +1877,7 @@ impl ServerActor {
                 match_distances_buffers_masks,
                 &bucket_distance_counters,
                 self.distance_buffer_size,
+                1u16,
                 streams,
             );
 
@@ -3279,6 +3281,7 @@ fn sort_shares_by_indices(
     shares: &[ChunkShare<u16>],
     length: &[usize],
     padded_len: usize,
+    dummy_value: u16,
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
     let a = shares
@@ -3298,7 +3301,7 @@ fn sort_shares_by_indices(
             let new_a = resort_indices[i]
                 .iter()
                 .map(|&j| a[i][j])
-                .chain(std::iter::repeat(0u16))
+                .chain(std::iter::repeat(dummy_value))
                 .take(padded_len)
                 .collect::<Vec<_>>();
             tracing::info!(
@@ -3311,7 +3314,7 @@ fn sort_shares_by_indices(
             let new_b = resort_indices[i]
                 .iter()
                 .map(|&j| b[i][j])
-                .chain(std::iter::repeat(0u16))
+                .chain(std::iter::repeat(dummy_value))
                 .take(padded_len)
                 .collect::<Vec<_>>();
             tracing::info!(
