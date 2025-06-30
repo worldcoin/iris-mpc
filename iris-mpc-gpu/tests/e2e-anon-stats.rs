@@ -19,7 +19,7 @@ mod e2e_anon_stats_test {
     const MAX_BATCH_SIZE: usize = 64;
     const N_BUCKETS: usize = 8;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
-    const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
+    const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
 
     fn install_tracing() {
         tracing_subscriber::registry()
