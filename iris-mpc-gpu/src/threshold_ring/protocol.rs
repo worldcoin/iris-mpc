@@ -2656,10 +2656,9 @@ impl Circuits {
         for i in 0..self.n_devices {
             let mut extended_bitmask = bitmask[i].clone();
             extended_bitmask.resize(self.chunk_size, 0);
-            bitmasks[i].push(extended_bitmask);
-            let mut bitmask_negated = bitmask[i].clone();
+            bitmasks[i].push(extended_bitmask.clone());
+            let mut bitmask_negated = extended_bitmask;
             detail::negate_bitvec(&mut bitmask_negated);
-            bitmask_negated.resize(self.chunk_size, 0);
             let mut bitmask = bitmask_negated.clone();
             for _ in 0..max_rotations_needed {
                 detail::rotate_bitvec_right(&mut bitmask);
