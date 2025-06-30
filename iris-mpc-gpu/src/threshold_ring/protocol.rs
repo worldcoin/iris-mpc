@@ -2647,6 +2647,11 @@ impl Circuits {
         // -> [1,0,0,1,1,0,1,0,0], this is then used to MASK the OR of the original bit vector with the rotated one
         // after the rotation, we AND the bitmask with the negated original bitmask, to clear the current bit for accumulation
         // and then we repeat from STEP i
+        tracing::info!(
+            "resising bitmasks from {} to {}",
+            bitmask[0].len(),
+            self.chunk_size
+        );
         let mut bitmasks = vec![vec![]; self.n_devices];
         for i in 0..self.n_devices {
             let mut extended_bitmask = bitmask[i].clone();
