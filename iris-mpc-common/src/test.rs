@@ -1902,6 +1902,35 @@ impl SimpleAnonStatsTestGenerator {
                     // );
 
                     assert_eq!(
+                        plain_bucket_statistics_left
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        anonymized_bucket_statistics_left
+                            .buckets
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        " we have the same amount of matches in plain and anonymized statistics"
+                    );
+
+                    // we need to allow a small slack, since the anonymized statistics calculation in MPC can miss the last match due to the buffer size
+                    let diff: Vec<_> = plain_bucket_statistics_left
+                        .iter()
+                        .map(|x| x.count)
+                        .zip(
+                            anonymized_bucket_statistics_left
+                                .buckets
+                                .iter()
+                                .map(|x| x.count),
+                        )
+                        .map(|(a, b)| a as i64 - b as i64)
+                        .collect();
+                    // overall num of matches must be equal
+                    assert!(diff.iter().sum::<i64>() == 0);
+                    // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
+                    assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
+                    assert_eq!(
                         plain_bucket_statistics_left,
                         anonymized_bucket_statistics_left.buckets
                     );
