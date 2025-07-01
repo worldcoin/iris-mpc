@@ -286,10 +286,6 @@ impl HawkActor {
         graph: BothEyes<GraphMem<Aby3Store>>,
         iris_store: BothEyes<SharedIrises>,
     ) -> Result<Self> {
-        tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .map_err(|_| eyre!("failed to install CryptoProvider for rustls"))?;
-
         let search_params = HnswParams::new(
             args.hnsw_param_ef_constr,
             args.hnsw_param_ef_search,

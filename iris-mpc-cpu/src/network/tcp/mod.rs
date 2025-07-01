@@ -14,6 +14,7 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use itertools::izip;
+use std::sync::Once;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     time::Duration,
@@ -54,6 +55,16 @@ pub async fn build_network_handle(
     args: &HawkArgs,
     identities: &[Identity],
 ) -> Result<Box<dyn NetworkHandle>> {
+    static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
+    INSTALL_CRYPTO_PROVIDER.call_once(|| {
+        if let Err(_) =
+            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default()
+        {
+            // We can't return an error from call_once, so just log it.
+            tracing::error!("failed to install CryptoProvider for rustls");
+        }
+    });
+
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
