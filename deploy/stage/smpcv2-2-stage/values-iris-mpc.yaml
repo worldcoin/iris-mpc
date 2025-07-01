@@ -49,7 +49,7 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "120"
-  
+
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
 
@@ -85,7 +85,7 @@ env:
 
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
     value: "1024"
-  
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
@@ -100,9 +100,6 @@ env:
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
-    
-  - name: SMPC__N_BUCKETS
-    value: "10"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
@@ -120,7 +117,7 @@ env:
     value: "false"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
     value: "5"
@@ -157,8 +154,14 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name : SMPC__ENABLE_DEBUG_TIMING
+  - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "correctnessTestFixedBatchSize"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "5000"
 
 initContainer:
   enabled: true
