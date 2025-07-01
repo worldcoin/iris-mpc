@@ -480,11 +480,19 @@ pub struct MetricsConfig {
     pub prefix: String,
 }
 
+// #[clap(flatten)] makes arguments required. this is problematic
+// when the flattened struct is wrapped in an option. to allow the
+// absence of these fields to make the arg None, each field needs
+// 'required = false'
 #[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
+#[group(requires_all = ["server_key", "server_cert", "root_cert"])]
 pub struct TlsConfig {
+    #[arg(required = false)]
     pub server_key: String,
+    #[arg(required = false)]
     pub server_cert: String,
     // used by the client to make them trust the server cert
+    #[arg(required = false)]
     pub root_cert: String,
 }
 
