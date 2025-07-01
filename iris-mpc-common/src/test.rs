@@ -1,5 +1,5 @@
 use crate::galois_engine::degree4::FullGaloisRingIrisCodeShare;
-use crate::job::GaloisSharesBothSides;
+use crate::job::{BatchMetadata, GaloisSharesBothSides};
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -512,9 +512,13 @@ impl TestCaseGenerator {
                 self.disallowed_queries.push(idx as u32);
                 tracing::info!("Deleting index {}", idx);
 
-                batch0.deletion_requests_indices.push(idx as u32);
-                batch1.deletion_requests_indices.push(idx as u32);
-                batch2.deletion_requests_indices.push(idx as u32);
+                for b in [&mut batch0, &mut batch1, &mut batch2] {
+                    b.push_deletion_request(
+                        "sns_id".to_string(),
+                        idx as u32,
+                        BatchMetadata::default(),
+                    );
+                }
             }
         }
 
@@ -564,18 +568,11 @@ impl TestCaseGenerator {
                     idx,
                     req_id
                 );
+                let sns_id = || "sns_id".to_string();
 
-                batch0.reset_update_request_ids.push(req_id.clone());
-                batch1.reset_update_request_ids.push(req_id.clone());
-                batch2.reset_update_request_ids.push(req_id);
-
-                batch0.reset_update_indices.push(idx as u32);
-                batch1.reset_update_indices.push(idx as u32);
-                batch2.reset_update_indices.push(idx as u32);
-
-                batch0.reset_update_shares.push(shares0);
-                batch1.reset_update_shares.push(shares1);
-                batch2.reset_update_shares.push(shares2);
+                batch0.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares0);
+                batch1.push_reset_update_request(sns_id(), req_id.clone(), idx as u32, shares1);
+                batch2.push_reset_update_request(sns_id(), req_id, idx as u32, shares2);
             }
         }
 
@@ -1375,10 +1372,8 @@ fn prepare_batch(
     skip_persistence: bool,
     message_type: String,
 ) -> Result<()> {
-    batch.metadata.push(Default::default());
     batch.valid_entries.push(is_valid);
-    batch.skip_persistence.push(skip_persistence);
-    batch.request_ids.push(request_id.clone());
+
     if message_type == REAUTH_MESSAGE_TYPE {
         let target_index = maybe_reauth_target_index.unwrap();
         batch
@@ -1389,8 +1384,14 @@ fn prepare_batch(
             .insert(request_id.clone(), *target_index);
     }
 
-    batch.request_types.push(message_type);
-    batch.or_rule_indices.push(or_rule_indices);
+    batch.push_matching_request(
+        "sns_id".to_string(),
+        request_id.clone(),
+        &message_type,
+        BatchMetadata::default(),
+        or_rule_indices,
+        skip_persistence,
+    );
 
     batch
         .left_iris_requests

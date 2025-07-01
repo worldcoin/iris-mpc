@@ -72,8 +72,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let mut graph_store = graph_store;
         jobs.spawn(async move {
             let mut vector_store = vector_store.lock().await;
+            let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
             searcher
-                .insert(&mut *vector_store, &mut graph_store, &query, &mut rng)
+                .insert(
+                    &mut *vector_store,
+                    &mut graph_store,
+                    &query,
+                    insertion_layer,
+                )
                 .instrument(party_span)
                 .await
                 .unwrap();

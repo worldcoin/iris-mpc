@@ -280,7 +280,7 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    lazy_random_setup(rng, database_size, NetworkType::Local).await
 }
 
 /// Generates 3 pairs of vector stores and graphs from a random plaintext
@@ -328,8 +328,9 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
                 let searcher = HnswSearcher::new_with_test_parameters();
                 // insert queries
                 for query in queries.iter() {
+                    let insertion_layer = searcher.select_layer_rng(&mut rng_searcher)?;
                     searcher
-                        .insert(&mut *store_lock, &mut graph_store, query, &mut rng_searcher)
+                        .insert(&mut *store_lock, &mut graph_store, query, insertion_layer)
                         .await?;
                 }
                 Ok((store.clone(), graph_store))
@@ -356,7 +357,7 @@ pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoR
     rng: &mut R,
     database_size: usize,
 ) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
-    shared_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    shared_random_setup(rng, database_size, NetworkType::Local).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each

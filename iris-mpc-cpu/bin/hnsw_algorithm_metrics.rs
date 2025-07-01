@@ -97,8 +97,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for idx in 0..database_size {
         let raw_query = IrisCode::random_rng(&mut rng);
         let query = Arc::new(raw_query.clone());
+        let insertion_layer = searcher.select_layer_rng(&mut rng)?;
         searcher
-            .insert(&mut vector, &mut graph, &query, &mut rng)
+            .insert(&mut vector, &mut graph, &query, insertion_layer)
             .await?;
 
         if idx % 1000 == 999 {

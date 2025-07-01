@@ -55,12 +55,12 @@ impl HawkSession {
         let net = &mut session.aby3_store.session.network_session;
 
         // Send my state to others.
-        let my_msg = || NetworkValue::StateChecksum(my_state.clone()).to_network();
+        let my_msg = || NetworkValue::StateChecksum(my_state.clone());
         net.send_prev(my_msg()).await?;
         net.send_next(my_msg()).await?;
 
         // Receive their state.
-        let decode = |msg| match NetworkValue::from_network(msg) {
+        let decode = |msg| match msg {
             Ok(NetworkValue::StateChecksum(c)) => Ok(c),
             other => {
                 tracing::error!("Unexpected message format: {:?}", other);

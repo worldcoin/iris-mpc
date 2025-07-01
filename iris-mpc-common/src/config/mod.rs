@@ -91,9 +91,6 @@ pub struct Config {
     pub disable_persistence: bool,
 
     #[serde(default)]
-    pub cpu_disable_persistence: bool,
-
-    #[serde(default)]
     pub enable_debug_timing: bool,
 
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
@@ -192,11 +189,11 @@ pub struct Config {
     #[serde(default)]
     pub hnsw_schema_name_suffix: String,
 
+    #[serde(default)]
+    pub gpu_schema_name_suffix: String,
+
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
-
-    #[serde(default = "default_hawk_stream_parallelism")]
-    pub hawk_stream_parallelism: usize,
 
     #[serde(default = "default_hawk_connection_parallelism")]
     pub hawk_connection_parallelism: usize,
@@ -214,18 +211,10 @@ pub struct Config {
     pub hnsw_param_ef_search: usize,
 
     #[serde(default)]
-    pub hawk_prng_seed: Option<u64>,
+    pub hawk_prf_key: Option<u64>,
 
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
-
-    /// Server process behaviour can be adjusted as per compute mode.
-    #[serde(default)]
-    pub mode_of_compute: ModeOfCompute,
-
-    /// Server process behaviour can be adjusted as per deployment mode.
-    #[serde(default)]
-    pub mode_of_deployment: ModeOfDeployment,
 
     #[serde(default)]
     pub enable_modifications_sync: bool,
@@ -260,29 +249,6 @@ pub struct Config {
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
-}
-
-/// Enumeration over set of compute modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfCompute {
-    /// Computation with standard CPUs (see HNSW graph).
-    Cpu,
-    /// Computation with Cuda GPU(s).
-    #[default]
-    Gpu,
-}
-
-/// Enumeration over set of deployment modes.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModeOfDeployment {
-    // shadow mode for when HSNW deployment does not read from the Gpu implementation
-    // it should create and write its own shares DB
-    ShadowIsolation,
-    // Shadow mode for when HNSW test deployment reads from the Gpu Implementation
-    ShadowReadOnly,
-    // Standard mode for all other deployments.
-    #[default]
-    Standard,
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -352,10 +318,6 @@ fn default_n_buckets() -> usize {
 
 fn default_hawk_request_parallelism() -> usize {
     1024
-}
-
-fn default_hawk_stream_parallelism() -> usize {
-    8
 }
 
 fn default_hawk_connection_parallelism() -> usize {
@@ -557,15 +519,12 @@ pub struct CommonConfig {
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
-    hawk_stream_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
     hnsw_param_M: usize,
     hnsw_param_ef_search: usize,
-    hawk_prng_seed: Option<u64>,
+    hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
-    mode_of_compute: ModeOfCompute,
-    mode_of_deployment: ModeOfDeployment,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -573,7 +532,7 @@ pub struct CommonConfig {
     hawk_server_reauths_enabled: bool,
     schema_name: String,
     hnsw_schema_name_suffix: String,
-    cpu_disable_persistence: bool,
+    gpu_schema_name_suffix: String,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
     batch_polling_timeout_secs: i32,
@@ -635,16 +594,13 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
-            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hawk_server_healthcheck_port: _, // different for each server
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
-            hawk_prng_seed,
+            hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -652,7 +608,7 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
-            cpu_disable_persistence,
+            gpu_schema_name_suffix,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,
@@ -690,15 +646,12 @@ impl From<Config> for CommonConfig {
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
-            hawk_stream_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
             hnsw_param_M,
             hnsw_param_ef_search,
-            hawk_prng_seed,
+            hawk_prf_key,
             max_deletions_per_batch,
-            mode_of_compute,
-            mode_of_deployment,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -706,7 +659,7 @@ impl From<Config> for CommonConfig {
             hawk_server_reauths_enabled,
             schema_name,
             hnsw_schema_name_suffix,
-            cpu_disable_persistence,
+            gpu_schema_name_suffix,
             hawk_server_resets_enabled,
             full_scan_side,
             batch_polling_timeout_secs,

@@ -10,17 +10,23 @@ use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
+use iris_mpc::services::processors::get_iris_shares_parse_task;
+use iris_mpc::services::processors::modifications_sync::{
+    send_last_modifications_to_sns, sync_modifications,
+};
 use iris_mpc::services::processors::result_message::{
     send_error_results_to_sns, send_results_to_sns,
 };
 use iris_mpc_common::config::CommonConfig;
+use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
-use iris_mpc_common::job::GaloisSharesBothSides;
+use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
+use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
-    config::{Config, ModeOfCompute, ModeOfDeployment, Opt},
+    config::{Config, Opt},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
@@ -41,7 +47,7 @@ use iris_mpc_common::{
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{Modification, SyncResult, SyncState},
+        sync::{Modification, ModificationKey, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
     iris_db::get_dummy_shares_for_deletion,
@@ -80,18 +86,6 @@ const MAX_CONCURRENT_REQUESTS: usize = 32;
 
 static CURRENT_BATCH_SIZE: LazyLock<Mutex<usize>> = LazyLock::new(|| Mutex::new(0));
 
-type GaloisShares = (
-    GaloisRingIrisCodeShare,
-    GaloisRingTrimmedMaskCodeShare,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-    Vec<GaloisRingIrisCodeShare>,
-    Vec<GaloisRingTrimmedMaskCodeShare>,
-);
-type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
-
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
@@ -106,48 +100,6 @@ fn decode_iris_message_shares(
 
 fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
     mask.into()
-}
-
-fn preprocess_iris_message_shares(
-    code_share: GaloisRingIrisCodeShare,
-    mask_share: GaloisRingTrimmedMaskCodeShare,
-    code_share_mirrored: GaloisRingIrisCodeShare,
-    mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
-) -> Result<GaloisShares> {
-    let mut code_share = code_share;
-    let mut mask_share = mask_share;
-
-    // Original for storage.
-    let store_iris_shares = code_share.clone();
-    let store_mask_shares = mask_share.clone();
-
-    // With rotations for in-memory database.
-    let db_iris_shares = code_share.all_rotations();
-    let db_mask_shares = mask_share.all_rotations();
-
-    // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
-    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
-
-    // Mirrored share and mask.
-    // Only interested in the Lagrange interpolated share and mask for the mirrored case.
-    let mut code_share_mirrored = code_share_mirrored;
-    let mut mask_share_mirrored = mask_share_mirrored;
-
-    // With Lagrange interpolation.
-    GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
-    GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
-
-    Ok((
-        store_iris_shares,
-        store_mask_shares,
-        db_iris_shares,
-        db_mask_shares,
-        code_share.all_rotations(),
-        mask_share.all_rotations(),
-        code_share_mirrored.all_rotations(),
-        mask_share_mirrored.all_rotations(),
-    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -227,7 +179,6 @@ async fn receive_batch(
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
     let mut handles = vec![];
     let mut msg_counter = 0;
-    let batch_modifications = &mut batch_query.modifications;
 
     while msg_counter < *CURRENT_BATCH_SIZE.lock().unwrap() {
         let rcv_message_output = client
@@ -284,7 +235,10 @@ async fn receive_batch(
                             .map_err(ReceiveRequestError::FailedToDeleteFromSQS)?;
                         metrics::counter!("request.received", "type" => "identity_deletion")
                             .increment(1);
-                        if batch_modifications.contains_key(&identity_deletion_request.serial_id) {
+                        if batch_query
+                            .modifications
+                            .contains_key(&RequestSerialId(identity_deletion_request.serial_id))
+                        {
                             tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 identity_deletion_request.serial_id,
@@ -294,19 +248,21 @@ async fn receive_batch(
                         }
                         let modification = store
                             .insert_modification(
-                                identity_deletion_request.serial_id as i64,
+                                Some(identity_deletion_request.serial_id as i64),
                                 IDENTITY_DELETION_MESSAGE_TYPE,
                                 None,
                             )
                             .await?;
-                        batch_modifications
-                            .insert(identity_deletion_request.serial_id, modification);
+                        batch_query.modifications.insert(
+                            RequestSerialId(identity_deletion_request.serial_id),
+                            modification,
+                        );
 
-                        batch_query
-                            .deletion_requests_indices
-                            .push(identity_deletion_request.serial_id - 1); // serial_id is 1-indexed
-                        batch_query.deletion_requests_metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
+                        batch_query.push_deletion_request(
+                            sns_message_id,
+                            identity_deletion_request.serial_id - 1,
+                            batch_metadata,
+                        );
                     }
 
                     UNIQUENESS_MESSAGE_TYPE => {
@@ -340,6 +296,19 @@ async fn receive_batch(
                                 batch_size.clamp(1, max_batch_size);
                             tracing::info!("Updating batch size to {}", batch_size);
                         }
+
+                        let modification = store
+                            .insert_modification(
+                                None,
+                                UNIQUENESS_MESSAGE_TYPE,
+                                Some(uniqueness_request.s3_key.as_str()),
+                            )
+                            .await?;
+                        batch_query.modifications.insert(
+                            RequestId(uniqueness_request.signup_id.clone()),
+                            modification,
+                        );
+
                         if let Some(enable_mirror_attacks) =
                             uniqueness_request.full_face_mirror_attacks_detection_enabled
                         {
@@ -357,14 +326,11 @@ async fn receive_batch(
                         }
 
                         if let Some(skip_persistence) = uniqueness_request.skip_persistence {
-                            batch_query.skip_persistence.push(skip_persistence);
                             tracing::info!(
                                 "Setting skip_persistence to {} for request id {}",
                                 skip_persistence,
                                 uniqueness_request.signup_id
                             );
-                        } else {
-                            batch_query.skip_persistence.push(false);
                         }
 
                         if config.luc_enabled && config.luc_lookback_records > 0 {
@@ -387,16 +353,15 @@ async fn receive_batch(
                         } else {
                             vec![]
                         };
-                        batch_query.or_rule_indices.push(or_rule_indices);
 
-                        batch_query
-                            .request_ids
-                            .push(uniqueness_request.signup_id.clone());
-                        batch_query
-                            .request_types
-                            .push(UNIQUENESS_MESSAGE_TYPE.to_string());
-                        batch_query.metadata.push(batch_metadata);
-                        batch_query.sns_message_ids.push(sns_message_id);
+                        batch_query.push_matching_request(
+                            sns_message_id,
+                            uniqueness_request.signup_id.clone(),
+                            UNIQUENESS_MESSAGE_TYPE,
+                            batch_metadata,
+                            or_rule_indices,
+                            uniqueness_request.skip_persistence.unwrap_or(false),
+                        );
 
                         let semaphore = Arc::clone(&semaphore);
                         let s3_client_arc = s3_client.clone();
@@ -444,7 +409,10 @@ async fn receive_batch(
                                 continue;
                             }
 
-                            if batch_modifications.contains_key(&reauth_request.serial_id) {
+                            if batch_query
+                                .modifications
+                                .contains_key(&RequestSerialId(reauth_request.serial_id))
+                            {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reauth_request.serial_id,
@@ -457,12 +425,14 @@ async fn receive_batch(
 
                             let modification = store
                                 .insert_modification(
-                                    reauth_request.serial_id as i64,
+                                    Some(reauth_request.serial_id as i64),
                                     REAUTH_MESSAGE_TYPE,
                                     Some(reauth_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications.insert(reauth_request.serial_id, modification);
+                            batch_query
+                                .modifications
+                                .insert(RequestSerialId(reauth_request.serial_id), modification);
 
                             if let Some(batch_size) = reauth_request.batch_size {
                                 // Updating the batch size instantly makes it a bit unpredictable,
@@ -477,13 +447,6 @@ async fn receive_batch(
                                 tracing::info!("Updating batch size to {}", batch_size);
                             }
 
-                            batch_query
-                                .request_ids
-                                .push(reauth_request.reauth_id.clone());
-                            batch_query
-                                .request_types
-                                .push(REAUTH_MESSAGE_TYPE.to_string());
-                            batch_query.metadata.push(batch_metadata);
                             batch_query.reauth_target_indices.insert(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.serial_id - 1,
@@ -492,15 +455,22 @@ async fn receive_batch(
                                 reauth_request.reauth_id.clone(),
                                 reauth_request.use_or_rule,
                             );
-                            batch_query.sns_message_ids.push(sns_message_id);
 
                             let or_rule_indices = if reauth_request.use_or_rule {
                                 vec![reauth_request.serial_id - 1]
                             } else {
                                 vec![]
                             };
-                            batch_query.or_rule_indices.push(or_rule_indices);
-                            batch_query.skip_persistence.push(false);
+
+                            batch_query.push_matching_request(
+                                sns_message_id,
+                                reauth_request.reauth_id.clone(),
+                                REAUTH_MESSAGE_TYPE,
+                                batch_metadata,
+                                or_rule_indices,
+                                false, // skip_persistence is only used for uniqueness requests
+                            );
+
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_clone = s3_client.clone();
                             let bucket_name = config.shares_bucket_name.clone();
@@ -540,26 +510,35 @@ async fn receive_batch(
                         if config.enable_reset {
                             msg_counter += 1;
 
+                            // Persist in progress reset_check message.
+                            // Note that reset_check is only a query and does not persist anything into the database.
+                            // We store modification so that the SNS result can be replayed.
+                            let modification = store
+                                .insert_modification(
+                                    None,
+                                    RESET_CHECK_MESSAGE_TYPE,
+                                    Some(reset_check_request.s3_key.as_str()),
+                                )
+                                .await?;
+                            batch_query.modifications.insert(
+                                RequestId(reset_check_request.reset_id.clone()),
+                                modification,
+                            );
+
                             if let Some(batch_size) = reset_check_request.batch_size {
                                 *CURRENT_BATCH_SIZE.lock().unwrap() =
                                     batch_size.clamp(1, max_batch_size);
                                 tracing::info!("Updating batch size to {}", batch_size);
                             }
 
-                            batch_query
-                                .request_ids
-                                .push(reset_check_request.reset_id.clone());
-                            batch_query
-                                .request_types
-                                .push(RESET_CHECK_MESSAGE_TYPE.to_string());
-                            batch_query.metadata.push(batch_metadata);
-                            batch_query.sns_message_ids.push(sns_message_id);
-
-                            // skip_persistence is only used for uniqueness requests
-                            batch_query.skip_persistence.push(false);
-
-                            // We need to use AND rule for reset check requests
-                            batch_query.or_rule_indices.push(vec![]);
+                            batch_query.push_matching_request(
+                                sns_message_id,
+                                reset_check_request.reset_id.clone(),
+                                RESET_CHECK_MESSAGE_TYPE,
+                                batch_metadata,
+                                vec![], // use AND rule for reset check requests
+                                false,  // skip_persistence is only used for uniqueness requests
+                            );
 
                             let semaphore = Arc::clone(&semaphore);
                             let s3_client_arc = s3_client.clone();
@@ -631,7 +610,10 @@ async fn receive_batch(
                                 }
                             };
 
-                            if batch_modifications.contains_key(&reset_update_request.serial_id) {
+                            if batch_query
+                                .modifications
+                                .contains_key(&RequestSerialId(reset_update_request.serial_id))
+                            {
                                 tracing::warn!(
                                 "Received multiple modification operations in batch on serial id: {}. Skipping {:?}",
                                 reset_update_request.serial_id,
@@ -642,27 +624,27 @@ async fn receive_batch(
 
                             let modification = store
                                 .insert_modification(
-                                    reset_update_request.serial_id as i64,
+                                    Some(reset_update_request.serial_id as i64),
                                     RESET_UPDATE_MESSAGE_TYPE,
                                     Some(reset_update_request.s3_key.as_str()),
                                 )
                                 .await?;
-                            batch_modifications
-                                .insert(reset_update_request.serial_id, modification);
+                            batch_query.modifications.insert(
+                                RequestSerialId(reset_update_request.serial_id),
+                                modification,
+                            );
 
-                            batch_query
-                                .reset_update_indices
-                                .push(reset_update_request.serial_id - 1);
-                            batch_query.sns_message_ids.push(sns_message_id.clone());
-                            batch_query
-                                .reset_update_request_ids
-                                .push(reset_update_request.reset_id);
-                            batch_query.reset_update_shares.push(GaloisSharesBothSides {
-                                code_left: left_shares.0,
-                                mask_left: left_shares.1,
-                                code_right: right_shares.0,
-                                mask_right: right_shares.1,
-                            });
+                            batch_query.push_reset_update_request(
+                                sns_message_id,
+                                reset_update_request.reset_id,
+                                reset_update_request.serial_id - 1,
+                                GaloisSharesBothSides {
+                                    code_left: left_shares.code,
+                                    mask_left: left_shares.mask,
+                                    code_right: right_shares.code,
+                                    mask_right: right_shares.mask,
+                                },
+                            );
                         }
                     }
 
@@ -683,35 +665,11 @@ async fn receive_batch(
         }
     }
     for (index, handle) in handles.into_iter().enumerate() {
-        let (
-            (
-                (
-                    store_iris_shares_left,
-                    store_mask_shares_left,
-                    db_iris_shares_left,
-                    db_mask_shares_left,
-                    iris_shares_left,
-                    mask_shares_left,
-                    iris_shares_left_mirrored,
-                    mask_shares_left_mirrored,
-                ),
-                (
-                    store_iris_shares_right,
-                    store_mask_shares_right,
-                    db_iris_shares_right,
-                    db_mask_shares_right,
-                    iris_shares_right,
-                    mask_shares_right,
-                    iris_shares_right_mirrored,
-                    mask_shares_right_mirrored,
-                ),
-            ),
-            valid_entry,
-        ) = match handle
+        let result = handle
             .await
-            .map_err(ReceiveRequestError::FailedToJoinHandle)?
-        {
-            Ok(res) => (res, true),
+            .map_err(ReceiveRequestError::FailedToJoinHandle)?;
+        let (shares, valid_entry) = match result {
+            Ok(shares) => (shares, true),
             Err(e) => {
                 tracing::error!("Failed to process iris shares: {:?}", e);
                 // Return error message back to the signup-service if failed to process iris
@@ -762,101 +720,77 @@ async fn receive_batch(
                 // batch in order to keep the same order across nodes
                 let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
                 let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
-                (
-                    (
-                        (
-                            dummy_code_share.clone(),
-                            dummy_mask_share.clone(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                        ),
-                        (
-                            dummy_code_share.clone(),
-                            dummy_mask_share.clone(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                            dummy_code_share.clone().all_rotations(),
-                            dummy_mask_share.clone().all_rotations(),
-                        ),
-                    ),
-                    false,
-                )
+                let dummy_one_side = GaloisShares {
+                    code: dummy_code_share.clone(),
+                    mask: dummy_mask_share.clone(),
+                    code_rotated: dummy_code_share.clone().all_rotations(),
+                    mask_rotated: dummy_mask_share.clone().all_rotations(),
+                    code_interpolated: dummy_code_share.clone().all_rotations(),
+                    mask_interpolated: dummy_mask_share.clone().all_rotations(),
+                    code_mirrored: dummy_code_share.clone().all_rotations(),
+                    mask_mirrored: dummy_mask_share.clone().all_rotations(),
+                };
+                ((dummy_one_side.clone(), dummy_one_side), false)
             }
         };
 
         batch_query.valid_entries.push(valid_entry);
 
-        batch_query
-            .left_iris_requests
-            .code
-            .push(store_iris_shares_left);
-        batch_query
-            .left_iris_requests
-            .mask
-            .push(store_mask_shares_left);
+        // push left iris related entries
+        batch_query.left_iris_requests.code.push(shares.0.code);
+        batch_query.left_iris_requests.mask.push(shares.0.mask);
         batch_query
             .left_iris_rotated_requests
             .code
-            .extend(db_iris_shares_left);
+            .extend(shares.0.code_rotated);
         batch_query
             .left_iris_rotated_requests
             .mask
-            .extend(db_mask_shares_left);
+            .extend(shares.0.mask_rotated);
         batch_query
             .left_iris_interpolated_requests
             .code
-            .extend(iris_shares_left);
+            .extend(shares.0.code_interpolated);
         batch_query
             .left_iris_interpolated_requests
             .mask
-            .extend(mask_shares_left);
+            .extend(shares.0.mask_interpolated);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .code
+            .extend(shares.0.code_mirrored);
+        batch_query
+            .left_mirrored_iris_interpolated_requests
+            .mask
+            .extend(shares.0.mask_mirrored);
 
-        batch_query
-            .right_iris_requests
-            .code
-            .push(store_iris_shares_right);
-        batch_query
-            .right_iris_requests
-            .mask
-            .push(store_mask_shares_right);
+        // push right iris related entries
+        batch_query.right_iris_requests.code.push(shares.1.code);
+        batch_query.right_iris_requests.mask.push(shares.1.mask);
         batch_query
             .right_iris_rotated_requests
             .code
-            .extend(db_iris_shares_right);
+            .extend(shares.1.code_rotated);
         batch_query
             .right_iris_rotated_requests
             .mask
-            .extend(db_mask_shares_right);
+            .extend(shares.1.mask_rotated);
         batch_query
             .right_iris_interpolated_requests
             .code
-            .extend(iris_shares_right);
+            .extend(shares.1.code_interpolated);
         batch_query
             .right_iris_interpolated_requests
             .mask
-            .extend(mask_shares_right);
-        batch_query
-            .left_mirrored_iris_interpolated_requests
-            .code
-            .extend(iris_shares_left_mirrored);
-        batch_query
-            .left_mirrored_iris_interpolated_requests
-            .mask
-            .extend(mask_shares_left_mirrored);
+            .extend(shares.1.mask_interpolated);
         batch_query
             .right_mirrored_iris_interpolated_requests
             .code
-            .extend(iris_shares_right_mirrored);
+            .extend(shares.1.code_mirrored);
         batch_query
             .right_mirrored_iris_interpolated_requests
             .mask
-            .extend(mask_shares_right_mirrored);
+            .extend(shares.1.mask_mirrored);
     }
 
     tracing::info!(
@@ -869,196 +803,6 @@ async fn receive_batch(
     );
 
     Ok(Some(batch_query))
-}
-
-fn get_iris_shares_parse_task(
-    party_id: usize,
-    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
-    semaphore: Arc<Semaphore>,
-    s3_client_arc: S3Client,
-    bucket_name: String,
-    s3_key: String,
-) -> Result<JoinHandle<ParseSharesTaskResult>, ReceiveRequestError> {
-    let handle =
-        tokio::spawn(async move {
-            let _ = semaphore.acquire().await?;
-
-            let (encrypted_iris_share_b64, hash) =
-                match get_iris_data_by_party_id(&s3_key, party_id, &bucket_name, &s3_client_arc)
-                    .await
-                {
-                    Ok(iris_message_share) => iris_message_share,
-                    Err(e) => {
-                        tracing::error!("Failed to get iris shares: {:?}", e);
-                        eyre::bail!("Failed to get iris shares: {:?}", e);
-                    }
-                };
-
-            let iris_share_b64 = match decrypt_iris_share(
-                encrypted_iris_share_b64,
-                shares_encryption_key_pairs.clone(),
-            ) {
-                Ok(iris_data) => iris_data,
-                Err(e) => {
-                    tracing::error!("Failed to decrypt iris shares: {:?}", e);
-                    eyre::bail!("Failed to decrypt iris shares: {:?}", e);
-                }
-            };
-
-            match validate_iris_share(hash, iris_share_b64.clone()) {
-                Ok(_) => {}
-                Err(e) => {
-                    tracing::error!("Failed to validate iris shares: {:?}", e);
-                    eyre::bail!("Failed to validate iris shares: {:?}", e);
-                }
-            }
-
-            let (left_code, left_mask) = decode_iris_message_shares(
-                iris_share_b64.left_iris_code_shares,
-                iris_share_b64.left_mask_code_shares,
-            )?;
-
-            let (right_code, right_mask) = decode_iris_message_shares(
-                iris_share_b64.right_iris_code_shares,
-                iris_share_b64.right_mask_code_shares,
-            )?;
-
-            let (left_code_mirrored, left_mask_mirrored) =
-                (left_code.mirrored_code(), left_mask.mirrored_mask());
-            let (right_code_mirrored, right_mask_mirrored) =
-                (right_code.mirrored_code(), right_mask.mirrored_mask());
-
-            let left_mask_trimmed = trim_mask(left_mask);
-            let right_mask_trimmed = trim_mask(right_mask);
-            let left_mask_mirrored_trimmed = trim_mask(left_mask_mirrored);
-            let right_mask_mirrored_trimmed = trim_mask(right_mask_mirrored);
-
-            let left_future = spawn_blocking(move || {
-                preprocess_iris_message_shares(
-                    left_code,
-                    left_mask_trimmed,
-                    left_code_mirrored,
-                    left_mask_mirrored_trimmed,
-                )
-            });
-
-            let right_future = spawn_blocking(move || {
-                preprocess_iris_message_shares(
-                    right_code,
-                    right_mask_trimmed,
-                    right_code_mirrored,
-                    right_mask_mirrored_trimmed,
-                )
-            });
-
-            let (left_result, right_result) = tokio::join!(left_future, right_future);
-
-            Ok((
-                left_result.context("while processing left iris shares")??,
-                right_result.context("while processing right iris shares")??,
-            ))
-        });
-    Ok(handle)
-}
-
-async fn send_last_modifications_to_sns(
-    store: &Store,
-    sns_client: &SNSClient,
-    config: &Config,
-    reauth_message_attributes: &HashMap<String, MessageAttributeValue>,
-    deletion_message_attributes: &HashMap<String, MessageAttributeValue>,
-    reset_update_message_attributes: &HashMap<String, MessageAttributeValue>,
-    lookback: usize,
-) -> Result<()> {
-    // Fetch the last modifications from the database
-    let last_modifications = store.last_modifications(lookback).await?;
-    tracing::info!(
-        "Replaying last {} modification results to SNS",
-        last_modifications.len()
-    );
-
-    if last_modifications.is_empty() {
-        tracing::info!("No last modifications found to send to SNS");
-        return Ok(());
-    }
-
-    // Collect messages by type
-    let mut deletion_messages = Vec::new();
-    let mut reauth_messages = Vec::new();
-    let mut reset_update_messages = Vec::new();
-    for modification in &last_modifications {
-        if modification.result_message_body.is_none() {
-            tracing::error!("Missing modification result message body");
-            continue;
-        }
-
-        let body = modification
-            .result_message_body
-            .as_ref()
-            .expect("Missing SNS message body")
-            .clone();
-
-        match modification.request_type.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                deletion_messages.push(body);
-            }
-            REAUTH_MESSAGE_TYPE => {
-                reauth_messages.push(body);
-            }
-            RESET_UPDATE_MESSAGE_TYPE => {
-                reset_update_messages.push(body);
-            }
-            other => {
-                tracing::error!("Unknown message type: {}", other);
-            }
-        }
-    }
-
-    tracing::info!(
-        "Sending {} last modifications to SNS. {} deletion, {} reauth, {} reset update",
-        last_modifications.len(),
-        deletion_messages.len(),
-        reauth_messages.len(),
-        reset_update_messages.len(),
-    );
-
-    if !deletion_messages.is_empty() {
-        send_results_to_sns(
-            deletion_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            deletion_message_attributes,
-            IDENTITY_DELETION_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reauth_messages.is_empty() {
-        send_results_to_sns(
-            reauth_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            reauth_message_attributes,
-            REAUTH_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reset_update_messages.is_empty() {
-        send_results_to_sns(
-            reset_update_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            reset_update_message_attributes,
-            RESET_UPDATE_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    Ok(())
 }
 
 #[tokio::main]
@@ -1095,30 +839,14 @@ async fn server_main(config: Config) -> Result<()> {
         config.shutdown_last_results_sync_timeout_secs,
     ));
     shutdown_handler.wait_for_shutdown_signal().await;
-
-    // Validate compute/deployment modes.
-    if config.mode_of_compute != ModeOfCompute::Gpu
-        || config.mode_of_deployment != ModeOfDeployment::Standard
-    {
-        panic!(
-            "Invalid config: Compute/deployment mode combination.  Expected : ModeOfCompute::GPU \
-             :: ModeOfDeployment::STANDARD"
-        );
-    } else {
-        tracing::info!("Mode of compute: {:?}", config.mode_of_compute);
-        tracing::info!("Mode of deployment: {:?}", config.mode_of_deployment);
-    }
-
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
-    let max_sync_lookback: usize = config.max_batch_size * 2;
     let max_modification_lookback = (config.max_deletions_per_batch + config.max_batch_size) * 2;
-    let max_rollback: usize = config.max_batch_size * 2;
     tracing::info!("Set batch size to {}", config.max_batch_size);
 
     let schema_name = format!(
-        "{}_{}_{}",
-        config.schema_name, config.environment, config.party_id
+        "{}{}_{}_{}",
+        config.schema_name, config.gpu_schema_name_suffix, config.environment, config.party_id
     );
     let db_config = config
         .database
@@ -1139,7 +867,7 @@ async fn server_main(config: Config) -> Result<()> {
     let next_sns_seq_number_future = get_next_sns_seq_num(&config, &aws_clients.sqs_client);
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
-        aws_clients.secrets_manager_client,
+        aws_clients.secrets_manager_client.clone(),
         &config.environment,
         &config.party_id,
     )
@@ -1165,16 +893,6 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-    tracing::info!("Replaying results");
-    send_results_to_sns(
-        store.last_results(max_sync_lookback).await?,
-        &Vec::new(),
-        &aws_clients.sns_client,
-        &config,
-        &uniqueness_result_attributes,
-        UNIQUENESS_MESSAGE_TYPE,
-    )
-    .await?;
 
     let store_len = store.count_irises().await?;
 
@@ -1529,109 +1247,33 @@ async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    if let Some(db_len) = sync_result.must_rollback_storage() {
-        tracing::error!("Databases are out-of-sync: {:?}", sync_result);
-        if db_len + max_rollback < store_len {
-            bail!(
-                "Refusing to rollback so much (from {} to {})",
-                store_len,
-                db_len,
-            );
-        }
-        tracing::warn!(
-            "Rolling back from database length {} to other nodes length {}",
-            store_len,
-            db_len
-        );
-        store.rollback(db_len).await?;
-        metrics::counter!("db.sync.rollback").increment(1);
-    }
-
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
-    // Handle modifications sync (reauth & deletions)
+    // Handle modifications sync
     if config.enable_modifications_sync {
-        let (mut to_update, to_delete) = sync_result.compare_modifications();
-        tracing::info!(
-            "Modifications to update: {:?}, to delete: {:?}",
-            to_update,
-            to_delete
-        );
-        // Update node_id in each modification because they are coming from another more advanced node
-        let to_update: Vec<&Modification> = to_update
-            .iter_mut()
-            .map(|modification| {
-                if config.enable_modifications_replay {
-                    modification
-                        .update_result_message_node_id(party_id)
-                        .map_err(|e| {
-                            tracing::error!("Failed to update modification node_id: {:?}", e)
-                        });
-                }
-                &*modification
-            })
-            .collect();
-
-        let mut tx = store.tx().await?;
-        store.update_modifications(&mut tx, &to_update).await?;
-        store.delete_modifications(&mut tx, &to_delete).await?;
-        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
-
-        // update irises table for persisted modifications which are missing in local
-        for modification in to_update {
-            if !modification.persisted {
-                tracing::debug!(
-                    "Skip writing non-persisted modification to iris table: {:?}",
-                    modification
-                );
-                continue;
-            }
-            tracing::warn!("Applying modification to local node: {:?}", modification);
-            metrics::counter!("db.modifications.rollforward").increment(1);
-            let (lc, lm, rc, rm) = match modification.request_type.as_str() {
-                IDENTITY_DELETION_MESSAGE_TYPE => (
-                    dummy_shares_for_deletions.clone().0,
-                    dummy_shares_for_deletions.clone().1,
-                    dummy_shares_for_deletions.clone().0,
-                    dummy_shares_for_deletions.clone().1,
-                ),
-                REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE => {
-                    let (left_shares, right_shares) = get_iris_shares_parse_task(
-                        party_id,
-                        shares_encryption_key_pair.clone(),
-                        Arc::clone(&semaphore),
-                        aws_clients.s3_client.clone(),
-                        config.shares_bucket_name.clone(),
-                        modification.clone().s3_url.unwrap(),
-                    )?
-                    .await?
-                    .unwrap();
-                    (left_shares.0, left_shares.1, right_shares.0, right_shares.1)
-                }
-                _ => {
-                    panic!("Unknown modification type: {:?}", modification);
-                }
-            };
-            store
-                .update_iris(Some(&mut tx), modification.serial_id, &lc, &lm, &rc, &rm)
-                .await?;
-        }
-        tx.commit().await?;
+        sync_modifications(
+            &config,
+            &store,
+            None,
+            &aws_clients,
+            &shares_encryption_key_pair,
+            sync_result,
+        )
+        .await?;
     }
 
     if config.enable_modifications_replay {
         // replay last `max_modification_lookback` modifications to SNS
-        send_last_modifications_to_sns(
+        if let Err(e) = send_last_modifications_to_sns(
             &store,
             &aws_clients.sns_client,
             &config,
-            &reauth_result_attributes,
-            &identity_deletion_result_attributes,
-            &reset_update_result_attributes,
             max_modification_lookback,
         )
         .await
-        .map_err(|e| tracing::error!("Failed to replay last modifications: {:?}", e));
+        {
+            tracing::error!("Failed to replay last modifications: {:?}", e);
+        }
     }
 
     if download_shutdown_handler.is_shutting_down() {
@@ -1733,6 +1375,8 @@ async fn server_main(config: Config) -> Result<()> {
             full_face_mirror_match_ids,
             partial_match_ids_left,
             partial_match_ids_right,
+            partial_match_rotation_indices_left,
+            partial_match_rotation_indices_right,
             full_face_mirror_partial_match_ids_left,
             full_face_mirror_partial_match_ids_right,
             partial_match_counters_left,
@@ -1805,6 +1449,14 @@ async fn server_main(config: Config) -> Result<()> {
                             false => Some(partial_match_counters_left[i]),
                             true => None,
                         },
+                        match partial_match_rotation_indices_left[i].is_empty() {
+                            false => Some(partial_match_rotation_indices_left[i].clone()),
+                            true => None,
+                        },
+                        match partial_match_rotation_indices_right[i].is_empty() {
+                            false => Some(partial_match_rotation_indices_right[i].clone()),
+                            true => None,
+                        },
                         match full_face_mirror_match_ids[i].is_empty() {
                             false => Some(
                                 full_face_mirror_match_ids[i]
@@ -1842,10 +1494,15 @@ async fn server_main(config: Config) -> Result<()> {
                         },
                         full_face_mirror_attack_detected[i],
                     );
-
-                    serde_json::to_string(&result_event).wrap_err("failed to serialize result")
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reauth result");
+                    modifications
+                        .get_mut(&RequestId(request_ids[i].clone()))
+                        .unwrap()
+                        .mark_completed(!result_event.is_match, &result_string, result_event.serial_id, None);
+                    result_string
                 })
-                .collect::<Result<Vec<_>>>()?;
+                .collect::<Vec<String>>();
 
             // Insert non-matching uniqueness queries into the persistent store.
             let (memory_serial_ids, codes_and_masks): (Vec<i64>, Vec<StoredIrisRef>) = matches
@@ -1907,9 +1564,9 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(success, &result_string);
+                        .mark_completed(success, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1923,9 +1580,9 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity deletion result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
@@ -1956,9 +1613,17 @@ async fn server_main(config: Config) -> Result<()> {
                         Some(partial_match_counters_right[i]),
                         Some(partial_match_counters_left[i]),
                     );
+                    let result_string = serde_json::to_string(&result_event)
+                        .expect("failed to serialize reset check result");
 
-                    serde_json::to_string(&result_event)
-                        .expect("failed to serialize reset check result")
+                    // Mark the reset check modification as completed. 
+                    // Note that reset_check is only a query and does not persist anything into the database. 
+                    // We store modification so that the SNS result can be replayed.
+                    modifications
+                        .get_mut(&RequestId(reset_id))
+                        .unwrap()
+                        .mark_completed(false, &result_string, None, None);
+                    result_string
                 })
                 .collect::<Vec<String>>();
 
@@ -1974,18 +1639,14 @@ async fn server_main(config: Config) -> Result<()> {
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset update result");
                     modifications
-                        .get_mut(&serial_id)
+                        .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(true, &result_string);
+                        .mark_completed(true, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();
 
             let mut tx = store_bg.tx().await?;
-
-            store_bg
-                .insert_results(&mut tx, &uniqueness_results)
-                .await?;
 
             store_bg
                 .update_modifications(&mut tx, &modifications.values().collect::<Vec<_>>())

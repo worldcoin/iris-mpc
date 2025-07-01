@@ -2,6 +2,7 @@ use super::player::Identity;
 pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
+        hawk_main::search::SearchIds,
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -14,15 +15,16 @@ use crate::{
         searcher::ConnectPlanV,
         GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::grpc::{GrpcConfig, GrpcHandle, GrpcNetworking},
-    proto_generated::party_node::party_node_server::PartyNodeServer,
+    network::tcp::{
+        handle::TcpNetworkHandle, networking::connection_builder::PeerConnectionBuilder, TcpConfig,
+    },
     protocol::{
-        ops::{setup_replicated_prf, setup_shared_rng},
+        ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::helpers::{
@@ -35,23 +37,25 @@ use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
 };
+use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
     RequestType, UniquenessRequest,
 };
-use rand::{thread_rng, Rng, RngCore, SeedableRng};
+use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
+use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
     collections::HashMap,
     future::Future,
     hash::{Hash, Hasher},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     ops::Not,
     sync::Arc,
     time::{Duration, Instant},
@@ -60,9 +64,7 @@ use std::{
 use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
-    task::JoinSet,
 };
-use tonic::transport::Server;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
@@ -95,9 +97,6 @@ pub struct HawkArgs {
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
-    #[clap(short, long, default_value_t = 1)]
-    pub stream_parallelism: usize,
-
     #[clap(long, default_value_t = 2)]
     pub connection_parallelism: usize,
 
@@ -111,7 +110,7 @@ pub struct HawkArgs {
     pub hnsw_param_ef_search: usize,
 
     #[clap(long)]
-    pub hnsw_prng_seed: Option<u64>,
+    pub hnsw_prf_key: Option<u64>,
 
     #[clap(long, default_value_t = false)]
     pub disable_persistence: bool,
@@ -130,30 +129,45 @@ pub struct HawkActor {
 
     // ---- Shared setup ----
     searcher: Arc<HnswSearcher>,
+    prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
-    consensus: Consensus,
 
     // ---- My state ----
-    // TODO: Persistence.
-    db_size: usize,
+    /// A size used by the startup loader.
+    loader_db_size: usize,
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     distances_cache: BothEyes<Vec<((u32, u32), Vec<DistanceShare<u32>>)>>,
 
     // ---- My network setup ----
-    networking: GrpcHandle,
+    networking: TcpNetworkHandle,
     party_id: usize,
 }
 
-#[derive(Clone, Copy, Debug, Hash)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq)]
 pub enum StoreId {
     Left = 0,
     Right = 1,
 }
+
 pub const LEFT: usize = 0;
 pub const RIGHT: usize = 1;
 pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
+
+impl TryFrom<usize> for StoreId {
+    type Error = Report;
+
+    fn try_from(value: usize) -> std::result::Result<Self, Self::Error> {
+        match value {
+            0 => Ok(StoreId::Left),
+            1 => Ok(StoreId::Right),
+            _ => Err(eyre!(
+                "Invalid usize representation of StoreId, valid inputs are 0 (left) and 1 (right)"
+            )),
+        }
+    }
+}
 
 // TODO: Merge with the same in iris-mpc-gpu.
 // Orientation enum to indicate the orientation of the iris code during the batch processing.
@@ -161,8 +175,8 @@ pub const STORE_IDS: BothEyes<StoreId> = [StoreId::Left, StoreId::Right];
 // Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
-    Normal,
-    Mirror,
+    Normal = 0,
+    Mirror = 1,
 }
 
 // TODO: Merge with the same in iris-mpc-gpu.
@@ -184,6 +198,8 @@ impl std::fmt::Display for StoreId {
 
 /// BothEyes is an alias for types that apply to both left and right eyes.
 pub type BothEyes<T> = [T; 2];
+/// BothOrient is an alias for types that apply to both orientations (normal and mirror).
+pub type BothOrient<T> = [T; 2];
 /// VecRequests are lists of things for each request of a batch.
 pub(crate) type VecRequests<T> = Vec<T>;
 type VecBuckets = Vec<u32>;
@@ -201,7 +217,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 pub struct HawkSession {
     aby3_store: Aby3Store,
     graph_store: GraphRef,
-    shared_rng: Box<dyn RngCore + Send + Sync>,
+    hnsw_prf_key: Arc<[u8; 16]>,
 }
 
 // Thread safe reference to a HakwSession instance.
@@ -259,7 +275,7 @@ impl HawkActor {
             [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
             [(); 2].map(|_| SharedIrises::default()),
         )
-            .await
+        .await
     }
 
     pub async fn from_cli_with_graph_and_store(
@@ -288,48 +304,36 @@ impl HawkActor {
         let my_identity = identities[my_index].clone();
         let my_address = &args.addresses[my_index];
 
-        let grpc_config = GrpcConfig {
-            timeout_duration: Duration::from_secs(10),
-            connection_parallelism: args.connection_parallelism,
-            stream_parallelism: args.stream_parallelism,
-        };
+        let tcp_config = TcpConfig::new(
+            Duration::from_secs(10),
+            args.connection_parallelism,
+            args.request_parallelism * 2, // x2 for both orientations.
+        );
+        tracing::debug!("{:?}", tcp_config);
 
-        let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
-        let networking = GrpcHandle::new(networking).await?;
-
-        // Start server.
-        {
-            let player = networking.clone();
-            let socket = to_inaddr_any(my_address.parse().unwrap());
-            tracing::info!("Starting Hawk server on {}", socket);
-            tokio::spawn(async move {
-                Server::builder()
-                    .add_service(PartyNodeServer::new(player))
-                    .serve(socket)
-                    .await
-                    .unwrap();
-            });
-        }
+        let connection_builder = PeerConnectionBuilder::new(
+            my_identity,
+            to_inaddr_any(my_address.parse::<SocketAddr>()?),
+            tcp_config.clone(),
+        )
+        .await?;
 
         // Connect to other players.
-        izip!(&identities, &args.addresses)
-            .filter(|(_, address)| address != &my_address)
-            .map(|(identity, address)| {
-                let player = networking.clone();
-                let identity = identity.clone();
-                let url = format!("http://{}", address);
-                async move {
-                    tracing::info!("Connecting to {}…", url);
-                    player.connect_to_party(identity, &url).await?;
-                    tracing::info!("_connected to {}!", url);
-                    Ok(())
-                }
-            })
-            .collect::<JoinSet<_>>()
-            .join_all()
-            .await
-            .into_iter()
-            .collect::<Result<()>>()?;
+        for (identity, address) in
+            izip!(&identities, &args.addresses).filter(|(_, address)| address != &my_address)
+        {
+            let socket_addr = address
+                .clone()
+                .to_socket_addrs()?
+                .next()
+                .ok_or(eyre::eyre!("invalid peer address"))?;
+            connection_builder
+                .include_peer(identity.clone(), socket_addr)
+                .await?;
+        }
+
+        let (reconnector, connections) = connection_builder.build().await?;
+        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
 
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
@@ -350,13 +354,13 @@ impl HawkActor {
         Ok(HawkActor {
             args: args.clone(),
             searcher,
-            db_size: 0,
+            prf_key: None,
+            loader_db_size: 0,
             iris_store,
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
             distances_cache: [vec![], vec![]],
             role_assignments: Arc::new(role_assignments),
-            consensus: Consensus::default(),
             networking,
             party_id: my_index,
         })
@@ -374,18 +378,83 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
-        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
-        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = (0..self.args.request_parallelism)
-            .map(|_| {
-                let mut new_for_side_future = |store_id: StoreId| {
-                    let session_id = self.consensus.next_session_id();
-                    self.create_session(store_id, session_id)
-                };
+    pub async fn db_size(&self) -> usize {
+        self.iris_store[LEFT].read().await.db_size()
+    }
 
+    /// Initialize the shared PRF key for HNSW graph insertion layer selection.
+    ///
+    /// The PRF key is either statically injected via configuration in TEST environments or
+    /// mutually derived with other MPC parties in PROD environments.
+    ///
+    /// This PRF key is used to determine insertion heights for new elements added to the
+    /// HNSW graphs, so is configured to be equal across all sessions, and initialized once
+    /// upon startup of the `HawkActor` instance.
+    async fn get_or_init_prf_key(
+        &mut self,
+        network_session: &mut NetworkSession,
+    ) -> Result<Arc<[u8; 16]>> {
+        if self.prf_key.is_none() {
+            let prf_key_ = if let Some(prf_key) = self.args.hnsw_prf_key {
+                tracing::info!("Initializing HNSW shared PRF key to static value {prf_key:?}");
+                (prf_key as u128).to_le_bytes()
+            } else {
+                tracing::info!("Initializing HNSW shared PRF key to mutually derived random value");
+                let my_prf_key = thread_rng().gen();
+                setup_shared_seed(network_session, my_prf_key)
+                    .await
+                    .unwrap_or_else(|err| {
+                        tracing::warn!("Unable to initialize shared HNSW PRF key: {err}");
+                        tracing::warn!("Using default PRF key value [0u8; 16]");
+                        [0u8; 16]
+                    })
+            };
+            let prf_key = Arc::new(prf_key_);
+
+            self.prf_key = Some(prf_key);
+        }
+
+        Ok(self.prf_key.as_ref().unwrap().clone())
+    }
+
+    pub async fn new_sessions_orient(
+        &mut self,
+    ) -> Result<BothOrient<BothEyes<Vec<HawkSessionRef>>>> {
+        let [mut left, mut right] = self.new_sessions().await?;
+
+        let left_mirror = left.split_off(left.len() / 2);
+        let right_mirror = right.split_off(right.len() / 2);
+        Ok([[left, right], [left_mirror, right_mirror]])
+    }
+
+    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+        let mut network_sessions = vec![];
+        for tcp_session in self.networking.make_sessions().await? {
+            network_sessions.push(NetworkSession {
+                session_id: tcp_session.id(),
+                role_assignments: self.role_assignments.clone(),
+                networking: Box::new(tcp_session),
+                own_role: Role::new(self.party_id),
+            });
+        }
+        let hnsw_prf_key = self.get_or_init_prf_key(&mut network_sessions[0]).await?;
+
+        // todo: replace this with array_chunks::<2>() once that feature
+        // is stabilized in Rust.
+        let mut it = network_sessions.drain(..);
+        let mut left = vec![];
+        let mut right = vec![];
+        while let (Some(l), Some(r)) = (it.next(), it.next()) {
+            left.push(l);
+            right.push(r);
+        }
+
+        // Futures to create sessions, ids interleaved by side: (Left, 0), (Right, 1), (Left, 2), (Right, 3), ...
+        let (sessions_left, sessions_right): (Vec<_>, Vec<_>) = izip!(left, right)
+            .map(|(left, right)| {
                 (
-                    new_for_side_future(StoreId::Left),
-                    new_for_side_future(StoreId::Right),
+                    self.create_session(StoreId::Left, left, &hnsw_prf_key),
+                    self.create_session(StoreId::Right, right, &hnsw_prf_key),
                 )
             })
             .unzip();
@@ -401,39 +470,16 @@ impl HawkActor {
     fn create_session(
         &self,
         store_id: StoreId,
-        session_id: SessionId,
-    ) -> impl Future<Output=Result<HawkSessionRef>> {
-        let networking = self.networking.clone();
-        let role_assignments = self.role_assignments.clone();
+        mut network_session: NetworkSession,
+        hnsw_prf_key: &Arc<[u8; 16]>,
+    ) -> impl Future<Output = Result<HawkSessionRef>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
-        let party_id = self.party_id;
-        let hnsw_prng_seed = self.args.hnsw_prng_seed;
+        let hnsw_prf_key = hnsw_prf_key.clone();
 
         async move {
-            let grpc_session = networking.create_session(session_id).await?;
-
-            let mut network_session = NetworkSession {
-                session_id,
-                role_assignments,
-                networking: Box::new(grpc_session),
-                own_role: Role::new(party_id),
-            };
-
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
-
-            // PRNG seed is either statically injected via configuration in TEST environments or
-            // mutually derived with other MPC parties in PROD environments.
-            let shared_rng: Box<dyn RngCore + Send + Sync> = if let Some(base_seed) = hnsw_prng_seed
-            {
-                let rng = session_seeded_rng(base_seed, store_id, session_id);
-                Box::new(rng)
-            } else {
-                let my_rng_seed = thread_rng().gen();
-                let rng = setup_shared_rng(&mut network_session, my_rng_seed).await?;
-                Box::new(rng)
-            };
 
             let hawk_session = HawkSession {
                 aby3_store: Aby3Store {
@@ -444,7 +490,7 @@ impl HawkActor {
                     storage,
                 },
                 graph_store,
-                shared_rng,
+                hnsw_prf_key,
             };
 
             Ok(Arc::new(RwLock::new(hawk_session)))
@@ -488,7 +534,7 @@ impl HawkActor {
             .map(|x: usize| {
                 translate_threshold_a(MATCH_THRESHOLD_RATIO / (n_buckets as f64) * (x as f64))
             })
-            .collect::<Vec<_>>()
+            .collect_vec()
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
@@ -561,7 +607,7 @@ impl HawkActor {
         (
             IrisLoader {
                 party_id: self.party_id,
-                db_size: &mut self.db_size,
+                db_size: &mut self.loader_db_size,
                 irises: [
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
@@ -688,6 +734,7 @@ pub struct HawkRequest {
     batch: BatchQuery,
     queries: SearchQueries,
     queries_mirror: SearchQueries,
+    ids: SearchIds,
 }
 
 // TODO: Unify `BatchQuery` and `HawkRequest`.
@@ -765,12 +812,16 @@ impl From<BatchQuery> for HawkRequest {
             Arc::new(queries)
         };
 
+        let ids = Arc::new(batch.request_ids.clone());
+
+        assert!(n_queries <= batch.requests_order.len());
         assert_eq!(n_queries, batch.request_types.len());
         assert_eq!(n_queries, batch.or_rule_indices.len());
         Self {
             queries: extract_queries(Orientation::Normal),
             queries_mirror: extract_queries(Orientation::Mirror),
             batch,
+            ids,
         }
     }
 }
@@ -789,8 +840,7 @@ impl HawkRequest {
             .enumerate()
             .map(|(i, request_type)| match request_type.as_str() {
                 UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
-                    // Support for optional skip_persistence.
-                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap_or(&false),
+                    skip_persistence: *self.batch.skip_persistence.get(i).unwrap(),
                 }),
                 REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
                     let request_id = &self.batch.request_ids[i];
@@ -866,6 +916,7 @@ impl HawkRequest {
         });
         ResetRequests {
             vector_ids: iris_store.from_0_indices(&self.batch.reset_update_indices),
+            request_ids: Arc::new(self.batch.reset_update_request_ids.clone()),
             queries: Arc::new(queries),
         }
     }
@@ -925,9 +976,14 @@ impl HawkResult {
     }
 
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
-        self.connect_plans.0[LEFT][request_i]
-            .as_ref()
-            .map(|plan| plan.inserted_vector)
+        self.connect_plans
+            .get_by_request_index(RequestIndex::UniqueReauthResetCheck(request_i))
+            .and_then(|mutation| {
+                mutation.plans[LEFT]
+                    .as_ref()
+                    .or(mutation.plans[RIGHT].as_ref())
+                    .map(|plan| plan.inserted_vector)
+            })
     }
 
     fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
@@ -950,7 +1006,8 @@ impl HawkResult {
                         IntraBatch(req_i) => self.inserted_id(req_i),
                     })
                     .map(|id| id.index())
-                    .unique()
+                    .sorted()
+                    .dedup()
                     .collect_vec()
             })
             .collect_vec()
@@ -1047,7 +1104,15 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
+        tracing::info!(
+            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            successful_reauths,
+            matches,
+            matches_with_skip_persistence
+        );
+
         let batch = self.batch;
+        let batch_size = batch.request_ids.len();
 
         ServerJobResult {
             merged_results,
@@ -1063,6 +1128,8 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            partial_match_rotation_indices_left: vec![vec![]; batch_size],
+            partial_match_rotation_indices_right: vec![vec![]; batch_size],
 
             full_face_mirror_match_ids,
             full_face_mirror_partial_match_ids_left,
@@ -1098,14 +1165,53 @@ impl HawkResult {
 pub type ServerJobResult = iris_mpc_common::job::ServerJobResult<HawkMutation>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HawkMutation(pub BothEyes<Vec<Option<ConnectPlan>>>);
+pub struct HawkMutation(pub Vec<SingleHawkMutation>);
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SingleHawkMutation {
+    pub plans: BothEyes<Option<ConnectPlan>>,
+
+    #[serde(skip)]
+    pub modification_key: Option<ModificationKey>,
+
+    #[serde(skip)]
+    pub request_index: Option<RequestIndex>,
+}
+
+impl SingleHawkMutation {
+    pub fn serialize(&self) -> Result<Vec<u8>> {
+        bincode::serialize(self).map_err(|e| eyre::eyre!("Serialization error: {}", e))
+    }
+}
 
 impl HawkMutation {
+    /// Get a serialized `SingleHawkMutation` by `ModificationKey`.
+    ///
+    /// Returns None if no mutation exists for the given key.
+    pub fn get_serialized_mutation_by_key(&self, key: &ModificationKey) -> Option<Vec<u8>> {
+        let mutation = self
+            .0
+            .iter()
+            .find(|mutation| mutation.modification_key.as_ref() == Some(key))
+            .cloned();
+        mutation
+            .as_ref()
+            .map(|m| m.serialize().expect("failed to serialize graph mutation"))
+    }
+
+    pub fn get_by_request_index(&self, req_index: RequestIndex) -> Option<&SingleHawkMutation> {
+        self.0
+            .iter()
+            .find(|mutation| mutation.request_index == Some(req_index))
+    }
+
     pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
-        for (side, plans) in izip!(STORE_IDS, self.0) {
-            tracing::info!("Hawk Main :: Persisting Hawk mutations: side={}", side);
-            for plan in plans.into_iter().flatten() {
-                graph_tx.with_graph(side).insert_apply(plan).await?;
+        tracing::info!("Hawk Main :: Persisting Hawk mutations");
+        for mutation in self.0 {
+            for (side, plan_opt) in izip!(STORE_IDS, mutation.plans) {
+                if let Some(plan) = plan_opt {
+                    graph_tx.with_graph(side).insert_apply(plan).await?;
+                }
             }
         }
         Ok(())
@@ -1124,7 +1230,7 @@ impl JobSubmissionHandle for HawkHandle {
     async fn submit_batch_query(
         &mut self,
         batch: BatchQuery,
-    ) -> impl Future<Output=Result<ServerJobResult>> {
+    ) -> impl Future<Output = Result<ServerJobResult>> {
         let request = HawkRequest::from(batch);
         let (tx, rx) = oneshot::channel();
         let job = HawkJob {
@@ -1146,10 +1252,10 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        let mut sessions = hawk_actor.new_sessions().await?;
+        let mut sessions = hawk_actor.new_sessions_orient().await?;
 
         // Validate the common state before starting.
-        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
+        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
@@ -1181,7 +1287,7 @@ impl HawkHandle {
 
     async fn handle_job(
         hawk_actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions_orient: &BothOrient<BothEyes<Vec<HawkSessionRef>>>,
         request: HawkRequest,
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
@@ -1190,7 +1296,16 @@ impl HawkHandle {
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;
 
+        tracing::info!(
+            "Processing an Hawk job with request types: {:?}, reauth targets: {:?}, skip persistence: {:?}, reauth use or rule: {:?}",
+            request.batch.request_types,
+            request.batch.reauth_target_indices,
+            request.batch.skip_persistence,
+            request.batch.reauth_use_or_rule,
+        );
+
         let do_search = async |orient| -> Result<_> {
+            let sessions = &sessions_orient[orient as usize];
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
                 // The store to find vector ids (same left or right).
@@ -1205,11 +1320,13 @@ impl HawkHandle {
 
             // Search for nearest neighbors.
             // For both eyes, all requests, and rotations.
+            let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
-            let search_results = search::search(sessions, search_queries, search_params).await?;
+            let search_results =
+                search::search(sessions, search_queries, search_ids, search_params).await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
@@ -1220,7 +1337,7 @@ impl HawkHandle {
                     step1.missing_vector_ids(),
                     sessions,
                 )
-                    .await?;
+                .await?;
 
                 step1.step2(&missing_is_match, intra_results)
             };
@@ -1229,11 +1346,14 @@ impl HawkHandle {
         };
 
         let (search_results, match_result) = {
-            let (search_normal, matches_normal) = do_search(Orientation::Normal).await?;
-            let (_, matches_mirror) = do_search(Orientation::Mirror).await?;
+            let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
+                do_search(Orientation::Normal),
+                do_search(Orientation::Mirror),
+            )?;
 
             (search_normal, matches_normal.step3(matches_mirror))
         };
+        let sessions = &sessions_orient[Orientation::Normal as usize];
 
         hawk_actor
             .update_anon_stats(sessions, &search_results)
@@ -1244,9 +1364,15 @@ impl HawkHandle {
         let resets = search_to_reset(hawk_actor, sessions, &request).await?;
 
         // Insert into the in memory stores.
-        let mutations =
-            Self::handle_mutations(hawk_actor, sessions, search_results, &match_result, resets)
-                .await?;
+        let mutations = Self::handle_mutations(
+            hawk_actor,
+            sessions,
+            search_results,
+            &match_result,
+            resets,
+            &request,
+        )
+        .await?;
 
         let results = HawkResult::new(
             request.batch,
@@ -1256,7 +1382,7 @@ impl HawkHandle {
         );
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
-        metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+        metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
@@ -1270,26 +1396,45 @@ impl HawkHandle {
         search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
+        request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
         let decisions = match_result.decisions();
+        let requests_order = &request.batch.requests_order;
 
         // The vector IDs of reauths and resets, or None for uniqueness insertions.
-        let update_ids = decisions
+        let update_ids = requests_order
             .iter()
-            .map(|decision| match decision {
-                ReauthUpdate(update_id) => Some(*update_id),
-                _ => None,
+            .map(|req_index| match req_index {
+                RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
+                    ReauthUpdate(update_id) => Some(update_id),
+                    _ => None,
+                },
+                RequestIndex::ResetUpdate(i) => Some(resets.vector_ids[*i]),
+                RequestIndex::Deletion(_) => None,
             })
-            .chain(resets.vector_ids.into_iter().map(Some))
             .collect_vec();
 
-        let mut connect_plans = HawkMutation([vec![], vec![]]);
+        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
+
+        // Store plans for both sides using BothEyes structure
+        let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
+            vec![[None, None]; requests_order.len()];
 
         // For both eyes.
         for (side, sessions, search_results, reset_results) in
             izip!(&STORE_IDS, sessions, search_results, resets.search_results)
         {
+            let unique_insertions_persistence_skipped = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsertSkipped))
+                .collect_vec();
+
+            let unique_insertions = decisions
+                .iter()
+                .map(|decision| matches!(decision, UniqueInsert))
+                .collect_vec();
+
             // The accepted insertions for uniqueness, reauth, and resets.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
@@ -1297,47 +1442,88 @@ impl HawkHandle {
                 search_results.len(),
                 side
             );
-            let insert_plans = izip!(search_results, &decisions)
-                .map(|(search_result, &decision)| {
-                    decision.is_mutation().then(|| search_result.into_center())
+
+            tracing::info!(
+                "Unique insertions: {}, persistence skipped: {}",
+                unique_insertions.len(),
+                unique_insertions_persistence_skipped.len()
+            );
+
+            let insert_plans = requests_order
+                .iter()
+                .map(|req_index| match req_index {
+                    // If the decision is a mutation, return the insertion plan.
+                    RequestIndex::UniqueReauthResetCheck(i) => decisions[*i]
+                        .is_mutation()
+                        .then(|| search_results[*i].center().clone()),
+                    RequestIndex::ResetUpdate(i) => Some(reset_results[*i].center().clone()),
+                    RequestIndex::Deletion(_) => None,
                 })
-                .chain(reset_results.into_iter().map(|res| Some(res.into_center())))
                 .collect_vec();
 
             // Insert in memory, and return the plans to update the persistent database.
-            connect_plans.0[*side as usize] = hawk_actor
+            let plans = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
                 .await?;
+
+            // Store plans for this side
+            for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
+                both_sides[*side as usize] = plan;
+            }
         }
-        Ok(connect_plans)
+
+        // Combine ModificationKey and ConnectPlan into into SingleHawkMutation objects.
+        let mut mutations = Vec::new();
+
+        for (req_index, modif_plan) in izip!(requests_order, plans_both_sides) {
+            let modification_key = match *req_index {
+                RequestIndex::UniqueReauthResetCheck(i) => {
+                    // This is a batch request mutation
+                    match decisions[i] {
+                        UniqueInsert => {
+                            let request_id = &request.batch.request_ids[i];
+                            Some(ModificationKey::RequestId(request_id.clone()))
+                        }
+                        ReauthUpdate(vector_id) => {
+                            Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
+                        }
+                        UniqueInsertSkipped | NoMutation => None,
+                    }
+                }
+                RequestIndex::ResetUpdate(i) => {
+                    // This is a reset update mutation.
+                    if let Some(&vector_id) = resets.vector_ids.get(i) {
+                        Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
+                    } else {
+                        None
+                    }
+                }
+                RequestIndex::Deletion(_) => None,
+            };
+
+            mutations.push(SingleHawkMutation {
+                plans: modif_plan,
+                modification_key,
+                request_index: Some(*req_index),
+            });
+        }
+
+        Ok(HawkMutation(mutations))
     }
 
     async fn health_check(
         hawk_actor: &mut HawkActor,
-        sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+        sessions: &mut BothOrient<BothEyes<Vec<HawkSessionRef>>>,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
             // There is some error so the sessions may be somehow invalid. Make new ones.
-            *sessions = hawk_actor.new_sessions().await?;
+            *sessions = hawk_actor.new_sessions_orient().await?;
         }
 
         // Validate the common state after processing the requests.
-        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
+        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
         Ok(())
-    }
-}
-
-#[derive(Default)]
-struct Consensus {
-    next_session_id: u32,
-}
-
-impl Consensus {
-    fn next_session_id(&mut self) -> SessionId {
-        let id = SessionId(self.next_session_id);
-        self.next_session_id += 1;
-        id
     }
 }
 
@@ -1436,72 +1622,39 @@ mod tests {
             })
             .collect_vec();
 
-        let all_results = izip!(irises, handles.clone())
-            .map(|(shares, mut handle)| async move {
-                // TODO: different test irises for each eye.
+        let mut batch_0 = BatchQuery {
+            luc_lookback_records: 2,
+            ..BatchQuery::default()
+        };
+        for i in 0..batch_size {
+            batch_0.push_matching_request(
+                format!("sns_{i}"),
+                format!("request_{i}"),
+                UNIQUENESS_MESSAGE_TYPE,
+                BatchMetadata::default(),
+                vec![],
+                false,
+            );
+        }
 
-                let shares_right_cloned = shares.clone();
-                let shares_left_cloned = shares.clone();
-
-                let shares_right = shares_right_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_right_mirrored = shares_right_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let shares_left = shares_left_cloned.clone().into_iter().map(|(share, _)| share).collect();
-                let shares_left_mirrored = shares_left_cloned.into_iter().map(|(_, share)| share).collect();
-
-                let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_right, shares_right_mirrored);
-                let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] = receive_batch_shares(shares_left, shares_left_mirrored);
-
-                let batch = BatchQuery {
-                    // Iris shares.
-                    left_iris_requests,
-                    right_iris_requests,
-                    // All rotations.
-                    left_iris_rotated_requests,
-                    right_iris_rotated_requests,
-                    // All rotations, preprocessed.
-                    left_iris_interpolated_requests,
-                    right_iris_interpolated_requests,
-                    // All rotations, preprocessed, mirrored.
-                    left_mirrored_iris_interpolated_requests,
-                    right_mirrored_iris_interpolated_requests,
-
-                    // Batch details to be just copied to the result.
-                    request_ids: vec!["X".to_string(); batch_size],
-                    request_types: vec![UNIQUENESS_MESSAGE_TYPE.to_string(); batch_size],
-                    metadata: vec![
-                        BatchMetadata {
-                            node_id: "X".to_string(),
-                            trace_id: "X".to_string(),
-                            span_id: "X".to_string(),
-                        };
-                        batch_size
-                    ],
-
-                    or_rule_indices: vec![vec![]; batch_size],
-                    luc_lookback_records: 2,
-                    skip_persistence: vec![], // Unused.
-
-                    ..BatchQuery::default()
-                };
-                handle.submit_batch_query(batch).await.await
-            })
-            .collect::<JoinSet<_>>()
-            .join_all()
-            .await
-            .into_iter()
-            .collect::<Result<Vec<ServerJobResult>>>()?;
+        let all_results =
+            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+                let batch = batch_of_party(&batch_0, shares);
+                async move { handle.submit_batch_query(batch).await.await }
+            }))
+            .await?;
 
         let result = assert_all_equal(all_results);
 
-        assert_eq!(batch_size, result.merged_results.len());
-        assert_eq!(result.merged_results, (0..batch_size as u32).collect_vec());
+        let inserted_indices = (0..batch_size as u32).collect_vec();
+
+        assert_eq!(result.matches, vec![false; batch_size]);
+        assert_eq!(result.merged_results, inserted_indices);
         assert_eq!(batch_size, result.request_ids.len());
         assert_eq!(batch_size, result.request_types.len());
         assert_eq!(batch_size, result.metadata.len());
-        assert_eq!(batch_size, result.matches.len());
         assert_eq!(batch_size, result.matches_with_skip_persistence.len());
-        assert_eq!(batch_size, result.match_ids.len());
+        assert_eq!(result.match_ids, vec![Vec::<u32>::new(); batch_size]);
         assert_eq!(batch_size, result.partial_match_ids_left.len());
         assert_eq!(batch_size, result.partial_match_ids_right.len());
         assert_eq!(batch_size, result.partial_match_counters_left.len());
@@ -1517,8 +1670,63 @@ mod tests {
         assert!(result.reauth_target_indices.is_empty());
         assert!(result.reauth_or_rule_used.is_empty());
         assert!(result.modifications.is_empty());
-        assert_eq!(batch_size, result.actor_data.0[0].len());
-        assert_eq!(batch_size, result.actor_data.0[1].len());
+        assert_eq!(batch_size, result.actor_data.0.len());
+
+        // --- Reauth ---
+
+        let batch_1 = BatchQuery {
+            request_types: vec![REAUTH_MESSAGE_TYPE.to_string(); batch_size],
+
+            // Map the request ID to the inserted index.
+            reauth_target_indices: izip!(&batch_0.request_ids, &inserted_indices)
+                .map(|(req_id, inserted_index)| (req_id.clone(), *inserted_index))
+                .collect(),
+            reauth_use_or_rule: batch_0
+                .request_ids
+                .iter()
+                .map(|req_id| (req_id.clone(), false))
+                .collect(),
+
+            ..batch_0.clone()
+        };
+
+        let failed_request_i = 1;
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            // Mess with the shares to make one request fail.
+            let mut shares = irises[party_i].clone();
+            shares[failed_request_i].0 = GaloisRingSharedIris::dummy_for_party(party_i);
+
+            let batch = batch_of_party(&batch_1, &shares);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+
+        let result = assert_all_equal(all_results);
+        assert_eq!(
+            result.successful_reauths,
+            (0..batch_size).map(|i| i != failed_request_i).collect_vec()
+        );
+
+        // --- Rejected Uniqueness ---
+
+        let batch_2 = batch_0;
+
+        let all_results = parallelize((0..n_parties).map(|party_i| {
+            let batch = batch_of_party(&batch_2, &irises[party_i]);
+            let mut handle = handles[party_i].clone();
+            async move { handle.submit_batch_query(batch).await.await }
+        }))
+        .await?;
+        let result = assert_all_equal(all_results);
+
+        assert_eq!(
+            result.match_ids.iter().map(|ids| ids[0]).collect_vec(),
+            inserted_indices,
+        );
+        assert_eq!(result.merged_results, inserted_indices);
+        assert_eq!(result.matches, vec![true; batch_size]);
+        assert_match_ids(&result);
 
         Ok(())
     }
@@ -1536,7 +1744,7 @@ mod tests {
                 mirrored_share.code,
                 mirrored_share.mask,
             )
-                .unwrap();
+            .unwrap();
             out[0].code.push(one.code);
             out[0].mask.push(one.mask);
             out[1].code.extend(one.code_rotated);
@@ -1547,6 +1755,58 @@ mod tests {
             out[3].mask.extend(one.mask_mirrored);
         }
         out
+    }
+
+    // Prepare a batch for a particular party, setting their shares.
+    fn batch_of_party(
+        batch: &BatchQuery,
+        shares: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+    ) -> BatchQuery {
+        // TODO: different test irises for each eye.
+        let shares_right_cloned = shares.to_vec();
+        let shares_left_cloned = shares.to_vec();
+
+        let shares_right = shares_right_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_right_mirrored = shares_right_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let shares_left = shares_left_cloned
+            .clone()
+            .into_iter()
+            .map(|(share, _)| share)
+            .collect();
+        let shares_left_mirrored = shares_left_cloned
+            .into_iter()
+            .map(|(_, share)| share)
+            .collect();
+
+        let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_right, shares_right_mirrored);
+        let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
+            receive_batch_shares(shares_left, shares_left_mirrored);
+
+        BatchQuery {
+            // Iris shares.
+            left_iris_requests,
+            right_iris_requests,
+            // All rotations.
+            left_iris_rotated_requests,
+            right_iris_rotated_requests,
+            // All rotations, preprocessed.
+            left_iris_interpolated_requests,
+            right_iris_interpolated_requests,
+            // All rotations, preprocessed, mirrored.
+            left_mirrored_iris_interpolated_requests,
+            right_mirrored_iris_interpolated_requests,
+            // Details common to all parties.
+            ..batch.clone()
+        }
     }
 
     fn assert_all_equal(mut all_results: Vec<ServerJobResult>) -> ServerJobResult {
@@ -1620,9 +1880,7 @@ mod tests_db {
         hnsw::{
             graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
             searcher::ConnectPlanLayerV,
-            SortedNeighborhood,
         },
-        shares::share::DistanceShare,
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -1630,7 +1888,6 @@ mod tests_db {
     async fn test_graph_load() -> Result<()> {
         // The test data is a sequence of mutations on the graph.
         let vectors = (0..5).map(VectorId::from_0_index).collect_vec();
-        let distance = DistanceShare::new(Default::default(), Default::default());
 
         let make_plans = |side| {
             let side = side as usize; // Make some difference between sides.
@@ -1641,10 +1898,7 @@ mod tests_db {
                 .map(|(i, vector)| ConnectPlan {
                     inserted_vector: *vector,
                     layers: vec![ConnectPlanLayer {
-                        neighbors: SortedNeighborhood::from_ascending_vec(vec![(
-                            vectors[side],
-                            distance.clone(),
-                        )]),
+                        neighbors: SortedEdgeIds::from_ascending_vec(vec![vectors[side]]),
                         nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![*vector])],
                     }],
                     set_ep: i == side,
@@ -1656,7 +1910,20 @@ mod tests_db {
         // Populate the SQL store with test data.
         let graph_store = TestGraphPg::<Aby3Store>::new().await.unwrap();
         {
-            let mutation = HawkMutation(STORE_IDS.map(make_plans));
+            let plans_left = make_plans(StoreId::Left);
+            let plans_right = make_plans(StoreId::Right);
+
+            let mutations = plans_left
+                .into_iter()
+                .zip(plans_right.into_iter())
+                .map(|(left_plan, right_plan)| SingleHawkMutation {
+                    plans: [left_plan, right_plan],
+                    modification_key: None,
+                    request_index: None,
+                })
+                .collect();
+
+            let mutation = HawkMutation(mutations);
             let mut graph_tx = graph_store.tx().await?;
             mutation.persist(&mut graph_tx).await?;
             graph_tx.tx.commit().await?;
@@ -1667,12 +1934,11 @@ mod tests_db {
             party_index: 0,
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
-            stream_parallelism: 2,
             connection_parallelism: 2,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
-            hnsw_prng_seed: None,
+            hnsw_prf_key: None,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
@@ -1699,5 +1965,188 @@ mod tests_db {
 
         graph_store.cleanup().await.unwrap();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod hawk_mutation_tests {
+    use super::*;
+    use crate::hawkers::aby3::aby3_store::VectorId;
+    use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
+    use iris_mpc_common::helpers::sync::ModificationKey;
+
+    type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
+
+    fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
+        ConnectPlan {
+            inserted_vector: vector_id,
+            layers: vec![ConnectPlanLayer {
+                neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
+                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+            }],
+            set_ep: false,
+        }
+    }
+
+    #[test]
+    fn test_get_serialized_mutation_by_key() {
+        let request_id = "test-request-456".to_string();
+        let modification_key = ModificationKey::RequestId(request_id.clone());
+
+        let mutation = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(modification_key.clone()),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+        };
+
+        let hawk_mutation = HawkMutation(vec![mutation.clone()]);
+
+        // Test successful serialization
+        let result = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
+        assert!(result.is_some());
+
+        let serialized = result.unwrap();
+        assert!(!serialized.is_empty());
+
+        // Verify we can deserialize it back
+        let deserialized: SingleHawkMutation = bincode::deserialize(&serialized).unwrap();
+        // Note: modification_key is skipped during serialization, so we only compare plans
+        assert_eq!(deserialized.plans, mutation.plans);
+
+        // Test failed lookup
+        let wrong_key = ModificationKey::RequestId("wrong-request".to_string());
+        let result = hawk_mutation.get_serialized_mutation_by_key(&wrong_key);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_multiple_mutations_serialized_lookup() {
+        let request_id1 = "request-1".to_string();
+        let request_id2 = "request-2".to_string();
+        let serial_id = 100u32;
+
+        let key1 = ModificationKey::RequestId(request_id1.clone());
+        let key2 = ModificationKey::RequestId(request_id2.clone());
+        let key3 = ModificationKey::RequestSerialId(serial_id);
+
+        let index1 = RequestIndex::UniqueReauthResetCheck(0);
+        let index2 = RequestIndex::UniqueReauthResetCheck(1);
+        let index3 = RequestIndex::ResetUpdate(0);
+        let index_wrong = RequestIndex::ResetUpdate(1);
+
+        let mutation1 = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(key1.clone()),
+            request_index: Some(index1),
+        };
+
+        let mutation2 = SingleHawkMutation {
+            plans: [
+                None,
+                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+            ],
+            modification_key: Some(key2.clone()),
+            request_index: Some(index2),
+        };
+
+        let mutation3 = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+            ],
+            modification_key: Some(key3.clone()),
+            request_index: Some(index3),
+        };
+
+        let hawk_mutation = HawkMutation(vec![
+            mutation1.clone(),
+            mutation2.clone(),
+            mutation3.clone(),
+        ]);
+
+        // Test all serialized lookups work correctly
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key1)
+            .is_some());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key2)
+            .is_some());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&key3)
+            .is_some());
+
+        assert_eq!(hawk_mutation.get_by_request_index(index1), Some(&mutation1));
+        assert_eq!(hawk_mutation.get_by_request_index(index2), Some(&mutation2));
+        assert_eq!(hawk_mutation.get_by_request_index(index3), Some(&mutation3));
+
+        // Test non-existent key
+        let wrong_key = ModificationKey::RequestId("non-existent".to_string());
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&wrong_key)
+            .is_none());
+
+        assert!(hawk_mutation.get_by_request_index(index_wrong).is_none());
+    }
+
+    #[test]
+    fn test_mutation_without_modification_key() {
+        let mutation_with_key = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(ModificationKey::RequestId("test".to_string())),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+        };
+
+        let mutation_without_key = SingleHawkMutation {
+            plans: [
+                None,
+                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+            ],
+            modification_key: None,
+            request_index: None,
+        };
+
+        let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
+
+        // Should find the serialized mutation with key
+        let key = ModificationKey::RequestId("test".to_string());
+        assert!(hawk_mutation.get_serialized_mutation_by_key(&key).is_some());
+
+        // Should not find mutations without keys
+        let other_key = ModificationKey::RequestSerialId(123);
+        assert!(hawk_mutation
+            .get_serialized_mutation_by_key(&other_key)
+            .is_none());
+    }
+
+    #[test]
+    fn test_single_hawk_mutation_serialization() {
+        let mutation = SingleHawkMutation {
+            plans: [
+                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
+                None,
+            ],
+            modification_key: Some(ModificationKey::RequestId("test".to_string())),
+            request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+        };
+
+        // Test serialization
+        let serialized = mutation.serialize().unwrap();
+        assert!(!serialized.is_empty());
+
+        // Test deserialization
+        let deserialized: SingleHawkMutation = bincode::deserialize(&serialized).unwrap();
+
+        // modification_key is skipped during serialization, so it should be None
+        assert_eq!(deserialized.plans, mutation.plans);
+        assert_eq!(deserialized.modification_key, None);
     }
 }

@@ -14,22 +14,10 @@ env:
   - name: SMPC__PARTY_ID
     value: "0"
 
-  - name: SMPC__MODE_OF_COMPUTE
-    value: "Cpu"
-
-  - name: SMPC__MODE_OF_DEPLOYMENT
-    value: "ShadowIsolation"
-
-  - name: SMPC__DATABASE__URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_MPCV2_URL
-        name: application
-
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: TEMP_DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HNSW_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
@@ -53,7 +41,7 @@ env:
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
 
-  - name: SMPC__CPU_DISABLE_PERSISTENCE
+  - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
@@ -99,7 +87,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-stage--eun1-az3--x-s3"
@@ -154,6 +142,11 @@ env:
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
 
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
 
 initContainer:
   enabled: true

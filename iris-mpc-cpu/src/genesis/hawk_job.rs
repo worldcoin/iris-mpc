@@ -1,13 +1,10 @@
-use super::{
-    utils::{PartyId, COUNT_OF_MPC_PARTIES},
-    Batch,
-};
+use super::Batch;
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
     hawkers::aby3::aby3_store::QueryRef,
 };
 use eyre::Result;
-use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -28,21 +25,26 @@ pub struct Job {
 
 /// An indexation job request.
 #[derive(Clone, Debug)]
-pub struct JobRequest {
-    // Incoming batch identifier.
-    pub batch_id: usize,
+pub enum JobRequest {
+    BatchIndexation {
+        // Incoming batch identifier.
+        batch_id: usize,
 
-    // Incoming batch of iris identifiers for subsequent correlation.
-    pub vector_ids: Vec<IrisVectorId>,
+        // Incoming batch of iris identifiers for subsequent correlation.
+        vector_ids: Vec<IrisVectorId>,
 
-    /// HNSW indexation queries over both eyes.
-    pub queries: Aby3BatchQueryRef,
+        /// HNSW indexation queries over both eyes.
+        queries: Aby3BatchQueryRef,
+    },
+    Modification {
+        // Modification entry for processing
+        modification: Modification,
+    },
 }
 
 /// Constructor.
 impl JobRequest {
-    pub fn new(
-        party_id: PartyId,
+    pub fn new_batch_indexation(
         Batch {
             batch_id,
             vector_ids,
@@ -50,53 +52,74 @@ impl JobRequest {
             right_queries,
         }: Batch,
     ) -> Self {
-        assert!(party_id < COUNT_OF_MPC_PARTIES, "Invalid party id");
         assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
 
-        Self {
+        Self::BatchIndexation {
             batch_id,
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
         }
     }
-}
 
-// Methods.
-impl JobRequest {
-    // Incoming batch size.
-    pub fn batch_size(&self) -> usize {
-        self.vector_ids.len()
+    pub fn new_modification(modification: Modification) -> Self {
+        Self::Modification { modification }
     }
 }
 
 /// An indexation result over a set of irises.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobResult {
-    /// Unique sequential job identifier.
-    pub batch_id: usize,
+pub enum JobResult {
+    BatchIndexation {
+        /// Unique sequential job identifier.
+        batch_id: usize,
 
-    /// Connect plans for updating HNSW graph in DB.
-    pub connect_plans: HawkMutation,
+        /// Connect plans for updating HNSW graph in DB.
+        connect_plans: HawkMutation,
 
-    /// Iris serial id of batch's first element.
-    pub first_serial_id: IrisSerialId,
+        /// Set of Iris identifiers being indexed.
+        vector_ids: Vec<IrisVectorId>,
 
-    /// Set of Iris identifiers being indexed.
-    pub vector_ids: Vec<IrisVectorId>,
+        /// Iris serial id of batch's first element.
+        first_serial_id: IrisSerialId,
 
-    /// Iris serial id of batch's last element.
-    pub last_serial_id: IrisSerialId,
+        /// Iris serial id of batch's last element.
+        last_serial_id: IrisSerialId,
+    },
+    Modification {
+        /// Modification id of associated modifications table entry
+        modification_id: i64,
+
+        /// Connect plans for updating HNSW graph in DB.
+        connect_plans: HawkMutation,
+    },
 }
 
 /// Constructor.
 impl JobResult {
-    pub(crate) fn new(request: &JobRequest, connect_plans: HawkMutation) -> Self {
-        Self {
+    pub(crate) fn new_batch_result(
+        batch_id: usize,
+        vector_ids: Vec<IrisVectorId>,
+        connect_plans: HawkMutation,
+    ) -> Self {
+        let first_serial_id = vector_ids.first().unwrap().serial_id();
+        let last_serial_id = vector_ids.last().unwrap().serial_id();
+        Self::BatchIndexation {
             connect_plans,
-            batch_id: request.batch_id,
-            first_serial_id: request.vector_ids.first().unwrap().serial_id(),
-            vector_ids: request.vector_ids.clone(),
-            last_serial_id: request.vector_ids.last().unwrap().serial_id(),
+            batch_id,
+            vector_ids,
+            first_serial_id,
+            last_serial_id,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn new_modification_result(
+        modification_id: i64,
+        connect_plans: HawkMutation,
+    ) -> Self {
+        Self::Modification {
+            modification_id,
+            connect_plans,
         }
     }
 }
@@ -104,13 +127,28 @@ impl JobResult {
 /// Trait: fmt::Display.
 impl fmt::Display for JobResult {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "batch-id={}, batch-size={}, range=({}..{})",
-            self.batch_id,
-            self.vector_ids.len(),
-            self.first_serial_id,
-            self.last_serial_id
-        )
+        match self {
+            JobResult::BatchIndexation {
+                batch_id,
+                vector_ids,
+                first_serial_id,
+                last_serial_id,
+                ..
+            } => {
+                write!(
+                    f,
+                    "batch-id={}, batch-size={}, range=({}..{})",
+                    batch_id,
+                    vector_ids.len(),
+                    first_serial_id,
+                    last_serial_id
+                )
+            }
+            JobResult::Modification {
+                modification_id, ..
+            } => {
+                write!(f, "modification-id={}", modification_id)
+            }
+        }
     }
 }

@@ -6,11 +6,12 @@ use super::{
     BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT, RIGHT,
 };
 pub use crate::hawkers::aby3::aby3_store::VectorId;
-use crate::protocol::shared_iris::GaloisRingSharedIris;
+use crate::{execution::hawk_main::search::SearchIds, protocol::shared_iris::GaloisRingSharedIris};
 use eyre::Result;
 
 pub struct ResetRequests {
     pub vector_ids: Vec<VectorId>,
+    pub request_ids: SearchIds,
     pub queries: SearchQueries<WithoutRot>,
 }
 
@@ -38,7 +39,13 @@ pub async fn search_to_reset(
 
     Ok(ResetPlan {
         vector_ids: updates.vector_ids,
-        search_results: search::search(sessions, &updates.queries, search_params).await?,
+        search_results: search::search(
+            sessions,
+            &updates.queries,
+            &updates.request_ids,
+            search_params,
+        )
+        .await?,
     })
 }
 

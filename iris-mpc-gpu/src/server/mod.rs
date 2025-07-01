@@ -4,6 +4,7 @@ use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 pub use actor::{
     generate_luc_records, prepare_or_policy_bitmap, Orientation, ServerActor, ServerActorHandle,
 };
+use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::job::GaloisSharesBothSides;
 use iris_mpc_common::{
     helpers::sync::Modification,
@@ -129,7 +130,7 @@ pub struct PreprocessedBatchQuery {
     pub right_mirrored_iris_interpolated_requests_preprocessed: BatchQueryEntriesPreprocessed,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
-    pub modifications: HashMap<u32, Modification>,
+    pub modifications: HashMap<ModificationKey, Modification>,
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
