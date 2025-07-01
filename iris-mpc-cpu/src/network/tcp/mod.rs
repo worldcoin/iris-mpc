@@ -57,10 +57,10 @@ pub async fn build_network_handle(
 ) -> Result<Box<dyn NetworkHandle>> {
     static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
     INSTALL_CRYPTO_PROVIDER.call_once(|| {
-        if let Err(_) =
-            tokio_rustls::rustls::crypto::aws_lc_rs::default_provider().install_default()
+        if tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .is_err()
         {
-            // We can't return an error from call_once, so just log it.
             tracing::error!("failed to install CryptoProvider for rustls");
         }
     });
