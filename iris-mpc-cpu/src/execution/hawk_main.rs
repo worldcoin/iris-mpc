@@ -1895,6 +1895,7 @@ mod tests_db {
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
+            tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
