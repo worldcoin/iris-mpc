@@ -816,6 +816,7 @@ async fn get_results_thread(
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
+                    metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
 
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
