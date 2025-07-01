@@ -14,7 +14,7 @@ use bytes::{Buf, BytesMut};
 use eyre::Result;
 use itertools::Itertools;
 use std::{collections::HashMap, time::Instant};
-use std::{io, sync::Arc, time::Duration};
+use std::{io, sync::Arc};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
@@ -23,7 +23,6 @@ use tokio::{
     },
 };
 
-const FLUSH_INTERVAL_US: u64 = 500;
 const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
 const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
 
@@ -383,7 +382,6 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         buf.extend_from_slice(&session_id.0.to_le_bytes());
         msg.serialize(&mut buf);
 
-        let loop_start_time = Instant::now();
         while buffered_msgs < num_sessions {
             match outbound_rx.try_recv() {
                 Ok((session_id, msg)) => {
@@ -394,12 +392,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
                         break;
                     }
                 }
-                Err(TryRecvError::Empty) => {
-                    if loop_start_time.elapsed() >= Duration::from_micros(FLUSH_INTERVAL_US) {
-                        break;
-                    }
-                    tokio::task::yield_now().await;
-                }
+                Err(TryRecvError::Empty) => break,
                 Err(_) => break,
             }
         }
@@ -415,7 +408,6 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             }
         }
 
-        // this function yields after every write.
         if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
             tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
             return Err(e);
@@ -512,9 +504,6 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                 session_id
             );
         }
-
-        // don't want to starve the Writer task
-        tokio::task::yield_now().await;
     }
 }
 
@@ -531,11 +520,10 @@ async fn write_buf<T: NetworkConnection>(
     }
     *buffered_msgs = 0;
 
-    // don't want to starve the ReadHalf. yield after writing.
+    // maybe faster than write_all()?
     while !buf.is_empty() {
         let n = stream.write(buf).await?;
         buf.advance(n);
-        tokio::task::yield_now().await;
     }
 
     buf.clear();
