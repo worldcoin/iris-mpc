@@ -404,7 +404,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             } else if buffered_msgs >= num_sessions {
                 metrics::counter!("network::flush_reason::msg_count").increment(1);
             } else {
-                metrics::counter!("network::flush_reason::timeout").increment(1);
+                metrics::counter!("network::flush_reason::no_more").increment(1);
             }
         }
 
