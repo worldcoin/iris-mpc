@@ -1,5 +1,34 @@
 # iris-mpc
 
+## Contributing
+
+We welcome contributions to this project! Please follow these guidelines when contributing:
+
+### Pull Requests
+
+- Fork the repository and create a new branch for your changes
+- Make your changes and ensure all tests pass
+- Submit a pull request with a clear description of your changes
+- All pull requests will be reviewed before merging
+
+### Signed Commits
+
+- All commits must be signed with your SSH/GPG key
+- Configure Git to sign commits automatically:
+
+    ```bash
+    git config --global user.signingkey <SSH signing key path/your-gpg-key-id>
+    git config --global commit.gpgsign true
+    ```
+
+- Verify your commits are signed with `git log --show-signature`
+
+### Code Standards
+
+- Follow the existing code style and conventions
+- Include appropriate tests for new functionality
+- Update documentation as needed
+
 ## How to release
 
 New releases are created automagically by [Release Drafter GH action](https://github.com/worldcoin//gpu-iris-mpc/actions/workflows/release.yaml).
@@ -10,14 +39,13 @@ Release is created as draft, so you have to edit it manually and change it to fi
 
 After release creation the build image is starting with tag with release number.
 
-
 ## Setup
 
 - GPU-based node implementation in `iris-mpc/src/bin/server.rs`
 - CPU-based node PoC in `iris-mpc/src/bin/server_hawk.rs`
 - Example client in `src/bin/client.rs`
 
-## GPU Implementation 
+## GPU Implementation
 
 #### Running the E2E test binary (single machine)
 
@@ -98,6 +126,7 @@ Some Linux distributions have a (lib)cuda package 12.2 which depends on earlier 
 It might not work.
 
 ### Direnv setup
+
 If you're running with libraries in non-standard paths you'll likely want to setup direnv to automatically load the env vars for configuration.
 
 [Make sure to install direnv](https://direnv.net/)
@@ -111,7 +140,7 @@ The example file contains a sample WSL env var.
 ### Requirements
 
 1. `direnv` installed on your machine
-2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .test.env and .envrc files 
+2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .test.env and .envrc files
 
 #### Option 1: Locally run a single server without Docker (recommended for quick iteration)
 
@@ -148,7 +177,7 @@ It will bring up the 3 parties plus all the needed AWS/DB resources
 ### Running Requests Against the Local Servers
 
 In either option you can send batches of requests to the SNS topics that will then be forwarded to the SQS
-queues from which the servers can read. This can be done with the `client` binary. We provide a bash script to 
+queues from which the servers can read. This can be done with the `client` binary. We provide a bash script to
 simplify its invocation:
 
 ```bash
@@ -160,7 +189,6 @@ Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
 
 ### Running Requests with file data
 
-
 ```bash
 cargo run --bin client -- \
     --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
@@ -171,7 +199,8 @@ cargo run --bin client -- \
     --data-from-file signup_sequence_shares_optin_both_sides.json \
     --populate-file-data-limit 0
 ```
-* 0 is to use all data in file otherwise one can specify a limit
+
+- 0 is to use all data in file otherwise one can specify a limit
 
 This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
 Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
@@ -186,12 +215,17 @@ cargo test --release --features db_dependent -- --test-threads=1 # require a run
 If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
 ## CPU Genesis
+
 1. Create the generated data (this will be generated to the `iris-mpc-cpu/data` folder)
-* note you can change the value of the benchmark data to generate less data (100 is required for local stack)
+
+- note you can change the value of the benchmark data to generate less data (100 is required for local stack)
+
 ```bash
 cargo run --bin generate_benchmark_data
 ```
+
 2. Run the commands
+
 ```bash
 docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
 docker-compose -f docker-compose.test.genesis.yaml up
@@ -200,7 +234,6 @@ docker-compose -f docker-compose.test.genesis.yaml up
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)
-
 
 ## How to run client in the prod-dev env
 

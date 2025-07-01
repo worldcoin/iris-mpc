@@ -280,7 +280,7 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
     (PlaintextStore, GraphMem<PlaintextStore>),
     Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
 )> {
-    lazy_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    lazy_random_setup(rng, database_size, NetworkType::Local).await
 }
 
 /// Generates 3 pairs of vector stores and graphs from a random plaintext
@@ -357,7 +357,7 @@ pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoR
     rng: &mut R,
     database_size: usize,
 ) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
-    shared_random_setup(rng, database_size, NetworkType::LocalChannel).await
+    shared_random_setup(rng, database_size, NetworkType::Local).await
 }
 
 /// Generates 3 pairs of vector stores and graphs corresponding to each
