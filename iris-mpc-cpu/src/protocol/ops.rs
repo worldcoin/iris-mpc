@@ -22,7 +22,7 @@ use crate::{
 };
 use eyre::{bail, eyre, Result};
 use itertools::{izip, Itertools};
-use std::array;
+use std::{array, ops::Not};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -75,7 +75,7 @@ pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -
 /// - Lifts the two dot products to the ring Z_{2^32}.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
-/// - Compares mask_dist * A < code_dist * B.
+/// - Compares mask_dist * A > code_dist * B.
 pub async fn compare_threshold(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
@@ -85,7 +85,7 @@ pub async fn compare_threshold(
         .map(|d| {
             let x = d.mask_dot.clone() * A as u32;
             let y = d.code_dot.clone() * B as u32;
-            x - y
+            y - x
         })
         .collect();
 
@@ -145,15 +145,15 @@ pub async fn lift_and_compare_threshold(
     code_dist: Share<u16>,
     mask_dist: Share<u16>,
 ) -> Result<Share<Bit>> {
-    let y = mul_lift_2k::<B_BITS>(&code_dist);
+    let mut y = mul_lift_2k::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x
         .pop()
         .ok_or(eyre!("Expected a single element in the VecShare"))?;
     x *= A as u32;
-    x -= y;
+    y -= x;
 
-    single_extract_msb_u32(session, x).await
+    single_extract_msb_u32(session, y).await
 }
 
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
@@ -306,7 +306,7 @@ pub async fn compare_threshold_and_open(
     let bits = compare_threshold(session, distances).await?;
     open_bin(session, &bits)
         .await
-        .map(|v| v.into_iter().map(|x| x.convert()).collect())
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
