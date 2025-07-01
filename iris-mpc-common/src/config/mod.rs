@@ -40,6 +40,9 @@ pub struct Config {
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
+    pub tls: Option<TlsConfig>,
+
+    #[serde(default)]
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
@@ -477,6 +480,14 @@ pub struct MetricsConfig {
     pub prefix: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
+pub struct TlsConfig {
+    pub server_key: String,
+    pub server_cert: String,
+    // used by the client to make them trust the server cert
+    pub root_cert: String,
+}
+
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -550,6 +561,7 @@ impl From<Config> for CommonConfig {
             requests_queue_url: _, // requests queue url is different for each server
             results_topic_arn,
             kms_key_arns: _, // kms key arns are different for each server
+            tls: _,
             service: _,
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server

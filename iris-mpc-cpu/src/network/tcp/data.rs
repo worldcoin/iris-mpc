@@ -1,6 +1,15 @@
-use crate::execution::player::Identity;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+
+use crate::{
+    execution::{player::Identity, session::SessionId},
+    network::value::NetworkValue,
+};
 use std::collections::HashMap;
-use tokio::net::TcpStream;
+
+// session multiplexing over a socket requires a SessionId
+pub type OutboundMsg = (SessionId, NetworkValue);
+pub type OutStream = UnboundedSender<NetworkValue>;
+pub type InStream = UnboundedReceiver<NetworkValue>;
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug, Hash)]
 pub struct StreamId(pub u32);
@@ -17,16 +26,16 @@ impl From<u32> for StreamId {
     }
 }
 
-pub type PeerConnections = HashMap<Identity, HashMap<StreamId, TcpConnection>>;
+pub type PeerConnections<T> = HashMap<Identity, HashMap<StreamId, Connection<T>>>;
 
-pub struct TcpConnection {
+pub struct Connection<T> {
     pub peer: Identity,
-    pub stream: TcpStream,
+    pub stream: T,
     pub stream_id: StreamId,
 }
 
-impl TcpConnection {
-    pub fn new(peer: Identity, stream: TcpStream, stream_id: StreamId) -> Self {
+impl<T> Connection<T> {
+    pub fn new(peer: Identity, stream: T, stream_id: StreamId) -> Self {
         Self {
             peer,
             stream,
@@ -39,9 +48,9 @@ impl TcpConnection {
     }
 }
 
-impl std::fmt::Debug for TcpConnection {
+impl<T> std::fmt::Debug for Connection<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TcpConnection")
+        f.debug_struct("Connection")
             .field("peer", &self.peer)
             .field("stream_id", &self.stream_id)
             .finish()

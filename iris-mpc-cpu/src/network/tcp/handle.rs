@@ -1,31 +1,51 @@
-use super::{
-    session::TcpSession, OutStream, OutboundMsg, PeerConnections, StreamId, TcpConnection,
-};
+use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
-        tcp::{networking::connection_builder::Reconnector, TcpConfig},
+        tcp::{
+            config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
+            NetworkHandle,
+        },
         value::{DescriptorByte, NetworkValue},
     },
 };
-use bytes::BytesMut;
+use async_trait::async_trait;
+use bytes::{Buf, BytesMut};
 use eyre::Result;
 use itertools::Itertools;
 use std::{collections::HashMap, time::Instant};
 use std::{io, sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
-    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
         mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
         oneshot, Mutex,
     },
-    task::JoinSet,
 };
 
 const FLUSH_INTERVAL_US: u64 = 500;
 const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
 const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+
+/// spawns a task for each TCP connection (there are x connections per peer and each of the x
+/// connections has y sessions, of the same session id)
+pub struct TcpNetworkHandle<T: NetworkConnection> {
+    peers: Vec<Identity>,
+    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
+    reconnector: Reconnector<T>,
+    config: TcpConfig,
+    next_session_id: usize,
+}
+
+#[async_trait]
+impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
+    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
+        tracing::debug!("make_sessions");
+        self.reconnector.wait_for_reconnections().await?;
+        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
+        Ok(self.make_sessions_inner(sc).await)
+    }
+}
 
 #[derive(Default)]
 struct SessionChannels {
@@ -33,16 +53,6 @@ struct SessionChannels {
     outbound_rx: HashMap<Identity, HashMap<StreamId, UnboundedReceiver<OutboundMsg>>>,
     inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
     inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
-}
-
-/// spawns a task for each TCP connection (there are x connections per peer and each of the x
-/// connections has y sessions, of the same session id)
-pub struct TcpNetworkHandle {
-    peers: Vec<Identity>,
-    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
-    reconnector: Reconnector,
-    config: TcpConfig,
-    next_session_id: usize,
 }
 
 enum Cmd {
@@ -55,9 +65,12 @@ enum Cmd {
     TestReconnect { rsp: oneshot::Sender<Result<()>> },
 }
 
-impl TcpNetworkHandle {
-    pub fn new(reconnector: Reconnector, connections: PeerConnections, config: TcpConfig) -> Self {
-        tracing::info!("TcpNetworkHandle with config: {:?}", config);
+impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
+    pub fn new(
+        reconnector: Reconnector<T>,
+        connections: PeerConnections<T>,
+        config: TcpConfig,
+    ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
         for (peer_id, connections) in connections {
@@ -83,13 +96,6 @@ impl TcpNetworkHandle {
             config,
             next_session_id: 0,
         }
-    }
-
-    pub async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
-        tracing::debug!("make_sessions");
-        self.reconnector.wait_for_reconnections().await?;
-        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        Ok(self.make_sessions_inner(sc).await)
     }
 
     #[cfg(test)]
@@ -221,22 +227,17 @@ fn make_channels(
     sc
 }
 
-async fn manage_connection(
-    connection: TcpConnection,
-    reconnector: Reconnector,
+async fn manage_connection<T: NetworkConnection>(
+    connection: Connection<T>,
+    reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
 ) {
-    let TcpConnection {
+    let Connection {
         peer,
         stream,
         stream_id,
     } = connection;
-
-    let (reader, writer) = stream.into_split();
-    // these are made so that the stream can be dropped for testing purposes.
-    let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
-    let writer = Arc::new(Mutex::new(Some(writer)));
 
     // We enter the loop only after receiving the first NewSessions
     let (inbound_forwarder, outbound_rx) = match cmd_ch.recv().await {
@@ -258,19 +259,36 @@ async fn manage_connection(
             return;
         }
     };
+
+    // wrapping these for future re-use
+    let (reader, writer) = tokio::io::split(stream);
+    let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
+    let writer = Arc::new(Mutex::new(Some(writer)));
     let inbound_forwarder = Arc::new(Mutex::new(inbound_forwarder));
     let outbound_rx = Arc::new(Mutex::new(outbound_rx));
 
     // on disconnect, reconnect automatically. tear down and stand up the forwarders.
     // when new sessions are requested, also tear down and stand up the forwarders.
     loop {
-        let mut set = spawn_forwarders(
-            reader.clone(),
-            writer.clone(),
-            inbound_forwarder.clone(),
-            outbound_rx.clone(),
-            num_sessions,
-        );
+        let writer_mtx = writer.clone();
+        let outbound_mtx = outbound_rx.clone();
+        let outbound_task = async move {
+            let mut writer = writer_mtx.lock().await;
+            let mut outbound_rx = outbound_mtx.lock().await;
+            let r =
+                handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions)
+                    .await;
+            tracing::debug!("handle_outbound_traffic exited: {r:?}");
+        };
+
+        let reader_mtx = reader.clone();
+        let inbound_mtx = inbound_forwarder.clone();
+        let inbound_task = async move {
+            let mut reader = reader_mtx.lock().await;
+            let inbound = inbound_mtx.lock().await;
+            let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound).await;
+            tracing::debug!("handle_inbound_traffic exited: {r:?}");
+        };
 
         enum Evt {
             Cmd(Cmd),
@@ -286,12 +304,9 @@ async fn manage_connection(
                     }
                 }
             }
-            _ = set.join_next() => Evt::Disconnected,
+            _ = inbound_task => Evt::Disconnected,
+            _ = outbound_task => Evt::Disconnected,
         };
-
-        // shut down the forwarders
-        tracing::info!("shutting down tasks for {:?}: {:?}", peer, stream_id);
-        set.shutdown().await;
 
         // update the Arcs depending on the event. wait for reconnect if needed.
         match event {
@@ -332,44 +347,12 @@ async fn manage_connection(
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn spawn_forwarders(
-    reader: Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
-    writer: Arc<Mutex<Option<OwnedWriteHalf>>>,
-    inbound_forwarder: Arc<Mutex<HashMap<SessionId, UnboundedSender<NetworkValue>>>>,
-    outbound_rx: Arc<Mutex<UnboundedReceiver<(SessionId, NetworkValue)>>>,
-    num_sessions: usize,
-) -> JoinSet<()> {
-    let mut join_set = JoinSet::new();
-
-    let writer = writer.clone();
-    let outbound_rx = outbound_rx.clone();
-    join_set.spawn(async move {
-        let mut writer = writer.lock().await;
-        let mut outbound_rx = outbound_rx.lock().await;
-        let r =
-            handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions).await;
-        tracing::debug!("handle_outbound_traffic exited: {r:?}");
-    });
-
-    let reader = reader.clone();
-    let inbound_forwarder = inbound_forwarder.clone();
-    join_set.spawn(async move {
-        let mut reader = reader.lock().await;
-        let inbound = inbound_forwarder.lock().await;
-        let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound).await;
-        tracing::debug!("handle_inbound_traffic exited: {r:?}");
-    });
-
-    join_set
-}
-
-async fn reconnect_and_replace(
-    reconnector: &Reconnector,
+async fn reconnect_and_replace<T: NetworkConnection>(
+    reconnector: &Reconnector<T>,
     peer: &Identity,
     stream_id: StreamId,
-    reader: &Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
-    writer: &Arc<Mutex<Option<OwnedWriteHalf>>>,
+    reader: &Arc<Mutex<Option<BufReader<ReadHalf<T>>>>>,
+    writer: &Arc<Mutex<Option<WriteHalf<T>>>>,
 ) -> Result<(), eyre::Report> {
     let old_writer = writer.lock().await.take();
     let old_reader = reader.lock().await.take().map(|br| br.into_inner());
@@ -377,7 +360,7 @@ async fn reconnect_and_replace(
     drop(old_reader);
 
     let stream = reconnector.reconnect(peer.clone(), stream_id).await?;
-    let (r, w) = stream.into_split();
+    let (r, w) = tokio::io::split(stream);
 
     reader.lock().await.replace(BufReader::new(r));
     writer.lock().await.replace(w);
@@ -387,8 +370,8 @@ async fn reconnect_and_replace(
 
 /// Outbound: send messages from rx to the socket.
 /// the sender needs to prepend the session id to the message.
-async fn handle_outbound_traffic(
-    stream: &mut OwnedWriteHalf,
+async fn handle_outbound_traffic<T: NetworkConnection>(
+    stream: &mut WriteHalf<T>,
     outbound_rx: &mut UnboundedReceiver<OutboundMsg>,
     num_sessions: usize,
 ) -> io::Result<()> {
@@ -432,6 +415,7 @@ async fn handle_outbound_traffic(
             }
         }
 
+        // this function yields after every write.
         if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
             tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
             return Err(e);
@@ -456,8 +440,8 @@ async fn handle_outbound_traffic(
 }
 
 /// Inbound: read from the socket and send to tx.
-async fn handle_inbound_traffic(
-    reader: &mut BufReader<OwnedReadHalf>,
+async fn handle_inbound_traffic<T: NetworkConnection>(
+    reader: &mut BufReader<ReadHalf<T>>,
     inbound_tx: &HashMap<SessionId, UnboundedSender<NetworkValue>>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; READ_BUF_SIZE];
@@ -509,31 +493,34 @@ async fn handle_inbound_traffic(
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            let nv = match NetworkValue::deserialize(&buf[..total_len]) {
-                Ok(m) => m,
+            match NetworkValue::deserialize(&buf[..total_len]) {
+                Ok(nv) => {
+                    if ch.send(nv).is_err() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "failed to forward message",
+                        ));
+                    }
+                }
                 Err(e) => {
                     tracing::error!("failed to deserialize message: {e}");
-                    continue;
                 }
             };
-            if ch.send(nv).is_err() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "failed to forward message",
-                ));
-            }
         } else {
             tracing::warn!(
                 "failed to forward message for {:?} - channel not found",
                 session_id
             );
         }
+
+        // don't want to starve the Writer task
+        tokio::task::yield_now().await;
     }
 }
 
 /// Helper to write & flush, then clear the buffer
-async fn write_buf(
-    writer: &mut OwnedWriteHalf,
+async fn write_buf<T: NetworkConnection>(
+    stream: &mut WriteHalf<T>,
     buf: &mut BytesMut,
     buffered_msgs: &mut usize,
 ) -> io::Result<()> {
@@ -543,7 +530,14 @@ async fn write_buf(
         metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
     }
     *buffered_msgs = 0;
-    writer.write_all(buf).await?;
+
+    // don't want to starve the ReadHalf. yield after writing.
+    while !buf.is_empty() {
+        let n = stream.write(buf).await?;
+        buf.advance(n);
+        tokio::task::yield_now().await;
+    }
+
     buf.clear();
     Ok(())
 }

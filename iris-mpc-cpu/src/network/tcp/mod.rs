@@ -1,8 +1,26 @@
-use std::{cmp, time::Duration};
+use crate::{
+    execution::{hawk_main::HawkArgs, player::Identity},
+    network::tcp::{
+        config::TcpConfig,
+        handle::TcpNetworkHandle,
+        networking::{
+            client::{TcpClient, TlsClient},
+            connection_builder::PeerConnectionBuilder,
+            server::{TcpServer, TlsServer},
+        },
+        session::TcpSession,
+    },
+};
+use async_trait::async_trait;
+use eyre::Result;
+use itertools::izip;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    time::Duration,
+};
+use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{execution::session::SessionId, network::value::NetworkValue};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-
+pub mod config;
 mod data;
 pub mod handle;
 pub mod networking;
@@ -10,59 +28,110 @@ pub mod session;
 
 use data::*;
 
-// session multiplexing over a socket requires a SessionId
-type OutboundMsg = (SessionId, NetworkValue);
-type OutStream = UnboundedSender<NetworkValue>;
-type InStream = UnboundedReceiver<NetworkValue>;
-
-#[derive(Default, Clone, Debug)]
-pub struct TcpConfig {
-    pub timeout_duration: Duration,
-    // the number of requests processed at once
-    pub request_parallelism: usize,
-    // number of TCP connections
-    pub num_connections: usize,
-    // number of sessions per connection
-    pub max_sessions_per_connection: usize,
+#[async_trait]
+pub trait NetworkHandle: Send + Sync {
+    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>>;
 }
 
-impl TcpConfig {
-    pub fn new(
-        timeout_duration: Duration,
-        num_connections: usize,
-        request_parallelism: usize,
-    ) -> Self {
-        // don't allow fewer requests than connections...
-        let connection_parallelism = cmp::min(num_connections, request_parallelism);
-        // x2 for both eyes
-        let request_parallelism = request_parallelism * 2;
+pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> NetworkConnection for T {}
 
-        Self {
-            timeout_duration,
-            request_parallelism,
-            num_connections: connection_parallelism,
-            max_sessions_per_connection: request_parallelism / connection_parallelism,
-        }
-    }
+// used to establish an outbound connection
+#[async_trait]
+pub trait Client: Send + Sync + Clone {
+    type Connection: NetworkConnection;
+    async fn connect(&self, addr: SocketAddr) -> Result<Self::Connection>;
+}
 
-    // max_sessions_per_connection doesn't have to divide request_parallelism. in that case, one TcpStream may have
-    // fewer sessions than the others. This function determines how many sessions are handled by a TcpStream based on the stream id
-    pub fn get_sessions_for_stream(&self, stream_id: &StreamId) -> usize {
-        match self.num_connections {
-            0 => unreachable!(),
-            1 => self.request_parallelism,
-            num_connections => {
-                let stream_id = stream_id.0 as usize;
-                if stream_id <= num_connections - 2
-                    || self.request_parallelism % self.max_sessions_per_connection == 0
-                {
-                    self.max_sessions_per_connection
-                } else {
-                    self.request_parallelism % self.max_sessions_per_connection
-                }
-            }
+// used for a server to accept an incoming connection
+#[async_trait]
+pub trait Server: Send {
+    type Connection: NetworkConnection;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Connection)>;
+}
+
+pub async fn build_network_handle(
+    args: &HawkArgs,
+    identities: &[Identity],
+) -> Result<Box<dyn NetworkHandle>> {
+    let my_index = args.party_index;
+    let my_identity = identities[my_index].clone();
+    let my_address = &args.addresses[my_index];
+    let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
+
+    let tcp_config = TcpConfig::new(
+        Duration::from_secs(10),
+        args.connection_parallelism,
+        args.request_parallelism * 2, // x2 for both orientations.
+    );
+
+    if let Some(tls) = args.tls.as_ref() {
+        tracing::info!(
+            "Building NetworkHandle, with TLS, from config: {:?}",
+            tcp_config
+        );
+        let listener = TlsServer::new(my_addr, &tls.server_key, &tls.server_cert).await?;
+        let connector = TlsClient::new(&tls.root_cert).await?;
+        let connection_builder =
+            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
+                .await?;
+
+        // Connect to other players.
+        for (identity, address) in
+            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+        {
+            let socket_addr = address
+                .clone()
+                .to_socket_addrs()?
+                .next()
+                .ok_or(eyre::eyre!("invalid peer address"))?;
+            connection_builder
+                .include_peer(identity.clone(), socket_addr)
+                .await?;
         }
+
+        let (reconnector, connections) = connection_builder.build().await?;
+        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
+        Ok(Box::new(networking))
+    } else {
+        tracing::info!(
+            "Building NetworkHandle, without TLS, from config: {:?}",
+            tcp_config
+        );
+        let listener = TcpServer::new(my_addr).await?;
+        let connector = TcpClient::new();
+        let connection_builder =
+            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
+                .await?;
+
+        // Connect to other players.
+        for (identity, address) in
+            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+        {
+            let socket_addr = address
+                .clone()
+                .to_socket_addrs()?
+                .next()
+                .ok_or(eyre::eyre!("invalid peer address"))?;
+
+            connection_builder
+                .include_peer(identity.clone(), socket_addr)
+                .await?;
+        }
+
+        let (reconnector, connections) = connection_builder.build().await?;
+        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
+        Ok(Box::new(networking))
     }
+}
+
+fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
+    if socket.is_ipv4() {
+        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    } else {
+        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+    }
+    socket
 }
 
 pub mod testing {
@@ -70,15 +139,18 @@ pub mod testing {
 
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
-    use tokio::{sync::Mutex, time::sleep};
+    use tokio::{net::TcpStream, sync::Mutex, time::sleep};
 
     use crate::{
         execution::player::Identity,
         network::tcp::{
+            config::TcpConfig,
             handle::{self, TcpNetworkHandle},
-            networking::connection_builder::PeerConnectionBuilder,
+            networking::{
+                client::TcpClient, connection_builder::PeerConnectionBuilder, server::TcpServer,
+            },
             session::TcpSession,
-            TcpConfig,
+            NetworkHandle,
         },
     };
 
@@ -104,7 +176,10 @@ pub mod testing {
         parties: Vec<Identity>,
         connection_parallelism: usize,
         request_parallelism: usize,
-    ) -> Result<(Vec<handle::TcpNetworkHandle>, Vec<Vec<TcpSession>>)> {
+    ) -> Result<(
+        Vec<handle::TcpNetworkHandle<TcpStream>>,
+        Vec<Vec<TcpSession>>,
+    )> {
         assert_eq!(parties.len(), 3);
 
         let config = TcpConfig::new(
@@ -116,8 +191,18 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
+        let connector = TcpClient::new();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
-            builders.push(PeerConnectionBuilder::new(party.clone(), *addr, config.clone()).await?);
+            let listener = TcpServer::new(*addr).await?;
+            builders.push(
+                PeerConnectionBuilder::new(
+                    party.clone(),
+                    config.clone(),
+                    listener,
+                    connector.clone(),
+                )
+                .await?,
+            );
         }
 
         sleep(Duration::from_secs(1)).await;
