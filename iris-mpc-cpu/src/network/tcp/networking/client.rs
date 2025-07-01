@@ -40,8 +40,8 @@ impl TcpClient {
 
 #[async_trait]
 impl Client for TlsClient {
-    type Connection = TlsStream<TcpStream>;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Connection> {
+    type Output = TlsStream<TcpStream>;
+    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
         let stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?;
         let domain = ServerName::IpAddress(addr.ip().into());
@@ -52,8 +52,8 @@ impl Client for TlsClient {
 
 #[async_trait]
 impl Client for TcpClient {
-    type Connection = TcpStream;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Connection> {
+    type Output = TcpStream;
+    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
         let stream = TcpStream::connect(addr).await?;
         stream.set_nodelay(true)?;
         Ok(stream)

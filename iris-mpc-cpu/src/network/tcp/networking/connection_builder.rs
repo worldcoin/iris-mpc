@@ -26,11 +26,8 @@ use tokio_util::sync::CancellationToken;
 
 /// creates a list of peer connections, used to initialize a
 /// TcpNetworkHandle
-pub struct PeerConnectionBuilder<
-    T: NetworkConnection,
-    C: Client<Connection = T>,
-    S: Server<Connection = T>,
-> {
+pub struct PeerConnectionBuilder<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>>
+{
     id: Identity,
     tcp_config: TcpConfig,
     cmd_tx: UnboundedSender<Cmd<T>>,
@@ -82,8 +79,8 @@ enum State {
 impl<T, C, S> PeerConnectionBuilder<T, C, S>
 where
     T: NetworkConnection + 'static,
-    C: Client<Connection = T> + 'static,
-    S: Server<Connection = T> + 'static,
+    C: Client<Output = T> + 'static,
+    S: Server<Output = T> + 'static,
 {
     pub async fn new(
         id: Identity,
@@ -132,10 +129,7 @@ where
     }
 }
 
-impl<T> Reconnector<T>
-where
-    T: NetworkConnection,
-{
+impl<T: NetworkConnection> Reconnector<T> {
     pub async fn wait_for_reconnections(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -157,7 +151,7 @@ where
     }
 }
 
-struct Worker<T: NetworkConnection, C: Client<Connection = T>, S: Server<Connection = T>> {
+struct Worker<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>> {
     id: Identity,
     cmd_rx: UnboundedReceiver<Cmd<T>>,
 
@@ -193,8 +187,8 @@ struct Worker<T: NetworkConnection, C: Client<Connection = T>, S: Server<Connect
 impl<T, C, S> Worker<T, C, S>
 where
     T: NetworkConnection + 'static,
-    C: Client<Connection = T> + 'static,
-    S: Server<Connection = T> + 'static,
+    C: Client<Output = T> + 'static,
+    S: Server<Output = T> + 'static,
 {
     pub async fn spawn(
         id: Identity,
@@ -508,7 +502,7 @@ where
 }
 
 /// Just accepts and forwards new connections
-async fn accept_loop<T: NetworkConnection, S: Server<Connection = T>>(
+async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     id: Identity,
     listener: S,
     pending_tx: UnboundedSender<Connection<T>>,

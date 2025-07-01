@@ -45,8 +45,8 @@ impl TcpServer {
 
 #[async_trait]
 impl Server for TlsServer {
-    type Connection = TlsStream<TcpStream>;
-    async fn accept(&self) -> Result<(SocketAddr, Self::Connection)> {
+    type Output = TlsStream<TcpStream>;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         tcp_stream.set_nodelay(true)?;
         let tls_stream = self.tls_acceptor.accept(tcp_stream).await?;
@@ -56,8 +56,8 @@ impl Server for TlsServer {
 
 #[async_trait]
 impl Server for TcpServer {
-    type Connection = TcpStream;
-    async fn accept(&self) -> Result<(SocketAddr, Self::Connection)> {
+    type Output = TcpStream;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         tcp_stream.set_nodelay(true)?;
         Ok((peer_addr, tcp_stream))

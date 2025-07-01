@@ -40,15 +40,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> NetworkConnection for T 
 // used to establish an outbound connection
 #[async_trait]
 pub trait Client: Send + Sync + Clone {
-    type Connection: NetworkConnection;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Connection>;
+    type Output: NetworkConnection;
+    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output>;
 }
 
 // used for a server to accept an incoming connection
 #[async_trait]
 pub trait Server: Send {
-    type Connection: NetworkConnection;
-    async fn accept(&self) -> Result<(SocketAddr, Self::Connection)>;
+    type Output: NetworkConnection;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)>;
 }
 
 pub async fn build_network_handle(
