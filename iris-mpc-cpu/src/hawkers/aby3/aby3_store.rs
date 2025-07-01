@@ -136,6 +136,10 @@ impl SharedIrises {
         new_id
     }
 
+    pub fn db_size(&self) -> usize {
+        self.points.len()
+    }
+
     /// Return the next id for new insertions, which should have the serial id
     /// following the largest previously inserted serial id, and version 0.
     fn next_id(&self) -> VectorId {
