@@ -133,8 +133,8 @@ pub struct HawkActor {
     role_assignments: Arc<HashMap<Role, Identity>>,
 
     // ---- My state ----
-    // TODO: Persistence.
-    db_size: usize,
+    /// A size used by the startup loader.
+    loader_db_size: usize,
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
@@ -355,7 +355,7 @@ impl HawkActor {
             args: args.clone(),
             searcher,
             prf_key: None,
-            db_size: 0,
+            loader_db_size: 0,
             iris_store,
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
@@ -376,6 +376,10 @@ impl HawkActor {
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
+    }
+
+    pub async fn db_size(&self) -> usize {
+        self.iris_store[LEFT].read().await.db_size()
     }
 
     /// Initialize the shared PRF key for HNSW graph insertion layer selection.
@@ -594,7 +598,7 @@ impl HawkActor {
         (
             IrisLoader {
                 party_id: self.party_id,
-                db_size: &mut self.db_size,
+                db_size: &mut self.loader_db_size,
                 irises: [
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
@@ -1369,7 +1373,7 @@ impl HawkHandle {
         );
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
-        metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+        metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
