@@ -537,10 +537,7 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            // copy persisted only
-            if !batch.vector_ids.is_empty() && batch.vector_ids_to_persist.is_empty() {
-                last_indexed_id = batch.id_end();
-            }
+            last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
             let request = JobRequest::new_batch_indexation(batch);
@@ -870,22 +867,21 @@ async fn get_results_thread(
                             &codes_and_masks,
                         )
                         .await?;
-                    // iris persistence only
-                    if !vector_ids.is_empty(){
-                        connect_plans.persist(&mut graph_tx).await?;
-                        log_info(format!(
-                            "Job Results :: Persisted graph updates: batch-id={batch_id}"
-                        ));
-                    }
+                    connect_plans.persist(&mut graph_tx).await?;
+                    log_info(format!(
+                        "Job Results :: Persisted graph updates: batch-id={batch_id}"
+                    ));
                     let mut db_tx = graph_tx.tx;
-                    set_last_indexed_iris_id(&mut db_tx, last_serial_id.unwrap()).await?;
+                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    db_tx.commit().await?;
                     log_info(format!(
                         "Job Results :: Persisted last indexed id: batch-id={batch_id}"
                     ));
+
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
-                     ));
-                    db_tx.commit().await?;
+                    ));
+                    // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
                 JobResult::Modification {

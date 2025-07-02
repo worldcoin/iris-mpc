@@ -86,9 +86,9 @@ pub enum JobResult {
         vector_ids_to_persist: Vec<IrisVectorId>,
 
         /// Iris serial id of batch's first element.
-        first_serial_id: Option<IrisSerialId>,
+        first_serial_id: IrisSerialId,
         /// Iris serial id of batch's last element.
-        last_serial_id: Option<IrisSerialId>,
+        last_serial_id: IrisSerialId,
     },
     Modification {
         /// Modification id of associated modifications table entry.
@@ -110,19 +110,8 @@ impl JobResult {
         connect_plans: HawkMutation,
         vector_ids_to_persist: Vec<IrisVectorId>,
     ) -> Self {
-        let iris_copy_only = vector_ids.is_empty();
-
-        let first_serial_id = if iris_copy_only {
-            None
-        } else {
-            Some(vector_ids.first().unwrap().serial_id())
-        };
-
-        let last_serial_id = if iris_copy_only {
-            None
-        } else {
-            Some(vector_ids.last().unwrap().serial_id())
-        };
+        let first_serial_id = vector_ids.first().unwrap().serial_id();
+        let last_serial_id = vector_ids.last().unwrap().serial_id();
 
         Self::BatchIndexation {
             connect_plans,
@@ -163,8 +152,8 @@ impl fmt::Display for JobResult {
                     "batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
-                    Some(first_serial_id),
-                    Some(last_serial_id)
+                    first_serial_id,
+                    last_serial_id
                 )
             }
             JobResult::Modification {
