@@ -32,7 +32,9 @@ jobs:
               - Cargo.lock
               - Cargo.toml
               - deny.toml
+              - rust-toolchain.toml
               - iris-*/**
+#              - .github/workflows/lint-clippy.yaml -- bring this back after Canonical incident
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

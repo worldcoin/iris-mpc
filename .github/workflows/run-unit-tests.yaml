@@ -40,7 +40,10 @@ jobs:
               - Cargo.lock
               - Cargo.toml
               - deny.toml
+              - rust-toolchain.toml
               - iris-*/**
+              - migrations/**
+              - scripts/**
 #              - .github/workflows/run-unit-tests.yaml -- bring this back after Canonical incident
 
       # The following steps will only run if any of the src files have changed

@@ -21,12 +21,15 @@ jobs:
         with:
           files_yaml: |
             src:
-            - Dockerfile*
-            - Cargo.lock
-            - Cargo.toml
-            - deny.toml
-            - iris-*/**
-#            - .github/workflows/test-gpu.yaml -- bring this back after Canonical incident
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - rust-toolchain.toml
+              - iris-*/**
+              - migrations/**
+              - scripts/**
+#              - .github/workflows/test-gpu.yaml -- bring this back after Canonical incident
 
       # The following steps will only run if any of the src files have changed
       - name: Validate presence of GPU devices
