@@ -660,7 +660,6 @@ pub mod degree4 {
                             .wrapping_mul(query_mask_shares_preprocessed[i].coefs[j]),
                     );
                 }
-                dot_masks[i] = dot_masks[i].wrapping_mul(2);
             }
             let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
