@@ -109,11 +109,7 @@ async fn start_hawk_node(
     Ok(handle)
 }
 
-#[ignore = "Expected to fail for now"]
-#[tokio::test]
-async fn e2e_test() -> Result<()> {
-    install_tracing();
-
+async fn e2e_test_main() -> Result<()> {
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED);
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
@@ -186,5 +182,22 @@ async fn e2e_test() -> Result<()> {
     // a bit for now
     tokio::time::sleep(Duration::from_secs(5)).await;
 
+    Ok(())
+}
+
+#[ignore = "Expected to fail for now"]
+#[test]
+fn e2e_test() -> Result<()> {
+    install_tracing();
+    let builder = std::thread::Builder::new().stack_size(32 * 1024 * 1024);
+    let handler = builder.spawn(|| {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(3)
+            .enable_all()
+            .build()?;
+        rt.block_on(e2e_test_main())
+    })?;
+
+    handler.join().unwrap()?;
     Ok(())
 }

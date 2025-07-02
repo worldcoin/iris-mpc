@@ -33,12 +33,7 @@ mod e2e_test {
             .init();
     }
 
-    #[tokio::test]
-    async fn e2e_test() -> Result<()> {
-        install_tracing();
-        env::set_var("NCCL_P2P_LEVEL", "LOC");
-        env::set_var("NCCL_NET", "Socket");
-
+    async fn e2e_test_main() -> Result<()> {
         let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
         let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
@@ -224,6 +219,23 @@ mod e2e_test {
         actor1_task.await.unwrap();
         actor2_task.await.unwrap();
 
+        Ok(())
+    }
+
+    #[test]
+    fn e2e_test() -> Result<()> {
+        install_tracing();
+        env::set_var("NCCL_P2P_LEVEL", "LOC");
+        env::set_var("NCCL_NET", "Socket");
+        let builder = std::thread::Builder::new().stack_size(32 * 1024 * 1024);
+        let handler = builder.spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(e2e_test_main())
+        })?;
+
+        handler.join().unwrap()?;
         Ok(())
     }
 }
