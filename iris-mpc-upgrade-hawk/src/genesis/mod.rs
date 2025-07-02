@@ -825,7 +825,6 @@ async fn get_results_thread(
                 JobResult::BatchIndexation {
                     batch_id,
                     connect_plans,
-                    vector_ids,
                     last_serial_id,
                     vector_ids_to_persist,
                     ..
