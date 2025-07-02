@@ -914,7 +914,7 @@ mod tests {
     };
     use float_eq::assert_float_eq;
     use iris_mpc_common::{
-        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
         iris_db::db::IrisDB,
     };
     use itertools::Itertools;

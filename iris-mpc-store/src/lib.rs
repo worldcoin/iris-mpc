@@ -9,7 +9,7 @@ use futures::{
 };
 use iris_mpc_common::{
     config::Config,
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     helpers::{
         smpc_request::{
             IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
@@ -301,9 +301,9 @@ DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask, ri
         external_tx: Option<&mut Transaction<'_, Postgres>>,
         id: i64,
         left_iris_share: &GaloisRingIrisCodeShare,
-        left_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        left_mask_share: &GaloisRingMaskCodeShare,
         right_iris_share: &GaloisRingIrisCodeShare,
-        right_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        right_mask_share: &GaloisRingMaskCodeShare,
     ) -> Result<()> {
         let query = sqlx::query(
             r#"
@@ -587,7 +587,7 @@ WHERE id = $1;
             )[party_id]
                 .clone();
 
-            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+            let mask: GaloisRingMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
                 &mut StdRng::seed_from_u64(rng_seed),
             )[party_id]
@@ -872,7 +872,7 @@ pub mod tests {
             id: 1,
             coefs: [666_u16; 12800],
         };
-        let updated_left_mask = GaloisRingTrimmedMaskCodeShare {
+        let updated_left_mask = GaloisRingMaskCodeShare {
             id: 1,
             coefs: [777_u16; 6400],
         };
@@ -880,7 +880,7 @@ pub mod tests {
             id: 1,
             coefs: [888_u16; 12800],
         };
-        let updated_right_mask = GaloisRingTrimmedMaskCodeShare {
+        let updated_right_mask = GaloisRingMaskCodeShare {
             id: 1,
             coefs: [999_u16; 6400],
         };

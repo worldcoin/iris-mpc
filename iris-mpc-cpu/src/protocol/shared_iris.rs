@@ -1,6 +1,6 @@
 use eyre::Result;
 use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     iris_db::{get_dummy_shares_for_deletion, iris::IrisCode},
     job::IrisQueryBatchEntries,
 };
@@ -12,7 +12,7 @@ use std::sync::Arc;
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct GaloisRingSharedIris {
     pub code: GaloisRingIrisCodeShare,
-    pub mask: GaloisRingTrimmedMaskCodeShare,
+    pub mask: GaloisRingMaskCodeShare,
 }
 
 impl GaloisRingSharedIris {
@@ -20,7 +20,7 @@ impl GaloisRingSharedIris {
     pub fn default_for_party(party_id: usize) -> Self {
         GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::default_for_party(party_id),
-            mask: GaloisRingTrimmedMaskCodeShare::default_for_party(party_id),
+            mask: GaloisRingMaskCodeShare::default_for_party(party_id),
         }
     }
 
@@ -51,7 +51,7 @@ impl GaloisRingSharedIris {
     pub fn try_from_buffers_inner(party_id: usize, code: &[u16], mask: &[u16]) -> Result<Self> {
         Ok(GaloisRingSharedIris {
             code: GaloisRingIrisCodeShare::new(code.try_into()?, party_id),
-            mask: GaloisRingTrimmedMaskCodeShare::new(mask.try_into()?, party_id),
+            mask: GaloisRingMaskCodeShare::new(mask.try_into()?, party_id),
         })
     }
 
@@ -66,15 +66,15 @@ impl GaloisRingSharedIris {
         [
             GaloisRingSharedIris {
                 code: code_shares[0].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[0]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares[0]),
             },
             GaloisRingSharedIris {
                 code: code_shares[1].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[1]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares[1]),
             },
             GaloisRingSharedIris {
                 code: code_shares[2].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares[2]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares[2]),
             },
         ]
     }
@@ -96,15 +96,15 @@ impl GaloisRingSharedIris {
         [
             GaloisRingSharedIris {
                 code: code_shares_mirrored[0].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[0]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares_mirrored[0]),
             },
             GaloisRingSharedIris {
                 code: code_shares_mirrored[1].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[1]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares_mirrored[1]),
             },
             GaloisRingSharedIris {
                 code: code_shares_mirrored[2].clone(),
-                mask: GaloisRingTrimmedMaskCodeShare::from(&mask_shares_mirrored[2]),
+                mask: GaloisRingMaskCodeShare::from(&mask_shares_mirrored[2]),
             },
         ]
     }

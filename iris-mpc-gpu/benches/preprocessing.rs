@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use iris_mpc_common::{
     galois_engine::degree4::{
-        FullGaloisRingIrisCodeShare, GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+        FullGaloisRingIrisCodeShare, GaloisRingIrisCodeShare, GaloisRingMaskCodeShare,
     },
     helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::iris::IrisCode,
@@ -24,7 +24,7 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
             let mut code_shares_query = code_shares_request.clone();
             let mut mask_shares_query = mask_shares_request.clone();
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_shares_query);
-            GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(
+            GaloisRingMaskCodeShare::preprocess_mask_code_query_share(
                 &mut mask_shares_query,
             );
             let code_shares_query = code_shares_query.all_rotations();

@@ -28,7 +28,7 @@ use cudarc::{
 use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
 use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
+    GaloisRingIrisCodeShare, GaloisRingMaskCodeShare,
 };
 use iris_mpc_common::{
     helpers::{
@@ -2742,7 +2742,7 @@ impl ServerActor {
     fn prepare_device_query_for_shares(
         &self,
         code_share: &GaloisRingIrisCodeShare,
-        mask_share: &GaloisRingTrimmedMaskCodeShare,
+        mask_share: &GaloisRingMaskCodeShare,
     ) -> Result<(DeviceCompactQuery, DeviceCompactSums)> {
         let compact_query = {
             let code = preprocess_query(
