@@ -14,7 +14,7 @@ use iris_mpc_common::{
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
     genesis::{
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
@@ -30,7 +30,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
+use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, Instant},
@@ -195,7 +195,7 @@ async fn exec_setup(
     Arc<ShutdownHandler>,
     TaskMonitor,
     RDSClient,
-    BothEyes<SharedIrisesRef>,
+    Arc<BothEyes<SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
 )> {
@@ -323,10 +323,10 @@ async fn exec_setup(
     }
 
     // Set in memory Iris stores.
-    let imem_iris_stores: BothEyes<_> = [
+    let imem_iris_stores = Arc::new([
         hawk_actor.iris_store(StoreId::Left),
         hawk_actor.iris_store(StoreId::Right),
-    ];
+    ]);
 
     // Set Hawk handle.
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
@@ -334,6 +334,7 @@ async fn exec_setup(
 
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
+        Arc::clone(&imem_iris_stores),
         hnsw_iris_store,
         graph_store,
         &mut task_monitor_bg,
@@ -536,7 +537,8 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            if !batch.iris_copy_only {
+            // copy persisted only
+            if !batch.vector_ids.is_empty() && batch.vector_ids_to_persist.is_empty() {
                 last_indexed_id = batch.id_end();
             }
 
@@ -811,6 +813,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
+    imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
     graph_store: GraphPg<Aby3Store>,
     task_monitor: &mut TaskMonitor,
@@ -818,66 +821,101 @@ async fn get_results_thread(
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
+    let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
             match result {
                 JobResult::BatchIndexation {
                     batch_id,
                     connect_plans,
+                    vector_ids,
                     last_serial_id,
-                    iris_data,
-                    iris_copy_only,
+                    vector_ids_to_persist,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
+                    // get iris shares to persist
+                    let left_store = &imem_iris_stores_bg[LEFT];
+                    let right_store = &imem_iris_stores_bg[RIGHT];
+
+                    let left_data = left_store
+                        .get_vectors(vector_ids_to_persist.iter())
+                        .await;
+                    let right_data = right_store
+                        .get_vectors(vector_ids_to_persist.iter())
+                        .await;
+
+                    let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
+                            .iter()
+                            .enumerate()
+                            .map(|(i, vector_id)| {
+                                let left_iris = &left_data[i];
+                                let right_iris = &right_data[i];
+                                StoredIrisRef {
+                                    id: vector_id.serial_id() as i64,
+                                    left_code: &left_iris.code.coefs,
+                                    left_mask: &left_iris.mask.coefs,
+                                    right_code: &right_iris.code.coefs,
+                                    right_mask: &right_iris.mask.coefs,
+                                }
+                            })
+                            .collect();
 
                     let mut graph_tx = graph_store.tx().await?;
                     // Persist batch of Iris's to the HNSW graph store.
                     hnsw_iris_store
-                        .insert_copy_iris(
+                        .insert_copy_irises(
                             &mut graph_tx.tx,
-                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                            &vector_ids_to_persist,
+                            &codes_and_masks,
                         )
                         .await?;
-                    if iris_copy_only {
-                        graph_tx.tx.commit().await?;
-                        shutdown_handler_bg.decrement_batches_pending_completion();
-                    } else {
+                    // iris persistence only
+                    if !vector_ids.is_empty(){
                         connect_plans.persist(&mut graph_tx).await?;
                         log_info(format!(
                             "Job Results :: Persisted graph updates: batch-id={batch_id}"
                         ));
-
-                        let mut db_tx = graph_tx.tx;
-                        set_last_indexed_iris_id(&mut db_tx, last_serial_id.unwrap()).await?;
-                        db_tx.commit().await?;
-                        log_info(format!(
-                            "Job Results :: Persisted last indexed id: batch-id={batch_id}"
-                        ));
-
-                        log_info(format!(
-                            "Job Results :: Persisted to dB: batch-id={batch_id}"
-                        ));
-
-                        // Notify background task responsible for tracking pending batches.
-                        shutdown_handler_bg.decrement_batches_pending_completion();
                     }
+                    let mut db_tx = graph_tx.tx;
+                    set_last_indexed_iris_id(&mut db_tx, last_serial_id.unwrap()).await?;
+                    log_info(format!(
+                        "Job Results :: Persisted last indexed id: batch-id={batch_id}"
+                    ));
+                    log_info(format!(
+                        "Job Results :: Persisted to dB: batch-id={batch_id}"
+                     ));
+                    db_tx.commit().await?;
+                    shutdown_handler_bg.decrement_batches_pending_completion();
                 }
                 JobResult::Modification {
                     modification_id,
                     connect_plans,
-                    iris_data
+                    vector_id_to_persist,
                 } => {
                     log_info(format!(
                         "Job Results :: Received: modification-id={modification_id}",
                     ));
+                    // get iris shares to persist
+                    let left_store = &imem_iris_stores_bg[LEFT];
+                    let right_store = &imem_iris_stores_bg[RIGHT];
+
+                    let left_iris = left_store
+                        .get_vector(&vector_id_to_persist)
+                        .await;
+                    let right_iris = right_store
+                        .get_vector(&vector_id_to_persist)
+                        .await;
 
                     let mut graph_tx = graph_store.tx().await?;
-                    // Persist batch of Iris's to the HNSW graph store.
-                    hnsw_iris_store
-                        .insert_copy_iris(
-                            &mut graph_tx.tx,
-                            &iris_data.iter().map(|i| i.as_ref()).collect::<Vec<_>>(),
+                    // This should automatically update the version id with the correct value
+                    hnsw_iris_store.update_iris(
+                            Some(&mut graph_tx.tx),
+                            vector_id_to_persist.serial_id() as i64,
+                            &left_iris.code,
+                            &left_iris.mask,
+                            &right_iris.code,
+                            &right_iris.mask,
                         )
                         .await?;
                     connect_plans.persist(&mut graph_tx).await?;

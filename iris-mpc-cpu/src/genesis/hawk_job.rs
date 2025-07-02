@@ -5,7 +5,6 @@ use crate::{
 };
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
-use iris_mpc_store::StoredIrisVector;
 use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -35,7 +34,7 @@ pub enum JobRequest {
         vector_ids: Vec<IrisVectorId>,
 
         /// Iris data for persistence.
-        iris_data: Vec<StoredIrisVector>,
+        vector_ids_to_persist: Vec<IrisVectorId>,
 
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
@@ -54,20 +53,14 @@ impl JobRequest {
             vector_ids,
             left_queries,
             right_queries,
-            iris_data,
-            iris_copy_only,
+            vector_ids_to_persist,
         }: Batch,
     ) -> Self {
-        assert!(
-            !vector_ids.is_empty() || iris_copy_only,
-            "Invalid batch: is empty"
-        );
-
         Self::BatchIndexation {
             batch_id,
             vector_ids,
             queries: Arc::new([left_queries, right_queries]),
-            iris_data,
+            vector_ids_to_persist,
         }
     }
 
@@ -89,11 +82,8 @@ pub enum JobResult {
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
 
-        /// Iris data for persistence.
-        iris_data: Vec<StoredIrisVector>,
-
-        /// if it is a batch indexation only, then this is true.
-        iris_copy_only: bool,
+        /// Vector ids for persistence
+        vector_ids_to_persist: Vec<IrisVectorId>,
 
         /// Iris serial id of batch's first element.
         first_serial_id: Option<IrisSerialId>,
@@ -104,8 +94,8 @@ pub enum JobResult {
         /// Modification id of associated modifications table entry.
         modification_id: i64,
 
-        /// Iris data for persistence.
-        iris_data: Vec<StoredIrisVector>,
+        /// Vector id for persistence.
+        vector_id_to_persist: IrisVectorId,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -118,7 +108,7 @@ impl JobResult {
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
         connect_plans: HawkMutation,
-        iris_data: Vec<StoredIrisVector>,
+        vector_ids_to_persist: Vec<IrisVectorId>,
     ) -> Self {
         let iris_copy_only = vector_ids.is_empty();
 
@@ -138,23 +128,21 @@ impl JobResult {
             connect_plans,
             batch_id,
             vector_ids,
-            iris_data,
+            vector_ids_to_persist,
             first_serial_id,
             last_serial_id,
-            iris_copy_only,
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn new_modification_result(
         modification_id: i64,
         connect_plans: HawkMutation,
-        iris_data: Vec<StoredIrisVector>,
+        vector_id_to_persist: IrisVectorId,
     ) -> Self {
         Self::Modification {
             modification_id,
             connect_plans,
-            iris_data,
+            vector_id_to_persist,
         }
     }
 }

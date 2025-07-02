@@ -8,8 +8,7 @@ use crate::execution::hawk_main::{
     STORE_IDS,
 };
 use eyre::{eyre, OptionExt, Result};
-use iris_mpc_common::helpers::smpc_request;
-use iris_mpc_store::{OneSidedStoredIrisVector, StoredIrisVector};
+use iris_mpc_common::{helpers::smpc_request, IrisVectorId};
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
@@ -109,7 +108,7 @@ impl Handle {
                 batch_id,
                 vector_ids,
                 queries,
-                iris_data,
+                vector_ids_to_persist,
             } => {
                 Self::log_info(format!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
@@ -201,7 +200,7 @@ impl Handle {
                     batch_id,
                     vector_ids,
                     HawkMutation(mutations),
-                    iris_data,
+                    vector_ids_to_persist,
                 ))
             }
             JobRequest::Modification { modification } => {
@@ -246,16 +245,7 @@ impl Handle {
                                     let connect_plan =
                                         insert(session, &searcher, plans, &ids).await?;
 
-                                    let iris_data = vector.get_vector(&vector_id).await;
-
-                                    let one_sided_iris_data = OneSidedStoredIrisVector {
-                                        id: vector_id.serial_id() as i64,
-                                        version_id: vector_id.version_id(),
-                                        code: Vec::from(&iris_data.code.coefs),
-                                        mask: Vec::from(&iris_data.mask.coefs),
-                                    };
-
-                                    Ok((connect_plan, one_sided_iris_data))
+                                    Ok((connect_plan, vector_id))
                                 }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
                                     let msg = Self::log_error(format!(
@@ -271,12 +261,10 @@ impl Handle {
                                     ));
                                     Ok((
                                         vec![],
-                                        OneSidedStoredIrisVector {
-                                            id: serial_id as i64,
-                                            version_id: 0,
-                                            code: vec![],
-                                            mask: vec![],
-                                        },
+                                        IrisVectorId::new(
+                                            serial_id,
+                                            0,
+                                        ),
                                     ))
                                 }
                             }
@@ -287,26 +275,16 @@ impl Handle {
                 let results: [_; 2] = results_.try_into().unwrap();
 
                 // Convert the results into SingleHawkMutation format
-                let [left_plans_and_irises, right_plans_and_irises] = results;
-                let left_plans = left_plans_and_irises.0;
-                let right_plans = right_plans_and_irises.0;
-                let left_irises = left_plans_and_irises.1;
-                let right_irises = right_plans_and_irises.1;
+                let [left_plans_and_vector, right_plans_and_vector] = results;
+                let left_plans = left_plans_and_vector.0;
+                let right_plans = right_plans_and_vector.0;
+                let left_vector = left_plans_and_vector.1;
+                let right_vector = right_plans_and_vector.1;
 
-                assert_eq!(left_irises.version_id, right_irises.version_id);
-                assert_eq!(left_irises.id, right_irises.id);
-
-                let iris_data = StoredIrisVector {
-                    id: left_irises.id,
-                    version_id: left_irises.version_id,
-                    left_code: left_irises.code,
-                    left_mask: left_irises.mask,
-                    right_code: right_irises.code,
-                    right_mask: right_irises.mask,
-                };
+                assert_eq!(left_vector.version_id(), right_vector.version_id());
+                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
 
                 let mut mutations = Vec::new();
-                let iris_data_vec = vec![iris_data.clone()];
 
                 for (left_plan, right_plan) in izip!(left_plans, right_plans) {
                     // Genesis doesn't use modification keys or request indices
@@ -320,7 +298,7 @@ impl Handle {
                 Ok(JobResult::new_modification_result(
                     modification.id,
                     HawkMutation(mutations),
-                    iris_data_vec,
+                    left_vector,
                 ))
             }
         }
