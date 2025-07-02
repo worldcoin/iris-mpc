@@ -250,8 +250,6 @@ impl BatchGenerator {
         let batch_size_max = self.batch_size.next_max(last_indexed_id);
 
         // Construct next batch.
-        println!("exclusions={:?}", self.exclusions);
-
         let mut identifiers = Vec::<IrisSerialId>::new();
         let mut identifiers_for_copying = Vec::<IrisSerialId>::new();
         while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
