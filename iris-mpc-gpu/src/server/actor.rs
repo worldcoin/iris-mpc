@@ -3365,10 +3365,24 @@ impl InMemoryStore for ServerActor {
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
+
+        // Pad partial mask if needed, since the DB may contain partial masks, where the imaginary and real parts are the same and deduplicated.
+        // If this is the case, the incoming mask length will be half of the expected length, and we double it.
+        let left_mask = if left_mask.len() == MASK_CODE_LENGTH {
+            left_mask.to_owned()
+        } else if left_mask.len() == MASK_CODE_LENGTH / 2 {
+            let mut left_mask_padded = vec![0u16; MASK_CODE_LENGTH];
+            left_mask_padded[..left_mask.len()].copy_from_slice(left_mask);
+            left_mask_padded[left_mask.len()..].copy_from_slice(left_mask);
+            left_mask_padded
+        } else {
+            panic!("Invalid left mask length: {}", left_mask.len());
+        };
+
         ShareDB::load_single_record_from_db(
             index,
             &self.left_mask_db_slices.code_gr,
-            left_mask,
+            &left_mask,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
@@ -3379,10 +3393,23 @@ impl InMemoryStore for ServerActor {
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
+
+        // Pad partial mask if needed, since the DB may contain partial masks, where the imaginary and real parts are the same and deduplicated.
+        // If this is the case, the incoming mask length will be half of the expected length, and we double it.
+        let right_mask = if right_mask.len() == MASK_CODE_LENGTH {
+            right_mask.to_owned()
+        } else if right_mask.len() == MASK_CODE_LENGTH / 2 {
+            let mut right_mask_padded = vec![0u16; MASK_CODE_LENGTH];
+            right_mask_padded[..right_mask.len()].copy_from_slice(right_mask);
+            right_mask_padded[right_mask.len()..].copy_from_slice(right_mask);
+            right_mask_padded
+        } else {
+            panic!("Invalid right mask length: {}", left_mask.len());
+        };
         ShareDB::load_single_record_from_db(
             index,
             &self.right_mask_db_slices.code_gr,
-            right_mask,
+            &right_mask,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
@@ -3412,11 +3439,33 @@ impl InMemoryStore for ServerActor {
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
+        // Pad partial mask if needed, since the DB may contain partial masks, where the imaginary and real parts are the same and deduplicated.
+        // If this is the case, the incoming mask length will be half of the expected length, and we double it.
+        let left_mask_odd = if left_mask_odd.len() == MASK_CODE_LENGTH {
+            left_mask_odd.to_owned()
+        } else if right_mask_odd.len() == MASK_CODE_LENGTH / 2 {
+            let mut mask_padded = vec![0u8; MASK_CODE_LENGTH];
+            mask_padded[..left_mask_odd.len()].copy_from_slice(left_mask_odd);
+            mask_padded[left_mask_odd.len()..].copy_from_slice(left_mask_odd);
+            mask_padded
+        } else {
+            panic!("Invalid left mask odd length: {}", left_mask_odd.len());
+        };
+        let left_mask_even = if left_mask_even.len() == MASK_CODE_LENGTH {
+            left_mask_even.to_owned()
+        } else if right_mask_even.len() == MASK_CODE_LENGTH / 2 {
+            let mut mask_padded = vec![0u8; MASK_CODE_LENGTH];
+            mask_padded[..left_mask_even.len()].copy_from_slice(left_mask_even);
+            mask_padded[left_mask_even.len()..].copy_from_slice(left_mask_even);
+            mask_padded
+        } else {
+            panic!("Invalid left mask even length: {}", left_mask_even.len());
+        };
         ShareDB::load_single_record_from_s3(
             index,
             &self.left_mask_db_slices.code_gr,
-            left_mask_odd,
-            left_mask_even,
+            &left_mask_odd,
+            &left_mask_even,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
@@ -3428,11 +3477,33 @@ impl InMemoryStore for ServerActor {
             self.device_manager.device_count(),
             IRIS_CODE_LENGTH,
         );
+        // Pad partial mask if needed, since the DB may contain partial masks, where the imaginary and real parts are the same and deduplicated.
+        // If this is the case, the incoming mask length will be half of the expected length, and we double it.
+        let right_mask_odd = if right_mask_odd.len() == MASK_CODE_LENGTH {
+            right_mask_odd.to_owned()
+        } else if right_mask_odd.len() == MASK_CODE_LENGTH / 2 {
+            let mut mask_padded = vec![0u8; MASK_CODE_LENGTH];
+            mask_padded[..right_mask_odd.len()].copy_from_slice(right_mask_odd);
+            mask_padded[right_mask_odd.len()..].copy_from_slice(right_mask_odd);
+            mask_padded
+        } else {
+            panic!("Invalid right mask odd length: {}", right_mask_odd.len());
+        };
+        let right_mask_even = if right_mask_even.len() == MASK_CODE_LENGTH {
+            right_mask_even.to_owned()
+        } else if right_mask_even.len() == MASK_CODE_LENGTH / 2 {
+            let mut mask_padded = vec![0u8; MASK_CODE_LENGTH];
+            mask_padded[..right_mask_even.len()].copy_from_slice(right_mask_even);
+            mask_padded[right_mask_even.len()..].copy_from_slice(right_mask_even);
+            mask_padded
+        } else {
+            panic!("Invalid right mask even length: {}", right_mask_even.len());
+        };
         ShareDB::load_single_record_from_s3(
             index,
             &self.right_mask_db_slices.code_gr,
-            right_mask_odd,
-            right_mask_even,
+            &right_mask_odd,
+            &right_mask_even,
             self.device_manager.device_count(),
             MASK_CODE_LENGTH,
         );
