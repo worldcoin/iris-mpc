@@ -3,8 +3,8 @@ use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
         tcp::{
-            config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
-            NetworkHandle,
+            config::TcpConfig, health, networking::connection_builder::Reconnector,
+            NetworkConnection, NetworkHandle,
         },
         value::{DescriptorByte, NetworkValue},
     },
@@ -260,6 +260,7 @@ async fn manage_connection<T: NetworkConnection>(
     };
 
     // wrapping these for future re-use
+    let stream_fd = stream.as_raw_fd();
     let (reader, writer) = tokio::io::split(stream);
     let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
     let writer = Arc::new(Mutex::new(Some(writer)));
@@ -277,7 +278,7 @@ async fn manage_connection<T: NetworkConnection>(
             let r =
                 handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions)
                     .await;
-            tracing::debug!("handle_outbound_traffic exited: {r:?}");
+            tracing::info!("handle_outbound_traffic exited: {r:?}");
         };
 
         let reader_mtx = reader.clone();
@@ -286,7 +287,12 @@ async fn manage_connection<T: NetworkConnection>(
             let mut reader = reader_mtx.lock().await;
             let inbound = inbound_mtx.lock().await;
             let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound).await;
-            tracing::debug!("handle_inbound_traffic exited: {r:?}");
+            tracing::info!("handle_inbound_traffic exited: {r:?}");
+        };
+
+        let health_task = async move {
+            let r = health::watch_socket(stream_fd).await;
+            tracing::info!("health task exited: {r:?}");
         };
 
         enum Evt {
@@ -298,13 +304,14 @@ async fn manage_connection<T: NetworkConnection>(
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::debug!("cmd channel closed");
+                        tracing::info!("cmd channel closed");
                         return;
                     }
                 }
-            }
+            },
             _ = inbound_task => Evt::Disconnected,
             _ = outbound_task => Evt::Disconnected,
+            _ = health_task => Evt::Disconnected,
         };
 
         // update the Arcs depending on the event. wait for reconnect if needed.
