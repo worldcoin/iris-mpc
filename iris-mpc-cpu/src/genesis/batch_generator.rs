@@ -205,7 +205,7 @@ impl fmt::Display for BatchSize {
 impl Batch {
     // Returns Iris serial id of batch's last element.
     pub fn id_end(&self) -> IrisSerialId {
-        self.vector_ids
+        self.vector_ids_to_persist
             .last()
             .map(|id| id.serial_id())
             .unwrap_or_default()
@@ -213,7 +213,7 @@ impl Batch {
 
     // Returns Iris serial id of batch's first element.
     pub fn id_start(&self) -> IrisSerialId {
-        self.vector_ids
+        self.vector_ids_to_persist
             .first()
             .map(|id| id.serial_id())
             .unwrap_or_default()
@@ -224,7 +224,7 @@ impl Batch {
         self.vector_ids.iter().map(|id| id.serial_id()).collect()
     }
 
-    // Returns size of the batch.
+    // Returns size of the batch.x
     pub fn size(&self) -> usize {
         self.vector_ids.len()
     }
