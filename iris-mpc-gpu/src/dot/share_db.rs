@@ -1254,13 +1254,12 @@ mod tests {
                 0,
                 &streams,
             );
-            masks_engine.dot_reduce_and_multiply(
+            masks_engine.dot_reduce(
                 &mask_query_sums,
                 &mask_db_slices.code_sums_gr,
                 &db_sizes,
                 0,
                 &streams,
-                2,
             );
 
             device_manager.await_streams(&streams);
