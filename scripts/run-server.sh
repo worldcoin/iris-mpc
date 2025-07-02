@@ -4,17 +4,16 @@ set -e
 # Arg :: Node ID :: MPC node ordinal identifier.
 NODE_ID="$1"
 if [ -z "$NODE_ID" ]; then
-  echo "Usage: run-server.sh <node_id>"
+  echo "Usage: run-server.sh <node_id> <binary> [--init-servers]"
   exit 1
 fi
 
 # Arg :: Binary :: Binary to run [standard | genesis].
 BINARY="$2"
 if [ -z "$BINARY" ]; then
-  echo "Usage: run-server-docker.sh <node_id> <binary>"
+  echo "Usage: run-server.sh <node_id> <binary> [--init-servers]"
   exit 1
 fi
-
 
 INIT_SERVERS=false
 if [ "$3" == "--init-servers" ]; then
@@ -42,10 +41,7 @@ export RUST_MIN_STACK=104857600
 
 
 if [ "$BINARY" == "genesis" ]; then
-    cargo run --bin iris-mpc-hawk-genesis -- --max-height "${GENESIS_MAX_HEIGHT}" --perform-snapshot=false
+    cargo run --release --bin iris-mpc-hawk-genesis -- --max-height "${GENESIS_MAX_HEIGHT}" --perform-snapshot=false
 else
-    cargo run --bin iris-mpc-hawk
+    cargo run --release --bin iris-mpc-hawk
 fi
-
-
-
