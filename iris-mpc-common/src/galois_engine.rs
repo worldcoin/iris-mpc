@@ -497,7 +497,7 @@ pub mod degree4 {
         use crate::{
             galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
             iris_db::iris::IrisCodeArray,
-            MASK_CODE_LENGTH,
+            IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
         };
         use float_eq::assert_float_eq;
         use rand::{thread_rng, Rng};
@@ -741,7 +741,7 @@ pub mod degree4 {
         #[test]
         fn check_remap() {
             let mut rng = thread_rng();
-            let index: usize = rng.gen_range(0..12800);
+            let index: usize = rng.gen_range(0..IRIS_CODE_LENGTH);
             assert_eq!(
                 GaloisRingIrisCodeShare::remap_old_to_new_index(
                     GaloisRingIrisCodeShare::remap_new_to_old_index(index)

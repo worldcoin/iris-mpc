@@ -7,8 +7,7 @@ use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
-    preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingMaskCodeShare,
-    GaloisShares,
+    preprocess_iris_message_shares, GaloisRingIrisCodeShare, GaloisRingMaskCodeShare, GaloisShares,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{

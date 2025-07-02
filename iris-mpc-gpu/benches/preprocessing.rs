@@ -24,9 +24,7 @@ pub fn criterion_benchmark_preprocessing(c: &mut Criterion) {
             let mut code_shares_query = code_shares_request.clone();
             let mut mask_shares_query = mask_shares_request.clone();
             GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_shares_query);
-            GaloisRingMaskCodeShare::preprocess_mask_code_query_share(
-                &mut mask_shares_query,
-            );
+            GaloisRingMaskCodeShare::preprocess_mask_code_query_share(&mut mask_shares_query);
             let code_shares_query = code_shares_query.all_rotations();
             let mask_shares_query = mask_shares_query.all_rotations();
             let code_shares_db = code_shares_request.all_rotations();

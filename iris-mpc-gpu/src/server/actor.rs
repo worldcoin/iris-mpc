@@ -27,9 +27,7 @@ use cudarc::{
 };
 use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
-use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingMaskCodeShare,
-};
+use iris_mpc_common::galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare};
 use iris_mpc_common::{
     helpers::{
         inmemory_store::InMemoryStore,

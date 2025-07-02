@@ -1150,13 +1150,12 @@ mod tests {
                 .db
                 .iter()
                 .flat_map(|iris| {
-                    let mask: GaloisRingTrimmedMaskCodeShare =
-                        GaloisRingIrisCodeShare::encode_mask_code(
-                            &iris.mask,
-                            &mut StdRng::seed_from_u64(RNG_SEED),
-                        )[party_id]
-                            .clone()
-                            .into();
+                    let mask: GaloisRingMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .clone()
+                        .into();
                     mask.coefs
                 })
                 .collect::<Vec<_>>();
@@ -1183,7 +1182,7 @@ mod tests {
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
                     shares[party_id].preprocess_iris_code_query_share();
-                    let mask: GaloisRingTrimmedMaskCodeShare = shares[party_id].clone().into();
+                    let mask: GaloisRingMaskCodeShare = shares[party_id].clone().into();
                     mask.coefs
                 })
                 .collect::<Vec<_>>();
