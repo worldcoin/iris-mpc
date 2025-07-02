@@ -166,3 +166,53 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         set_ep,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_utils::setup_hawk_actors;
+    use super::super::VectorId;
+    use super::*;
+    use crate::execution::hawk_main::test_utils::{init_graph, init_iris_db, make_request};
+    use crate::execution::hawk_main::{HawkActor, Orientation};
+
+    #[tokio::test]
+    async fn test_search() -> Result<()> {
+        let actors = setup_hawk_actors().await?;
+
+        parallelize(actors.into_iter().map(go_search)).await?;
+
+        Ok(())
+    }
+
+    async fn go_search(mut actor: HawkActor) -> Result<HawkActor> {
+        init_iris_db(&mut actor).await?;
+        init_graph(&mut actor).await?;
+
+        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+        HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
+
+        let batch_size = 3;
+        let request = make_request(batch_size, actor.party_id);
+        let search_queries = &request.queries(Orientation::Normal);
+        let search_params = SearchParams {
+            hnsw: actor.searcher(),
+            do_match: true,
+        };
+
+        let result = search(&sessions, search_queries, &request.ids, search_params).await?;
+
+        for side in result {
+            assert_eq!(side.len(), batch_size);
+            for (i, rotations) in side.iter().enumerate() {
+                // Match because i from make_request is the same as i from init_db.
+                assert_eq!(rotations.center().match_count, 1);
+                assert_eq!(
+                    rotations.center().links[0].edges[0].0,
+                    VectorId::from_0_index(i as u32)
+                );
+            }
+        }
+
+        Ok(actor)
+    }
+}
