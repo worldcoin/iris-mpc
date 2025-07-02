@@ -132,3 +132,44 @@ async fn aggregate_results(
 
     Ok(match_lists)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::test_utils::setup_hawk_actors;
+    use super::*;
+    use crate::execution::hawk_main::test_utils::make_request_intra_match;
+    use crate::execution::hawk_main::{HawkActor, Orientation};
+
+    #[tokio::test]
+    async fn test_intra_batch_is_match() -> Result<()> {
+        let actors = setup_hawk_actors().await?;
+
+        parallelize(actors.into_iter().map(go_intra_batch)).await?;
+
+        Ok(())
+    }
+
+    async fn go_intra_batch(mut actor: HawkActor) -> Result<HawkActor> {
+        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+
+        let batch_size = 3;
+        let request = make_request_intra_match(batch_size, actor.party_id);
+        let search_queries = &request.queries(Orientation::Normal);
+
+        let result = intra_batch_is_match(&sessions, search_queries).await?;
+
+        assert_eq!(
+            result,
+            vec![
+                vec![], // First request cannot have a match.
+                vec![], // Second request has no matches.
+                // Third request matches the first one (see make_request_intra_match).
+                vec![IntraMatch {
+                    other_request_i: 0,
+                    is_match: [true, true],
+                }],
+            ]
+        );
+        Ok(actor)
+    }
+}
