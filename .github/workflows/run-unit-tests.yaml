@@ -30,11 +30,29 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c
+        with:
+          files_yaml: |
+            src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - rust-toolchain.toml
+              - iris-*/**
+              - migrations/**
+              - scripts/**
+#              - .github/workflows/run-unit-tests.yaml -- bring this back after Canonical incident
+
       # The following steps will only run if any of the src files have changed
       - name: Install Dependencies
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: sudo apt install protobuf-compiler
 
       - name: Cache Rust build
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         id: cache-rust
         with:
@@ -47,18 +65,23 @@ jobs:
             rust-build-${{ runner.os }}-
 
       - name: Install Rust
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup toolchain install 1.85.0
 
       - name: Set Rust  as default
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup default 1.85.0
 
       - name: Run Tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release -- --test-threads=1
 
       - name: Run Tests with DB
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release --features db_dependent -- --test-threads=1
 
       - name: Run CPU E2E tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
         env:
           RUST_LOG: info
