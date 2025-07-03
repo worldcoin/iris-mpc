@@ -1,6 +1,6 @@
 use crate::{
     execution::player::{Identity, Role},
-    network::Networking,
+    network::{value::NetworkValue, Networking},
     protocol::prf::Prf,
 };
 use eyre::{eyre, Result};
@@ -40,30 +40,30 @@ pub struct NetworkSession {
 }
 
 impl NetworkSession {
-    async fn send(&self, value: Vec<u8>, receiver: &Identity) -> Result<()> {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
         self.networking.send(value, receiver).await
     }
 
-    async fn receive(&mut self, sender: &Identity) -> Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
         self.networking.receive(sender).await
     }
 
-    pub async fn send_next(&self, value: Vec<u8>) -> Result<()> {
+    pub async fn send_next(&self, value: NetworkValue) -> Result<()> {
         let next_identity = self.next_identity()?;
         self.send(value, &next_identity).await
     }
 
-    pub async fn send_prev(&self, value: Vec<u8>) -> Result<()> {
+    pub async fn send_prev(&self, value: NetworkValue) -> Result<()> {
         let prev_identity = self.prev_identity()?;
         self.send(value, &prev_identity).await
     }
 
-    pub async fn receive_next(&mut self) -> Result<Vec<u8>> {
+    pub async fn receive_next(&mut self) -> Result<NetworkValue> {
         let next_identity = self.next_identity()?;
         self.receive(&next_identity).await
     }
 
-    pub async fn receive_prev(&mut self) -> Result<Vec<u8>> {
+    pub async fn receive_prev(&mut self) -> Result<NetworkValue> {
         let prev_identity = self.prev_identity()?;
         self.receive(&prev_identity).await
     }

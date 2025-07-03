@@ -14,7 +14,24 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c
+        with:
+          files_yaml: |
+            src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - rust-toolchain.toml
+              - rustfmt.toml
+              - iris-*/**
+#              - .github/workflows/lint-rustfmt.yaml -- bring this back after Canonical incident
+
       - name: Cache Rust build
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         id: cache-rust
         with:
@@ -25,13 +42,23 @@ jobs:
           key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             rust-build-${{ runner.os }}-
+
       - name: Show errors inline
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: r7kamura/rust-problem-matchers@9fe7ca9f6550e5d6358e179d451cc25ea6b54f98
+
       - name: Install Rust
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup toolchain install 1.85.0
+
       - name: Set Rust as default
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup default 1.85.0
+
       - name: Install Rustfmt for formatting
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: rustup component add rustfmt
+
       - name: Run Rustfmt
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo fmt -- --check

@@ -677,7 +677,6 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         party_index: config.party_id,
         addresses: node_addresses.clone(),
         request_parallelism: config.hawk_request_parallelism,
-        stream_parallelism: config.hawk_stream_parallelism,
         connection_parallelism: config.hawk_connection_parallelism,
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_M: config.hnsw_param_M,
@@ -880,6 +879,7 @@ async fn get_results_thread(
                     log_info(format!(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
+                    metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
