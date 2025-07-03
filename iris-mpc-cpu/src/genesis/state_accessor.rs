@@ -120,13 +120,12 @@ pub async fn get_iris_modifications(
         ),
     );
 
-    let data = iris_store
+    let (modifications, max_id) = iris_store
         .get_persisted_modifications_after_id(from_modification_id, to_serial_id)
         .await
         .map_err(|err| IndexationError::FetchModificationBatch(err.to_string()))?;
-    let last_id = data.last().map(|m| m.id).unwrap_or(0);
 
-    Ok((data, last_id))
+    Ok((modifications, max_id))
 }
 
 /// Get serial id of last iris to have been indexed.
