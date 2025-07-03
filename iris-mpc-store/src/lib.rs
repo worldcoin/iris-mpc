@@ -265,6 +265,47 @@ impl Store {
         Ok(ids)
     }
 
+    pub async fn insert_copy_irises(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        vector_ids: &[VectorId],
+        codes_and_masks: &[StoredIrisRef<'_>],
+    ) -> Result<Vec<i64>> {
+        if codes_and_masks.is_empty() {
+            return Ok(vec![]);
+        }
+        if vector_ids.len() != codes_and_masks.len() {
+            return Err(eyre!(
+                "vector_ids and codes_and_masks must have the same length"
+            ));
+        }
+        let mut query = sqlx::QueryBuilder::new(
+            "INSERT INTO irises (id, version_id, left_code, left_mask, right_code, right_mask)",
+        );
+        query.push_values(
+            codes_and_masks.iter().zip(vector_ids.iter()),
+            |mut query, (iris, vector_id)| {
+                query.push_bind(iris.id);
+                query.push_bind(vector_id.version_id());
+                query.push_bind(cast_slice::<u16, u8>(iris.left_code));
+                query.push_bind(cast_slice::<u16, u8>(iris.left_mask));
+                query.push_bind(cast_slice::<u16, u8>(iris.right_code));
+                query.push_bind(cast_slice::<u16, u8>(iris.right_mask));
+            },
+        );
+
+        query.push(" RETURNING id");
+
+        let ids = query
+            .build()
+            .fetch_all(tx.deref_mut())
+            .await?
+            .iter()
+            .map(|row| row.get::<i64, _>("id"))
+            .collect::<Vec<_>>();
+        Ok(ids)
+    }
+
     pub async fn insert_irises_overriding(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -316,6 +357,40 @@ WHERE id = $1;
         .bind(cast_slice::<u16, u8>(&left_mask_share.coefs[..]))
         .bind(cast_slice::<u16, u8>(&right_iris_share.coefs[..]))
         .bind(cast_slice::<u16, u8>(&right_mask_share.coefs[..]));
+
+        match external_tx {
+            Some(external_tx) => {
+                query.execute(external_tx.deref_mut()).await?;
+            }
+            None => {
+                let mut new_tx = self.pool.begin().await?;
+                query.execute(&mut *new_tx).await?;
+                new_tx.commit().await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // Update existing iris with given shares.
+    pub async fn update_iris_with_version_id(
+        &self,
+        external_tx: Option<&mut Transaction<'_, Postgres>>,
+        version_id: i16,
+        codes_and_masks: &StoredIrisRef<'_>,
+    ) -> Result<()> {
+        let query = sqlx::query(
+            r#"
+UPDATE irises SET (version_id, left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5  , $6)
+WHERE id = $1;
+"#,
+        )
+        .bind(codes_and_masks.id)
+        .bind(version_id)
+        .bind(cast_slice::<u16, u8>(codes_and_masks.left_code))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.left_mask))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.right_code))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.right_mask));
 
         match external_tx {
             Some(external_tx) => {
@@ -640,7 +715,9 @@ pub mod tests {
     use futures::TryStreamExt;
     use iris_mpc_common::{
         helpers::{
-            smpc_request::{RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+            smpc_request::{
+                IDENTITY_DELETION_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            },
             sync::ModificationStatus,
         },
         postgres::AccessMode,

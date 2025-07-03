@@ -14,7 +14,7 @@ use iris_mpc_common::{
     server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId},
+    execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
     genesis::{
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
@@ -30,7 +30,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{loader::load_iris_db, Store as IrisStore};
+use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
     sync::{atomic::AtomicU64, Arc},
     time::{Duration, Instant},
@@ -195,7 +195,7 @@ async fn exec_setup(
     Arc<ShutdownHandler>,
     TaskMonitor,
     RDSClient,
-    BothEyes<SharedIrisesRef>,
+    Arc<BothEyes<SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
 )> {
@@ -209,8 +209,10 @@ async fn exec_setup(
     let mut task_monitor_bg = coordinator::init_task_monitor();
 
     // Set service clients.
-    let ((aws_s3_client, aws_sqs_client, aws_rds_client), (iris_store, graph_store)) =
-        get_service_clients(config).await?;
+    let (
+        (aws_s3_client, aws_sqs_client, aws_rds_client),
+        (iris_store, (hnsw_iris_store, graph_store)),
+    ) = get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
 
     // Set serial identifier of last indexed Iris.
@@ -321,18 +323,24 @@ async fn exec_setup(
     }
 
     // Set in memory Iris stores.
-    let imem_iris_stores: BothEyes<_> = [
+    let imem_iris_stores = Arc::new([
         hawk_actor.iris_store(StoreId::Left),
         hawk_actor.iris_store(StoreId::Right),
-    ];
+    ]);
 
     // Set Hawk handle.
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
     // Set thread for persisting indexing results to DB.
-    let tx_results =
-        get_results_thread(graph_store, &mut task_monitor_bg, &shutdown_handler).await?;
+    let tx_results = get_results_thread(
+        Arc::clone(&imem_iris_stores),
+        hnsw_iris_store,
+        graph_store,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
     task_monitor_bg.check_tasks();
 
     Ok((
@@ -482,6 +490,13 @@ async fn exec_indexation(
         _ => BatchSize::new_static(ctx.args.batch_size),
     };
 
+    if ctx.last_indexed_id + 1 > ctx.args.max_indexation_id {
+        log_warn(format!(
+            "Last indexed id {} is greater than max indexation id {}. \
+                 No indexation will be performed.",
+            ctx.last_indexed_id, ctx.args.max_indexation_id
+        ));
+    }
     // Set batch generator.
     let mut batch_generator = BatchGenerator::new(
         ctx.last_indexed_id + 1,
@@ -522,7 +537,6 @@ async fn exec_indexation(
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
-            // Set next last indexed id.
             last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
@@ -541,7 +555,6 @@ async fn exec_indexation(
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
         }
-
         Ok(())
     }
     .await;
@@ -693,7 +706,7 @@ async fn get_service_clients(
 ) -> Result<
     (
         (S3Client, SQSClient, RDSClient),
-        (IrisStore, GraphPg<Aby3Store>),
+        (IrisStore, (IrisStore, GraphPg<Aby3Store>)),
     ),
     Report,
 > {
@@ -721,8 +734,10 @@ async fn get_service_clients(
     }
 
     /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.
-    async fn get_pgres_clients(config: &Config) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
-        async fn get_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
+    async fn get_pgres_clients(
+        config: &Config,
+    ) -> Result<(IrisStore, (IrisStore, GraphPg<Aby3Store>)), Report> {
+        async fn get_mpc_iris_store_client(config: &Config) -> Result<IrisStore, Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
                 config.schema_name,
@@ -734,7 +749,10 @@ async fn get_service_clients(
                 .database
                 .as_ref()
                 .ok_or(eyre!("Missing database config"))?;
-            log_info(format!("Creating new iris store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new iris store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
                     .await?;
@@ -742,7 +760,9 @@ async fn get_service_clients(
             IrisStore::new(&db_client).await
         }
 
-        async fn get_graph_store_client(config: &Config) -> Result<GraphPg<Aby3Store>, Report> {
+        async fn get_hnsw_store_clients(
+            config: &Config,
+        ) -> Result<(IrisStore, GraphPg<Aby3Store>), Report> {
             let db_schema = format!(
                 "{}{}_{}_{}",
                 config.schema_name,
@@ -754,17 +774,23 @@ async fn get_service_clients(
                 .cpu_database
                 .as_ref()
                 .ok_or(eyre!("Missing CPU database config for Hawk Genesis"))?;
-            log_info(format!("Creating new graph store from: {:?}", db_config));
+            log_info(format!(
+                "Creating new graph store from: {:?}, schema: {}",
+                db_config, db_schema
+            ));
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
 
-            GraphStore::new(&db_client).await
+            Ok((
+                IrisStore::new(&db_client).await?,
+                GraphStore::new(&db_client).await?,
+            ))
         }
 
         Ok((
-            get_iris_store_client(config).await?,
-            get_graph_store_client(config).await?,
+            get_mpc_iris_store_client(config).await?,
+            get_hnsw_store_clients(config).await?,
         ))
     }
 
@@ -783,12 +809,15 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
+    imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
+    hnsw_iris_store: IrisStore,
     graph_store: GraphPg<Aby3Store>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
+    let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
             match result {
@@ -796,16 +825,50 @@ async fn get_results_thread(
                     batch_id,
                     connect_plans,
                     last_serial_id,
+                    vector_ids_to_persist,
                     ..
                 } => {
                     log_info(format!("Job Results :: Received: batch-id={batch_id}"));
+                    // get iris shares to persist
+                    let left_store = &imem_iris_stores_bg[LEFT];
+                    let right_store = &imem_iris_stores_bg[RIGHT];
+
+                    let left_data = left_store
+                        .get_vectors(vector_ids_to_persist.iter())
+                        .await;
+                    let right_data = right_store
+                        .get_vectors(vector_ids_to_persist.iter())
+                        .await;
+
+                    let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
+                            .iter()
+                            .enumerate()
+                            .map(|(i, vector_id)| {
+                                let left_iris = &left_data[i];
+                                let right_iris = &right_data[i];
+                                StoredIrisRef {
+                                    id: vector_id.serial_id() as i64,
+                                    left_code: &left_iris.code.coefs,
+                                    left_mask: &left_iris.mask.coefs,
+                                    right_code: &right_iris.code.coefs,
+                                    right_mask: &right_iris.mask.coefs,
+                                }
+                            })
+                            .collect();
 
                     let mut graph_tx = graph_store.tx().await?;
+                    // Persist batch of Iris's to the HNSW graph store.
+                    hnsw_iris_store
+                        .insert_copy_irises(
+                            &mut graph_tx.tx,
+                            &vector_ids_to_persist,
+                            &codes_and_masks,
+                        )
+                        .await?;
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: batch-id={batch_id}"
                     ));
-
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
                     db_tx.commit().await?;
@@ -817,19 +880,44 @@ async fn get_results_thread(
                         "Job Results :: Persisted to dB: batch-id={batch_id}"
                     ));
                     metrics::gauge!("genesis_indexation_complete").set(last_serial_id);
-
                     // Notify background task responsible for tracking pending batches.
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 }
                 JobResult::Modification {
                     modification_id,
                     connect_plans,
+                    vector_id_to_persist,
                 } => {
                     log_info(format!(
-                        "Job Results :: Received: modification-id={modification_id}",
+                        "Job Results :: Received: modification-id={modification_id} for serial-id={}",
+                        vector_id_to_persist.serial_id()
                     ));
+                    // get iris shares to persist
+                    let left_store = &imem_iris_stores_bg[LEFT];
+                    let right_store = &imem_iris_stores_bg[RIGHT];
+
+                    let left_iris = left_store
+                        .get_vector(&vector_id_to_persist)
+                        .await;
+                    let right_iris = right_store
+                        .get_vector(&vector_id_to_persist)
+                        .await;
 
                     let mut graph_tx = graph_store.tx().await?;
+                    let iris_data =StoredIrisRef {
+                                    id: vector_id_to_persist.serial_id() as i64,
+                                    left_code: &left_iris.code.coefs,
+                                    left_mask: &left_iris.mask.coefs,
+                                    right_code: &right_iris.code.coefs,
+                                    right_mask: &right_iris.mask.coefs,
+                                };
+                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
+                    hnsw_iris_store.update_iris_with_version_id(
+                            Some(&mut graph_tx.tx),
+                            vector_id_to_persist.version_id(),
+                            &iris_data,
+                        )
+                        .await?;
                     connect_plans.persist(&mut graph_tx).await?;
                     log_info(format!(
                         "Job Results :: Persisted graph updates: modification-id={modification_id}"
