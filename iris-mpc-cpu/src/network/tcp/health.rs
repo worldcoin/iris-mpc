@@ -114,7 +114,7 @@ pub async fn watch_socket(fd: RawFd) -> Result<()> {
     }
 }
 
-fn get_tcp_info(fd: RawFd) -> Result<tcp_info> {
+pub fn get_tcp_info(fd: RawFd) -> Result<tcp_info> {
     let (r, ti) = getsockopt(fd, libc::IPPROTO_TCP, libc::TCP_INFO);
     match r {
         0 => Ok(ti),
@@ -122,7 +122,7 @@ fn get_tcp_info(fd: RawFd) -> Result<tcp_info> {
     }
 }
 
-fn get_snd_buf(fd: RawFd) -> Result<c_int> {
+pub fn get_snd_buf(fd: RawFd) -> Result<c_int> {
     let (r, sndbuf) = getsockopt(fd, libc::SOL_SOCKET, libc::SO_SNDBUF);
     match r {
         0 => Ok(sndbuf),
@@ -130,7 +130,7 @@ fn get_snd_buf(fd: RawFd) -> Result<c_int> {
     }
 }
 
-fn get_rcv_buf(fd: RawFd) -> Result<c_int> {
+pub fn get_rcv_buf(fd: RawFd) -> Result<c_int> {
     let (r, rcvbuf) = getsockopt(fd, libc::SOL_SOCKET, libc::SO_RCVBUF);
     match r {
         0 => Ok(rcvbuf),

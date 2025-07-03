@@ -1,10 +1,20 @@
-use clap::{Parser, ValueEnum};
+#![allow(dead_code)]
+#[path = "../src/network/tcp/health.rs"]
+mod health;
+
+use clap::Parser;
 use eyre::{eyre, Result};
 use futures::future::try_join_all;
-use std::net::SocketAddr;
-use tokio::io::{stdin, AsyncBufReadExt, AsyncReadExt, BufReader};
+use health::{get_tcp_info, tcp_info};
+use std::{
+    net::SocketAddr,
+    os::fd::AsRawFd,
+    time::{Duration, Instant},
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::time::{interval, sleep};
 
 /// start the program in one of two modes: client or server
 #[derive(Parser)]
@@ -23,22 +33,40 @@ struct ClientArgs {
     server: String,
     /// number of connections to establish
     connections: usize,
-    /// the type of experiment to run
-    strategy: Strategy,
+
     /// duration in seconds for each step of the test
-    step_sec: Option<usize>,
-    /// MB/s to start the test at
-    throughput_start: Option<usize>,
+    step_sec: Option<u64>,
     /// the maximum number of tests to run
     num_steps: Option<usize>,
+
+    /// MB/s to start the test at
+    throughput_start: Option<usize>,
+    /// if set, the throughput will be incremented by X MB every step. otherwise it doubles.
+    increment: Option<usize>,
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-enum Strategy {
-    /// increment by X MB
-    Increment,
-    /// double the throughput each step
-    Double,
+#[derive(Clone)]
+struct ClientCmd {
+    duration_sec: u64,
+    throughput: usize,
+}
+
+#[derive(Default)]
+struct MetricsRsp {
+    // in MB/s
+    avg_delivery_rate: f64,
+    // in MB
+    bytes_sent: f64,
+    // ms
+    busy_time: f64,
+    // ms
+    rwnd_limited: f64,
+    // ms
+    sndbuf_limited: f64,
+    // packets
+    delivered: u32,
+    // packets
+    delivered_ce: u32,
 }
 
 #[tokio::main]
@@ -82,8 +110,9 @@ async fn run_server(listen_addr: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-async fn server_task(mut stream: TcpStream) {
+async fn server_task(stream: TcpStream) {
     let mut buf = vec![0u8; 2048];
+    let mut stream = BufReader::new(stream);
     loop {
         let len = match stream.read_u32().await {
             Ok(n) => n as usize,
@@ -151,33 +180,46 @@ async fn run_client(args: ClientArgs) -> Result<()> {
             };
         }
 
+        mb_sec = match args.increment {
+            Some(mb) => mb_sec + mb,
+            None => mb_sec * 2,
+        };
+
+        // todo: add a way to log to csv instead of the terminal
+
         println!(
             "stats for step {}, duration {}, throughput {}",
             idx, step_sec, mb_sec
         );
         println!("---------------------------------");
 
-        println!("avg_delivery_rate:");
+        println!("avg_delivery_rate (MB/s):");
         for m in &rsp {
-            print!("{} ", m.avg_delivery_rate);
+            print!("{:.2} ", m.avg_delivery_rate);
         }
         println!();
 
-        println!("busy_time");
+        println!("bytes_sent (MB):");
         for m in &rsp {
-            print!("{} ", m.busy_time);
+            print!("{:.2} ", m.bytes_sent);
         }
         println!();
 
-        println!("rwnd_limited");
+        println!("busy_time (ms)");
         for m in &rsp {
-            print!("{} ", m.rwnd_limited);
+            print!("{:.3} ", m.busy_time);
         }
         println!();
 
-        println!("sndbuf_limited");
+        println!("rwnd_limited (ms)");
         for m in &rsp {
-            print!("{} ", m.sndbuf_limited);
+            print!("{:.3} ", m.rwnd_limited);
+        }
+        println!();
+
+        println!("sndbuf_limited (ms)");
+        for m in &rsp {
+            print!("{:.3} ", m.sndbuf_limited);
         }
         println!();
 
@@ -203,34 +245,70 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone)]
-struct ClientCmd {
-    duration_sec: usize,
-    throughput: usize,
-}
-
-#[derive(Default)]
-struct MetricsRsp {
-    duration_sec: usize,
-    desired_throughput: usize,
-    // in MB/s
-    avg_delivery_rate: u64,
-    // usec
-    busy_time: u64,
-    // usec
-    rwnd_limited: u64,
-    // usec
-    sndbuf_limited: u64,
-    // packets
-    delivered: u32,
-    // packets
-    delivered_ce: u32,
-}
-
 async fn client_task(
-    stream: TcpStream,
+    mut stream: TcpStream,
     mut cmd_rx: UnboundedReceiver<ClientCmd>,
     metrics_tx: UnboundedSender<Result<MetricsRsp>>,
 ) -> Result<()> {
-    while let Some(cmd) = cmd_rx.recv().await {}
+    let fd = stream.as_raw_fd();
+    let tick_ms = 500;
+    while let Some(cmd) = cmd_rx.recv().await {
+        let mut last_info: Option<tcp_info> = None;
+        let mut samples = 0;
+        let mut delivery_rate_sum = 0;
+
+        let start = Instant::now();
+        let mut snd_ticker = interval(Duration::from_millis(tick_ms));
+
+        let data = vec![0_u8; cmd.throughput * 1_000_000 / 100];
+        for _ in 0..6 {
+            snd_ticker.tick().await;
+            stream.write_all(&(data.len() as u32).to_le_bytes()).await?;
+            stream.write_all(&data).await?;
+        }
+
+        // want the stats to be offset from the sending
+        sleep(Duration::from_millis(tick_ms / 2)).await;
+        let mut stats_ticker = interval(Duration::from_millis(tick_ms));
+
+        while start.elapsed().as_secs() < cmd.duration_sec {
+            tokio::select! {
+                _ = snd_ticker.tick() => {
+                    stream.write_all(&(data.len() as u32).to_le_bytes()).await?;
+                    stream.write_all(&data).await?;
+                },
+                _ = stats_ticker.tick() => {
+                    let mut tcp_info = get_tcp_info(fd)?;
+                    delivery_rate_sum += tcp_info.tcpi_delivery_rate;
+                    samples += 1;
+
+                    // for ease of use, only log the diff.
+                    if let Some(prev) = last_info.as_ref() {
+                        tcp_info.tcpi_bytes_sent -= prev.tcpi_bytes_sent;
+                        tcp_info.tcpi_busy_time -= prev.tcpi_busy_time;
+                        tcp_info.tcpi_rwnd_limited -= prev.tcpi_rwnd_limited;
+                        tcp_info.tcpi_sndbuf_limited -= prev.tcpi_sndbuf_limited;
+                        tcp_info.tcpi_delivered -= prev.tcpi_delivered;
+                        tcp_info.tcpi_delivered_ce -= prev.tcpi_delivered_ce;
+                    }
+                    last_info.replace(tcp_info);
+                }
+            }
+        }
+
+        let ti = last_info.unwrap();
+        let rsp = MetricsRsp {
+            avg_delivery_rate: (delivery_rate_sum / samples) as f64 / 1_000_000.0,
+            bytes_sent: ti.tcpi_bytes_sent as f64 / 1_000_000.0,
+            busy_time: ti.tcpi_busy_time as f64 / 1000.0,
+            rwnd_limited: ti.tcpi_rwnd_limited as f64 / 1000.0,
+            sndbuf_limited: ti.tcpi_sndbuf_limited as f64 / 1000.0,
+            delivered: ti.tcpi_delivered,
+            delivered_ce: ti.tcpi_delivered_ce,
+        };
+
+        metrics_tx.send(Ok(rsp))?;
+    }
+
+    Ok(())
 }
