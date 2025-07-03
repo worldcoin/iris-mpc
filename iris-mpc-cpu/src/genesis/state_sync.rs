@@ -22,6 +22,9 @@ pub struct Config {
 
     // Identifier of the last modification ID to be indexed.
     pub max_modification_id: i64,
+
+    // Identifier of the max completed modification the node has seen
+    pub max_completed_modification: i64,
 }
 
 /// Constructor.
@@ -33,6 +36,7 @@ impl Config {
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
         max_modification_id: i64,
+        max_completed_modification: i64,
     ) -> Self {
         Self {
             batch_size,
@@ -41,6 +45,7 @@ impl Config {
             last_indexed_id,
             max_indexation_id,
             max_modification_id,
+            max_completed_modification,
         }
     }
 }
@@ -107,10 +112,10 @@ mod tests {
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(64, 128, vec![3, 5], 50, 100, 100)
+            Self::new(64, 128, vec![3, 5], 50, 100, 100, 100)
         }
         fn new_2() -> Self {
-            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200)
+            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200, 200)
         }
     }
 

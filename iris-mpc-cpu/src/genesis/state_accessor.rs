@@ -105,7 +105,7 @@ pub async fn get_iris_deletions(
 ///
 /// # Returns
 ///
-/// 2 member tuple: (Modification data, Last modification ID).
+/// 2 member tuple: (Modification data, Max completed modification from the table).
 ///
 pub async fn get_iris_modifications(
     iris_store: &Store,
@@ -124,7 +124,7 @@ pub async fn get_iris_modifications(
         .get_persisted_modifications_after_id(from_modification_id, to_serial_id)
         .await
         .map_err(|err| IndexationError::FetchModificationBatch(err.to_string()))?;
-
+    let max_id = max_id.unwrap_or(0);
     Ok((modifications, max_id))
 }
 

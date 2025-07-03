@@ -92,7 +92,7 @@ struct ExecutionContextInfo {
     // Set of modifications to be applied.
     modifications: Vec<Modification>,
 
-    // Maximum modification id.
+    // Maximum modification id to be performed
     max_modification_id: i64,
 }
 
@@ -111,8 +111,8 @@ impl ExecutionContextInfo {
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
-            max_modification_id,
             modifications,
+            max_modification_id,
         }
     }
 }
@@ -241,12 +241,14 @@ async fn exec_setup(
         "Identifier of last modification to have been indexed = {}",
         last_indexed_modification_id,
     ));
-    let (modifications, latest_modification_id) =
+    let (modifications, max_completed_modification_id) =
         get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
+    let max_modification_id = modifications.last().map_or(0, |m| m.id);
     log_info(format!(
-        "Modifications to be applied count = {}. Last modification id = {}",
+        "Modifications to be applied count = {}. Max modification id completed = {}, Max modification to be performed = {}",
         modifications.len(),
-        latest_modification_id
+        max_completed_modification_id,
+        max_modification_id,
     ));
 
     // Coordinator: Await coordination server to start.
@@ -257,7 +259,8 @@ async fn exec_setup(
         args.max_indexation_id,
         last_indexed_id,
         &excluded_serial_ids,
-        latest_modification_id,
+        max_modification_id,
+        max_completed_modification_id,
     )
     .await?;
     log_info(String::from("Synchronization state initialised"));
@@ -332,6 +335,13 @@ async fn exec_setup(
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
+    if modifications.is_empty() {
+        log_info(String::from("No modifications to apply. Therefore setting the last modification id as the largest completed modification id."));
+        let mut graph_tx = graph_store.tx().await?;
+        set_last_indexed_modification_id(&mut graph_tx.tx, max_completed_modification_id).await?;
+        graph_tx.tx.commit().await?;
+    }
+
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
         Arc::clone(&imem_iris_stores),
@@ -350,7 +360,7 @@ async fn exec_setup(
             last_indexed_id,
             excluded_serial_ids,
             modifications,
-            latest_modification_id,
+            max_modification_id,
         ),
         shutdown_handler,
         task_monitor_bg,
@@ -966,6 +976,7 @@ async fn get_sync_state(
     last_indexed_id: IrisSerialId,
     excluded_serial_ids: &[IrisSerialId],
     max_modification_id: i64,
+    max_completed_modification: i64,
 ) -> Result<GenesisSyncState> {
     let common_config = CommonConfig::from(config.clone());
     let genesis_config = GenesisConfig::new(
@@ -975,6 +986,7 @@ async fn get_sync_state(
         last_indexed_id,
         max_indexation_id,
         max_modification_id,
+        max_completed_modification,
     );
 
     Ok(GenesisSyncState::new(common_config, genesis_config))

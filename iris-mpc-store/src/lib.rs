@@ -506,7 +506,7 @@ WHERE id = $1;
             REAUTH_MESSAGE_TYPE,
             IDENTITY_DELETION_MESSAGE_TYPE,
         ];
-            let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin().await?;
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
@@ -534,7 +534,7 @@ WHERE id = $1;
         .fetch_all(&mut *tx)
         .await?;
 
-            // Fetch the max id from modifications that are persisted and completed.
+        // Fetch the max id from modifications that are persisted and completed.
         let max_id: Option<i64> = sqlx::query_scalar(
             r#"
             SELECT MAX(id) FROM modifications
