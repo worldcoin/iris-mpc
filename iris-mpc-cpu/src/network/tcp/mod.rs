@@ -426,7 +426,7 @@ mod tests {
         sleep(Duration::from_millis(500)).await;
 
         assert_eq!(sessions.len(), 3);
-        assert_eq!(sessions[0].len(), 2);
+        assert_eq!(sessions[0].len(), 62); // 31 rotations * 2 eyes
 
         let mut iters = vec![];
         for session in sessions.iter_mut() {
