@@ -116,3 +116,7 @@ path = "bin/graph_mem_cli.rs"
 [[bin]]
 name = "local_hnsw"
 path = "bin/local_hnsw.rs"
+
+[[bin]]
+name = "network-test-cli"
+path = "bin/network_test_cli.rs"

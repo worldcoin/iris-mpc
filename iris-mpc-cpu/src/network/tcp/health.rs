@@ -41,14 +41,14 @@ pub async fn log_from_channel_to_file(filename: String) -> Result<()> {
         .await
         .map_err(|e| eyre!("Failed to create log file {}: {}", filename, e))?;
     file.write_all(
-        b"time_ms,socket_id,snd_buf,rcv_buf,unacked,bytes_acked,bytes_sent,bytes_received,busy_time,rwnd_limited,sndbuf_limited,snd_wnd,rcv_wnd,notsent_bytes,delivery_rate\n",
+        b"time_ms,socket_id,snd_buf,rcv_buf,unacked,bytes_acked,bytes_sent,bytes_received,busy_time,rwnd_limited,sndbuf_limited,snd_wnd,rcv_wnd,notsent_bytes,delivery_rate,rtt\n",
     )
     .await?;
 
     let mut rx = LOG_CH.rx.lock().await;
     while let Some(log) = rx.recv().await {
         let line = format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             log.time_ms,
             log.socket_id,
             log.snd_buf,
@@ -64,6 +64,7 @@ pub async fn log_from_channel_to_file(filename: String) -> Result<()> {
             log.info.tcpi_rcv_wnd,
             log.info.tcpi_notsent_bytes,
             log.info.tcpi_delivery_rate,
+            log.info.tcpi_rtt,
         );
         file.write_all(line.as_bytes()).await?;
         file.flush().await?;
