@@ -8,7 +8,10 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config}, helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor}, iris_db::iris, postgres::{AccessMode, PostgresClient}, server_coordination as coordinator, IrisSerialId
+    config::{CommonConfig, Config},
+    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
+    postgres::{AccessMode, PostgresClient},
+    server_coordination as coordinator, IrisSerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},

@@ -298,25 +298,20 @@ impl BatchIterator for BatchGenerator {
         };
         // Set vector identifiers - assumes left/right store equivalence.
         let vector_ids: Vec<VectorId> = imem_iris_stores[LEFT]
-                .get_vector_ids(&identifiers)
-                .await
-                .into_iter()
-                .zip(identifiers)
-                .map(|(id_opt, serial_id)| {
-                    id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
-                })
-                .collect::<Result<Vec<_>, IndexationError>>()?;
+            .get_vector_ids(&identifiers)
+            .await
+            .into_iter()
+            .zip(identifiers)
+            .map(|(id_opt, serial_id)| id_opt.ok_or(IndexationError::MissingSerialId(serial_id)))
+            .collect::<Result<Vec<_>, IndexationError>>()?;
 
-        let vector_ids_for_persistence: Vec<VectorId> = 
-            imem_iris_stores[LEFT]
-                .get_vector_ids(&identifiers_for_indexation)
-                .await
-                .into_iter()
-                .zip(identifiers_for_indexation)
-                .map(|(id_opt, serial_id)| {
-                    id_opt.ok_or(IndexationError::MissingSerialId(serial_id))
-                })
-                .collect::<Result<Vec<_>, IndexationError>>()?;
+        let vector_ids_for_persistence: Vec<VectorId> = imem_iris_stores[LEFT]
+            .get_vector_ids(&identifiers_for_indexation)
+            .await
+            .into_iter()
+            .zip(identifiers_for_indexation)
+            .map(|(id_opt, serial_id)| id_opt.ok_or(IndexationError::MissingSerialId(serial_id)))
+            .collect::<Result<Vec<_>, IndexationError>>()?;
 
         self.batch_count += 1;
 

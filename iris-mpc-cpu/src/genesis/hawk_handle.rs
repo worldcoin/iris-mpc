@@ -8,7 +8,7 @@ use crate::execution::hawk_main::{
     STORE_IDS,
 };
 use eyre::{eyre, OptionExt, Result};
-use iris_mpc_common::{helpers::smpc_request, IrisVectorId};
+use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
 use tokio::sync::{mpsc, oneshot};
