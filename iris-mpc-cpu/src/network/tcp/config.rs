@@ -21,7 +21,7 @@ impl TcpConfig {
         // don't allow fewer requests than connections...
         let connection_parallelism = cmp::min(num_connections, request_parallelism);
         // x2 for both eyes
-        let request_parallelism = request_parallelism * 2;
+        let request_parallelism = request_parallelism * 2 * iris_mpc_common::ROTATIONS;
 
         Self {
             timeout_duration,
