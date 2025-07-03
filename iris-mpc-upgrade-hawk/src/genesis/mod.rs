@@ -252,17 +252,16 @@ async fn exec_setup(
     ));
 
     // Coordinator: Await coordination server to start.
-    let my_state = get_sync_state(
-        config,
+    let genesis_config = GenesisConfig::new(
         args.batch_size,
         args.batch_size_error_rate,
-        args.max_indexation_id,
+        excluded_serial_ids.clone(),
         last_indexed_id,
-        &excluded_serial_ids,
+        args.max_indexation_id,
         max_modification_id,
         max_completed_modification_id,
-    )
-    .await?;
+    );
+    let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
 
     // Coordinator: await server start.
@@ -970,25 +969,9 @@ async fn get_results_thread(
 ///
 async fn get_sync_state(
     config: &Config,
-    batch_size: usize,
-    batch_size_error_rate: usize,
-    max_indexation_id: IrisSerialId,
-    last_indexed_id: IrisSerialId,
-    excluded_serial_ids: &[IrisSerialId],
-    max_modification_id: i64,
-    max_completed_modification: i64,
+    genesis_config: GenesisConfig,
 ) -> Result<GenesisSyncState> {
     let common_config = CommonConfig::from(config.clone());
-    let genesis_config = GenesisConfig::new(
-        batch_size,
-        batch_size_error_rate,
-        excluded_serial_ids.to_vec(),
-        last_indexed_id,
-        max_indexation_id,
-        max_modification_id,
-        max_completed_modification,
-    );
-
     Ok(GenesisSyncState::new(common_config, genesis_config))
 }
 
