@@ -83,16 +83,18 @@ fn bench_is_match_batch_tcp(c: &mut Criterion) {
             let t2 = create_random_sharing(&mut rng, 10_u16);
 
             let sessions = rt
-                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp / 2).await })
+                .block_on(async move { LocalRuntime::mock_sessions_with_tcp(cp, rp).await })
                 .unwrap();
+
+            let num_parties = 3;
+            assert_eq!(sessions.len(), rp * num_parties);
 
             group.bench_function(
                 BenchmarkId::new("local", format!("cp: {}, rp: {}, nj: {}", cp, rp, nj)),
                 |b| {
                     b.iter(|| {
                         let (d1, d2, t1, t2) = (d1.clone(), d2.clone(), t1.clone(), t2.clone());
-                        let num_parties = 3;
-                        let sessions = &sessions[..rp * num_parties];
+                        let sessions = &sessions;
                         rt.block_on(async move {
                             for _ in 0..nj / rp {
                                 run_jobs(

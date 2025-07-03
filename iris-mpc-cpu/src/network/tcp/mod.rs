@@ -73,7 +73,7 @@ pub async fn build_network_handle(
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
         args.connection_parallelism,
-        args.request_parallelism * 2, // x2 for both orientations.
+        args.request_parallelism * 2 * 2 * iris_mpc_common::ROTATIONS, // x2 for both orientations and x2 for both eyes.
     );
 
     if let Some(tls) = args.tls.as_ref() {
@@ -287,7 +287,7 @@ mod tests {
     use crate::execution::player::{Identity, Role};
     use crate::network::tcp::data::StreamId;
     use crate::network::value::NetworkValue;
-    use crate::network::{tcp::session::TcpSession, NetworkType, Networking};
+    use crate::network::{tcp::session::TcpSession, Networking};
     use rand::Rng;
 
     use super::testing::*;
@@ -342,10 +342,11 @@ mod tests {
     async fn test_tcp_comms_correct() -> Result<()> {
         let identities = generate_local_identities();
         let (_managers, mut sessions) =
-            setup_local_tcp_networking(identities.clone(), 1, 2).await?;
+            setup_local_tcp_networking(identities.clone(), 1, 4).await?;
         sleep(Duration::from_millis(500)).await;
 
         assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].len(), 4);
 
         let mut iters = vec![];
         for session in sessions.iter_mut() {
@@ -416,15 +417,11 @@ mod tests {
     #[traced_test]
     async fn test_tcp_comms_reconnect() -> Result<()> {
         let identities = generate_local_identities();
-        let (managers, mut sessions) = setup_local_tcp_networking(
-            identities.clone(),
-            1,
-            NetworkType::default_request_parallelism(),
-        )
-        .await?;
+        let (managers, mut sessions) = setup_local_tcp_networking(identities.clone(), 1, 2).await?;
         sleep(Duration::from_millis(500)).await;
 
         assert_eq!(sessions.len(), 3);
+        assert_eq!(sessions[0].len(), 2);
 
         let mut iters = vec![];
         for session in sessions.iter_mut() {
