@@ -33,6 +33,7 @@ services:
       - .test.hawk0.env
     environment:
       - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_0
+      - SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw
       - SMPC__DATABASE__MIGRATE=true
       - SMPC__DATABASE__CREATE=true
     depends_on:
@@ -58,6 +59,7 @@ services:
       - .test.hawk1.env
     environment:
       - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_1
+      - SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw
       - SMPC__DATABASE__MIGRATE=true
       - SMPC__DATABASE__CREATE=true
     depends_on:
@@ -85,6 +87,7 @@ services:
       - SMPC__DATABASE__URL=postgres://postgres:postgres@dev_db:5432/SMPC_dev_2
       - SMPC__DATABASE__MIGRATE=true
       - SMPC__DATABASE__CREATE=true
+      - SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw
     depends_on:
       localstack:
         condition: service_healthy
