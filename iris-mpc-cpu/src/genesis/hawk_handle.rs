@@ -273,6 +273,8 @@ impl Handle {
                         request_index: None,
                     });
                 }
+                metrics::histogram!("genesis_modification_duration")
+                    .record(now.elapsed().as_secs_f64());
 
                 Ok(JobResult::new_modification_result(
                     modification.id,
