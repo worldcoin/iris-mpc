@@ -110,8 +110,8 @@ impl JobResult {
         connect_plans: HawkMutation,
         vector_ids_to_persist: Vec<IrisVectorId>,
     ) -> Self {
-        let first_serial_id = vector_ids.first().unwrap().serial_id();
-        let last_serial_id = vector_ids.last().unwrap().serial_id();
+        let first_serial_id = vector_ids_to_persist.first().unwrap().serial_id();
+        let last_serial_id = vector_ids_to_persist.last().unwrap().serial_id();
 
         Self::BatchIndexation {
             connect_plans,

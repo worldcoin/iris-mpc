@@ -255,17 +255,11 @@ impl Handle {
                                     Err(eyre!(msg))
                                 }
                                 _ => {
-                                    Self::log_error(format!(
+                                    let msg = Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
                                     ));
-                                    Ok((
-                                        vec![],
-                                        IrisVectorId::new(
-                                            serial_id,
-                                            0,
-                                        ),
-                                    ))
+                                    Err(eyre!(msg))
                                 }
                             }
                         }

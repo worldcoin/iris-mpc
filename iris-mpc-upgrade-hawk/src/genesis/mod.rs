@@ -8,10 +8,7 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config},
-    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
-    postgres::{AccessMode, PostgresClient},
-    server_coordination as coordinator, IrisSerialId,
+    config::{CommonConfig, Config}, helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor}, iris_db::iris, postgres::{AccessMode, PostgresClient}, server_coordination as coordinator, IrisSerialId
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, GraphStore, HawkActor, HawkArgs, StoreId, LEFT, RIGHT},
@@ -889,7 +886,8 @@ async fn get_results_thread(
                     vector_id_to_persist,
                 } => {
                     log_info(format!(
-                        "Job Results :: Received: modification-id={modification_id}",
+                        "Job Results :: Received: modification-id={modification_id} for serial-id={}",
+                        vector_id_to_persist.serial_id()
                     ));
                     // get iris shares to persist
                     let left_store = &imem_iris_stores_bg[LEFT];
@@ -903,14 +901,18 @@ async fn get_results_thread(
                         .await;
 
                     let mut graph_tx = graph_store.tx().await?;
-                    // This should automatically update the version id with the correct value
-                    hnsw_iris_store.update_iris(
+                    let iris_data =StoredIrisRef {
+                                    id: vector_id_to_persist.serial_id() as i64,
+                                    left_code: &left_iris.code.coefs,
+                                    left_mask: &left_iris.mask.coefs,
+                                    right_code: &right_iris.code.coefs,
+                                    right_mask: &right_iris.mask.coefs,
+                                };
+                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
+                    hnsw_iris_store.update_iris_with_version_id(
                             Some(&mut graph_tx.tx),
-                            vector_id_to_persist.serial_id() as i64,
-                            &left_iris.code,
-                            &left_iris.mask,
-                            &right_iris.code,
-                            &right_iris.mask,
+                            vector_id_to_persist.version_id(),
+                            &iris_data,
                         )
                         .await?;
                     connect_plans.persist(&mut graph_tx).await?;

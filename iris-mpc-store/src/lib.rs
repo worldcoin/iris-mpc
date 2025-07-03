@@ -372,6 +372,40 @@ WHERE id = $1;
         Ok(())
     }
 
+    // Update existing iris with given shares.
+    pub async fn update_iris_with_version_id(
+        &self,
+        external_tx: Option<&mut Transaction<'_, Postgres>>,
+        version_id: i16,
+        codes_and_masks: &StoredIrisRef<'_>,
+    ) -> Result<()> {
+        let query = sqlx::query(
+            r#"
+UPDATE irises SET (version_id, left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5  , $6)
+WHERE id = $1;
+"#,
+        )
+        .bind(codes_and_masks.id)
+        .bind(version_id)
+        .bind(cast_slice::<u16, u8>(codes_and_masks.left_code))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.left_mask))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.right_code))
+        .bind(cast_slice::<u16, u8>(codes_and_masks.right_mask));
+
+        match external_tx {
+            Some(external_tx) => {
+                query.execute(external_tx.deref_mut()).await?;
+            }
+            None => {
+                let mut new_tx = self.pool.begin().await?;
+                query.execute(&mut *new_tx).await?;
+                new_tx.commit().await?;
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn rollback(&self, db_len: usize) -> Result<()> {
         let mut tx = self.pool.begin().await?;
 
