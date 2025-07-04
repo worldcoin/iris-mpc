@@ -75,9 +75,12 @@ struct MetricsRsp {
     // ms
     sndbuf_limited: f64,
     // packets
+    snd_cwnd: u32,
+    // packets
     delivered: u32,
     // packets
     delivered_ce: u32,
+    app_limited: bool,
 }
 
 #[tokio::main]
@@ -231,10 +234,14 @@ async fn client_task(
 
         let mut samples = 0;
         let mut delivery_rate_sum = 0;
+        let mut app_limited = false;
         for _ in 0..(cmd.duration_sec * 1000) / tick_ms {
             snd_ticker.tick().await;
 
             let tcp_info = get_tcp_info(fd)?;
+            if tcp_info.tcpi_delivery_rate_app_limited_fastopen_client_fail & 1 == 1 {
+                app_limited = true;
+            }
             delivery_rate_sum += tcp_info.tcpi_delivery_rate;
             samples += 1;
 
@@ -255,12 +262,15 @@ async fn client_task(
             busy_time: (ti.tcpi_busy_time - s_ti.tcpi_busy_time) as f64 / 1000.0,
             rwnd_limited: (ti.tcpi_rwnd_limited - s_ti.tcpi_rwnd_limited) as f64 / 1000.0,
             sndbuf_limited: (ti.tcpi_sndbuf_limited - s_ti.tcpi_sndbuf_limited) as f64 / 1000.0,
+            snd_cwnd: ti.tcpi_snd_cwnd,
             delivered: ti.tcpi_delivered - s_ti.tcpi_delivered,
             delivered_ce: ti.tcpi_delivered_ce - s_ti.tcpi_delivered_ce,
+            app_limited,
         };
 
         metrics_tx.send(Ok(rsp))?;
     }
+    stream.shutdown().await?;
 
     Ok(())
 }
@@ -305,6 +315,12 @@ fn log_to_terminal(idx: usize, num_steps: usize, cmd: &ClientCmd, rsp: &[Metrics
     }
     println!();
 
+    println!("snd_cwnd (packets)");
+    for m in rsp {
+        print!("{} ", m.snd_cwnd);
+    }
+    println!();
+
     println!("delivered");
     for m in rsp {
         print!("{} ", m.delivered);
@@ -314,6 +330,12 @@ fn log_to_terminal(idx: usize, num_steps: usize, cmd: &ClientCmd, rsp: &[Metrics
     println!("delivered_ce");
     for m in rsp {
         print!("{} ", m.delivered_ce);
+    }
+    println!();
+
+    println!("app_limited");
+    for m in rsp {
+        print!("{} ", m.app_limited);
     }
     println!();
 
