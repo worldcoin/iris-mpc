@@ -11,7 +11,7 @@ use crate::proto::iris_mpc_reshare::{
 use eyre::Result;
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -91,7 +91,7 @@ impl IrisCodeReshareSenderHelper {
     }
     fn reshare_mask(
         &self,
-        mut mask_share: GaloisRingTrimmedMaskCodeShare,
+        mut mask_share: GaloisRingMaskCodeShare,
         rng: &mut (impl CryptoRng + Rng),
     ) -> Vec<u8> {
         for i in (0..MASK_CODE_LENGTH).step_by(4) {
@@ -157,9 +157,9 @@ impl IrisCodeReshareSenderHelper {
         &mut self,
         iris_code_id: i64,
         left_code_share: GaloisRingIrisCodeShare,
-        left_mask_share: GaloisRingTrimmedMaskCodeShare,
+        left_mask_share: GaloisRingMaskCodeShare,
         right_code_share: GaloisRingIrisCodeShare,
-        right_mask_share: GaloisRingTrimmedMaskCodeShare,
+        right_mask_share: GaloisRingMaskCodeShare,
     ) {
         assert!(
             self.current_packet.is_some(),
@@ -401,7 +401,7 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let mut left_mask_share1 = GaloisRingTrimmedMaskCodeShare {
+            let mut left_mask_share1 = GaloisRingMaskCodeShare {
                 id: self.my_party_id + 1,
                 coefs: reshare1
                     .left_mask_share
@@ -423,7 +423,7 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let left_mask_share2 = GaloisRingTrimmedMaskCodeShare {
+            let left_mask_share2 = GaloisRingMaskCodeShare {
                 id: self.my_party_id + 1,
                 coefs: reshare2
                     .left_mask_share
@@ -467,7 +467,7 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let mut right_mask_share1 = GaloisRingTrimmedMaskCodeShare {
+            let mut right_mask_share1 = GaloisRingMaskCodeShare {
                 id: self.my_party_id + 1,
                 coefs: reshare1
                     .right_mask_share
@@ -489,7 +489,7 @@ impl IrisCodeReshareReceiverHelper {
                     // we checked this beforehand in check_valid
                     .expect("Invalid iris code share length"),
             };
-            let right_mask_share2 = GaloisRingTrimmedMaskCodeShare {
+            let right_mask_share2 = GaloisRingMaskCodeShare {
                 id: self.my_party_id + 1,
                 coefs: reshare2
                     .right_mask_share
@@ -560,9 +560,9 @@ pub struct RecombinedIrisCodeBatch {
     #[expect(unused)]
     range_end_exclusive: i64,
     left_iris_codes: Vec<GaloisRingIrisCodeShare>,
-    left_masks: Vec<GaloisRingTrimmedMaskCodeShare>,
+    left_masks: Vec<GaloisRingMaskCodeShare>,
     right_iris_codes: Vec<GaloisRingIrisCodeShare>,
-    right_masks: Vec<GaloisRingTrimmedMaskCodeShare>,
+    right_masks: Vec<GaloisRingMaskCodeShare>,
 }
 
 impl RecombinedIrisCodeBatch {

@@ -8,7 +8,7 @@ use aws_sdk_sqs::Client;
 use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
-    GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare, GaloisShares,
+    GaloisRingIrisCodeShare, GaloisRingMaskCodeShare, GaloisShares,
 };
 use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
@@ -869,7 +869,7 @@ impl<'a> BatchProcessor<'a> {
 
     fn create_dummy_shares(&self) -> ((GaloisShares, GaloisShares), bool) {
         let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(self.party_id);
-        let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(self.party_id);
+        let dummy_mask_share = GaloisRingMaskCodeShare::default_for_party(self.party_id);
 
         let dummy = GaloisShares {
             code: dummy_code_share.clone(),

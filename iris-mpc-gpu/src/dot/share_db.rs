@@ -680,14 +680,13 @@ impl ShareDB {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn dot_reduce_and_multiply(
+    pub fn dot_reduce(
         &mut self,
         query_sums: &CudaVec2DSlicerU32,
         db_sums: &CudaVec2DSlicerU32,
         chunk_sizes: &[usize],
         offset: usize,
         streams: &[CudaStream],
-        multiplier: u16,
     ) {
         for idx in 0..self.device_manager.device_count() {
             assert!(
@@ -718,7 +717,6 @@ impl ShareDB {
                             chunk_sizes[idx] as u64,
                             (chunk_sizes[idx] * self.query_length) as u64,
                             offset as u64,
-                            multiplier,
                             self.rngs[idx].0.cuda_slice().unwrap(),
                             self.rngs[idx].1.cuda_slice().unwrap(),
                         ),
@@ -726,17 +724,6 @@ impl ShareDB {
                     .unwrap();
             }
         }
-    }
-
-    pub fn dot_reduce(
-        &mut self,
-        query_sums: &CudaVec2DSlicerU32,
-        db_sums: &CudaVec2DSlicerU32,
-        chunk_sizes: &[usize],
-        offset: usize,
-        streams: &[CudaStream],
-    ) {
-        self.dot_reduce_and_multiply(query_sums, db_sums, chunk_sizes, offset, streams, 1);
     }
 
     fn single_xor_assign_u8(
@@ -914,7 +901,7 @@ mod tests {
     };
     use float_eq::assert_float_eq;
     use iris_mpc_common::{
-        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+        galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
         iris_db::db::IrisDB,
     };
     use itertools::Itertools;
@@ -1150,13 +1137,12 @@ mod tests {
                 .db
                 .iter()
                 .flat_map(|iris| {
-                    let mask: GaloisRingTrimmedMaskCodeShare =
-                        GaloisRingIrisCodeShare::encode_mask_code(
-                            &iris.mask,
-                            &mut StdRng::seed_from_u64(RNG_SEED),
-                        )[party_id]
-                            .clone()
-                            .into();
+                    let mask: GaloisRingMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                        &iris.mask,
+                        &mut StdRng::seed_from_u64(RNG_SEED),
+                    )[party_id]
+                        .clone()
+                        .into();
                     mask.coefs
                 })
                 .collect::<Vec<_>>();
@@ -1183,7 +1169,7 @@ mod tests {
                         &mut StdRng::seed_from_u64(RNG_SEED),
                     );
                     shares[party_id].preprocess_iris_code_query_share();
-                    let mask: GaloisRingTrimmedMaskCodeShare = shares[party_id].clone().into();
+                    let mask: GaloisRingMaskCodeShare = shares[party_id].clone().into();
                     mask.coefs
                 })
                 .collect::<Vec<_>>();
@@ -1255,13 +1241,12 @@ mod tests {
                 0,
                 &streams,
             );
-            masks_engine.dot_reduce_and_multiply(
+            masks_engine.dot_reduce(
                 &mask_query_sums,
                 &mask_db_slices.code_sums_gr,
                 &db_sizes,
                 0,
                 &streams,
-                2,
             );
 
             device_manager.await_streams(&streams);

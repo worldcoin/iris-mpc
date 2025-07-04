@@ -1,5 +1,5 @@
 use crate::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     helpers::{
         statistics::BucketStatistics,
         sync::{Modification, ModificationKey},
@@ -17,7 +17,7 @@ use std::{
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
     pub code: Vec<GaloisRingIrisCodeShare>,
-    pub mask: Vec<GaloisRingTrimmedMaskCodeShare>,
+    pub mask: Vec<GaloisRingMaskCodeShare>,
 }
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BatchMetadata {
@@ -29,9 +29,9 @@ pub struct BatchMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GaloisSharesBothSides {
     pub code_left: GaloisRingIrisCodeShare,
-    pub mask_left: GaloisRingTrimmedMaskCodeShare,
+    pub mask_left: GaloisRingMaskCodeShare,
     pub code_right: GaloisRingIrisCodeShare,
-    pub mask_right: GaloisRingTrimmedMaskCodeShare,
+    pub mask_right: GaloisRingMaskCodeShare,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use futures::{
 };
 use iris_mpc_common::{
     config::Config,
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     helpers::{
         smpc_request::{
             IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
@@ -342,9 +342,9 @@ DO UPDATE SET left_code = EXCLUDED.left_code, left_mask = EXCLUDED.left_mask, ri
         external_tx: Option<&mut Transaction<'_, Postgres>>,
         id: i64,
         left_iris_share: &GaloisRingIrisCodeShare,
-        left_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        left_mask_share: &GaloisRingMaskCodeShare,
         right_iris_share: &GaloisRingIrisCodeShare,
-        right_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        right_mask_share: &GaloisRingMaskCodeShare,
     ) -> Result<()> {
         let query = sqlx::query(
             r#"
@@ -678,7 +678,7 @@ WHERE id = $1;
             )[party_id]
                 .clone();
 
-            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+            let mask: GaloisRingMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
                 &iris.mask,
                 &mut StdRng::seed_from_u64(rng_seed),
             )[party_id]
@@ -737,6 +737,7 @@ pub mod tests {
             sync::ModificationStatus,
         },
         postgres::AccessMode,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
 
     // Max connections default to 100 for Postgres, but can't test at quite this level when running
@@ -852,10 +853,10 @@ pub mod tests {
         for i in 0..count {
             let iris = StoredIrisRef {
                 id: (i + 1) as i64,
-                left_code: &[123_u16; 12800],
-                left_mask: &[456_u16; 12800],
-                right_code: &[789_u16; 12800],
-                right_mask: &[101_u16; 12800],
+                left_code: &[123_u16; IRIS_CODE_LENGTH],
+                left_mask: &[456_u16; MASK_CODE_LENGTH],
+                right_code: &[789_u16; IRIS_CODE_LENGTH],
+                right_mask: &[101_u16; MASK_CODE_LENGTH],
             };
             codes_and_masks.push(iris);
         }
@@ -914,10 +915,10 @@ pub mod tests {
         for i in 0..10 {
             let iris = StoredIrisRef {
                 id: (i + 1) as i64,
-                left_code: &[123_u16; 12800],
-                left_mask: &[456_u16; 12800],
-                right_code: &[789_u16; 12800],
-                right_mask: &[101_u16; 12800],
+                left_code: &[123_u16; IRIS_CODE_LENGTH],
+                left_mask: &[456_u16; MASK_CODE_LENGTH],
+                right_code: &[789_u16; IRIS_CODE_LENGTH],
+                right_mask: &[101_u16; MASK_CODE_LENGTH],
             };
             irises.push(iris);
         }
@@ -946,10 +947,10 @@ pub mod tests {
         // insert two irises into db
         let iris1 = StoredIrisRef {
             id: 1,
-            left_code: &[123_u16; 12800],
-            left_mask: &[456_u16; 6400],
-            right_code: &[789_u16; 12800],
-            right_mask: &[101_u16; 6400],
+            left_code: &[123_u16; IRIS_CODE_LENGTH],
+            left_mask: &[456_u16; MASK_CODE_LENGTH],
+            right_code: &[789_u16; IRIS_CODE_LENGTH],
+            right_mask: &[101_u16; MASK_CODE_LENGTH],
         };
         let mut iris2 = iris1.clone();
         iris2.id = 2;
@@ -963,19 +964,19 @@ pub mod tests {
         // update iris with id 1 in db
         let updated_left_code = GaloisRingIrisCodeShare {
             id: 1,
-            coefs: [666_u16; 12800],
+            coefs: [666_u16; IRIS_CODE_LENGTH],
         };
-        let updated_left_mask = GaloisRingTrimmedMaskCodeShare {
+        let updated_left_mask = GaloisRingMaskCodeShare {
             id: 1,
-            coefs: [777_u16; 6400],
+            coefs: [777_u16; MASK_CODE_LENGTH],
         };
         let updated_right_code = GaloisRingIrisCodeShare {
             id: 1,
-            coefs: [888_u16; 12800],
+            coefs: [888_u16; IRIS_CODE_LENGTH],
         };
-        let updated_right_mask = GaloisRingTrimmedMaskCodeShare {
+        let updated_right_mask = GaloisRingMaskCodeShare {
             id: 1,
-            coefs: [999_u16; 6400],
+            coefs: [999_u16; MASK_CODE_LENGTH],
         };
         store
             .update_iris(

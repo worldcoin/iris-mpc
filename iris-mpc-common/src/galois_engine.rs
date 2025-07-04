@@ -46,7 +46,7 @@ pub mod degree4 {
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-    pub struct GaloisRingTrimmedMaskCodeShare {
+    pub struct GaloisRingMaskCodeShare {
         /// The 1-based ID of the Lagrange evaluation point. This id = party_id + 1.
         /// This field appears in serializations.
         pub id: usize,
@@ -54,31 +54,31 @@ pub mod degree4 {
         pub coefs: [u16; MASK_CODE_LENGTH],
     }
 
-    impl From<GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
+    impl From<GaloisRingIrisCodeShare> for GaloisRingMaskCodeShare {
         fn from(iris_share: GaloisRingIrisCodeShare) -> Self {
             let mut coefs = [0; MASK_CODE_LENGTH];
             coefs.copy_from_slice(&iris_share.coefs[..MASK_CODE_LENGTH]);
 
-            GaloisRingTrimmedMaskCodeShare {
+            GaloisRingMaskCodeShare {
                 id: iris_share.id,
                 coefs,
             }
         }
     }
 
-    impl From<&GaloisRingIrisCodeShare> for GaloisRingTrimmedMaskCodeShare {
+    impl From<&GaloisRingIrisCodeShare> for GaloisRingMaskCodeShare {
         fn from(iris_share: &GaloisRingIrisCodeShare) -> Self {
             let mut coefs = [0; MASK_CODE_LENGTH];
             coefs.copy_from_slice(&iris_share.coefs[..MASK_CODE_LENGTH]);
 
-            GaloisRingTrimmedMaskCodeShare {
+            GaloisRingMaskCodeShare {
                 id: iris_share.id,
                 coefs,
             }
         }
     }
 
-    impl GaloisRingTrimmedMaskCodeShare {
+    impl GaloisRingMaskCodeShare {
         /// Wrap a mask share. party_id is 0-based.
         #[inline(always)]
         pub fn new(coefs: [u16; MASK_CODE_LENGTH], party_id: usize) -> Self {
@@ -90,7 +90,7 @@ pub mod degree4 {
 
         /// Empty mask share. party_id is 0-based.
         pub fn default_for_party(party_id: usize) -> Self {
-            GaloisRingTrimmedMaskCodeShare {
+            GaloisRingMaskCodeShare {
                 id: party_id + 1,
                 coefs: [0u16; MASK_CODE_LENGTH],
             }
@@ -100,7 +100,7 @@ pub mod degree4 {
             preprocess_coefs(self.id, &mut self.coefs);
         }
 
-        pub fn all_rotations(&self) -> Vec<GaloisRingTrimmedMaskCodeShare> {
+        pub fn all_rotations(&self) -> Vec<GaloisRingMaskCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
             rotate_coefs_left(&mut reference.coefs, 16);
@@ -111,7 +111,7 @@ pub mod degree4 {
             result
         }
 
-        pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
+        pub fn trick_dot(&self, other: &GaloisRingMaskCodeShare) -> u16 {
             let mut sum = 0u16;
             for i in 0..MASK_CODE_LENGTH {
                 sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
@@ -405,26 +405,26 @@ pub mod degree4 {
         /// Iris code from a request.
         pub code: GaloisRingIrisCodeShare,
         /// Mask from the request.
-        pub mask: GaloisRingTrimmedMaskCodeShare,
+        pub mask: GaloisRingMaskCodeShare,
         /// Iris rotations (centered iris in the middle).
         pub code_rotated: Vec<GaloisRingIrisCodeShare>,
         /// Mask rotations (centered mask in the middle).
-        pub mask_rotated: Vec<GaloisRingTrimmedMaskCodeShare>,
+        pub mask_rotated: Vec<GaloisRingMaskCodeShare>,
         /// Iris rotations with Lagrange interpolations.
         pub code_interpolated: Vec<GaloisRingIrisCodeShare>,
         /// Mask rotations with Lagrange interpolations.
-        pub mask_interpolated: Vec<GaloisRingTrimmedMaskCodeShare>,
+        pub mask_interpolated: Vec<GaloisRingMaskCodeShare>,
         /// Iris mirrored with Lagrange interpolations.
         pub code_mirrored: Vec<GaloisRingIrisCodeShare>,
         /// Mask mirrored with Lagrange interpolations.
-        pub mask_mirrored: Vec<GaloisRingTrimmedMaskCodeShare>,
+        pub mask_mirrored: Vec<GaloisRingMaskCodeShare>,
     }
 
     pub fn preprocess_iris_message_shares(
         code_share: GaloisRingIrisCodeShare,
-        mask_share: GaloisRingTrimmedMaskCodeShare,
+        mask_share: GaloisRingMaskCodeShare,
         code_share_mirrored: GaloisRingIrisCodeShare,
-        mask_share_mirrored: GaloisRingTrimmedMaskCodeShare,
+        mask_share_mirrored: GaloisRingMaskCodeShare,
     ) -> Result<GaloisShares> {
         let mut code_share = code_share;
         let mut mask_share = mask_share;
@@ -439,7 +439,7 @@ pub mod degree4 {
 
         // With Lagrange interpolation.
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share);
-        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
+        GaloisRingMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share);
 
         // Mirrored share and mask.
         // Only interested in the Lagrange interpolated share and mask for the mirrored case.
@@ -448,7 +448,7 @@ pub mod degree4 {
 
         // With Lagrange interpolation.
         GaloisRingIrisCodeShare::preprocess_iris_code_query_share(&mut code_share_mirrored);
-        GaloisRingTrimmedMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
+        GaloisRingMaskCodeShare::preprocess_mask_code_query_share(&mut mask_share_mirrored);
 
         Ok(GaloisShares {
             code: store_iris_shares,
@@ -464,7 +464,7 @@ pub mod degree4 {
 
     pub struct FullGaloisRingIrisCodeShare {
         pub code: GaloisRingIrisCodeShare,
-        pub mask: GaloisRingTrimmedMaskCodeShare,
+        pub mask: GaloisRingMaskCodeShare,
     }
 
     impl FullGaloisRingIrisCodeShare {
@@ -495,9 +495,9 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::{
-            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
             iris_db::iris::IrisCodeArray,
-            MASK_CODE_LENGTH,
+            IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
         };
         use float_eq::assert_float_eq;
         use rand::{thread_rng, Rng};
@@ -577,7 +577,7 @@ pub mod degree4 {
             let t2_mask_shares_rotated = t2_mask_shares
                 .iter_mut()
                 .map(|share| {
-                    let trimmed: GaloisRingTrimmedMaskCodeShare = share.clone().into();
+                    let trimmed: GaloisRingMaskCodeShare = share.clone().into();
                     trimmed.all_rotations()
                 })
                 .collect::<Vec<_>>();
@@ -627,9 +627,9 @@ pub mod degree4 {
 
         fn calculate_distance(
             code_shares: &[GaloisRingIrisCodeShare],
-            mask_shares: &[GaloisRingTrimmedMaskCodeShare],
+            mask_shares: &[GaloisRingMaskCodeShare],
             query_code_shares: &[GaloisRingIrisCodeShare],
-            query_mask_shares: &[GaloisRingTrimmedMaskCodeShare],
+            query_mask_shares: &[GaloisRingMaskCodeShare],
         ) -> f64 {
             let mut query_code_shares_preprocessed = vec![];
             let mut query_mask_shares_preprocessed = vec![];
@@ -660,7 +660,6 @@ pub mod degree4 {
                             .wrapping_mul(query_mask_shares_preprocessed[i].coefs[j]),
                     );
                 }
-                dot_masks[i] = dot_masks[i].wrapping_mul(2);
             }
             let dot_masks = dot_masks.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
 
@@ -742,7 +741,7 @@ pub mod degree4 {
         #[test]
         fn check_remap() {
             let mut rng = thread_rng();
-            let index: usize = rng.gen_range(0..12800);
+            let index: usize = rng.gen_range(0..IRIS_CODE_LENGTH);
             assert_eq!(
                 GaloisRingIrisCodeShare::remap_old_to_new_index(
                     GaloisRingIrisCodeShare::remap_new_to_old_index(index)

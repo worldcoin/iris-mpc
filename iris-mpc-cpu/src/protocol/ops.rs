@@ -256,10 +256,7 @@ pub async fn galois_ring_pairwise_distance(
         let code_dist = x.code.trick_dot(&y.code);
         let mask_dist = x.mask.trick_dot(&y.mask);
         additive_shares.push(RingElement(code_dist));
-        // When applying the trick dot on trimmed masks, we have to multiply with 2 the
-        // result The intuition being that a GaloisRingTrimmedMask contains half
-        // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dist));
+        additive_shares.push(RingElement(mask_dist));
     }
     additive_shares
 }
