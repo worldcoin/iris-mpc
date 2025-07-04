@@ -2,7 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
     hnsw::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
@@ -95,9 +95,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let searcher = HnswSearcher { params };
 
     for idx in 0..database_size {
-        let raw_query = IrisCode::random_rng(&mut rng);
-        let query = Arc::new(raw_query.clone());
         let insertion_layer = searcher.select_layer_rng(&mut rng)?;
+        let iris_code = IrisCode::random_rng(&mut rng);
+        let query = Arc::new(IrisCodeWithSerialId {
+            iris_code,
+            serial_id: idx as u32 + 1,
+        });
         searcher
             .insert(&mut vector, &mut graph, &query, insertion_layer)
             .await?;

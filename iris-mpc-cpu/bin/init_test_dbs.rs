@@ -2,7 +2,7 @@ use clap::Parser;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
     hnsw::{
         graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
         HnswSearcher,
@@ -138,6 +138,9 @@ struct Args {
     /// are processed and persisted, without building the HNSW graph.
     #[clap(long, default_value = "false")]
     skip_hnsw_graph: bool,
+
+    #[clap(long, num_args = 1..)]
+    skip_insert_serial_ids: Vec<u32>,
 }
 
 impl Args {
@@ -294,12 +297,14 @@ async fn main() -> Result<()> {
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
             .take(2 * n_existing_irises);
-
         for (count, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
-
+            let raw_query: IrisCode = (&json_pt.unwrap()).into();
+            let serial_id = (count / 2 + 1) as u32; // serial_id starts at 1
             let side = count % 2;
-            let query = Arc::new(raw_query);
+            let query = Arc::new(IrisCodeWithSerialId {
+                iris_code: raw_query,
+                serial_id,
+            });
             vectors[side].insert(&query).await;
         }
     }
@@ -309,8 +314,8 @@ async fn main() -> Result<()> {
         args.path_to_iris_codes
     );
 
-    let (tx_l, rx_l) = mpsc::channel::<IrisCode>(256);
-    let (tx_r, rx_r) = mpsc::channel::<IrisCode>(256);
+    let (tx_l, rx_l) = mpsc::channel::<IrisCodeWithSerialId>(256);
+    let (tx_r, rx_r) = mpsc::channel::<IrisCodeWithSerialId>(256);
     let processors = [tx_l, tx_r];
     let receivers = [rx_l, rx_r];
     let mut jobs: JoinSet<Result<_>> = JoinSet::new();
@@ -324,9 +329,13 @@ async fn main() -> Result<()> {
             .into_iter::<Base64IrisCode>()
             .skip(2 * n_existing_irises);
         let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
-
         for (idx, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
+            let iris_code_query = (&json_pt.unwrap()).into();
+            let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;
+            let raw_query = IrisCodeWithSerialId {
+                iris_code: iris_code_query,
+                serial_id,
+            };
 
             let side = idx % 2;
             processors[side].blocking_send(raw_query).unwrap();
@@ -342,12 +351,20 @@ async fn main() -> Result<()> {
     ) {
         let params = params.clone();
         let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
+        let skip_serial_ids = args.skip_insert_serial_ids.clone();
 
         jobs.spawn(async move {
             let searcher = HnswSearcher { params };
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
+                if skip_serial_ids.contains(&raw_query.serial_id) {
+                    info!(
+                        "Skipping insertion of serial id {} for {} side",
+                        raw_query.serial_id, side
+                    );
+                    continue;
+                }
                 let query = Arc::new(raw_query);
 
                 let inserted_id = vector_store.insert(&query).await;
