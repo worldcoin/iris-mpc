@@ -605,7 +605,7 @@ mod tests {
         let mut graph_ops = tx.with_graph(StoreId::Left);
 
         // Insert links for each vector, using the same pattern as test_db
-        for i in 1..4 {
+        for i in 1..5 {
             let mut links = SortedNeighborhood::new();
             for j in 0..5 {
                 if i != j {
@@ -622,8 +622,8 @@ mod tests {
 
         let max_id = graph_ops.get_max_serial_id().await?;
         // serial_id is stored as u32, but we inserted 5 vectors, so largest should be >= 4
-        assert!(max_id >= 4);
-
+        assert!(max_id >= 5);
+        tx.tx.commit().await?;
         graph.cleanup().await?;
         Ok(())
     }
