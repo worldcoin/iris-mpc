@@ -145,9 +145,6 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "genesis"
-
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
