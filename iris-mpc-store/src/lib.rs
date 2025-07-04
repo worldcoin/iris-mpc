@@ -539,6 +539,7 @@ WHERE id = $1;
             r#"
             SELECT MAX(id) FROM modifications
             WHERE persisted = true
+                AND request_type = ANY($2)
                 AND status = 'COMPLETED'
             "#,
         )

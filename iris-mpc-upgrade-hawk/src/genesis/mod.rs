@@ -93,7 +93,11 @@ struct ExecutionContextInfo {
     modifications: Vec<Modification>,
 
     // Maximum modification id to be performed
-    max_modification_id: i64,
+    max_modification_indexed_id: i64,
+
+    // The largest modification id that has been completed and persisted by the source version.
+    // Used to track up to which modification the next run of Genesis can start from
+    max_modification_persist_id: i64,
 }
 
 /// Constructor.
@@ -104,7 +108,8 @@ impl ExecutionContextInfo {
         last_indexed_id: IrisSerialId,
         excluded_serial_ids: Vec<IrisSerialId>,
         modifications: Vec<Modification>,
-        max_modification_id: i64,
+        max_modification_indexed_id: i64,
+        max_modification_persist_id: i64,
     ) -> Self {
         Self {
             args: args.clone(),
@@ -112,7 +117,8 @@ impl ExecutionContextInfo {
             excluded_serial_ids,
             last_indexed_id,
             modifications,
-            max_modification_id,
+            max_modification_indexed_id,
+            max_modification_persist_id,
         }
     }
 }
@@ -138,6 +144,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         imem_iris_stores,
         mut hawk_handle,
         tx_results,
+        graph_store,
     ) = exec_setup(&args, &config).await?;
     log_info(String::from("Setup complete."));
 
@@ -148,6 +155,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         hawk_handle = exec_delta(
             &config,
             &ctx,
+            graph_store,
             hawk_handle,
             &tx_results,
             &mut task_monitor_bg,
@@ -198,6 +206,7 @@ async fn exec_setup(
     Arc<BothEyes<SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
+    Arc<GraphPg<Aby3Store>>,
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
@@ -214,9 +223,10 @@ async fn exec_setup(
         (iris_store, (hnsw_iris_store, graph_store)),
     ) = get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
+    let graph_store_arc = Arc::new(graph_store);
 
     // Set serial identifier of last indexed Iris.
-    let last_indexed_id = get_last_indexed_iris_id(&graph_store).await?;
+    let last_indexed_id = get_last_indexed_iris_id(graph_store_arc.clone()).await?;
     log_info(format!(
         "Identifier of last Iris to have been indexed = {}",
         last_indexed_id,
@@ -236,18 +246,20 @@ async fn exec_setup(
     ));
 
     // Set modifications that have occurred since last indexation.
-    let last_indexed_modification_id = get_last_indexed_modification_id(&graph_store).await?;
+    let last_indexed_modification_id =
+        get_last_indexed_modification_id(graph_store_arc.clone()).await?;
     log_info(format!(
         "Identifier of last modification to have been indexed = {}",
         last_indexed_modification_id,
     ));
-    let (modifications, max_completed_modification_id) =
+    // This is the largest modification id that has been completed by the node.
+    let (modifications, max_modification_id_to_persist) =
         get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
     let max_modification_id = modifications.last().map_or(0, |m| m.id);
     log_info(format!(
         "Modifications to be applied count = {}. Max modification id completed = {}, Max modification to be performed = {}",
         modifications.len(),
-        max_completed_modification_id,
+        max_modification_id_to_persist,
         max_modification_id,
     ));
 
@@ -259,7 +271,7 @@ async fn exec_setup(
         last_indexed_id,
         args.max_indexation_id,
         max_modification_id,
-        max_completed_modification_id,
+        max_modification_id_to_persist,
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
@@ -303,7 +315,7 @@ async fn exec_setup(
     init_graph_from_stores(
         config,
         &iris_store,
-        &graph_store,
+        graph_store_arc.clone(),
         &mut hawk_actor,
         Arc::clone(&shutdown_handler),
     )
@@ -334,18 +346,11 @@ async fn exec_setup(
     let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
     log_info(String::from("Hawk handle initialised"));
 
-    if modifications.is_empty() {
-        log_info(String::from("No modifications to apply. Therefore setting the last modification id as the largest completed modification id."));
-        let mut graph_tx = graph_store.tx().await?;
-        set_last_indexed_modification_id(&mut graph_tx.tx, max_completed_modification_id).await?;
-        graph_tx.tx.commit().await?;
-    }
-
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
         Arc::clone(&imem_iris_stores),
         hnsw_iris_store,
-        graph_store,
+        graph_store_arc.clone(),
         &mut task_monitor_bg,
         &shutdown_handler,
     )
@@ -360,6 +365,7 @@ async fn exec_setup(
             excluded_serial_ids,
             modifications,
             max_modification_id,
+            max_modification_id_to_persist,
         ),
         shutdown_handler,
         task_monitor_bg,
@@ -367,6 +373,7 @@ async fn exec_setup(
         imem_iris_stores,
         hawk_handle,
         tx_results,
+        graph_store_arc,
     ))
 }
 
@@ -384,6 +391,7 @@ async fn exec_setup(
 async fn exec_delta(
     config: &Config,
     ctx: &ExecutionContextInfo,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     task_monitor_bg: &mut TaskMonitor,
@@ -391,7 +399,8 @@ async fn exec_delta(
 ) -> Result<GenesisHawkHandle> {
     let ExecutionContextInfo {
         modifications,
-        max_modification_id,
+        max_modification_indexed_id,
+        max_modification_persist_id,
         ..
     } = ctx;
 
@@ -399,11 +408,11 @@ async fn exec_delta(
         log_info(format!(
             "Applying modifications: count={} :: max-id={}",
             modifications.len(),
-            max_modification_id
+            max_modification_indexed_id
         ));
 
         metrics::gauge!("genesis_number_modifications").set(modifications.len() as f64);
-        metrics::gauge!("genesis_max_modification_id").set(*max_modification_id as f64);
+        metrics::gauge!("genesis_max_modification_id").set(*max_modification_indexed_id as f64);
 
         let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
 
@@ -443,6 +452,12 @@ async fn exec_delta(
             ));
             shutdown_handler.wait_for_pending_batches_completion().await;
             log_info(String::from("All delta modifications have been processed"));
+
+            log_info(format!( "Setting last indexed modification id to the largest completed and persisted modification id = {}", max_modification_persist_id));
+            let mut graph_tx = graph_store.tx().await?;
+            set_last_indexed_modification_id(&mut graph_tx.tx, *max_modification_persist_id)
+                .await?;
+            graph_tx.tx.commit().await?;
 
             Ok(hawk_handle)
         }
@@ -820,13 +835,14 @@ async fn get_service_clients(
 async fn get_results_thread(
     imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
-    graph_store: GraphPg<Aby3Store>,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(32); // TODO: pick some buffer value
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
+    let graph_store_bg = Arc::clone(&graph_store);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
             match result {
@@ -912,7 +928,7 @@ async fn get_results_thread(
                         .get_vector(&vector_id_to_persist)
                         .await;
 
-                    let mut graph_tx = graph_store.tx().await?;
+                    let mut graph_tx = graph_store_bg.tx().await?;
                     let iris_data =StoredIrisRef {
                                     id: vector_id_to_persist.serial_id() as i64,
                                     left_code: &left_iris.code.coefs,
@@ -1005,7 +1021,7 @@ async fn get_sync_result(
 async fn init_graph_from_stores(
     config: &Config,
     iris_store: &IrisStore,
-    graph_store: &GraphPg<Aby3Store>,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     hawk_actor: &mut HawkActor,
     shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
@@ -1049,7 +1065,7 @@ async fn init_graph_from_stores(
     .expect("Failed to load DB");
 
     graph_loader
-        .load_graph_store(graph_store, graph_db_parallelism)
+        .load_graph_store(&graph_store, graph_db_parallelism)
         .await?;
 
     Ok(())
