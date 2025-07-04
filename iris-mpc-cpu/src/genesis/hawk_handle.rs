@@ -7,7 +7,7 @@ use crate::execution::hawk_main::{
     HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
     STORE_IDS,
 };
-use eyre::{bail, eyre, OptionExt, Result};
+use eyre::{eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
 use itertools::{izip, Itertools};
 use std::{future::Future, time::Instant};
@@ -108,6 +108,7 @@ impl Handle {
                 batch_id,
                 vector_ids,
                 queries,
+                vector_ids_to_persist,
             } => {
                 Self::log_info(format!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
@@ -199,6 +200,7 @@ impl Handle {
                     batch_id,
                     vector_ids,
                     HawkMutation(mutations),
+                    vector_ids_to_persist,
                 ))
             }
             JobRequest::Modification { modification } => {
@@ -216,42 +218,48 @@ impl Handle {
                         async move {
                             let vector_id_ = vector.get_vector_id(serial_id).await;
 
-                            let session = sessions
-                                .first()
-                                .ok_or_eyre("Sessions for side are empty")?;
+                            let session =
+                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
 
                             match modification.request_type.as_str() {
-                                smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
-                                    let vector_id = vector_id_.ok_or_eyre("Expected vector serial id of update is missing from store")?;
+                                smpc_request::RESET_UPDATE_MESSAGE_TYPE
+                                | smpc_request::REAUTH_MESSAGE_TYPE => {
+                                    let vector_id = vector_id_.ok_or_eyre(
+                                        "Expected vector serial id of update is missing from store",
+                                    )?;
                                     let identifier = (vector_id, side);
 
                                     // TODO remove any prior versions of this vector id from graph
 
                                     let query = vector.get_query(&vector_id).await;
                                     let insert_plan = search_single_query_no_match_count(
-                                                session.clone(), query, &searcher, &identifier
-                                        )
-                                        .await?;
+                                        session.clone(),
+                                        query,
+                                        &searcher,
+                                        &identifier,
+                                    )
+                                    .await?;
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
-                                    let connect_plan = insert(session, &searcher, plans, &ids).await?;
+                                    let connect_plan =
+                                        insert(session, &searcher, plans, &ids).await?;
 
-                                    Ok(connect_plan)
-                                },
+                                    Ok((connect_plan, vector_id))
+                                }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
                                     let msg = Self::log_error(format!(
                                         "HawkActor does not support deletion of identities: modification: {:?}",
                                         modification
                                     ));
-                                    bail!(msg);
-                                },
+                                    Err(eyre!(msg))
+                                }
                                 _ => {
                                     let msg = Self::log_error(format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
                                     ));
-                                    bail!(msg);
+                                    Err(eyre!(msg))
                                 }
                             }
                         }
@@ -261,8 +269,15 @@ impl Handle {
                 let results: [_; 2] = results_.try_into().unwrap();
 
                 // Convert the results into SingleHawkMutation format
-                let [left_plans, right_plans] = results;
-                assert_eq!(left_plans.len(), right_plans.len());
+                let [left_plans_and_vector, right_plans_and_vector] = results;
+                let left_plans = left_plans_and_vector.0;
+                let right_plans = right_plans_and_vector.0;
+                let left_vector = left_plans_and_vector.1;
+                let right_vector = right_plans_and_vector.1;
+
+                assert_eq!(left_vector.version_id(), right_vector.version_id());
+                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
+
                 let mut mutations = Vec::new();
 
                 for (left_plan, right_plan) in izip!(left_plans, right_plans) {
@@ -273,10 +288,13 @@ impl Handle {
                         request_index: None,
                     });
                 }
+                metrics::histogram!("genesis_modification_duration")
+                    .record(now.elapsed().as_secs_f64());
 
                 Ok(JobResult::new_modification_result(
                     modification.id,
                     HawkMutation(mutations),
+                    left_vector,
                 ))
             }
         }
@@ -286,7 +304,6 @@ impl Handle {
     fn log_error(msg: String) -> String {
         utils::log_error(COMPONENT, msg)
     }
-
     // Helper: component logging.
     fn log_info(msg: String) -> String {
         utils::log_info(COMPONENT, msg)
