@@ -148,7 +148,7 @@ pub async fn get_last_indexed_iris_id(
 ///
 /// # Arguments
 ///
-/// * `graph_store` - Graph PostgreSQL store provider.
+/// * `graph_store` -Arc of Graph PostgreSQL store provider.
 ///
 /// # Returns
 ///

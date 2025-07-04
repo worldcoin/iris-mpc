@@ -24,7 +24,7 @@ pub struct Config {
     pub max_modification_id: i64,
 
     // Identifier of the max completed modification the node has seen
-    pub max_completed_modification_id: i64,
+    pub max_modification_persisted_id: i64,
 }
 
 /// Constructor.
@@ -36,7 +36,7 @@ impl Config {
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
         max_modification_id: i64,
-        max_completed_modification_id: i64,
+        max_modification_persisted_id: i64,
     ) -> Self {
         Self {
             batch_size,
@@ -45,7 +45,7 @@ impl Config {
             last_indexed_id,
             max_indexation_id,
             max_modification_id,
-            max_completed_modification_id,
+            max_modification_persisted_id,
         }
     }
 }
