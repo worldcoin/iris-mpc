@@ -40,6 +40,9 @@ pub struct Config {
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
 
     #[serde(default)]
+    pub tls: Option<TlsConfig>,
+
+    #[serde(default)]
     pub service: Option<ServiceConfig>,
 
     #[serde(default)]
@@ -477,6 +480,22 @@ pub struct MetricsConfig {
     pub prefix: String,
 }
 
+// #[clap(flatten)] makes arguments required. this is problematic
+// when the flattened struct is wrapped in an option. to allow the
+// absence of these fields to make the arg None, each field needs
+// 'required = false'
+#[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
+#[group(requires_all = ["server_key", "server_cert", "root_cert"])]
+pub struct TlsConfig {
+    #[arg(required = false)]
+    pub server_key: String,
+    #[arg(required = false)]
+    pub server_cert: String,
+    // used by the client to make them trust the server cert
+    #[arg(required = false)]
+    pub root_cert: String,
+}
+
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -550,6 +569,7 @@ impl From<Config> for CommonConfig {
             requests_queue_url: _, // requests queue url is different for each server
             results_topic_arn,
             kms_key_arns: _, // kms key arns are different for each server
+            tls: _,
             service: _,
             database: _,     // database is different for each server
             cpu_database: _, // cpu database is different for each server
