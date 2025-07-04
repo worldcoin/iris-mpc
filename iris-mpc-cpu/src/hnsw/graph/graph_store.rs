@@ -287,6 +287,20 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         }
     }
 
+    pub async fn get_max_serial_id(&mut self) -> Result<i64> {
+        let table = self.links_table();
+        let row = sqlx::query(&format!(
+            "SELECT MAX(serial_id) as max_serial_id FROM {table} WHERE graph_id = $1"
+        ))
+        .bind(self.graph_id())
+        .fetch_one(self.tx())
+        .await
+        .map_err(|e| eyre!("Failed to fetch largest serial id: {e}"))?;
+
+        let max_serial_id: Option<i64> = row.try_get("max_serial_id").ok();
+        Ok(max_serial_id.unwrap_or(0))
+    }
+
     pub async fn set_links(
         &mut self,
         base: V::VectorRef,
@@ -549,6 +563,70 @@ mod tests {
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
     use tokio;
+
+    #[tokio::test]
+    async fn test_get_max_serial_id_empty() -> Result<()> {
+        // Use the same pattern as other tests for setup/cleanup
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let mut tx = graph.tx().await?;
+        let mut graph_ops = tx.with_graph(StoreId::Left);
+        let max_id = graph_ops.get_max_serial_id().await?;
+        assert_eq!(max_id, 0);
+        tx.tx.commit().await?;
+        graph.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_largest_inserted_id_nonempty() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let mut vector_store = PlaintextStore::new();
+        let rng = &mut AesRng::seed_from_u64(42_u64);
+
+        let vectors = {
+            let mut v = vec![];
+            for raw_query in IrisDB::new_random_rng(5, rng).db {
+                let q = Arc::new(raw_query);
+                v.push(vector_store.insert(&q).await);
+            }
+            v
+        };
+
+        let distances = {
+            let mut d = vec![];
+            let q = vector_store.points[0].clone();
+            for v in vectors.iter() {
+                d.push(vector_store.eval_distance(&q, v).await?);
+            }
+            d
+        };
+
+        let mut tx = graph.tx().await?;
+        let mut graph_ops = tx.with_graph(StoreId::Left);
+
+        // Insert links for each vector, using the same pattern as test_db
+        for i in 1..5 {
+            let mut links = SortedNeighborhood::new();
+            for j in 0..5 {
+                if i != j {
+                    links
+                        .insert(&mut vector_store, vectors[j], distances[j])
+                        .await?;
+                }
+            }
+            let links = links.edge_ids();
+            graph_ops.set_links(vectors[i], links.clone(), 0).await?;
+            let links2 = graph_ops.get_links(&vectors[i], 0).await?;
+            assert_eq!(*links, *links2);
+        }
+
+        let max_id = graph_ops.get_max_serial_id().await?;
+        // serial_id is stored as u32, but we inserted 5 vectors, so largest should be >= 4
+        assert!(max_id >= 5);
+        tx.tx.commit().await?;
+        graph.cleanup().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_db() -> Result<()> {
