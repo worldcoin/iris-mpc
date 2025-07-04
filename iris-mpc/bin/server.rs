@@ -1306,6 +1306,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
+            config.full_scan_side_switching_enabled,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
@@ -1741,8 +1742,8 @@ async fn server_main(config: Config) -> Result<()> {
             tx.commit().await?;
 
             for memory_serial_id in memory_serial_ids {
-                tracing::info!("Inserted serial_id: {}", memory_serial_id);
-                metrics::gauge!("results_inserted.latest_serial_id").set(memory_serial_id as f64);
+                tracing::info!("Inserted serial_id: {}", memory_serial_id+1);
+                metrics::gauge!("results_inserted.latest_serial_id").set((memory_serial_id +1) as f64);
             }
 
             tracing::info!("Sending {} uniqueness results", uniqueness_results.len());

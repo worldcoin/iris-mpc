@@ -133,8 +133,8 @@ pub struct HawkActor {
     role_assignments: Arc<HashMap<Role, Identity>>,
 
     // ---- My state ----
-    // TODO: Persistence.
-    db_size: usize,
+    /// A size used by the startup loader.
+    loader_db_size: usize,
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
@@ -355,7 +355,7 @@ impl HawkActor {
             args: args.clone(),
             searcher,
             prf_key: None,
-            db_size: 0,
+            loader_db_size: 0,
             iris_store,
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
@@ -376,6 +376,10 @@ impl HawkActor {
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
+    }
+
+    pub async fn db_size(&self) -> usize {
+        self.iris_store[LEFT].read().await.db_size()
     }
 
     /// Initialize the shared PRF key for HNSW graph insertion layer selection.
@@ -594,7 +598,7 @@ impl HawkActor {
         (
             IrisLoader {
                 party_id: self.party_id,
-                db_size: &mut self.db_size,
+                db_size: &mut self.loader_db_size,
                 irises: [
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
@@ -1369,7 +1373,7 @@ impl HawkHandle {
         );
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
-        metrics::gauge!("db_size").set(hawk_actor.db_size as f64);
+        metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
         let query_count = results.batch.request_ids.len();
         metrics::gauge!("search_queries_left").set(query_count as f64);
         metrics::gauge!("search_queries_right").set(query_count as f64);
@@ -1528,6 +1532,9 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     let hawk_actor = HawkActor::from_cli(&args).await?;
     HawkHandle::new(hawk_actor).await
 }
+
+#[cfg(test)]
+pub mod test_utils;
 
 #[cfg(test)]
 mod tests {
@@ -1720,11 +1727,10 @@ mod tests {
 
     /// Prepare shares in the same format as `receive_batch()`.
     fn receive_batch_shares(
-        shares: Vec<GaloisRingSharedIris>,
-        mirrored_shares: Vec<GaloisRingSharedIris>,
+        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
     ) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for (share, mirrored_share) in izip!(shares, mirrored_shares) {
+        for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
             let one = preprocess_iris_message_shares(
                 share.code,
                 share.mask,
@@ -1745,38 +1751,16 @@ mod tests {
     }
 
     // Prepare a batch for a particular party, setting their shares.
-    fn batch_of_party(
+    pub fn batch_of_party(
         batch: &BatchQuery,
-        shares: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
     ) -> BatchQuery {
         // TODO: different test irises for each eye.
-        let shares_right_cloned = shares.to_vec();
-        let shares_left_cloned = shares.to_vec();
-
-        let shares_right = shares_right_cloned
-            .clone()
-            .into_iter()
-            .map(|(share, _)| share)
-            .collect();
-        let shares_right_mirrored = shares_right_cloned
-            .into_iter()
-            .map(|(_, share)| share)
-            .collect();
-
-        let shares_left = shares_left_cloned
-            .clone()
-            .into_iter()
-            .map(|(share, _)| share)
-            .collect();
-        let shares_left_mirrored = shares_left_cloned
-            .into_iter()
-            .map(|(_, share)| share)
-            .collect();
 
         let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_right, shares_right_mirrored);
+            receive_batch_shares(shares_with_mirror);
         let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_left, shares_left_mirrored);
+            receive_batch_shares(shares_with_mirror);
 
         BatchQuery {
             // Iris shares.
