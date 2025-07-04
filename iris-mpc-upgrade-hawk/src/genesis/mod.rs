@@ -9,7 +9,10 @@ use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config},
-    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
+    helpers::{
+        shutdown_handler::ShutdownHandler, smpc_request, sync::Modification,
+        task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -422,6 +425,20 @@ async fn exec_delta(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
             ));
+            if modification.request_type == smpc_request::IDENTITY_DELETION_MESSAGE_TYPE {
+                if ctx.config.environment != "prod" {
+                    log_info(format!(
+                        "Modification is a deletion: serial_id={:?} and it is not production therefore skipping",
+                        modification.serial_id
+                    ));
+                    continue;
+                }else {
+                    bail!(eyre!(
+                        "Modification is a deletion: serial_id={:?} and it is production therefore bailing",
+                        modification.serial_id
+                    ));
+                }
+            }
 
             // Submit modification to Hawk handle for processing.
             let request = JobRequest::new_modification(modification.clone());
