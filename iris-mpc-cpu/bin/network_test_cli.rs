@@ -43,17 +43,23 @@ struct ClientArgs {
 
     /// MB/s to start the test at
     #[arg(short, long)]
-    throughput_start: Option<usize>,
+    throughput_start: Option<u64>,
 
     /// if set, the throughput will be incremented by X MB every step. otherwise it doubles.
     #[arg(short, long)]
-    increment: Option<usize>,
+    increment: Option<u64>,
+
+    /// send (<throughput> / sends_per_sec) every (1000ms / sends_per_sec)
+    /// defaults to 10
+    #[arg(long)]
+    sends_per_sec: Option<u64>,
 }
 
 #[derive(Clone)]
 struct ClientCmd {
     duration_sec: u64,
-    throughput: usize,
+    throughput: u64,
+    sends_per_sec: u64,
 }
 
 #[derive(Default)]
@@ -164,11 +170,13 @@ async fn run_client(args: ClientArgs) -> Result<()> {
     let mut mb_sec = args.throughput_start.unwrap_or(10);
     let step_sec = args.step_sec.unwrap_or(3);
     let num_steps = args.num_steps.unwrap_or(10);
+    let sends_per_sec = args.sends_per_sec.unwrap_or(10);
 
     for idx in 0..num_steps {
         let cmd = ClientCmd {
             duration_sec: step_sec,
             throughput: mb_sec,
+            sends_per_sec,
         };
         for ch in &cmd_ch {
             ch.send(cmd.clone())?;
@@ -204,17 +212,16 @@ async fn client_task(
 ) -> Result<()> {
     let fd = stream.as_raw_fd();
     while let Some(cmd) = cmd_rx.recv().await {
-        // MB/s to B/s, divided over MS_PER_SEC/TICK_MS intervals
-        // tried sending every 10ms but it used up all the ram and swap, even when data size was adjusted appropriately.
-        const TICK_MS: u64 = 100;
-        let mut data = vec![0_u8; (cmd.throughput * 1_000_000 / 10) + 4]; // +4 for the length
+        let tick_ms: u64 = 1_000 / cmd.sends_per_sec;
+        let mut data =
+            vec![0_u8; (cmd.throughput as usize * 1_000_000 / cmd.sends_per_sec as usize) + 4]; // +4 for the length
         let len = data.len() - 4;
         data[..4].copy_from_slice(&(len as u32).to_le_bytes());
 
         // want to only show metrics per step, not since the socket was open
         let s_ti = get_tcp_info(fd)?;
 
-        let mut snd_ticker = interval(Duration::from_millis(TICK_MS));
+        let mut snd_ticker = interval(Duration::from_millis(tick_ms));
 
         // warm up - want to sample socket statistics when sending is already in progress
         for _ in 0..6 {
@@ -224,7 +231,7 @@ async fn client_task(
 
         let mut samples = 0;
         let mut delivery_rate_sum = 0;
-        for _ in 0..(cmd.duration_sec * 1000) / TICK_MS {
+        for _ in 0..(cmd.duration_sec * 1000) / tick_ms {
             snd_ticker.tick().await;
 
             let tcp_info = get_tcp_info(fd)?;
