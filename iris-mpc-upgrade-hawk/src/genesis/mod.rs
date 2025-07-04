@@ -236,7 +236,7 @@ async fn exec_setup(
     validate_consistency_of_stores(
         config,
         &iris_store,
-        &graph_store,
+        graph_store_arc.clone(),
         args.max_indexation_id,
         last_indexed_id,
     )
@@ -1138,7 +1138,7 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    graph_store: &GraphPg<Aby3Store>,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
 ) -> Result<()> {
