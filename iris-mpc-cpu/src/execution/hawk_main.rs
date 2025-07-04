@@ -138,7 +138,7 @@ pub struct HawkActor {
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
-    distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
+    distances_cache: BothEyes<Vec<((u32, u32), Vec<DistanceShare<u32>>)>>,
 
     // ---- My network setup ----
     networking: TcpNetworkHandle,
@@ -538,25 +538,34 @@ impl HawkActor {
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
-        let distances = search_results
-            .iter() // All requests.
-            .flat_map(|rots| rots.iter()) // All rotations.
-            .flat_map(|plan| {
-                plan.links.first().into_iter().flat_map(move |neighbors| {
-                    neighbors
-                        .iter()
-                        .take(plan.match_count)
-                        .map(|(_, distance)| distance.clone())
-                })
+        let mut distances_with_ids: Vec<((u32, u32), Vec<DistanceShare<u32>>)> = vec![];
+        let _ = search_results
+            .iter() // iterator over &VecRots<_>
+            .enumerate() // (index, &VecRots<_>)
+            .map(|(query_idx, v)| (query_idx, v.clone()))
+            .enumerate()
+            .map(|(rotations_idx, (query_idx, insert_plan))| {
+                let _ = insert_plan.iter().enumerate().map(|(rotation_index, insert_plan)| {
+                    let helper = insert_plan.links.first();
+
+                    let distances_for_a_rotation: Vec<DistanceShare<u32>> = helper.into_iter().flat_map(|neighbors| {
+                        neighbors
+                            .iter()
+                            .take(insert_plan.match_count)
+                            .map(move |(_, distance)| distance.clone())
+                    }).collect();
+                    distances_with_ids.push(((query_idx as u32, rotation_index as u32), distances_for_a_rotation));
+                });
             });
+
         tracing::info!(
-            "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
-            distances.clone().count(),
+            "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
+            // distances.clone().count(),
             search_results.len(),
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances);
+        self.distances_cache[side].extend(distances_with_ids);
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
@@ -566,7 +575,7 @@ impl HawkActor {
             translated_thresholds.as_slice(),
             self.distances_cache[side].as_slice(),
         )
-        .await?;
+            .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
         Ok(buckets)
