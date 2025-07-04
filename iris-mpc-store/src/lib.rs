@@ -545,7 +545,6 @@ WHERE id = $1;
         )
         .bind(after_modification_id)
         .bind(message_types)
-        .bind(serial_id_less_than as i64)
         .fetch_one(&mut *tx)
         .await?;
 
