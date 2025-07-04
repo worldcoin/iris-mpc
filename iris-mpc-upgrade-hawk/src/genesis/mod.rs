@@ -149,21 +149,18 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from("Setup complete."));
 
     // Phase 1: apply delta.
-    if ctx.modifications.is_empty() {
-        log_info(String::from("Delta skipped ... no modifications to apply."));
-    } else {
-        hawk_handle = exec_delta(
-            &config,
-            &ctx,
-            graph_store,
-            hawk_handle,
-            &tx_results,
-            &mut task_monitor_bg,
-            &shutdown_handler,
-        )
-        .await?;
-        log_info(String::from("Delta complete."));
-    }
+
+    hawk_handle = exec_delta(
+        &config,
+        &ctx,
+        graph_store,
+        hawk_handle,
+        &tx_results,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+    )
+    .await?;
+    log_info(String::from("Delta complete."));
 
     // Phase 2: indexation.
     exec_indexation(
@@ -405,6 +402,10 @@ async fn exec_delta(
     } = ctx;
 
     let res: Result<()> = async {
+        if modifications.is_empty() {
+            log_info(String::from("Delta has no modifications to apply."));
+            return Ok(());
+        }
         log_info(format!(
             "Applying modifications: count={} :: max-id={}",
             modifications.len(),
