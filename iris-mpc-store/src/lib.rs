@@ -500,12 +500,13 @@ WHERE id = $1;
         &self,
         after_modification_id: i64,
         serial_id_less_than: u32,
-    ) -> Result<Vec<Modification>> {
+    ) -> Result<(Vec<Modification>, Option<i64>)> {
         let message_types = &[
             RESET_UPDATE_MESSAGE_TYPE,
             REAUTH_MESSAGE_TYPE,
             IDENTITY_DELETION_MESSAGE_TYPE,
         ];
+        let mut tx = self.pool.begin().await?;
 
         let rows = sqlx::query_as::<_, StoredModification>(
             r#"
@@ -522,6 +523,7 @@ WHERE id = $1;
             WHERE id > $1
               AND request_type = ANY($2)
               AND persisted = true
+              AND status = 'COMPLETED'
               AND serial_id <= $3
             ORDER BY id ASC
             "#,
@@ -529,11 +531,25 @@ WHERE id = $1;
         .bind(after_modification_id)
         .bind(message_types)
         .bind(serial_id_less_than as i64)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        // Fetch the max id from modifications that are persisted and completed.
+        let max_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT MAX(id) FROM modifications
+            WHERE persisted = true
+                AND request_type = ANY($2)
+                AND status = 'COMPLETED'
+            "#,
+        )
+        .bind(after_modification_id)
+        .bind(message_types)
+        .fetch_one(&mut *tx)
         .await?;
 
         let modifications = rows.into_iter().map(Into::into).collect();
-        Ok(modifications)
+        Ok((modifications, max_id))
     }
 
     /// Update the status, persisted flag, and result_message_body of the
@@ -1388,12 +1404,13 @@ pub mod tests {
         tx.commit().await?;
 
         // Test 1: Get all modifications with ID > 0 (should return only the 3 persisted ones with valid request types)
-        let modifications = store.get_persisted_modifications_after_id(0, 106).await?;
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(0, 106).await?;
         assert_eq!(
             modifications.len(),
             3,
             "Should return 3 persisted modifications"
         );
+        assert_eq!(max_id, Some(4), "Max ID should be 4");
 
         // Check the specific request types are correct
         let request_types: Vec<&str> = modifications
@@ -1414,12 +1431,13 @@ pub mod tests {
         );
 
         // Test 2: Get persisted modifications with ID > 2 (should exclude the first two)
-        let modifications = store.get_persisted_modifications_after_id(2, 106).await?;
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(2, 106).await?;
         assert_eq!(
             modifications.len(),
             1,
             "Should return 1 persisted modification"
         );
+        assert_eq!(max_id, Some(4), "Max ID should be 4");
 
         // The IDs should be greater than 2
         for modification in &modifications {
@@ -1440,28 +1458,31 @@ pub mod tests {
 
         // Test 3: Get persisted modifications with ID > 3 (should include ID 4 now)
         // Should not include the last serial id
-        let modifications = store.get_persisted_modifications_after_id(3, 105).await?;
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(3, 105).await?;
         assert_eq!(
             modifications.len(),
             1,
             "Should return 1 persisted modification"
         );
+        assert_eq!(max_id, Some(7), "Max ID should be 7");
         assert_eq!(
             modifications[0].id, 4,
             "Should return modification with ID 4"
         );
 
         // Test 4: Get modifications with ID > 6 (should return none)
-        let modifications = store.get_persisted_modifications_after_id(7, 106).await?;
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(7, 106).await?;
         assert_eq!(modifications.len(), 0, "Should return 0 modifications");
+        assert_eq!(max_id, Some(7), "Max ID should be 7");
 
         // Test 5: Get modifications with ID > 0 and serial id is less than 102
-        let modifications = store.get_persisted_modifications_after_id(0, 102).await?;
+        let (modifications, max_id) = store.get_persisted_modifications_after_id(0, 102).await?;
         assert_eq!(
             modifications.len(),
             2,
             "Should return 2 persisted modifications"
         );
+        assert_eq!(max_id, Some(7), "Max ID should be 7");
         assert_eq!(
             modifications[0].id, 1,
             "Should return modification with ID 1"
