@@ -74,6 +74,12 @@ struct MetricsRsp {
     rwnd_limited: f64,
     // ms
     sndbuf_limited: f64,
+    // us
+    rtt: u32,
+    // us
+    rtt_var: u32,
+    // mb
+    snd_wnd: f64,
     // packets
     snd_cwnd: u32,
     // packets
@@ -262,6 +268,10 @@ async fn client_task(
             busy_time: (ti.tcpi_busy_time - s_ti.tcpi_busy_time) as f64 / 1000.0,
             rwnd_limited: (ti.tcpi_rwnd_limited - s_ti.tcpi_rwnd_limited) as f64 / 1000.0,
             sndbuf_limited: (ti.tcpi_sndbuf_limited - s_ti.tcpi_sndbuf_limited) as f64 / 1000.0,
+            rtt: ti.tcpi_rtt,
+            rtt_var: ti.tcpi_rttvar,
+            snd_wnd: (ti.tcpi_snd_wnd * (1 << (s_ti.tcpi_snd_wscale_rcv_wscale & 0x11))) as f64
+                / 1_000_000.0,
             snd_cwnd: ti.tcpi_snd_cwnd,
             delivered: ti.tcpi_delivered - s_ti.tcpi_delivered,
             delivered_ce: ti.tcpi_delivered_ce - s_ti.tcpi_delivered_ce,
@@ -283,64 +293,98 @@ fn log_to_terminal(idx: usize, num_steps: usize, cmd: &ClientCmd, rsp: &[Metrics
         cmd.duration_sec,
         cmd.throughput
     );
-    println!("---------------------------------");
+    println!("=================================");
 
     println!("avg_delivery_rate (MB/s):");
+    print!("    ");
     for m in rsp {
         print!("{:.2} ", m.avg_delivery_rate);
     }
     println!();
 
     println!("bytes_sent (MB):");
+    print!("    ");
     for m in rsp {
         print!("{:.2} ", m.bytes_sent);
     }
     println!();
+    println!("---------------------------------");
 
     println!("busy_time (ms)");
+    print!("    ");
     for m in rsp {
         print!("{:.3} ", m.busy_time);
     }
     println!();
 
     println!("rwnd_limited (ms)");
+    print!("    ");
     for m in rsp {
         print!("{:.3} ", m.rwnd_limited);
     }
     println!();
 
     println!("sndbuf_limited (ms)");
+    print!("    ");
     for m in rsp {
         print!("{:.3} ", m.sndbuf_limited);
     }
     println!();
+    println!("---------------------------------");
+
+    println!("rtt (us)");
+    print!("    ");
+    for m in rsp {
+        print!("{} ", m.rtt);
+    }
+    println!();
+
+    println!("rtt_var (us)");
+    print!("    ");
+    for m in rsp {
+        print!("{} ", m.rtt_var);
+    }
+    println!();
+    println!("---------------------------------");
+
+    println!("snd_wnd (MB)");
+    print!("    ");
+    for m in rsp {
+        print!("{:.2} ", m.snd_wnd);
+    }
+    println!();
 
     println!("snd_cwnd (packets)");
+    print!("    ");
     for m in rsp {
         print!("{} ", m.snd_cwnd);
     }
     println!();
+    println!("---------------------------------");
 
     println!("delivered");
+    print!("    ");
     for m in rsp {
         print!("{} ", m.delivered);
     }
     println!();
 
     println!("delivered_ce");
+    print!("    ");
     for m in rsp {
         print!("{} ", m.delivered_ce);
     }
     println!();
 
     println!("app_limited");
+    print!("    ");
     for m in rsp {
         print!("{} ", m.app_limited);
     }
     println!();
 
     println!("");
-    println!("---------------------------------");
+    println!("=================================");
     println!("");
     println!("");
 }
