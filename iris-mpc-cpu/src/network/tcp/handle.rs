@@ -3,8 +3,8 @@ use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
         tcp::{
-            config::TcpConfig, health, networking::connection_builder::Reconnector,
-            NetworkConnection, NetworkHandle,
+            config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
+            NetworkHandle,
         },
         value::{DescriptorByte, NetworkValue},
     },
@@ -259,8 +259,10 @@ async fn manage_connection<T: NetworkConnection>(
         }
     };
 
-    // wrapping these for future re-use
+    #[cfg(feature = "tcp_metrics")]
     let stream_fd = stream.as_raw_fd();
+
+    // wrapping these for future re-use
     let (reader, writer) = tokio::io::split(stream);
     let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
     let writer = Arc::new(Mutex::new(Some(writer)));
@@ -290,10 +292,14 @@ async fn manage_connection<T: NetworkConnection>(
             tracing::info!("handle_inbound_traffic exited: {r:?}");
         };
 
+        // can't have a #[cfg] in a select!. make a future that never returns instead.
+        #[cfg(feature = "tcp_metrics")]
         let health_task = async move {
-            let r = health::watch_socket(stream_fd).await;
+            let r = crate::network::tcp::health::watch_socket(stream_fd).await;
             tracing::info!("health task exited: {r:?}");
         };
+        #[cfg(not(feature = "tcp_metrics"))]
+        let health_task = futures::future::pending::<()>();
 
         enum Evt {
             Cmd(Cmd),

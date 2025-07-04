@@ -25,9 +25,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub mod config;
 mod data;
 pub mod handle;
-mod health;
 pub mod networking;
 pub mod session;
+
+#[cfg(feature = "tcp_metrics")]
+mod health;
 
 use data::*;
 
