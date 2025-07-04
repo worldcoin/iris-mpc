@@ -1306,6 +1306,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.disable_persistence,
             config.enable_debug_timing,
             config.full_scan_side,
+            config.full_scan_side_switching_enabled,
         ) {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");

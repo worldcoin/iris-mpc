@@ -237,6 +237,9 @@ pub struct Config {
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
+    #[serde(default = "default_full_scan_side_switching_enabled")]
+    pub full_scan_side_switching_enabled: bool,
+
     #[serde(default = "default_batch_polling_timeout_secs")]
     pub batch_polling_timeout_secs: i32,
 
@@ -383,6 +386,10 @@ fn default_sqs_long_poll_wait_time() -> usize {
 
 fn default_batch_sync_polling_timeout_secs() -> u64 {
     10
+}
+
+fn default_full_scan_side_switching_enabled() -> bool {
+    true
 }
 
 impl Config {
@@ -535,6 +542,7 @@ pub struct CommonConfig {
     gpu_schema_name_suffix: String,
     hawk_server_resets_enabled: bool,
     full_scan_side: Eye,
+    full_scan_side_switching_enabled: bool,
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
@@ -611,6 +619,7 @@ impl From<Config> for CommonConfig {
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
             full_scan_side,
+            full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
@@ -662,6 +671,7 @@ impl From<Config> for CommonConfig {
             gpu_schema_name_suffix,
             hawk_server_resets_enabled,
             full_scan_side,
+            full_scan_side_switching_enabled,
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
