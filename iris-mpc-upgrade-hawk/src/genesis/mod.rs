@@ -8,8 +8,11 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config},
-    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
+    config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
+    helpers::{
+        shutdown_handler::ShutdownHandler, smpc_request, sync::Modification,
+        task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -230,8 +233,14 @@ async fn exec_setup(
     ));
 
     // Bail if stores are inconsistent.
-    validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
-        .await?;
+    validate_consistency_of_stores(
+        config,
+        &iris_store,
+        graph_store_arc.clone(),
+        args.max_indexation_id,
+        last_indexed_id,
+    )
+    .await?;
     log_info(String::from("Store consistency checks OK"));
 
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
@@ -304,7 +313,6 @@ async fn exec_setup(
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
         bail!("Shutdown")
-        // return Ok(());
     }
 
     // Initialise HNSW graph from previously indexed.
@@ -422,6 +430,20 @@ async fn exec_delta(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
             ));
+            if modification.request_type == smpc_request::IDENTITY_DELETION_MESSAGE_TYPE {
+                if ctx.config.environment != ENV_PROD {
+                    log_info(format!(
+                        "Modification is a deletion: serial_id={:?} and it is not production therefore skipping",
+                        modification.serial_id
+                    ));
+                    continue;
+                }else {
+                    bail!(eyre!(
+                        "Modification is a deletion: serial_id={:?} and it is production therefore bailing",
+                        modification.serial_id
+                    ));
+                }
+            }
 
             // Submit modification to Hawk handle for processing.
             let request = JobRequest::new_modification(modification.clone());
@@ -744,7 +766,7 @@ async fn get_service_clients(
             .unwrap_or_else(|| DEFAULT_REGION.to_owned());
         let region_provider = Region::new(region);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let force_path_style = config.environment != "prod" && config.environment != "stage";
+        let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
         let retry_config = RetryConfig::standard().with_max_attempts(5);
         let s3_config = S3ConfigBuilder::from(&shared_config)
             .force_path_style(force_path_style)
@@ -1134,6 +1156,7 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
 ) -> Result<()> {
@@ -1163,6 +1186,27 @@ async fn validate_consistency_of_stores(
         let msg = log_error(format!(
             "Max indexation id {} exceeds max database id {}",
             max_indexation_id, max_db_id
+        ));
+        bail!(msg);
+    }
+
+    // ensure the graph store is consistent with the last persisted_indexed_id
+    let mut tx = graph_store.tx().await.unwrap();
+    let last_indexed_id_in_graph_left = {
+        let mut graph_left = tx.with_graph(StoreId::Left);
+        graph_left.get_max_serial_id().await? as u32
+    };
+    let last_indexed_id_in_graph_right = {
+        let mut graph_right = tx.with_graph(StoreId::Right);
+        graph_right.get_max_serial_id().await? as u32
+    };
+    if last_indexed_id_in_graph_left != last_indexed_id
+        || last_indexed_id_in_graph_right != last_indexed_id
+    {
+        let msg = log_error(format!(
+            "Last indexed id in graph store does not match last indexed id: \
+             left={} :: right={} :: expected={}",
+            last_indexed_id_in_graph_left, last_indexed_id_in_graph_right, last_indexed_id
         ));
         bail!(msg);
     }
