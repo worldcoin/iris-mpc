@@ -6,6 +6,10 @@ use std::fmt;
 
 pub mod json_wrapper;
 
+pub const ENV_DEV: &str = "dev";
+pub const ENV_PROD: &str = "prod";
+pub const ENV_STAGE: &str = "stage";
+
 #[derive(Debug, Parser)]
 pub struct Opt {
     #[structopt(long)]
