@@ -494,6 +494,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        execution::hawk_main::scheduler::parallelize,
         hawkers::{
             aby3::test_utils::{
                 eval_vector_distance, get_owner_index, lazy_random_setup,
@@ -887,5 +888,30 @@ mod tests {
                 assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_gr_non_existent_vectors() {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let database_size = 2;
+        let vectors_and_graphs = shared_random_setup(&mut rng, database_size, NetworkType::Local)
+            .await
+            .unwrap();
+
+        let mut tasks = vec![];
+        for (store, _graph) in vectors_and_graphs {
+            let mut store = store.lock_owned().await;
+            tasks.push(async move {
+                let a = VectorId::from_0_index(0);
+                let v = vec![a, VectorId::from_0_index(1), VectorId::from_0_index(999)];
+                let q = store.vectors_as_queries(vec![a]).await;
+                let d = store.eval_distance_batch(&q, &v).await.unwrap();
+                let m = store.is_match_batch(&d).await.unwrap();
+                assert_eq!(m, vec![true, false, false]);
+                Ok(())
+            });
+        }
+        parallelize(tasks.into_iter()).await.unwrap();
     }
 }

@@ -254,16 +254,18 @@ pub async fn galois_ring_pairwise_distance(
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
-            (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask))
+            let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
-            SHARE_OF_RATIO_ONE
+            let (a, b) = SHARE_OF_RATIO_ONE;
+            (RingElement(a), RingElement(b))
         };
-        additive_shares.push(RingElement(code_dist));
+        additive_shares.push(code_dist);
         // When applying the trick dot on trimmed masks, we have to multiply with 2 the
         // result The intuition being that a GaloisRingTrimmedMask contains half
         // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dist));
+        additive_shares.push(mask_dist);
     }
     additive_shares
 }
