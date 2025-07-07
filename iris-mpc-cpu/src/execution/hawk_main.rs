@@ -19,7 +19,7 @@ use crate::{
         handle::TcpNetworkHandle, networking::connection_builder::PeerConnectionBuilder, TcpConfig,
     },
     protocol::{
-        ops::{setup_replicated_prf, setup_shared_seed},
+        ops::{compare_min_threshold_buckets, setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
     },
 };
@@ -78,9 +78,7 @@ mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
 pub mod state_check;
-use crate::protocol::ops::{
-    compare_threshold_buckets, open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO,
-};
+use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
 use is_match_batch::calculate_missing_is_match;
 use rot::VecRots;
@@ -138,7 +136,12 @@ pub struct HawkActor {
     iris_store: BothEyes<SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
-    distances_cache: BothEyes<Vec<((u32, u32), Vec<DistanceShare<u32>>)>>,
+
+    /// ---- Distances cache ----
+    /// Cache of distances for each eye.
+    /// Eye -> List of Lists of distances, where the inner list is all distances for rotations of a query.
+    /// In a later step, these distances will be reduced to a single, minimum distance per query.
+    distances_cache: BothEyes<Vec<Vec<DistanceShare<u32>>>>,
 
     // ---- My network setup ----
     networking: TcpNetworkHandle,
@@ -538,25 +541,27 @@ impl HawkActor {
     }
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
-        let mut distances_with_ids: Vec<((u32, u32), Vec<DistanceShare<u32>>)> = vec![];
-        let _ = search_results
-            .iter() // iterator over &VecRots<_>
-            .enumerate() // (index, &VecRots<_>)
-            .map(|(query_idx, v)| (query_idx, v.clone()))
-            .enumerate()
-            .map(|(rotations_idx, (query_idx, insert_plan))| {
-                let _ = insert_plan.iter().enumerate().map(|(rotation_index, insert_plan)| {
-                    let helper = insert_plan.links.first();
+        // maps query_id and db_id to a vector of distances.
+        let mut distances_with_ids: HashMap<(u32, u32), Vec<DistanceShare<u32>>> = HashMap::new();
+        for (query_idx, vec_rots) in search_results.iter().enumerate() {
+            for insert_plan in vec_rots.iter() {
+                let last_layer_insert_plan = match insert_plan.links.first() {
+                    Some(neighbors) => neighbors,
+                    None => continue,
+                };
 
-                    let distances_for_a_rotation: Vec<DistanceShare<u32>> = helper.into_iter().flat_map(|neighbors| {
-                        neighbors
-                            .iter()
-                            .take(insert_plan.match_count)
-                            .map(move |(_, distance)| distance.clone())
-                    }).collect();
-                    distances_with_ids.push(((query_idx as u32, rotation_index as u32), distances_for_a_rotation));
-                });
-            });
+                // only insert_plan.match_count neighbors are actually matches.
+                let matches = last_layer_insert_plan.iter().take(insert_plan.match_count);
+
+                for (vector_id, distance) in matches {
+                    let distance_share = distance.clone();
+                    distances_with_ids
+                        .entry((query_idx as u32, vector_id.serial_id()))
+                        .or_default()
+                        .push(distance_share);
+                }
+            }
+        }
 
         tracing::info!(
             "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
@@ -565,17 +570,17 @@ impl HawkActor {
             self.distances_cache[side].len(),
             self.args.match_distances_buffer_size,
         );
-        self.distances_cache[side].extend(distances_with_ids);
+        self.distances_cache[side].extend(distances_with_ids.into_values());
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
         let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
-        let bucket_result_shares = compare_threshold_buckets(
+        let bucket_result_shares = compare_min_threshold_buckets(
             session,
             translated_thresholds.as_slice(),
             self.distances_cache[side].as_slice(),
         )
-            .await?;
+        .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
         Ok(buckets)
