@@ -106,32 +106,6 @@ pub fn translate_threshold_a(t: f64) -> u32 {
     ((1. - 2. * t) * (B as f64)) as u32
 }
 
-/// Converts distances from the format [((query_id, rotation_id), Vec<T>)]
-/// to Vec<Vec<Vec<T>>> where outer Vec represents queries grouped by query_id,
-/// middle Vec represents rotations ordered by rotation_id within each query,
-/// and inner Vec represents distance shares for each rotation.
-fn convert_distances_to_query_grouped<T: Clone>(
-    distances: &[((u32, u32), Vec<T>)],
-) -> Vec<Vec<Vec<T>>> {
-    use std::collections::BTreeMap;
-
-    // Group by query_id and collect into a BTreeMap to maintain order
-    let mut query_map: BTreeMap<u32, BTreeMap<u32, Vec<T>>> = BTreeMap::new();
-
-    for ((query_id, rotation_id), values) in distances {
-        query_map
-            .entry(*query_id)
-            .or_default()
-            .insert(*rotation_id, values.clone());
-    }
-
-    // Convert to the desired format: Vec<Vec<Vec<T>>>
-    query_map
-        .into_values()
-        .map(|rotation_map| rotation_map.into_values().collect())
-        .collect()
-}
-
 /// Compares the distance between two iris pairs to a list of thresholds, represented as t_i/B, with B = 2^16.
 /// Use the [translate_threshold_a] function to compute the A term of the threshold comparison.
 /// The result of the comparisons is then summed up bucket-wise, with each bucket corresponding to a threshold.
@@ -1057,57 +1031,5 @@ mod tests {
 
         assert_eq!(output0.1[0], plain_d1 as u16);
         assert_eq!(output0.1[1], plain_d2);
-    }
-
-    #[test]
-    fn test_convert_distances_to_query_grouped_usize() {
-        // Create test data with multiple queries and rotations using usize
-        let distances = vec![
-            // Query 0, Rotation 0: distances [10, 20, 30]
-            ((0, 0), vec![10usize, 20, 30]),
-            // Query 0, Rotation 2: distances [40, 50] (intentionally skipping rotation 1 to test ordering)
-            ((0, 2), vec![40usize, 50]),
-            // Query 0, Rotation 1: distances [60] (will be ordered correctly despite being added later)
-            ((0, 1), vec![60usize]),
-            // Query 1, Rotation 0: distances [100, 200, 300, 400]
-            ((1, 0), vec![100usize, 200, 300, 400]),
-            // Query 2, Rotation 1: distances [500, 600]
-            ((2, 1), vec![500usize, 600]),
-            // Query 2, Rotation 0: distances [700] (will be ordered before rotation 1)
-            ((2, 0), vec![700usize]),
-        ];
-
-        let result = convert_distances_to_query_grouped(&distances);
-
-        // Expected structure:
-        // Query 0: [
-        //   Rotation 0: [10, 20, 30],
-        //   Rotation 1: [60],
-        //   Rotation 2: [40, 50]
-        // ]
-        // Query 1: [
-        //   Rotation 0: [100, 200, 300, 400]
-        // ]
-        // Query 2: [
-        //   Rotation 0: [700],
-        //   Rotation 1: [500, 600]
-        // ]
-
-        assert_eq!(result.len(), 3); // 3 queries
-
-        // Query 0 checks
-        assert_eq!(result[0].len(), 3); // 3 rotations
-        assert_eq!(result[0][0], vec![10, 20, 30]); // rotation 0
-        assert_eq!(result[0][1], vec![60]); // rotation 1
-        assert_eq!(result[0][2], vec![40, 50]); // rotation 2
-
-        // Query 1 checks
-        assert_eq!(result[1].len(), 1); // 1 rotation
-        assert_eq!(result[1][0], vec![100, 200, 300, 400]); // rotation 0
-
-        // Query 2 checks
-        assert_eq!(result[2].len(), 2); // 2 rotations
-        assert_eq!(result[2][0], vec![700]); // rotation 0
-        assert_eq!(result[2][1], vec![500, 600]); // rotation 1
     }
 }
