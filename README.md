@@ -233,7 +233,7 @@ docker-compose -f docker-compose.test.genesis.yaml up
 
 ## MPCTL
 
-A bash utility called MPCTL has been developed to streamline local testing of an MPC network.  Please refer to it's [tools/mpctl/README.md](documentation) in respect of usage.
+A bash utility called MPCTL has been developed to streamline local testing of an MPC network.  Please refer to it's [documentation](tools/mpctl/README.md) in respect of usage.
 
 ## Architecture
 
