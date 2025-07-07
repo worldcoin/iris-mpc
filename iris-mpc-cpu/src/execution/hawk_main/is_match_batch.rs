@@ -152,7 +152,11 @@ fn aggregate_rotation_results(results: VecRots<MapEdges<bool>>) -> MapEdges<bool
 
 #[cfg(test)]
 mod test {
+    use super::super::test_utils::setup_hawk_actors;
     use super::*;
+    use crate::execution::hawk_main::scheduler::parallelize;
+    use crate::execution::hawk_main::test_utils::{init_iris_db, make_request};
+    use crate::execution::hawk_main::{HawkActor, Orientation};
 
     #[tokio::test]
     async fn test_split_tasks() {
@@ -172,5 +176,68 @@ mod test {
             let results = unsplit_tasks(results).unwrap();
             assert_eq!(results, expect);
         }
+    }
+
+    #[tokio::test]
+    async fn test_is_match_batch() -> Result<()> {
+        let actors = setup_hawk_actors().await?;
+
+        parallelize(actors.into_iter().map(go_is_match_batch)).await?;
+
+        Ok(())
+    }
+
+    async fn go_is_match_batch(mut actor: HawkActor) -> Result<HawkActor> {
+        init_iris_db(&mut actor).await?;
+
+        let [sessions, _mirror] = actor.new_sessions_orient().await?;
+
+        let batch_size = 3;
+        let request = make_request(batch_size, actor.party_id);
+        let search_queries = &request.queries(Orientation::Normal);
+
+        let missing_vector_ids = [
+            vec![
+                vec![],                          // Empty.
+                vec![VectorId::from_0_index(1)], // Match because request 1 is the same as db entry 1.
+                vec![VectorId::from_0_index(1)], // Non-match.
+            ],
+            vec![
+                vec![VectorId::from_0_index(0), VectorId::from_0_index(1)], // Match and non-match.
+                vec![VectorId::from_0_index(999)],                          // Non-existing vector.
+                vec![VectorId::new(1, 999)],                                // Non-existing version.
+            ],
+        ];
+
+        let result =
+            calculate_missing_is_match(search_queries, missing_vector_ids.clone(), &sessions)
+                .await?;
+
+        assert_eq!(
+            result,
+            [
+                expected_matches(&missing_vector_ids[LEFT]),
+                expected_matches(&missing_vector_ids[RIGHT]),
+            ]
+        );
+
+        // Do not drop the connections too early.
+        Ok(actor)
+    }
+
+    fn expected_matches(requested_ids: &[VecEdges<VectorId>]) -> Vec<HashMap<VectorId, bool>> {
+        let mut expect = vec![];
+        for (iris_id, vector_ids) in requested_ids.iter().enumerate() {
+            let mut map = HashMap::new();
+
+            for vid in vector_ids {
+                // We get matches by construction of init_db and make_request.
+                let is_match = iris_id == vid.index() as usize;
+                map.insert(*vid, is_match);
+            }
+
+            expect.push(map);
+        }
+        expect
     }
 }

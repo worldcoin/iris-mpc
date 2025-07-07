@@ -41,7 +41,7 @@ create_bucket "wf-smpcv2-dev-sync-protocol"
 echo "Creating static dev_deleted_serial_ids.json"
 cat > ./dev_deleted_serial_ids.json <<EOF
 {
-    "deleted_serial_ids": [50, 100, 200, 1000]
+    "deleted_serial_ids": [50, 99, 100, 200, 1000]
 }
 EOF
 

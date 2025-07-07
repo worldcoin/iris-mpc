@@ -264,6 +264,9 @@ iris-mpc-1:
     - name : SMPC__ENABLE_DEBUG_TIMING
       value: "true"
 
+    - name : SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED
+      value: "false"
+
   initContainer:
     enabled: true
     image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image

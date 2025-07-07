@@ -186,6 +186,7 @@ pub struct ServerActor {
     anonymized_bucket_statistics_left_mirror: BucketStatistics,
     anonymized_bucket_statistics_right_mirror: BucketStatistics,
     full_scan_side: Eye,
+    full_scan_side_switching_enabled: bool,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -205,6 +206,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -222,6 +224,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -239,6 +242,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -258,6 +262,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )
     }
 
@@ -277,6 +282,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -294,6 +300,7 @@ impl ServerActor {
             disable_persistence,
             enable_debug_timing,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -314,6 +321,7 @@ impl ServerActor {
         disable_persistence: bool,
         enable_debug_timing: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
@@ -588,6 +596,7 @@ impl ServerActor {
             anonymized_bucket_statistics_left_mirror,
             anonymized_bucket_statistics_right_mirror,
             full_scan_side,
+            full_scan_side_switching_enabled,
         })
     }
 
@@ -653,9 +662,11 @@ impl ServerActor {
 
             metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
 
-            // Alternate the full scan side for the next batch
-            self.full_scan_side = self.full_scan_side.other();
-            tracing::info!("Switching full scan side to {}", self.full_scan_side);
+            if self.full_scan_side_switching_enabled {
+                // Alternate the full scan side for the next batch
+                self.full_scan_side = self.full_scan_side.other();
+                tracing::info!("Switching full scan side to {}", self.full_scan_side);
+            }
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
     }

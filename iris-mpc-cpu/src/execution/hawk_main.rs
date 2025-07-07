@@ -1543,6 +1543,9 @@ pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
 }
 
 #[cfg(test)]
+pub mod test_utils;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
@@ -1733,11 +1736,10 @@ mod tests {
 
     /// Prepare shares in the same format as `receive_batch()`.
     fn receive_batch_shares(
-        shares: Vec<GaloisRingSharedIris>,
-        mirrored_shares: Vec<GaloisRingSharedIris>,
+        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
     ) -> [IrisQueryBatchEntries; 4] {
         let mut out = [(); 4].map(|_| IrisQueryBatchEntries::default());
-        for (share, mirrored_share) in izip!(shares, mirrored_shares) {
+        for (share, mirrored_share) in shares_with_mirror.iter().cloned() {
             let one = preprocess_iris_message_shares(
                 share.code,
                 share.mask,
@@ -1758,38 +1760,16 @@ mod tests {
     }
 
     // Prepare a batch for a particular party, setting their shares.
-    fn batch_of_party(
+    pub fn batch_of_party(
         batch: &BatchQuery,
-        shares: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
+        shares_with_mirror: &[(GaloisRingSharedIris, GaloisRingSharedIris)],
     ) -> BatchQuery {
         // TODO: different test irises for each eye.
-        let shares_right_cloned = shares.to_vec();
-        let shares_left_cloned = shares.to_vec();
-
-        let shares_right = shares_right_cloned
-            .clone()
-            .into_iter()
-            .map(|(share, _)| share)
-            .collect();
-        let shares_right_mirrored = shares_right_cloned
-            .into_iter()
-            .map(|(_, share)| share)
-            .collect();
-
-        let shares_left = shares_left_cloned
-            .clone()
-            .into_iter()
-            .map(|(share, _)| share)
-            .collect();
-        let shares_left_mirrored = shares_left_cloned
-            .into_iter()
-            .map(|(_, share)| share)
-            .collect();
 
         let [left_iris_requests, left_iris_rotated_requests, left_iris_interpolated_requests, left_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_right, shares_right_mirrored);
+            receive_batch_shares(shares_with_mirror);
         let [right_iris_requests, right_iris_rotated_requests, right_iris_interpolated_requests, right_mirrored_iris_interpolated_requests] =
-            receive_batch_shares(shares_left, shares_left_mirrored);
+            receive_batch_shares(shares_with_mirror);
 
         BatchQuery {
             // Iris shares.
