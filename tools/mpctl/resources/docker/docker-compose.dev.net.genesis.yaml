@@ -1,0 +1,60 @@
+include:
+  - docker-compose.dev.base.yaml
+
+services:
+  hawk_participant_0:
+    image: hawk-server-local-genesis:latest
+    env_file:
+      - ../envs/local.base.env
+      - ../envs/local.node.0.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ../../iris-mpc/scripts/run-server-docker.sh 0 genesis
+
+  hawk_participant_1:
+    image: hawk-server-local-genesis:latest
+    env_file:
+      - ../envs/local.base.env
+      - ../envs/local.node.1.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4001:4001"
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ../../iris-mpc/scripts/run-server-docker.sh 1 genesis
+
+  hawk_participant_2:
+    image: hawk-server-local-genesis:latest
+    env_file:
+      - ../envs/local.base.env
+      - ../envs/local.node.2.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4002:4002"
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ../../iris-mpc/scripts/run-server-docker.sh 2 genesis

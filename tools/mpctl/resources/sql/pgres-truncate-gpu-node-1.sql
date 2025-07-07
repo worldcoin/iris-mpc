@@ -1,0 +1,3 @@
+TRUNCATE "SMPC_dev_1".irises RESTART IDENTITY;
+
+TRUNCATE "SMPC_dev_1".modifications RESTART IDENTITY;

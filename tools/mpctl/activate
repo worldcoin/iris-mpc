@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+# ###############################################################
+# PATH
+# ###############################################################
+
+# Set path -> here.
+export MPCTL="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Utility version.
+export MPCTL_VERSION="1.0.0"
+
+# ###############################################################
+# COMMANDS
+# ###############################################################
+
+# Infra docker.
+alias mpctl-dkr-build-images='source $MPCTL/cmds/dkr/build_images.sh'
+alias mpctl-dkr-init-db-for-genesis='source $MPCTL/cmds/dkr/init_db_for_genesis.sh'
+alias mpctl-dkr-net-down='source $MPCTL/cmds/dkr/net_down.sh'
+alias mpctl-dkr-net-down-genesis='source $MPCTL/cmds/dkr/net_down.sh binary=genesis'
+alias mpctl-dkr-net-start='source $MPCTL/cmds/dkr/net_start.sh'
+alias mpctl-dkr-net-start-genesis='source $MPCTL/cmds/dkr/net_start.sh binary=genesis'
+alias mpctl-dkr-net-stop='source $MPCTL/cmds/dkr/net_stop.sh'
+alias mpctl-dkr-net-stop-genesis='source $MPCTL/cmds/dkr/net_stop.sh binary=genesis'
+alias mpctl-dkr-net-up='source $MPCTL/cmds/dkr/net_up.sh'
+alias mpctl-dkr-net-up-genesis='source $MPCTL/cmds/dkr/net_up.sh binary=genesis'
+alias mpctl-dkr-node-start='source $MPCTL/cmds/dkr/node_start.sh'
+alias mpctl-dkr-node-start-genesis='source $MPCTL/cmds/dkr/node_start.sh binary=genesis'
+alias mpctl-dkr-node-stop='source $MPCTL/cmds/dkr/node_stop.sh'
+alias mpctl-dkr-node-stop-genesis='source $MPCTL/cmds/dkr/node_stop.sh binary=genesis'
+alias mpctl-dkr-node-view-logs='source $MPCTL/cmds/dkr/node_view_logs.sh'
+alias mpctl-dkr-node-view-logs-genesis='source $MPCTL/cmds/dkr/node_view_logs.sh binary=genesis'
+alias mpctl-dkr-services-down='source $MPCTL/cmds/dkr/services_down.sh'
+alias mpctl-dkr-services-up='source $MPCTL/cmds/dkr/services_up.sh'
+
+# Infra local (i.e. baremetal).
+alias mpctl-local-compile-binaries='source $MPCTL/cmds/local/compile_binaries.sh'
+alias mpctl-local-net-reset='mpctl-local-net-teardown && mpctl-local-net-setup'
+alias mpctl-local-net-setup='source $MPCTL/cmds/local/net_setup.sh'
+alias mpctl-local-net-start='source $MPCTL/cmds/local/net_start.sh'
+alias mpctl-local-net-start-genesis='source $MPCTL/cmds/local/net_start_genesis.sh'
+alias mpctl-local-net-teardown='source $MPCTL/cmds/local/net_teardown.sh'
+alias mpctl-local-net-update-binaries='source $MPCTL/cmds/local/net_update_binaries.sh'
+alias mpctl-local-node-activate-env='source $MPCTL/cmds/local/node_activate_env.sh'
+alias mpctl-local-node-start='source $MPCTL/cmds/local/node_start.sh'
+alias mpctl-local-node-start-genesis='source $MPCTL/cmds/local/node_start_genesis.sh'
+alias mpctl-local-node-update-binaries='source $MPCTL/cmds/local/node_update_binaries.sh'
+alias mpctl-local-node-view-env='source $MPCTL/cmds/local/node_view_env.sh'
+alias mpctl-local-node-view-logs='source $MPCTL/cmds/local/node_view_logs.sh'
+
+# Developer helpers.
+alias mpctl-dev-apply-linter='source $MPCTL/jobs/dev/apply_linter.sh'
+alias mpctl-dev-run-tests='source $MPCTL/jobs/dev/run_tests.sh'
+alias mpctl-ls='source $MPCTL/jobs/dev/view_commands.sh'
+
+# Jobs.
+alias mpctl-job-aws-sm-rotate-keys='source $MPCTL/jobs/services/aws_sm_rotate.sh'
+alias mpctl-job-write-iris-deletions-file='source $MPCTL/jobs/testing/write_iris_serial_ids_for_deletion.sh'
+alias mpctl-job-write-plain-text-iris-file='source $MPCTL/jobs/testing/write_plain_text_iris_file.sh'
+
+# Jobs: pgres.
+alias mpctl-job-pgres-dump='source $MPCTL/jobs/services/pgres_dump.sh'
+alias mpctl-job-pgres-init-from-plain-text-iris-file='source $MPCTL/jobs/testing/init_db_from_plain_text_iris_file.sh'
+alias mpctl-job-pgres-restore='source $MPCTL/jobs/services/pgres_restore.sh'
+alias mpctl-job-pgres-truncate-all='source $MPCTL/jobs/services/pgres_truncate.sh group=all'
+alias mpctl-job-pgres-truncate-cpu-tables='source $MPCTL/jobs/services/pgres_truncate.sh group=cpu'
+alias mpctl-job-pgres-truncate-gpu-tables='source $MPCTL/jobs/services/pgres_truncate.sh group=gpu'
