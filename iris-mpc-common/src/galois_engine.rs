@@ -14,6 +14,10 @@ pub mod degree4 {
 
     const CODE_COLS: usize = 200;
 
+    /// A representation of 1 or 100% as a fraction of additive shares.
+    /// The numerator and denominator are the same non-zero number (3, as shares 1 + 1 + 1).
+    pub const SHARE_OF_RATIO_ONE: (u16, u16) = (1, 1);
+
     fn preprocess_coefs(id: usize, coefs: &mut [u16]) {
         let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
         for i in (0..coefs.len()).step_by(4) {

@@ -21,6 +21,7 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
+use iris_mpc_common::galois_engine::degree4::SHARE_OF_RATIO_ONE;
 use itertools::{izip, Itertools};
 use std::{array, ops::Not};
 use tracing::instrument;
@@ -248,13 +249,16 @@ pub async fn cross_compare(
 /// vector to be able to reshare it later.
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
-    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
+    pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
 ) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
-        let (x, y) = pair;
-        let code_dist = x.code.trick_dot(&y.code);
-        let mask_dist = x.mask.trick_dot(&y.mask);
+        let (code_dist, mask_dist) = if let Some((x, y)) = pair {
+            (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask))
+        } else {
+            // Non-existent vectors get the largest relative distance of 100%.
+            SHARE_OF_RATIO_ONE
+        };
         additive_shares.push(RingElement(code_dist));
         // When applying the trick dot on trimmed masks, we have to multiply with 2 the
         // result The intuition being that a GaloisRingTrimmedMask contains half
@@ -720,7 +724,7 @@ mod tests {
             let session = session.clone();
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
+                let own_shares = own_shares.iter().map(|(x, y)| Some((x, y))).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares).await;
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();

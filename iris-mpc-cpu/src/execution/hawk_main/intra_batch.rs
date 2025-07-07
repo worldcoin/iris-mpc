@@ -71,19 +71,19 @@ async fn per_session(
     let query_pairs = pairs
         .iter()
         .map(|pair| {
-            (
+            Some((
                 &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
                     .processed_query,
                 &search_queries[batch.i_eye][pair.earlier_request]
                     .center()
                     .query,
-            )
+            ))
         })
         .collect_vec();
 
     let distances = session
         .aby3_store
-        .eval_pairwise_distances(query_pairs)
+        .eval_pairwise_distances(&query_pairs)
         .await?;
     let distances = session.aby3_store.lift_distances(distances).await?;
     let is_matches = session.aby3_store.is_match_batch(&distances).await?;

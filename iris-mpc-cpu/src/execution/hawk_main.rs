@@ -1805,22 +1805,31 @@ mod tests {
         for i in 1..all_results.len() {
             all_results[i].left_iris_requests = all_results[0].left_iris_requests.clone();
             all_results[i].right_iris_requests = all_results[0].right_iris_requests.clone();
+
+            assert_eq!(
+                all_results[i].reset_update_shares.len(),
+                all_results[0].reset_update_shares.len(),
+                "All parties must agree on the reset update shares"
+            );
+            all_results[i].reset_update_shares = all_results[0].reset_update_shares.clone();
+        }
+
+        for i in 0..all_results.len() {
             // Same for specific fields of the bucket statistics.
             // TODO: specific assertions for the bucket statistics results
-            all_results[i].anonymized_bucket_statistics_left.party_id =
-                all_results[0].anonymized_bucket_statistics_left.party_id;
-            all_results[i].anonymized_bucket_statistics_right.party_id =
-                all_results[0].anonymized_bucket_statistics_right.party_id;
-            all_results[i]
-                .anonymized_bucket_statistics_left
-                .start_time_utc_timestamp = all_results[0]
-                .anonymized_bucket_statistics_left
-                .start_time_utc_timestamp;
-            all_results[i]
-                .anonymized_bucket_statistics_right
-                .start_time_utc_timestamp = all_results[0]
-                .anonymized_bucket_statistics_right
-                .start_time_utc_timestamp;
+            let first = all_results[0].anonymized_bucket_statistics_left.clone();
+            let other = &mut all_results[i];
+            for other in [
+                &mut other.anonymized_bucket_statistics_left,
+                &mut other.anonymized_bucket_statistics_right,
+                &mut other.anonymized_bucket_statistics_left_mirror,
+                &mut other.anonymized_bucket_statistics_right_mirror,
+            ] {
+                other.party_id = first.party_id;
+                other.start_time_utc_timestamp = first.start_time_utc_timestamp;
+                other.end_time_utc_timestamp = first.end_time_utc_timestamp;
+                other.next_start_time_utc_timestamp = first.next_start_time_utc_timestamp;
+            }
         }
 
         assert!(
