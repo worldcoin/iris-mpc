@@ -42,6 +42,11 @@ mpctl-ls
 mpctl-[CMD] help
 ```
 
+What recipes can you do with mpctl ?
+--------------------------------------
+
+See [recipes](docs/recipe-local-net.md).
+
 What can you do with mpctl ?
 --------------------------------------
 
