@@ -27,10 +27,6 @@ use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
-use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-    statistics::BucketStatistics,
-};
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
@@ -38,6 +34,13 @@ use iris_mpc_common::{
     ROTATIONS,
 };
 use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
+    helpers::{
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        statistics::BucketStatistics,
+    },
+    MASK_CODE_LENGTH,
+};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
@@ -641,8 +644,18 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
             [left_code, right_code],
             [left_mask, right_mask]
         ) {
-            let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
-                .expect("Wrong code or mask size");
+            let iris = if mask.len() == MASK_CODE_LENGTH {
+                GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
+                    .expect("Wrong code or mask size")
+            } else if mask.len() == MASK_CODE_LENGTH / 2 {
+                // Pad partial mask if needed, since the DB may contain partial masks, where the imaginary and real parts are the same and deduplicated.
+                // If this is the case, the incoming mask length will be half of the expected length, and we double it.
+                let mask = mask.iter().chain(mask.iter()).copied().collect::<Vec<_>>();
+                GaloisRingSharedIris::try_from_buffers(self.party_id, code, &mask)
+                    .expect("Wrong code or mask size")
+            } else {
+                panic!("Invalid mask length: {}", mask.len());
+            };
             side.insert(vector_id, iris);
         }
     }

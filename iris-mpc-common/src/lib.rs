@@ -16,7 +16,7 @@ pub mod tracing;
 pub mod vector_id;
 
 pub const IRIS_CODE_LENGTH: usize = 12_800;
-pub const MASK_CODE_LENGTH: usize = 6_400;
+pub const MASK_CODE_LENGTH: usize = 12_800;
 pub const ROTATIONS: usize = 31;
 
 /// Iris code database type; .0 = iris code, .1 = mask

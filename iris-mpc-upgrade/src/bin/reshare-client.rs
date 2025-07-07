@@ -4,7 +4,7 @@ use futures::StreamExt;
 use hkdf::Hkdf;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     helpers::kms_dh::derive_shared_secret,
 };
 use iris_mpc_store::Store;
@@ -133,7 +133,7 @@ async fn main() -> Result<()> {
                     id: config.party_id as usize + 1,
                     coefs: iris_code.left_code().try_into().unwrap(),
                 },
-                GaloisRingTrimmedMaskCodeShare {
+                GaloisRingMaskCodeShare {
                     id: config.party_id as usize + 1,
                     coefs: iris_code.left_mask().try_into().unwrap(),
                 },
@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
                     id: config.party_id as usize + 1,
                     coefs: iris_code.right_code().try_into().unwrap(),
                 },
-                GaloisRingTrimmedMaskCodeShare {
+                GaloisRingMaskCodeShare {
                     id: config.party_id as usize + 1,
                     coefs: iris_code.right_mask().try_into().unwrap(),
                 },

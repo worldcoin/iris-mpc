@@ -27,7 +27,7 @@ use iris_mpc_common::server_coordination::ReadyProbeResponse;
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, Opt},
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingMaskCodeShare},
     helpers::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
@@ -98,7 +98,7 @@ fn decode_iris_message_shares(
     Ok((iris_share, mask_share))
 }
 
-fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
+fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingMaskCodeShare {
     mask.into()
 }
 
@@ -719,7 +719,7 @@ async fn receive_batch(
                 // If we failed to process the iris shares, we include a dummy entry in the
                 // batch in order to keep the same order across nodes
                 let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(party_id);
-                let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(party_id);
+                let dummy_mask_share = GaloisRingMaskCodeShare::default_for_party(party_id);
                 let dummy_one_side = GaloisShares {
                     code: dummy_code_share.clone(),
                     mask: dummy_mask_share.clone(),
