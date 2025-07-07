@@ -230,8 +230,14 @@ async fn exec_setup(
     ));
 
     // Bail if stores are inconsistent.
-    validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
-        .await?;
+    validate_consistency_of_stores(
+        config,
+        &iris_store,
+        graph_store_arc.clone(),
+        args.max_indexation_id,
+        last_indexed_id,
+    )
+    .await?;
     log_info(String::from("Store consistency checks OK"));
 
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
@@ -304,7 +310,6 @@ async fn exec_setup(
     if shutdown_handler.is_shutting_down() {
         log_warn(String::from("Shutting down has been triggered"));
         bail!("Shutdown")
-        // return Ok(());
     }
 
     // Initialise HNSW graph from previously indexed.
@@ -1134,6 +1139,7 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
+    graph_store: Arc<GraphPg<Aby3Store>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
 ) -> Result<()> {
@@ -1163,6 +1169,27 @@ async fn validate_consistency_of_stores(
         let msg = log_error(format!(
             "Max indexation id {} exceeds max database id {}",
             max_indexation_id, max_db_id
+        ));
+        bail!(msg);
+    }
+
+    // ensure the graph store is consistent with the last persisted_indexed_id
+    let mut tx = graph_store.tx().await.unwrap();
+    let last_indexed_id_in_graph_left = {
+        let mut graph_left = tx.with_graph(StoreId::Left);
+        graph_left.get_max_serial_id().await? as u32
+    };
+    let last_indexed_id_in_graph_right = {
+        let mut graph_right = tx.with_graph(StoreId::Right);
+        graph_right.get_max_serial_id().await? as u32
+    };
+    if last_indexed_id_in_graph_left != last_indexed_id
+        || last_indexed_id_in_graph_right != last_indexed_id
+    {
+        let msg = log_error(format!(
+            "Last indexed id in graph store does not match last indexed id: \
+             left={} :: right={} :: expected={}",
+            last_indexed_id_in_graph_left, last_indexed_id_in_graph_right, last_indexed_id
         ));
         bail!(msg);
     }
