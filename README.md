@@ -231,6 +231,10 @@ docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
 docker-compose -f docker-compose.test.genesis.yaml up
 ```
 
+## MPCTL
+
+A bash utility called MPCTL has been developed to streamline local testing of an MPC network.  Please refer to it's [tools/mpctl/README.md](documentation) in respect of usage.
+
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)
