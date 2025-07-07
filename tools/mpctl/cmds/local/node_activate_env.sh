@@ -25,13 +25,16 @@ function _main()
 {
     local idx_of_node=${1}
     local size_of_batch=${2}
+    local path_to_assets_of_node="$(get_path_to_assets_of_node "${idx_of_node}")"
 
     # Set automatic variable exportation.
     set -a
 
     # Standard evars.
-    source "$(get_path_to_monorepo)/.test.env"
-    source "$(get_path_to_monorepo)/.test.hawk${idx_of_node}.env"
+    # source "$(get_path_to_monorepo)/.test.env"
+    # source "$(get_path_to_monorepo)/.test.hawk${idx_of_node}.env"
+    source "${path_to_assets_of_node}/env/base.env"
+    source "${path_to_assets_of_node}/env/node.env"
 
     # Overridden evars (necessary to run locally).
     export AWS_ENDPOINT_URL="http://127.0.0.1:4566"

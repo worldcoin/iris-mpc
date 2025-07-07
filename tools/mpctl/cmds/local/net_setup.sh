@@ -103,22 +103,13 @@ function _setup_config()
 function _setup_config_of_node()
 {
     local idx_of_node=${1}
-    local path_to_assets_of_node
+    local path_to_assets_of_node="$(get_path_to_assets_of_node "${idx_of_node}")"
 
-    path_to_assets_of_node="$(get_path_to_assets_of_node "${idx_of_node}")"
-
-    # Env vars.
     cp \
-        "$(get_path_to_resources)/envs/direnv.toml" \
-        "${path_to_assets_of_node}/env"
-    cp \
-        "$(get_path_to_resources)/envs/.envrc" \
-        "${path_to_assets_of_node}/env"
-    cp \
-        "$(get_path_to_resources)/envs/local.base.env" \
+        "$(get_path_to_monorepo)/.test.env" \
         "${path_to_assets_of_node}/env/base.env"
     cp \
-        "$(get_path_to_resources)/envs/local.node.${idx_of_node}.env" \
+        "$(get_path_to_monorepo)/.test.hawk${idx_of_node}.env" \
         "${path_to_assets_of_node}/env/node.env"
 }
 
