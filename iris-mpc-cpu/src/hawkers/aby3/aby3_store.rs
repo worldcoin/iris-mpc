@@ -271,7 +271,7 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
-    async fn get_vectors_or_empty(
+    pub async fn get_vectors_or_empty(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
     ) -> Vec<IrisRef> {
@@ -366,7 +366,7 @@ impl Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, &pairs).await;
+        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, pairs).await;
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
     }
 }
@@ -419,13 +419,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| {
-                if let Some(v) = vector {
-                    Some((&q.processed_query, &**v))
-                } else {
-                    None
-                }
-            })
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&q.processed_query, &**v)))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -445,13 +439,9 @@ impl VectorStore for Aby3Store {
         let pairs = queries
             .iter()
             .flat_map(|q| {
-                vectors.iter().map(|vector| {
-                    if let Some(v) = vector {
-                        Some((&q.processed_query, &**v))
-                    } else {
-                        None
-                    }
-                })
+                vectors
+                    .iter()
+                    .map(|vector| vector.as_ref().map(|v| (&q.processed_query, &**v)))
             })
             .collect::<Vec<_>>();
 

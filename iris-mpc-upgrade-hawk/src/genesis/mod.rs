@@ -882,10 +882,10 @@ async fn get_results_thread(
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
                     let left_data = left_store
-                        .get_vectors(vector_ids_to_persist.iter())
+                        .get_vectors_or_empty(vector_ids_to_persist.iter())
                         .await;
                     let right_data = right_store
-                        .get_vectors(vector_ids_to_persist.iter())
+                        .get_vectors_or_empty(vector_ids_to_persist.iter())
                         .await;
 
                     let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
@@ -945,10 +945,10 @@ async fn get_results_thread(
                     let right_store = &imem_iris_stores_bg[RIGHT];
 
                     let left_iris = left_store
-                        .get_vector(&vector_id_to_persist)
+                        .get_vector_or_empty(&vector_id_to_persist)
                         .await;
                     let right_iris = right_store
-                        .get_vector(&vector_id_to_persist)
+                        .get_vector_or_empty(&vector_id_to_persist)
                         .await;
 
                     let mut graph_tx = graph_store_bg.tx().await?;
