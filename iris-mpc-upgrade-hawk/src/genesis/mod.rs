@@ -8,8 +8,11 @@ use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
-    config::{CommonConfig, Config},
-    helpers::{shutdown_handler::ShutdownHandler, sync::Modification, task_monitor::TaskMonitor},
+    config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
+    helpers::{
+        shutdown_handler::ShutdownHandler, smpc_request, sync::Modification,
+        task_monitor::TaskMonitor,
+    },
     postgres::{AccessMode, PostgresClient},
     server_coordination as coordinator, IrisSerialId,
 };
@@ -427,6 +430,20 @@ async fn exec_delta(
                 "Applying modification: type={} id={}, serial_id={:?}",
                 modification.request_type, modification.id, modification.serial_id
             ));
+            if modification.request_type == smpc_request::IDENTITY_DELETION_MESSAGE_TYPE {
+                if ctx.config.environment != ENV_PROD {
+                    log_info(format!(
+                        "Modification is a deletion: serial_id={:?} and it is not production therefore skipping",
+                        modification.serial_id
+                    ));
+                    continue;
+                }else {
+                    bail!(eyre!(
+                        "Modification is a deletion: serial_id={:?} and it is production therefore bailing",
+                        modification.serial_id
+                    ));
+                }
+            }
 
             // Submit modification to Hawk handle for processing.
             let request = JobRequest::new_modification(modification.clone());
@@ -749,7 +766,7 @@ async fn get_service_clients(
             .unwrap_or_else(|| DEFAULT_REGION.to_owned());
         let region_provider = Region::new(region);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let force_path_style = config.environment != "prod" && config.environment != "stage";
+        let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
         let retry_config = RetryConfig::standard().with_max_attempts(5);
         let s3_config = S3ConfigBuilder::from(&shared_config)
             .force_path_style(force_path_style)
