@@ -170,7 +170,7 @@ impl<V: VectorStore> GraphPg<V> {
         .bind(&new_schema_name)
         .fetch_all(&self.pool)
         .await?;
-        for (table,) in target_tables {
+        for (table,) in &target_tables {
             sqlx::query(&format!(
                 "DROP TABLE IF EXISTS \"{}\".\"{}\" CASCADE",
                 new_schema_name, table
@@ -187,24 +187,34 @@ impl<V: VectorStore> GraphPg<V> {
         .fetch_all(&self.pool)
         .await?;
 
-        // For each table, create it in the new schema and copy data
-        for (table,) in tables {
-            // Create table structure
-            sqlx::query(&format!(
-                "CREATE TABLE \"{}\".\"{}\" (LIKE \"{}\".\"{}\" INCLUDING ALL)",
-                new_schema_name, table, self.schema_name, table
-            ))
-            .execute(&self.pool)
-            .await?;
+        // Parallelize the per-table copy steps
+        let pool = self.pool.clone();
+        let schema_name = self.schema_name.clone();
+        let copy_tasks = tables.into_iter().map(|(table,)| {
+            let pool = pool.clone();
+            let schema_name = schema_name.clone();
+            let new_schema_name = new_schema_name.clone();
+            async move {
+                // Create table structure
+                sqlx::query(&format!(
+                    "CREATE TABLE \"{}\".\"{}\" (LIKE \"{}\".\"{}\" INCLUDING ALL)",
+                    new_schema_name, table, schema_name, table
+                ))
+                .execute(&pool)
+                .await?;
 
-            // Copy data
-            sqlx::query(&format!(
-                "INSERT INTO \"{}\".\"{}\" SELECT * FROM \"{}\".\"{}\"",
-                new_schema_name, table, self.schema_name, table
-            ))
-            .execute(&self.pool)
-            .await?;
-        }
+                // Copy data
+                sqlx::query(&format!(
+                    "INSERT INTO \"{}\".\"{}\" SELECT * FROM \"{}\".\"{}\"",
+                    new_schema_name, table, schema_name, table
+                ))
+                .execute(&pool)
+                .await?;
+                Ok::<(), eyre::Error>(())
+            }
+        });
+
+        futures::future::try_join_all(copy_tasks).await?;
 
         Ok(())
     }
