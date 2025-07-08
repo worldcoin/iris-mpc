@@ -15,44 +15,57 @@ function _help() {
 function _main()
 {
     echo "
+
     # Developer commands.
     mpctl-dev-apply-linter
     mpctl-dev-run-tests
+    mpctl-ls
 
-    # Docker based infra commands.
-    mpctl-dkr-build-image
+    # Local docker based infra commands.
+    mpctl-dkr-build-images
+    mpctl-dkr-init-db-for-genesis
     mpctl-dkr-net-down
+    mpctl-dkr-net-down-genesis
     mpctl-dkr-net-start
+    mpctl-dkr-net-start-genesis
     mpctl-dkr-net-stop
+    mpctl-dkr-net-stop-genesis
     mpctl-dkr-net-up
-    mpctl-dkr-net-view-status
+    mpctl-dkr-net-up-genesis
     mpctl-dkr-node-start
+    mpctl-dkr-node-start-genesis
     mpctl-dkr-node-stop
+    mpctl-dkr-node-stop-genesis
+    mpctl-dkr-node-view-logs
+    mpctl-dkr-node-view-logs-genesis
     mpctl-dkr-services-down
     mpctl-dkr-services-up
-
-    # Baremetal based infra commands.
-    mpctl-local-compile-binaries
-    mpctl-local-net-setup
-    mpctl-local-net-start
-    mpctl-local-net-start-genesis
-    mpctl-local-net-teardown
-    mpctl-local-node-activate-env
-    mpctl-local-node-start
-    mpctl-local-node-start-genesis
-    mpctl-local-node-update-binaries
-    mpctl-local-node-view-logs
 
     # Jobs.
     mpctl-job-aws-sm-rotate-keys
     mpctl-job-pgres-dump
     mpctl-job-pgres-init-from-plain-text-iris-file
     mpctl-job-pgres-restore
-    mpctl-job-pgres-truncate-graph-tables
-    mpctl-job-pgres-truncate-iris-tables
-    mpctl-job-pgres-truncate-state-tables
-    mpctl-job-write-iris-serial-ids-for-deletion
+    mpctl-job-pgres-truncate-all
+    mpctl-job-pgres-truncate-cpu-tables
+    mpctl-job-pgres-truncate-gpu-tables
+    mpctl-job-write-iris-deletions-file
     mpctl-job-write-plain-text-iris-file
+
+    # Local baremetal based infra commands.
+    mpctl-local-compile-binaries
+    mpctl-local-net-reset
+    mpctl-local-net-setup
+    mpctl-local-net-start
+    mpctl-local-net-start-genesis
+    mpctl-local-net-teardown
+    mpctl-local-net-update-binaries
+    mpctl-local-node-activate-env
+    mpctl-local-node-start
+    mpctl-local-node-start-genesis
+    mpctl-local-node-update-binaries
+    mpctl-local-node-view-env
+    mpctl-local-node-view-logs
     "
 }
 
