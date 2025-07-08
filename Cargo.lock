@@ -2334,6 +2334,7 @@ dependencies = [
  "itertools 0.13.0",
  "metrics 0.22.3",
  "metrics-exporter-statsd 0.7.0",
+ "metrics-logger",
  "percent-encoding",
  "rand",
  "rayon",
@@ -2850,6 +2851,14 @@ dependencies = [
  "cadence",
  "metrics 0.23.0",
  "thiserror",
+]
+
+[[package]]
+name = "metrics-logger"
+version = "0.22.1"
+source = "git+https://github.com/Inversed-Tech/MetricsLogger.git?branch=full_mode#438700848d0b6096b749e7f0e59e7138d709d19f"
+dependencies = [
+ "metrics 0.22.3",
 ]
 
 [[package]]
