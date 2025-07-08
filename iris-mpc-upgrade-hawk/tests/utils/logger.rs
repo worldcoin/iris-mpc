@@ -30,8 +30,8 @@ pub fn log_error(component: &str, msg: String) -> String {
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An information message.
 ///
-pub fn log_info(component: &str, msg: String) -> String {
-    let msg = get_formatted_message(component, msg);
+pub fn log_info(component: &str, msg: &str) -> String {
+    let msg = get_formatted_message(component, msg.to_string());
 
     // In testing print to stdout.
     #[cfg(test)]
