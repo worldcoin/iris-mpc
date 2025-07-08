@@ -8,8 +8,12 @@ use crate::services::processors::modifications_sync::{
 };
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
+use iris_mpc_common::helpers::batch_sync::{
+    get_batch_sync_entries, BatchSyncEntries, BatchSyncEntriesResult,
+};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -23,7 +27,8 @@ use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
     get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    start_coordination_server, wait_for_others_ready, wait_for_others_unready, CURRENT_BATCH_SHA,
+    CURRENT_BATCH_VALID_ENTRIES,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -32,6 +37,7 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
+use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::atomic::AtomicU64;
@@ -572,7 +578,7 @@ async fn run_main_server_loop(
         loop {
             let now = Instant::now();
 
-            let batch = match batch_stream.recv().await {
+            let mut batch = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -582,6 +588,57 @@ async fn run_main_server_loop(
                 }
                 Some(Ok(Some(batch))) => batch,
             };
+
+            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_valid_entries = batch.valid_entries.clone();
+
+            tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
+            tracing::info!(
+                "Received batch with {} valid entries and {} request types",
+                batch_valid_entries.len(),
+                batch.request_types.len()
+            );
+
+            *CURRENT_BATCH_VALID_ENTRIES.lock().unwrap() = batch_valid_entries.clone();
+            *CURRENT_BATCH_SHA.lock().unwrap() = batch_hash;
+
+            let own_batch_sync_entries = BatchSyncEntries {
+                valid_entries: batch.valid_entries.clone(),
+                batch_sha: batch_hash,
+            };
+            let batch_sync_entries =
+                get_batch_sync_entries(config, Some(&own_batch_sync_entries)).await?;
+
+            let batch_sync_entries_result =
+                BatchSyncEntriesResult::new(own_batch_sync_entries, batch_sync_entries);
+
+            if !batch_sync_entries_result.sha_matches() {
+                tracing::error!(
+                    "Batch sync entries SHA mismatch: own batch SHA: {}, all SHAs: {}",
+                    hex::encode(&batch_sync_entries_result.my_state.batch_sha[0..4]),
+                    batch_sync_entries_result
+                        .all_states
+                        .iter()
+                        .map(|s| hex::encode(&s.batch_sha[0..4]))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                return Err(eyre!("Batch sync entries SHA mismatch"));
+            }
+            let valid_entries = batch_sync_entries_result.valid_entries();
+            tracing::info!(
+                "Batch sync entries valid entries: {}",
+                valid_entries.clone().into_iter().filter(|b| *b).count()
+            );
+
+            if !valid_entries.eq(&batch_valid_entries) {
+                tracing::warn!(
+                    "Valid entries from sync does not equal own valid entries: (own) {}, (sync) {}",
+                    batch_valid_entries.into_iter().filter(|b| *b).count(),
+                    valid_entries.clone().into_iter().filter(|b| *b).count()
+                );
+                batch.valid_entries = valid_entries.clone();
+            }
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
