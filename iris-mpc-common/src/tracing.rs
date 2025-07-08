@@ -1,6 +1,7 @@
 use crate::config::Config;
 use eyre::Result;
 use metrics_exporter_statsd::StatsdBuilder;
+use metrics_logger::{metrics, LogMode, MetricsLogger, PeriodicMode};
 use std::{backtrace::Backtrace, panic};
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -14,15 +15,24 @@ pub fn initialize_tracing(config: &Config) -> Result<TracingShutdownHandle> {
             true,
         );
 
-        if let Some(metrics_config) = &service.metrics {
+        /*if let Some(metrics_config) = &service.metrics {
             let recorder = StatsdBuilder::from(&metrics_config.host, metrics_config.port)
                 .with_queue_size(metrics_config.queue_size)
                 .with_buffer_size(metrics_config.buffer_size)
                 .histogram_is_distribution()
                 .build(Some(&metrics_config.prefix))?;
             metrics::set_global_recorder(recorder)?;
-        }
+        }*/
 
+        let recorder = MetricsLogger::new(
+            LogMode::Periodic {
+                mode: PeriodicMode::Full,
+                interval: 1,
+            },
+            |logs| tracing::info!("{}", logs),
+            |err| tracing::error!("MetricsLogger error: {}", err),
+        );
+        metrics::set_global_recorder(recorder).unwrap();
         // Set a custom panic hook to print backtraces on one line
         panic::set_hook(Box::new(|panic_info| {
             let message = match panic_info.payload().downcast_ref::<&str>() {
