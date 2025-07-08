@@ -1,17 +1,16 @@
 use super::{
-    constants,
+    constants, resources,
     types::{NetInputs, NodeInputs, TestRunInfo},
 };
-use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns network level inputs for usage during a test run.
 pub fn get_net_inputs() -> NetInputs {
-    NetInputs::new(vec![
-        get_node_inputs(0),
-        get_node_inputs(1),
-        get_node_inputs(2),
-    ])
+    NetInputs::new(
+        (0..constants::COUNT_OF_PARTIES)
+            .map(|party_id| get_node_inputs(party_id))
+            .collect(),
+    )
 }
 
 /// Returns node level inputs for usage during a test run.
@@ -25,14 +24,10 @@ pub fn get_node_inputs(party_id: usize) -> NodeInputs {
         )
     }
 
-    pub fn get_config(_party_id: usize) -> NodeConfig {
-        unimplemented!()
-    }
-
-    NodeInputs::new(get_args(), get_config(party_id))
+    NodeInputs::new(get_args(), resources::read_node_config(party_id).unwrap())
 }
 
 /// Returns test run execution information.
 pub fn get_test_info(net_inputs: NetInputs) -> TestRunInfo {
-    TestRunInfo::new(net_inputs)
+    TestRunInfo::new(net_inputs, 100, 0)
 }

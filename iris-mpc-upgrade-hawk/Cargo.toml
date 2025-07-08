@@ -39,9 +39,11 @@ serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono = "0.4.38"
 sqlx.workspace = true
+toml = { version = "0.8.23", features = ["preserve_order"] }
 
 [dev-dependencies]
 criterion = "0.5"
+thiserror.workspace = true
 
 [features]
 default = []
@@ -49,3 +51,7 @@ default = []
 [[bin]]
 name = "iris-mpc-hawk-genesis"
 path = "bin/iris_mpc_hawk_genesis.rs"
+
+[[bin]]
+name = "write-node-config-toml"
+path = "bin/write_node_config_toml.rs"

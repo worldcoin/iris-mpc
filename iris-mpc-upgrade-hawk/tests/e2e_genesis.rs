@@ -1,31 +1,31 @@
 use eyre::Result;
 
 mod utils;
+mod workflows;
 
-/// HNSW-100: Basic genesis test.
-///   against:
-///     a known dataset of Iris shares in plaintext format;
-///     an empty dataset of exclusions;
-///     an empty dataset of modifications;
-///   asserts:
-///     node processes exit normally;
-///     graph construction is equivalent for each node;
 #[tokio::test]
 async fn test_100() -> Result<()> {
-    // Generic setup.
-    utils::setup();
-
-    // Set run network inputs.
-    let net_inputs = utils::get_net_inputs();
-
-    // Set run context info.
-    let run_info = utils::get_test_info(net_inputs);
-
-    // Execute tests.
-    utils::runner::exec_test(run_info).await;
-
-    // Test code here
-    assert!(true);
+    let workflow = workflows::Genesis_100::new();
+    workflow.run().await?;
 
     Ok(())
 }
+
+// #[tokio::test]
+// async fn test_100_1() -> Result<()> {
+//     // Set network inputs.
+//     let net_inputs = utils::get_net_inputs();
+
+//     // Set context info.
+//     let run_info = utils::get_test_info(net_inputs);
+
+//     // Execute tests.
+//     utils::runner::exec_test(run_info).await;
+
+//     // Perform asserts
+//     // TODO: implement assertions
+
+//     panic!("TODO");
+
+//     Ok(())
+// }

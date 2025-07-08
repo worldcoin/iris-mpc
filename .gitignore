@@ -6,3 +6,6 @@
 *.iml
 
 .DS_Store
+
+/tools/mpctl/assets/net
+/tools/mpctl/pgms/target
