@@ -239,7 +239,7 @@ impl<V: VectorStore> GraphPg<V> {
         // Drop backup tables if they exist
         for table in [backup_entry, backup_links] {
             sqlx::query(&format!(
-                "DROP TABLE IF EXISTS \"{}\".{} CASCADE",
+                "DROP TABLE IF EXISTS \"{}\".\"{}\" CASCADE",
                 schema, table
             ))
             .execute(&self.pool)
