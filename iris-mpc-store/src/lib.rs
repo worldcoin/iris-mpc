@@ -640,6 +640,17 @@ WHERE id = $1;
         Ok(())
     }
 
+    /// Delete all modifications from the modifications table.
+    pub async fn clear_modifications_table(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM modifications")
+            .execute(tx.deref_mut())
+            .await?;
+        Ok(())
+    }
+
     /// Initialize the database with random shares and masks. Cleans up the db
     /// before inserting new generated irises.
     pub async fn init_db_with_random_shares(
@@ -1310,6 +1321,40 @@ pub mod tests {
         // We expect only one modification to remain (m1).
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, m1.id);
+
+        // Clean up the temporary schema.
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear_modifications_table() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // Insert several modifications.
+        for i in 0..5 {
+            store
+                .insert_modification(Some(100 + i), IDENTITY_DELETION_MESSAGE_TYPE, None)
+                .await?;
+        }
+
+        // Ensure modifications are present.
+        let all_mods = store.last_modifications(10).await?;
+        assert_eq!(all_mods.len(), 5);
+
+        // Clear the modifications table.
+        let mut tx = store.tx().await?;
+        store.clear_modifications_table(&mut tx).await?;
+        tx.commit().await?;
+
+        // Ensure the table is empty.
+        let mods_after_clear = store.last_modifications(10).await?;
+        assert_eq!(mods_after_clear.len(), 0);
 
         // Clean up the temporary schema.
         cleanup(&postgres_client, &schema_name).await?;

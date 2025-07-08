@@ -142,6 +142,122 @@ impl<V: VectorStore> GraphPg<V> {
 
         Ok(())
     }
+
+    /// Copies the entire schema (all tables and data) from this schema to a new schema named "<current_schema>_backup".
+    ///
+    /// - Drops all tables in the target schema if they exist.
+    /// - Creates all tables in the target schema with the same structure as the source.
+    /// - Copies all data from the source tables to the target tables.
+    ///
+    /// This is a destructive operation for the target schema.
+    ///
+    /// Example usage:
+    ///     graph_pg.copy_schema().await?;
+    pub async fn copy_schema(&self) -> Result<()> {
+        let new_schema_name = format!("{}_backup", self.schema_name);
+        // Create the new schema if it doesn't exist
+        sqlx::query(&format!(
+            "CREATE SCHEMA IF NOT EXISTS \"{}\"",
+            new_schema_name
+        ))
+        .execute(&self.pool)
+        .await?;
+
+        // Drop all tables in the target schema first
+        let target_tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+        )
+        .bind(&new_schema_name)
+        .fetch_all(&self.pool)
+        .await?;
+        for (table,) in target_tables {
+            sqlx::query(&format!(
+                "DROP TABLE IF EXISTS \"{}\".\"{}\" CASCADE",
+                new_schema_name, table
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Get all table names in the current schema
+        let tables: Vec<(String,)> = sqlx::query_as(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+        )
+        .bind(&self.schema_name)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // For each table, create it in the new schema and copy data
+        for (table,) in tables {
+            // Create table structure
+            sqlx::query(&format!(
+                "CREATE TABLE \"{}\".\"{}\" (LIKE \"{}\".\"{}\" INCLUDING ALL)",
+                new_schema_name, table, self.schema_name, table
+            ))
+            .execute(&self.pool)
+            .await?;
+
+            // Copy data
+            sqlx::query(&format!(
+                "INSERT INTO \"{}\".\"{}\" SELECT * FROM \"{}\".\"{}\"",
+                new_schema_name, table, self.schema_name, table
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Copies the `hawk_graph_entry` and `hawk_graph_links` tables to backup tables with a `_backup` suffix in the same schema.
+    ///
+    /// - Drops the backup tables (`hawk_graph_entry_backup`, `hawk_graph_links_backup`) if they exist.
+    /// - Recreates the backup tables with the same structure as the originals.
+    /// - Copies all data from the original tables to the backup tables.
+    ///
+    /// This is a destructive operation for the backup tables: any existing data in them will be lost.
+    ///
+    /// Example usage:
+    ///     graph_pg.backup_hawk_graph_tables().await?;
+    pub async fn backup_hawk_graph_tables(&self) -> Result<()> {
+        let entry_table = "hawk_graph_entry";
+        let links_table = "hawk_graph_links";
+        let backup_entry = "hawk_graph_entry_backup";
+        let backup_links = "hawk_graph_links_backup";
+        let schema = &self.schema_name;
+
+        // Drop backup tables if they exist
+        for table in [backup_entry, backup_links] {
+            sqlx::query(&format!(
+                "DROP TABLE IF EXISTS \"{}\".{} CASCADE",
+                schema, table
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Create backup tables with the same structure as the originals
+        for (src, dest) in [(entry_table, backup_entry), (links_table, backup_links)] {
+            sqlx::query(&format!(
+                "CREATE TABLE \"{}\".{} (LIKE \"{}\".{} INCLUDING ALL)",
+                schema, dest, schema, src
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Copy data from original tables to backup tables
+        for (src, dest) in [(entry_table, backup_entry), (links_table, backup_links)] {
+            sqlx::query(&format!(
+                "INSERT INTO \"{}\".{} SELECT * FROM \"{}\".{}",
+                schema, dest, schema, src
+            ))
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(())
+    }
 }
 
 pub struct GraphTx<'a, V> {
@@ -807,6 +923,294 @@ mod tests {
         let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
         assert_eq!(value, None);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_copy_schema_creates_and_copies_tables_and_data() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let orig_schema = &graph.graph.schema_name;
+        let backup_schema = format!("{}_backup", orig_schema);
+
+        // Check that the schema does not exist yet
+        let schema_exists: Option<(String,)> = sqlx::query_as(
+            "SELECT schema_name FROM information_schema.schemata WHERE schema_name = $1",
+        )
+        .bind(&backup_schema)
+        .fetch_optional(pool)
+        .await?;
+        assert!(
+            schema_exists.is_none(),
+            "Schema should not exist before copy"
+        );
+
+        // Check that the table/data does not exist in the new schema
+        let table_exists: Option<(String,)> = sqlx::query_as(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'persistent_state'"
+        )
+        .bind(&backup_schema)
+        .fetch_optional(pool)
+        .await?;
+        assert!(
+            table_exists.is_none(),
+            "Table should not exist in new schema before copy"
+        );
+
+        // Insert a row into persistent_state in the original schema
+        let mut tx = graph.tx().await?.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, "domain", "key", &"value").await?;
+        tx.commit().await?;
+
+        // Copy schema (structure and data)
+        graph.graph.copy_schema().await?;
+
+        // Check that the table exists in the new schema and data is present
+        let row: Option<(String, String, String)> = sqlx::query_as(&format!(
+            "SELECT domain, \"key\", \"value\"::text FROM \"{}\".persistent_state WHERE domain = $1 AND \"key\" = $2",
+            backup_schema
+        ))
+        .bind("domain")
+        .bind("key")
+        .fetch_optional(pool)
+        .await?;
+        assert!(row.is_some(), "Row should exist in copied schema");
+        let (_domain, _key, value) = row.unwrap();
+        assert_eq!(value, "\"value\""); // JSON string
+
+        // Clean up both schemas
+        graph.cleanup().await?;
+        // Drop the copied schema
+        sqlx::query(&format!(
+            "DROP SCHEMA IF EXISTS \"{}\" CASCADE",
+            backup_schema
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_copy_schema_overwrites_existing_tables() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let orig_schema = &graph.graph.schema_name;
+        let backup_schema = format!("{}_backup", orig_schema);
+
+        // Create the target schema and a table with the same name but different structure
+        sqlx::query(&format!(
+            "CREATE SCHEMA IF NOT EXISTS \"{}\"",
+            backup_schema
+        ))
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS \"{}\".persistent_state (domain TEXT PRIMARY KEY, dummy_col INT)",
+            backup_schema
+        )).execute(pool).await?;
+        // Insert a dummy row
+        sqlx::query(&format!(
+            "INSERT INTO \"{}\".persistent_state (domain, dummy_col) VALUES ($1, $2)",
+            backup_schema
+        ))
+        .bind("should_be_deleted")
+        .bind(123)
+        .execute(pool)
+        .await?;
+
+        // Insert a row into persistent_state in the original schema
+        let mut tx = graph.tx().await?.tx;
+        GraphPg::<PlaintextStore>::set_persistent_state(&mut tx, "domain2", "key2", &"value2")
+            .await?;
+        tx.commit().await?;
+
+        // Copy schema (should drop and recreate the table, removing dummy_col and dummy row)
+        graph.graph.copy_schema().await?;
+
+        let row: Option<(String, String, String)> = sqlx::query_as(&format!(
+            "SELECT domain, \"key\", \"value\"::text FROM \"{}\".persistent_state WHERE domain = $1 AND \"key\" = $2",
+            backup_schema
+        ))
+        .bind("domain2")
+        .bind("key2")
+        .fetch_optional(pool)
+        .await?;
+        assert!(row.is_some(), "Row should exist in copied schema");
+        let (_domain, _key, value) = row.unwrap();
+        assert_eq!(value, "\"value2\"");
+
+        // The dummy row should not exist
+        let dummy_row: Option<(String,)> = sqlx::query_as(&format!(
+            "SELECT domain FROM \"{}\".persistent_state WHERE domain = $1",
+            backup_schema
+        ))
+        .bind("should_be_deleted")
+        .fetch_optional(pool)
+        .await?;
+        assert!(dummy_row.is_none(), "Dummy row should have been deleted");
+
+        // Clean up both schemas
+        graph.cleanup().await?;
+        sqlx::query(&format!(
+            "DROP SCHEMA IF EXISTS \"{}\" CASCADE",
+            backup_schema
+        ))
+        .execute(pool)
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backup_hawk_graph_tables_creates_and_copies() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let schema = &graph.graph.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        let entry_backup = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let links_backup = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Insert a row into hawk_graph_entry and hawk_graph_links
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_table
+        ))
+        .bind(1i16)
+        .bind(42i64)
+        .bind(0i16)
+        .bind(0i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table))
+            .bind(1i16)
+            .bind(42i64)
+            .bind(0i16)
+            .bind(0i16)
+            .bind(vec![1u8,2u8,3u8])
+            .execute(pool)
+            .await?;
+
+        // Run backup
+        graph.graph.backup_hawk_graph_tables().await?;
+
+        // Check backup tables exist and have the data
+        let entry_row: Option<(i16, i64, i16, i16)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer FROM {}",
+            entry_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(entry_row.is_some(), "Entry backup row should exist");
+        let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 42);
+        assert_eq!(version_id, 0);
+        assert_eq!(layer, 0);
+
+        let links_row: Option<(i16, i64, i16, i16, Vec<u8>)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer, links FROM {}",
+            links_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(links_row.is_some(), "Links backup row should exist");
+        let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 42);
+        assert_eq!(version_id, 0);
+        assert_eq!(layer, 0);
+        assert_eq!(links, vec![1u8, 2u8, 3u8]);
+
+        // Clean up
+        graph.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backup_hawk_graph_tables_overwrites_existing_backup() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let schema = &graph.graph.schema_name;
+        let entry_backup = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let links_backup = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Create backup tables with dummy data
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2)", entry_backup)).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2, links BYTEA)", links_backup)).execute(pool).await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_backup
+        ))
+        .bind(99i16)
+        .bind(99i64)
+        .bind(99i16)
+        .bind(99i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_backup))
+            .bind(99i16)
+            .bind(99i64)
+            .bind(99i16)
+            .bind(99i16)
+            .bind(vec![9u8,9u8,9u8])
+            .execute(pool)
+            .await?;
+
+        // Insert a row into hawk_graph_entry and hawk_graph_links
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_table
+        ))
+        .bind(2i16)
+        .bind(43i64)
+        .bind(1i16)
+        .bind(1i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table))
+            .bind(2i16)
+            .bind(43i64)
+            .bind(1i16)
+            .bind(1i16)
+            .bind(vec![4u8,5u8,6u8])
+            .execute(pool)
+            .await?;
+
+        // Run backup (should overwrite backup tables)
+        graph.graph.backup_hawk_graph_tables().await?;
+
+        // Check backup tables have only the new data
+        let entry_row: Option<(i16, i64, i16, i16)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer FROM {}",
+            entry_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(entry_row.is_some(), "Entry backup row should exist");
+        let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
+        assert_eq!(graph_id, 2);
+        assert_eq!(serial_id, 43);
+        assert_eq!(version_id, 1);
+        assert_eq!(layer, 1);
+
+        let links_row: Option<(i16, i64, i16, i16, Vec<u8>)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer, links FROM {}",
+            links_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(links_row.is_some(), "Links backup row should exist");
+        let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
+        assert_eq!(graph_id, 2);
+        assert_eq!(serial_id, 43);
+        assert_eq!(version_id, 1);
+        assert_eq!(layer, 1);
+        assert_eq!(links, vec![4u8, 5u8, 6u8]);
+
+        // Clean up
+        graph.cleanup().await?;
         Ok(())
     }
 }

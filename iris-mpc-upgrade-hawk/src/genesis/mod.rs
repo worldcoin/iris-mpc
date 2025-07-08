@@ -156,7 +156,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     hawk_handle = exec_delta(
         &config,
         &ctx,
-        graph_store,
+        graph_store.clone(),
         hawk_handle,
         &tx_results,
         &mut task_monitor_bg,
@@ -184,6 +184,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         exec_snapshot(&ctx, &aws_rds_client).await?;
         log_info(String::from("Snapshot complete."));
     };
+    // Phase 4: database backup.
+    log_info(String::from("Database backup begins"));
+    exec_database_backup(graph_store.clone()).await?;
 
     Ok(())
 }
@@ -315,6 +318,25 @@ async fn exec_setup(
         log_warn(String::from("Shutting down has been triggered"));
         bail!("Shutdown")
     }
+
+    // Clear modifications from the HNSW iris store
+    // This is because after a genesis run, we expect there to be no modifications
+    // as it is already synced
+    let mut tx = hnsw_iris_store.tx().await?;
+    hnsw_iris_store
+        .clear_modifications_table(&mut tx)
+        .await
+        .map_err(|err| {
+            eyre!(log_error(format!(
+                "Failed to clear modifications: {:?}",
+                err
+            )))
+        })?;
+    tx.commit().await?;
+
+    log_info(String::from(
+        "Cleared modifications from the HNSW iris store",
+    ));
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config).await?;
@@ -698,6 +720,41 @@ async fn exec_snapshot(
     log_info(format!(
         "Created RDS snapshot for cluster: cluster-id={} :: snapshot-id={}",
         cluster_id, snapshot_id
+    ));
+
+    Ok(())
+}
+
+/// Executes database backup by copying schema and table data.
+///
+/// # Arguments
+///
+/// * `graph_store` - Arc-wrapped HNSW graph store instance.
+async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<(), IndexationError> {
+    log_info(String::from("Schema snapshot begins"));
+    let now = Instant::now();
+    graph_store.copy_schema().await.map_err(|err| {
+        log_error(format!("Failed to copy schema: {}", err));
+        IndexationError::DatabaseCopyFailure(err.to_string())
+    })?;
+
+    log_info(format!(
+        "Schema snapshot ended - time taken is {:?}s",
+        now.elapsed().as_secs_f64()
+    ));
+
+    log_info(String::from("Table data snapshot begins"));
+    let now = Instant::now();
+    graph_store
+        .backup_hawk_graph_tables()
+        .await
+        .map_err(|err| {
+            log_error(format!("Failed to copy table data: {}", err));
+            IndexationError::DatabaseCopyFailure(err.to_string())
+        })?;
+    log_info(format!(
+        "Table data snapshot ended - time taken is {:?}s",
+        now.elapsed().as_secs_f64()
     ));
 
     Ok(())
