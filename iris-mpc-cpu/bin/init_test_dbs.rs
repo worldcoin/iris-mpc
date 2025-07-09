@@ -1,8 +1,8 @@
 use clap::Parser;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
-    hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
         HnswSearcher,
@@ -175,6 +175,12 @@ impl From<&Args> for HnswParams {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct IrisCodeWithSerialId {
+    pub iris_code: IrisCode,
+    pub serial_id: SerialId,
+}
+
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -298,13 +304,9 @@ async fn main() -> Result<()> {
             .into_iter::<Base64IrisCode>()
             .take(2 * n_existing_irises);
         for (count, json_pt) in stream.enumerate() {
-            let raw_query: IrisCode = (&json_pt.unwrap()).into();
-            let serial_id = (count / 2 + 1) as u32; // serial_id starts at 1
+            let raw_query = (&json_pt.unwrap()).into();
             let side = count % 2;
-            let query = Arc::new(IrisCodeWithSerialId {
-                iris_code: raw_query,
-                serial_id,
-            });
+            let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
         }
     }
@@ -358,14 +360,16 @@ async fn main() -> Result<()> {
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                if skip_serial_ids.contains(&raw_query.serial_id) {
+                let serial_id = raw_query.serial_id;
+                if skip_serial_ids.contains(&serial_id) {
                     info!(
                         "Skipping insertion of serial id {} for {} side",
-                        raw_query.serial_id, side
+                        serial_id, side
                     );
                     continue;
                 }
-                let query = Arc::new(raw_query);
+                let query = Arc::new(raw_query.iris_code);
+                vector_store.set_next_id(serial_id);
 
                 let inserted_id = vector_store.insert(&query).await;
                 let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;

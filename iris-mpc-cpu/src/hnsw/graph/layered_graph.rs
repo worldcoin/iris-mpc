@@ -252,7 +252,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+        hawkers::plaintext_store::PlaintextStore,
         hnsw::{vector_store::VectorStoreMut, HnswSearcher},
     };
     use aes_prng::AesRng;
@@ -331,11 +331,8 @@ mod tests {
 
         let raw_queries = IrisDB::new_random_rng(10, &mut rng);
 
-        for (idx, iris_code) in raw_queries.db.into_iter().enumerate() {
-            let query = Arc::new(IrisCodeWithSerialId {
-                iris_code,
-                serial_id: idx as u32 + 1,
-            });
+        for raw_query in raw_queries.db {
+            let query = Arc::new(raw_query);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
@@ -373,15 +370,8 @@ mod tests {
         let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =
             HashMap::new();
 
-        for (idx, iris_code) in IrisDB::new_random_rng(20, &mut rng)
-            .db
-            .into_iter()
-            .enumerate()
-        {
-            let query = Arc::new(IrisCodeWithSerialId {
-                iris_code,
-                serial_id: idx as u32 + 1,
-            });
+        for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
+            let query = Arc::new(raw_query);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)

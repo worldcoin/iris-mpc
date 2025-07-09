@@ -553,7 +553,7 @@ mod tests {
 
     use super::{test_utils::TestGraphPg, *};
     use crate::{
-        hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+        hawkers::plaintext_store::PlaintextStore,
         hnsw::{
             graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             SortedNeighborhood,
@@ -585,11 +585,8 @@ mod tests {
 
         let vectors = {
             let mut v = vec![];
-            for (idx, iris_code) in IrisDB::new_random_rng(5, rng).db.into_iter().enumerate() {
-                let q = Arc::new(IrisCodeWithSerialId {
-                    iris_code,
-                    serial_id: idx as u32 + 1,
-                });
+            for raw_query in IrisDB::new_random_rng(5, rng).db {
+                let q = Arc::new(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
             v
@@ -597,11 +594,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let iris_code = vector_store.points[&1].clone();
-            let q = Arc::new(IrisCodeWithSerialId {
-                iris_code,
-                serial_id: 1,
-            });
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -643,11 +636,8 @@ mod tests {
 
         let vectors = {
             let mut v = vec![];
-            for (idx, iris_code) in IrisDB::new_random_rng(10, rng).db.into_iter().enumerate() {
-                let q = Arc::new(IrisCodeWithSerialId {
-                    iris_code,
-                    serial_id: idx as u32 + 1,
-                });
+            for raw_query in IrisDB::new_random_rng(10, rng).db {
+                let q = Arc::new(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
             v
@@ -655,13 +645,9 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let iris_code = vector_store.points.get(&1).unwrap();
-            let query = Arc::new(IrisCodeWithSerialId {
-                iris_code: iris_code.clone(),
-                serial_id: 1,
-            });
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
-                d.push(vector_store.eval_distance(&query, v).await?);
+                d.push(vector_store.eval_distance(&q, v).await?);
             }
             d
         };
@@ -717,18 +703,11 @@ mod tests {
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let db = HnswSearcher::new_with_test_parameters();
 
-        let queries1: Vec<Arc<IrisCodeWithSerialId>> = IrisDB::new_random_rng(10, rng)
+        let queries1 = IrisDB::new_random_rng(10, rng)
             .db
             .into_iter()
-            .enumerate()
-            .map(|(idx, iris)| {
-                Arc::new(IrisCodeWithSerialId {
-                    iris_code: iris,
-                    serial_id: idx as u32 + 1,
-                })
-            })
+            .map(Arc::new)
             .collect::<Vec<_>>();
-
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {

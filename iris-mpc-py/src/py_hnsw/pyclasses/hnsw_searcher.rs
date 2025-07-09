@@ -1,6 +1,5 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::IrisCodeWithSerialId,
     hnsw::searcher::{HnswParams, HnswSearcher, N_PARAM_LAYERS},
     py_bindings,
 };
@@ -65,12 +64,7 @@ impl PyHnswSearcher {
         vector: &mut PyPlaintextStore,
         graph: &mut PyGraphStore,
     ) -> u32 {
-        let serial_id = vector.len() as u32 + 1; // Serial ID is one-based index
-        let query = IrisCodeWithSerialId {
-            iris_code: iris.0,
-            serial_id,
-        };
-        let id = py_bindings::hnsw::insert(query, &self.0, &mut vector.0, &mut graph.0);
+        let id = py_bindings::hnsw::insert(iris.0, &self.0, &mut vector.0, &mut graph.0);
         id.serial_id()
     }
 

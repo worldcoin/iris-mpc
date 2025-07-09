@@ -61,9 +61,11 @@ async fn create_graph_from_plain_dbs(
         .collect();
     let mut left_store = PlaintextStore {
         points: left_points,
+        next_id: left_db.db.len() as u32 + 1,
     };
     let mut right_store = PlaintextStore {
         points: right_points,
+        next_id: right_db.db.len() as u32 + 1,
     };
     let searcher = HnswSearcher {
         params: params.clone(),

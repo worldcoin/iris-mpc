@@ -22,18 +22,13 @@ use super::aby3::aby3_store::VectorId;
 use eyre::{bail, Result};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct IrisCodeWithSerialId {
-    pub iris_code: IrisCode,
-    pub serial_id: SerialId,
-}
-
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: HashMap<SerialId, IrisCode>,
+    pub next_id: u32,
 }
 
 impl PlaintextStore {
@@ -50,7 +45,10 @@ impl PlaintextStore {
             .enumerate()
             .map(|(idx, iris)| (idx as u32 + 1, iris))
             .collect::<HashMap<u32, IrisCode>>();
-        Self { points }
+        Self {
+            points,
+            next_id: store_size as u32 + 1,
+        }
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this
@@ -74,13 +72,9 @@ impl PlaintextStore {
         keys.truncate(graph_size);
 
         for key in keys {
-            let iris_code = self.points[&key].clone();
-            let query_id = VectorId::from_serial_id(key);
+            let query = self.points[&key].clone();
+            let query_id = VectorId::from_0_index(key);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
-            let query = IrisCodeWithSerialId {
-                iris_code,
-                serial_id: key,
-            };
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
@@ -90,6 +84,10 @@ impl PlaintextStore {
         }
 
         Ok(graph)
+    }
+
+    pub async fn set_next_id(&mut self, next_id: u32) {
+        self.next_id = next_id;
     }
 }
 
@@ -105,17 +103,14 @@ fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
 }
 
 impl VectorStore for PlaintextStore {
-    type QueryRef = IrisCodeWithSerialId;
+    type QueryRef = IrisCode;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         vectors
             .iter()
-            .map(|id| IrisCodeWithSerialId {
-                iris_code: self.points.get(&id.serial_id()).unwrap().clone(),
-                serial_id: id.serial_id(),
-            })
+            .map(|id| self.points.get(&id.serial_id()).unwrap().clone())
             .collect()
     }
 
@@ -129,7 +124,7 @@ impl VectorStore for PlaintextStore {
             .points
             .get(&vector.serial_id())
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store"))?;
-        Ok(query.iris_code.get_distance_fraction(vector_code))
+        Ok(query.get_distance_fraction(vector_code))
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -148,8 +143,10 @@ impl VectorStore for PlaintextStore {
 
 impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.points.insert(query.serial_id, query.iris_code.clone());
-        VectorId::from_serial_id(query.serial_id)
+        let serial_id = self.next_id;
+        self.points.insert(serial_id, query.clone());
+        self.next_id += 1;
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -157,6 +154,7 @@ impl VectorStoreMut for PlaintextStore {
 #[derive(Default, Debug, Clone)]
 pub struct SharedPlaintextStore {
     pub points: Arc<RwLock<HashMap<u32, IrisCode>>>,
+    next_id: u32,
 }
 
 impl SharedPlaintextStore {
@@ -169,12 +167,13 @@ impl From<PlaintextStore> for SharedPlaintextStore {
     fn from(value: PlaintextStore) -> Self {
         Self {
             points: Arc::new(RwLock::new(value.points)),
+            next_id: value.next_id,
         }
     }
 }
 
 impl VectorStore for SharedPlaintextStore {
-    type QueryRef = IrisCodeWithSerialId;
+    type QueryRef = IrisCode;
     type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
@@ -182,10 +181,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.points.read().await;
         vectors
             .iter()
-            .map(|id| IrisCodeWithSerialId {
-                iris_code: store.get(&id.serial_id()).unwrap().clone(),
-                serial_id: id.serial_id(),
-            })
+            .map(|id| store.get(&id.serial_id()).unwrap().clone())
             .collect()
     }
 
@@ -199,7 +195,7 @@ impl VectorStore for SharedPlaintextStore {
         let vector_code = store
             .get(&vector.serial_id())
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store"))?;
-        Ok(query.iris_code.get_distance_fraction(vector_code))
+        Ok(query.get_distance_fraction(vector_code))
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -218,9 +214,10 @@ impl VectorStore for SharedPlaintextStore {
 
 impl VectorStoreMut for SharedPlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        let serial_id = self.next_id;
         let mut store = self.points.write().await;
-        store.insert(query.serial_id, query.iris_code.clone());
-        VectorId::from_serial_id(query.serial_id)
+        store.insert(serial_id, query.clone());
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -241,16 +238,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0_u64);
         let mut store = PlaintextStore::new();
 
-        let db_code = IrisDB::new_random_rng(10, &mut rng).db;
-
-        let db = db_code
-            .iter()
-            .enumerate()
-            .map(|(idx, iris)| IrisCodeWithSerialId {
-                iris_code: iris.clone(),
-                serial_id: idx as u32 + 1,
-            })
-            .collect::<Vec<_>>();
+        let db = IrisDB::new_random_rng(10, &mut rng).db;
 
         let mut ids = Vec::new();
         for q in db.iter() {
@@ -268,44 +256,37 @@ mod tests {
 
         assert_eq!(
             store.less_than(&d01, &d23).await?,
-            db[0].iris_code.get_distance(&db[1].iris_code)
-                < db[2].iris_code.get_distance(&db[3].iris_code)
+            db[0].get_distance(&db[1]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d23, &d01).await?,
-            db[2].iris_code.get_distance(&db[3].iris_code)
-                < db[0].iris_code.get_distance(&db[1].iris_code)
+            db[2].get_distance(&db[3]) < db[0].get_distance(&db[1])
         );
 
         assert_eq!(
             store.less_than(&d02, &d13).await?,
-            db[0].iris_code.get_distance(&db[2].iris_code)
-                < db[1].iris_code.get_distance(&db[3].iris_code)
+            db[0].get_distance(&db[2]) < db[1].get_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d03, &d12).await?,
-            db[0].iris_code.get_distance(&db[3].iris_code)
-                < db[1].iris_code.get_distance(&db[2].iris_code)
+            db[0].get_distance(&db[3]) < db[1].get_distance(&db[2])
         );
 
         assert_eq!(
             store.less_than(&d10, &d23).await?,
-            db[1].iris_code.get_distance(&db[0].iris_code)
-                < db[2].iris_code.get_distance(&db[3].iris_code)
+            db[1].get_distance(&db[0]) < db[2].get_distance(&db[3])
         );
 
         assert_eq!(
             store.less_than(&d12, &d30).await?,
-            db[1].iris_code.get_distance(&db[2].iris_code)
-                < db[3].iris_code.get_distance(&db[0].iris_code)
+            db[1].get_distance(&db[2]) < db[3].get_distance(&db[0])
         );
 
         assert_eq!(
             store.less_than(&d02, &d01).await?,
-            db[0].iris_code.get_distance(&db[2].iris_code)
-                < db[0].iris_code.get_distance(&db[1].iris_code)
+            db[0].get_distance(&db[2]) < db[0].get_distance(&db[1])
         );
 
         Ok(())
@@ -323,10 +304,6 @@ mod tests {
             .await?;
         for i in 0..database_size {
             let query = ptxt_vector.points.get(&(i as u32 + 1)).unwrap().clone();
-            let query = IrisCodeWithSerialId {
-                iris_code: query.clone(),
-                serial_id: i as u32 + 1,
-            };
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;

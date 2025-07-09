@@ -1,5 +1,4 @@
-use crate::py_hnsw::pyclasses::iris_code::PyIrisCode;
-
+use super::iris_code::PyIrisCode;
 use iris_mpc_cpu::{hawkers::plaintext_store::PlaintextStore, py_bindings};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -15,18 +14,14 @@ impl PyPlaintextStore {
     }
 
     pub fn get(&self, id: u32) -> PyIrisCode {
-        self.0
-            .points
-            .get(&id)
-            .expect("Iris code not found")
-            .clone()
-            .into()
+        self.0.points[&id].clone().into()
     }
 
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
-        let new_id = self.0.points.len() as u32;
-        self.0.points.insert(new_id + 1, iris.0);
-        new_id
+        let serial_id = self.0.next_id;
+        self.0.points.insert(serial_id, iris.0);
+        self.0.next_id += 1;
+        serial_id
     }
 
     pub fn len(&self) -> usize {

@@ -8,7 +8,7 @@ use iris_mpc_cpu::{
             aby3_store::prepare_query,
             test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
         },
-        plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
+        plaintext_store::PlaintextStore,
     },
     hnsw::{GraphMem, HnswSearcher},
     protocol::{
@@ -49,13 +49,9 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
             let mut graph = GraphMem::new();
             let searcher = HnswSearcher::new_with_test_parameters();
 
-            for idx in 0..database_size {
-                let iris_code = IrisCode::random_rng(&mut rng);
-                let raw_query = IrisCodeWithSerialId {
-                    iris_code: iris_code.clone(),
-                    serial_id: idx as u32 + 1,
-                };
-                let query = Arc::new(raw_query);
+            for _ in 0..database_size {
+                let raw_query = IrisCode::random_rng(&mut rng);
+                let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
                 searcher
                     .insert(&mut vector, &mut graph, &query, insertion_layer)
@@ -71,12 +67,8 @@ fn bench_plaintext_hnsw(c: &mut Criterion) {
                 |(mut db_vectors, mut graph)| async move {
                     let searcher = HnswSearcher::new_with_test_parameters();
                     let mut rng = AesRng::seed_from_u64(0_u64);
-                    let on_the_fly_code = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
-                    let raw_query = IrisCodeWithSerialId {
-                        iris_code: on_the_fly_code.clone(),
-                        serial_id: db_vectors.points.len() as u32 + 1,
-                    };
-                    let query = Arc::new(raw_query);
+                    let on_the_fly_query = IrisDB::new_random_rng(1, &mut rng).db[0].clone();
+                    let query = Arc::new(on_the_fly_query);
                     let insertion_layer = searcher.select_layer_rng(&mut rng).unwrap();
                     searcher
                         .insert(&mut db_vectors, &mut graph, &query, insertion_layer)

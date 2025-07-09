@@ -1083,10 +1083,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{
-        hawkers::plaintext_store::{IrisCodeWithSerialId, PlaintextStore},
-        hnsw::GraphMem,
-    };
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -1102,13 +1099,7 @@ mod tests {
         let queries1 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .enumerate()
-            .map(|(idx, iris)| {
-                Arc::new(IrisCodeWithSerialId {
-                    iris_code: iris,
-                    serial_id: idx as u32 + 1,
-                })
-            })
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes.
@@ -1127,13 +1118,7 @@ mod tests {
         let queries2 = IrisDB::new_random_rng(100, rng)
             .db
             .into_iter()
-            .enumerate()
-            .map(|(idx, iris)| {
-                Arc::new(IrisCodeWithSerialId {
-                    iris_code: iris,
-                    serial_id: idx as u32 + 101,
-                })
-            })
+            .map(Arc::new)
             .collect::<Vec<_>>();
 
         // Insert the codes with helper function
