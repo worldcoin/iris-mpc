@@ -86,7 +86,7 @@ impl PlaintextStore {
         Ok(graph)
     }
 
-    pub async fn set_next_id(&mut self, next_id: u32) {
+    pub fn set_next_id(&mut self, next_id: u32) {
         self.next_id = next_id;
     }
 }
