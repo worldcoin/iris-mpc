@@ -135,6 +135,7 @@ async fn e2e_test() -> Result<()> {
         disable_persistence: false,
         match_distances_buffer_size: 64,
         n_buckets: 10,
+        tls: None,
     };
     let args1 = HawkArgs {
         party_index: 1,
