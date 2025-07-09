@@ -1,5 +1,5 @@
 use eyre::Result;
-use utils::runner::{TestRun, TestRunInfo};
+use utils::{TestRun, TestRunInfo};
 
 mod utils;
 mod workflows;

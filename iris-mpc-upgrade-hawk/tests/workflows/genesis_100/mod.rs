@@ -1,3 +1,4 @@
+mod factory;
 mod inputs;
 mod runner;
 

@@ -10,6 +10,7 @@ fn get_formatted_message(component: &str, msg: String) -> String {
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An error message.
 ///
+#[allow(dead_code)]
 pub fn log_error(component: &str, msg: String) -> String {
     let msg = get_formatted_message(component, msg);
 
@@ -50,6 +51,7 @@ pub fn log_info(component: &str, msg: &str) -> String {
 /// * `component` - A component encapsulating a unit of system functionality.
 /// * `msg` - An information message.
 ///
+#[allow(dead_code)]
 pub fn log_warn(component: &str, msg: String) -> String {
     let msg = get_formatted_message(component, msg);
 

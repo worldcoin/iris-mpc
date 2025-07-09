@@ -9,11 +9,11 @@ fn get_path_to_resources() -> String {
 }
 
 /// Returns node configuration deserialized from a toml file.
-pub fn read_node_config(idx_of_node: usize) -> Result<NodeConfig, Error> {
+pub fn read_node_config(config_fname: String) -> Result<NodeConfig, Error> {
     let path_to_cfg = format!(
-        "{}/node-config/node-{}-genesis.toml",
+        "{}/node-config/{}.toml",
         get_path_to_resources(),
-        idx_of_node
+        config_fname
     );
     let cfg = std::fs::read_to_string(path_to_cfg)?;
 

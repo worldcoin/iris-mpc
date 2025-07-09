@@ -1,18 +1,39 @@
-use crate::utils::{constants::COUNT_OF_PARTIES, types::NodeInputs};
-use iris_mpc_common::IrisSerialId;
+use crate::utils::constants::COUNT_OF_PARTIES;
+use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
+use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
-/// Excapsulates data used to drive a test run.
+/// Inputs required to run a network.
 #[derive(Debug, Clone)]
-pub struct TestInputs {
-    // Data used to launch each node process during a test run.
-    node_process_inputs: NodeProcessInputs,
-
-    // Data used to initialise system state prior to a test run.
-    system_state_inputs: SystemStateInputs,
+pub struct NetProcessInputs {
+    /// Node input arguments.
+    pub node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
 }
 
-/// Encapsulates data used to launch each node process during a test run.
-pub type NodeProcessInputs = [NodeInputs; COUNT_OF_PARTIES];
+/// Constructor.
+impl NetProcessInputs {
+    pub fn new(node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES]) -> Self {
+        Self {
+            node_process_inputs,
+        }
+    }
+}
+
+/// Inputs required to run a node.
+#[derive(Debug, Clone)]
+pub struct NodeProcessInputs {
+    /// Node input arguments.
+    pub args: NodeArgs,
+
+    /// Node input configuration.
+    pub config: NodeConfig,
+}
+
+/// Constructor.
+impl NodeProcessInputs {
+    pub fn new(args: NodeArgs, config: NodeConfig) -> Self {
+        Self { args, config }
+    }
+}
 
 /// Encapsulates data used to initialise system state prior to a test run.
 #[derive(Debug, Clone)]

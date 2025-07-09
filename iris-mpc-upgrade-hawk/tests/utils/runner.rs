@@ -63,6 +63,7 @@ impl TestRunInfo {
         Self { idx: 1, kind }
     }
 
+    #[allow(dead_code)]
     pub fn new_in_batch(kind: usize, idx: usize) -> Self {
         Self { idx, kind }
     }

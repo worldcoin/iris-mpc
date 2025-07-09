@@ -1,5 +1,8 @@
-use super::inputs::TestInputs;
-use crate::utils::{runner::TestRun, TestError};
+use super::{
+    factory,
+    inputs::{NetProcessInputs, SystemStateInputs},
+};
+use crate::utils::{TestError, TestRun};
 
 /// HNSW Genesis test.
 pub struct Test {
@@ -14,29 +17,65 @@ impl Test {
     }
 }
 
+/// Excapsulates data used to drive a test run.
+#[derive(Debug, Clone)]
+pub struct TestInputs {
+    // Data used to launch each node process during a test run.
+    net_process_inputs: NetProcessInputs,
+
+    // Data used to initialise system state prior to a test run.
+    system_state_inputs: Option<SystemStateInputs>,
+}
+
+/// Constructor.
+impl TestInputs {
+    pub fn new(
+        net_process_inputs: NetProcessInputs,
+        system_state_inputs: Option<SystemStateInputs>,
+    ) -> Self {
+        Self {
+            net_process_inputs,
+            system_state_inputs,
+        }
+    }
+}
+
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        println!("Executing test");
+
+        Ok(())
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        println!("Executing test assertion");
+
+        Ok(())
     }
 
     async fn setup(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        // Set inputs.
+        self.inputs = Some(TestInputs::new(factory::get_net_process_inputs(), None));
+
+        Ok(())
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        println!("Executing setup assertion");
+
+        Ok(())
     }
 
     async fn teardown(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        println!("Executing teardown");
+
+        Ok(())
     }
 
     async fn teardown_assert(&mut self) -> Result<(), TestError> {
-        unimplemented!()
+        println!("Executing teardown assertion");
+
+        Ok(())
     }
 }
