@@ -5,6 +5,7 @@ use eyre::Result;
 use iris_mpc::server::server_main;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
+use std::process::exit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+            exit(1);
         }
     }
     Ok(())
