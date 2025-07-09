@@ -47,7 +47,7 @@ impl PlaintextStore {
             .collect::<HashMap<u32, IrisCode>>();
         Self {
             points,
-            next_id: store_size as u32 + 1,
+            next_id: store_size as u32 + 2,
         }
     }
 
@@ -73,7 +73,7 @@ impl PlaintextStore {
 
         for key in keys {
             let query = self.points[&key].clone();
-            let query_id = VectorId::from_0_index(key);
+            let query_id = VectorId::from_serial_id(key);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
@@ -120,10 +120,11 @@ impl VectorStore for PlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
+        let serial_id = vector.serial_id();
         let vector_code = &self
             .points
             .get(&vector.serial_id())
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store"))?;
+            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
 
@@ -192,9 +193,10 @@ impl VectorStore for SharedPlaintextStore {
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.points.read().await;
+        let serial_id = vector.serial_id();
         let vector_code = store
-            .get(&vector.serial_id())
-            .ok_or_else(|| eyre::eyre!("Vector ID not found in store"))?;
+            .get(&serial_id)
+            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
 
@@ -303,7 +305,8 @@ mod tests {
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
         for i in 0..database_size {
-            let query = ptxt_vector.points.get(&(i as u32 + 1)).unwrap().clone();
+            let serial_id = i as u32 + 1;
+            let query = ptxt_vector.points.get(&serial_id).unwrap().clone();
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
