@@ -15,13 +15,9 @@ use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::oneshot;
-
-pub static CURRENT_BATCH_SHA: LazyLock<Mutex<[u8; 32]>> = LazyLock::new(|| Mutex::new([0; 32]));
-pub static CURRENT_BATCH_VALID_ENTRIES: LazyLock<Mutex<Vec<bool>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReadyProbeResponse {

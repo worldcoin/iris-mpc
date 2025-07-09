@@ -1395,6 +1395,7 @@ async fn server_main(config: Config) -> Result<()> {
             successful_reauths,
             reauth_target_indices,
             reauth_or_rule_used,
+            sns_message_ids,
             reset_update_indices,
             reset_update_request_ids,
             reset_update_shares,

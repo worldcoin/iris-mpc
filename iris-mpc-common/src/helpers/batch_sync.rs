@@ -1,9 +1,9 @@
 use crate::config::Config;
 use crate::helpers::sqs::get_approximate_number_of_messages;
-use crate::server_coordination::{
-    get_check_addresses, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES,
-};
+use crate::job::{InflightBatchMap, INFLIGHT_BATCHES};
+use crate::server_coordination::get_check_addresses;
 use eyre::{eyre, Context, Result};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::time::{timeout, Duration};
 
@@ -13,46 +13,47 @@ pub struct BatchSyncState {
     pub batch_id: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BatchSyncEntries {
-    pub valid_entries: Vec<bool>,
-    pub batch_sha: [u8; 32],
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BatchSyncEntriesResult {
-    pub my_state: BatchSyncEntries,
-    pub all_states: Vec<BatchSyncEntries>,
+    pub my_state: InflightBatchMap,
+    pub all_states: Vec<InflightBatchMap>,
 }
 
 impl BatchSyncEntriesResult {
-    pub fn new(my_state: BatchSyncEntries, all_states: Vec<BatchSyncEntries>) -> Self {
+    pub fn new(my_state: InflightBatchMap, all_states: Vec<InflightBatchMap>) -> Self {
         Self {
             my_state,
             all_states,
         }
     }
     pub fn sha_matches(&self) -> bool {
-        self.all_states
-            .iter()
-            .all(|s| s.batch_sha == self.my_state.batch_sha)
+        self.my_state
+            .keys()
+            .all(|sha| self.all_states.iter().all(|state| state.contains_key(sha)))
     }
 
-    pub fn valid_entries(&self) -> Vec<bool> {
-        self.all_states
+    pub fn valid_entries_for_sha(&self, batch_sha: String) -> Vec<bool> {
+        let valid_entries = self
+            .all_states
             .iter()
-            .map(|s| s.valid_entries.clone())
-            .fold(
-                vec![true; self.my_state.valid_entries.len()],
-                |mut acc, entries| {
-                    for (i, &entry) in entries.iter().enumerate() {
-                        if !entry {
-                            acc[i] = false;
-                        }
+            .map(|s| {
+                s.get(&batch_sha).unwrap_or_else(|| {
+                    panic!("Invalid batch sha: {}", hex::encode(&batch_sha[0..4]))
+                })
+            })
+            .collect_vec();
+
+        valid_entries.iter().fold(
+            vec![true; self.my_state.get(&batch_sha).iter().len()],
+            |mut acc, entries| {
+                for (i, &entry) in entries.iter().enumerate() {
+                    if !entry {
+                        acc[i] = false;
                     }
-                    acc
-                },
-            )
+                }
+                acc
+            },
+        )
     }
 }
 
@@ -79,18 +80,11 @@ impl BatchSyncResult {
     }
 }
 
-pub async fn get_own_batch_sync_entries() -> BatchSyncEntries {
-    let current_batch_valid_entries = CURRENT_BATCH_VALID_ENTRIES
-        .lock()
-        .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES");
-    let current_batch_hash = CURRENT_BATCH_SHA
+pub async fn get_own_batch_sync_entries() -> InflightBatchMap {
+    let current_batch_hash = INFLIGHT_BATCHES
         .lock()
         .expect("Failed to lock CURRENT_BATCH_SHA");
-
-    BatchSyncEntries {
-        valid_entries: current_batch_valid_entries.clone(),
-        batch_sha: current_batch_hash.to_owned(),
-    }
+    current_batch_hash.to_owned()
 }
 
 pub async fn get_own_batch_sync_state(
@@ -114,8 +108,9 @@ pub async fn get_own_batch_sync_state(
 
 pub async fn get_batch_sync_entries(
     config: &Config,
-    own_state: Option<&BatchSyncEntries>,
-) -> Result<Vec<BatchSyncEntries>> {
+    own_state: Option<InflightBatchMap>,
+    current_batch_sha: String,
+) -> Result<Vec<InflightBatchMap>> {
     let all_batch_size_sync_entries_addresses = get_check_addresses(
         &config.node_hostnames,
         &config.healthcheck_ports,
@@ -136,25 +131,32 @@ pub async fn get_batch_sync_entries(
     let polling_timeout_duration = Duration::from_secs(config.batch_sync_polling_timeout_secs);
 
     for host in [next_node, prev_node].iter() {
-        let mut fetched_state: Option<BatchSyncEntries> = None;
+        let mut fetched_state: Option<InflightBatchMap> = None;
 
         match timeout(polling_timeout_duration, async {
             loop {
                 let res = reqwest::get(host.as_str()).await.with_context(|| {
-                    format!("Failed to fetch batch sync state from party {}", host)
+                    format!("Failed to fetch batch sync entries from party {}", host)
                 })?;
-                let state: BatchSyncEntries = res.json().await.with_context(|| {
-                    format!("Failed to parse batch sync state from party {}", host)
+                let state: InflightBatchMap = res.json().await.with_context(|| {
+                    format!("Failed to parse batch sync entries from party {}", host)
                 })?;
 
-                if state.batch_sha != own_sync_state.batch_sha {
+                if !state.contains_key(&current_batch_sha.clone()) {
+                    let state_keys = state
+                        .keys()
+                        .map(|s| s[0..8].to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
                     tracing::info!(
-                        "Party {} (batch_hash {}) is differs own ({}). Retrying in 1 second...",
+                        "Party {} ({}) does not have current batch_sha {}. Retrying in 1 second...",
                         host,
-                        hex::encode(&state.batch_sha[0..4]),
-                        hex::encode(&own_sync_state.batch_sha[0..4])
+                        state_keys,
+                        &current_batch_sha.clone()[0..8],
                     );
                     tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
                 } else {
                     fetched_state = Some(state);
                     break;
@@ -188,12 +190,18 @@ pub async fn get_batch_sync_entries(
                 tracing::error!(
                     "Timeout polling party {} for batch sync entries with hash {}",
                     host,
-                    hex::encode(&own_sync_state.batch_sha[0..4])
+                    own_sync_state
+                        .keys()
+                        .map(|sha| hex::encode(&sha[0..4]))
+                        .join(", ")
                 );
                 return Err(eyre!(
                     "Timeout waiting for party {} to reach batch hash {}",
                     host,
-                    hex::encode(&own_sync_state.batch_sha[0..4])
+                    own_sync_state
+                        .keys()
+                        .map(|sha| hex::encode(&sha[0..4]))
+                        .join(", ")
                 ));
             }
         }

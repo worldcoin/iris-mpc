@@ -1149,6 +1149,7 @@ impl HawkResult {
             modifications: batch.modifications,
 
             actor_data: self.connect_plans,
+            sns_message_ids: batch.sns_message_ids,
         }
     }
 }

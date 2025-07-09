@@ -1,3 +1,6 @@
+use crate::config::Config;
+use crate::helpers::batch_sync::{get_batch_sync_entries, BatchSyncEntriesResult};
+use crate::helpers::sha256::sha256_bytes;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -6,13 +9,19 @@ use crate::{
     },
 };
 use core::fmt;
-use eyre::Result;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::{LazyLock, Mutex};
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     future::Future,
 };
+
+pub type InflightBatchMap = HashMap<String, Vec<bool>>;
+
+pub static INFLIGHT_BATCHES: LazyLock<Mutex<InflightBatchMap>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -162,6 +171,78 @@ impl BatchQuery {
         self.reset_update_indices.push(reset_update_0_index);
         self.reset_update_shares.push(shares);
     }
+    pub async fn sync_batch_entries(&mut self, config: &Config) -> Result<(), eyre::Error> {
+        let current_batch_sha = hex::encode(sha256_bytes(self.sns_message_ids.join("")));
+        let current_inflight_batches = INFLIGHT_BATCHES
+            .lock()
+            .expect("Batch SHA lock poisoned")
+            .to_owned();
+
+        let current_batch_valid_entries = current_inflight_batches
+            .get(&current_batch_sha.clone())
+            .expect("Current batch valid entries not found in inflight batches")
+            .clone();
+
+        let batch_sync_entries = get_batch_sync_entries(
+            config,
+            Some(current_inflight_batches.clone()),
+            current_batch_sha.clone(),
+        )
+        .await?;
+
+        let batch_sync_entries_result =
+            BatchSyncEntriesResult::new(current_inflight_batches.clone(), batch_sync_entries);
+
+        let own_batch_shas = batch_sync_entries_result
+            .my_state
+            .keys()
+            .map(|sha| sha[0..8].to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let other_batch_shas = batch_sync_entries_result
+            .all_states
+            .iter()
+            .map(|s| {
+                s.keys()
+                    .map(|sha| sha[0..8].to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .collect::<Vec<_>>()
+            .join(" | ");
+
+        if !batch_sync_entries_result.sha_matches() {
+            tracing::error!(
+                "Batch sync entries SHA mismatch: own batch SHAs: {}, all SHAs: {}",
+                own_batch_shas,
+                other_batch_shas
+            );
+            return Err(eyre!("Batch sync entries SHA mismatch"));
+        }
+        tracing::info!("Batch sync entries SHA match: {}", other_batch_shas);
+
+        let valid_entries =
+            batch_sync_entries_result.valid_entries_for_sha(current_batch_sha.clone());
+        tracing::info!(
+            "Batch sync entries valid entries: {}",
+            valid_entries.clone().into_iter().filter(|b| *b).count()
+        );
+
+        if !valid_entries.eq(&current_batch_valid_entries) {
+            tracing::warn!(
+                "Valid entries from sync does not equal own valid entries: (own) {}, (sync) {}",
+                current_batch_valid_entries
+                    .clone()
+                    .into_iter()
+                    .filter(|b| *b)
+                    .count(),
+                valid_entries.clone().into_iter().filter(|b| *b).count()
+            );
+            self.valid_entries = valid_entries.clone();
+        }
+        Ok(())
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -238,6 +319,8 @@ pub struct ServerJobResult<A = ()> {
     // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
     // Used for roll forward in the case of needing to r-run mutations
     pub modifications: HashMap<ModificationKey, Modification>,
+    // SNS message ids to assert identical batch processing across parties
+    pub sns_message_ids: Vec<String>,
     // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
     // Reset Update specific fields
