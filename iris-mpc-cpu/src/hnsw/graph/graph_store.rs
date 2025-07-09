@@ -1151,14 +1151,14 @@ mod tests {
             "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
             entry_backup
         ))
-        .bind(99i16)
+        .bind(0i16)
         .bind(99i64)
         .bind(99i16)
         .bind(99i16)
         .execute(pool)
         .await?;
         sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_backup))
-            .bind(99i16)
+            .bind(0i16)
             .bind(99i64)
             .bind(99i16)
             .bind(99i16)
@@ -1173,14 +1173,14 @@ mod tests {
             "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
             entry_table
         ))
-        .bind(2i16)
+        .bind(1i16)
         .bind(43i64)
         .bind(1i16)
         .bind(1i16)
         .execute(pool)
         .await?;
         sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table))
-            .bind(2i16)
+            .bind(1i16)
             .bind(43i64)
             .bind(1i16)
             .bind(1i16)
@@ -1200,7 +1200,7 @@ mod tests {
         .await?;
         assert!(entry_row.is_some(), "Entry backup row should exist");
         let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
-        assert_eq!(graph_id, 2);
+        assert_eq!(graph_id, 1);
         assert_eq!(serial_id, 43);
         assert_eq!(version_id, 1);
         assert_eq!(layer, 1);
@@ -1213,7 +1213,7 @@ mod tests {
         .await?;
         assert!(links_row.is_some(), "Links backup row should exist");
         let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
-        assert_eq!(graph_id, 2);
+        assert_eq!(graph_id, 1);
         assert_eq!(serial_id, 43);
         assert_eq!(version_id, 1);
         assert_eq!(layer, 1);
