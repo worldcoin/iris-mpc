@@ -115,11 +115,11 @@ pub async fn eval_vector_distance(
     vector1: &<Aby3Store as VectorStore>::VectorRef,
     vector2: &<Aby3Store as VectorStore>::VectorRef,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
-    let point1 = store.storage.get_vector(vector1).await;
-    let mut point2 = (*store.storage.get_vector(vector2).await).clone();
+    let point1 = store.storage.get_vector_or_empty(vector1).await;
+    let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = vec![(&*point1, &point2)];
+    let pairs = &[Some((&*point1, &point2))];
     let dist = store.eval_pairwise_distances(pairs).await?;
     Ok(store.lift_distances(dist).await?[0].clone())
 }
