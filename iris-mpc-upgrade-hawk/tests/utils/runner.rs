@@ -72,7 +72,7 @@ impl TestRunInfo {
 /// Trait: fmt::Display.
 impl fmt::Display for TestRunInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{} ({:02})", self.kind, self.idx)
+        write!(f, "{}-{:02}", self.kind, self.idx)
     }
 }
 

@@ -1,5 +1,5 @@
 mod factory;
-mod inputs;
 mod runner;
+mod types;
 
 pub use runner::Test;

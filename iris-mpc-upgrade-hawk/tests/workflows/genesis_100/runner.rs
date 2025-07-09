@@ -1,43 +1,23 @@
-use super::{
-    factory,
-    inputs::{NetProcessInputs, SystemStateInputs},
-};
+use super::{factory, types::TestInputs};
 use crate::utils::{TestError, TestRun};
+use eyre::{Report, Result};
+use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
 /// HNSW Genesis test.
 pub struct Test {
     /// Data encapsulating test inputs.
     inputs: Option<TestInputs>,
+
+    /// Results of node process execution.
+    node_results: Option<Vec<Result<(), Report>>>,
 }
 
 /// Constructor.
 impl Test {
     pub fn new() -> Self {
-        Self { inputs: None }
-    }
-}
-
-/// Excapsulates data used to drive a test run.
-#[derive(Debug, Clone)]
-pub struct TestInputs {
-    // Data used to launch each node process during a test run.
-    #[allow(dead_code)]
-    net_process_inputs: NetProcessInputs,
-
-    // Data used to initialise system state prior to a test run.
-    #[allow(dead_code)]
-    system_state_inputs: Option<SystemStateInputs>,
-}
-
-/// Constructor.
-impl TestInputs {
-    pub fn new(
-        net_process_inputs: NetProcessInputs,
-        system_state_inputs: Option<SystemStateInputs>,
-    ) -> Self {
         Self {
-            net_process_inputs,
-            system_state_inputs,
+            inputs: None,
+            node_results: None,
         }
     }
 }
@@ -45,39 +25,72 @@ impl TestInputs {
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        println!("Executing test");
+        // Set node process inputs.
+        let node_inputs = self
+            .inputs
+            .as_ref()
+            .unwrap()
+            .net_process_inputs()
+            .node_process_inputs()
+            .to_vec()
+            .into_iter();
+
+        // Set node process futures.
+        let node_futures: Vec<_> = node_inputs
+            .map(|node_input| {
+                exec_genesis(node_input.args().to_owned(), node_input.config().to_owned())
+            })
+            .collect();
+
+        // Await futures to complete.
+        self.node_results = Some(futures::future::join_all(node_futures).await);
 
         Ok(())
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        println!("Executing test assertion");
+        // Assert node process results.
+        for node_result in self.node_results.as_ref().unwrap().iter() {
+            assert!(node_result.is_ok());
+        }
+
+        // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state
+        // TODO
 
         Ok(())
     }
 
     async fn setup(&mut self) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(TestInputs::new(factory::get_net_process_inputs(), None));
+        self.inputs = Some(factory::get_test_inputs());
+
+        // Write 100 Iris shares -> GPU dB.
+        // TODO
+
+        // Write empty Iris deletions -> localstack.
+        // TODO
 
         Ok(())
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
-        println!("Executing setup assertion");
+        // Assert inputs.
+        assert!(&self.inputs.is_some());
+
+        // Assert dBs.
+        // TODO
+
+        // Assert localstack.
+        // TODO
 
         Ok(())
     }
 
     async fn teardown(&mut self) -> Result<(), TestError> {
-        println!("Executing teardown");
-
         Ok(())
     }
 
     async fn teardown_assert(&mut self) -> Result<(), TestError> {
-        println!("Executing teardown assertion");
-
         Ok(())
     }
 }
