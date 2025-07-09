@@ -3,6 +3,12 @@
 
 # Overview
 
+The TCP networking stack supports either TCP or TLS. The following traits make that possible:
+- `NetworkConnection`: both `TcpStream` and `TlsStream` support `AsyncRead` and `AsyncWrite`. Both can be passed to `tokio::io::split()` to get a read/write half. 
+- `Client`: used to initiate a connection.
+- `Server`: used to listen for connections.
+- `NetworkHandle`: simplifies `HawkActor`. `TcpNetworkHandle` is generic over `NetworkConnection` but `HawkActor` doesn't need to be. 
+
 ## `connection_builder.rs`
 
 This module manages peer-to-peer TCP connections by coordinating connection setup, acceptance, and reconnection.
