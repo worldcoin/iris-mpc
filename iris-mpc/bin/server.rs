@@ -63,6 +63,7 @@ use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::process::exit;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -828,7 +829,7 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+            exit(1);
         }
     }
     Ok(())

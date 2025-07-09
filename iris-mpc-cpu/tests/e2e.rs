@@ -1,7 +1,7 @@
 use eyre::Result;
 use iris_mpc_common::{
     iris_db::db::IrisDB,
-    test::{generate_full_test_db, TestCase, TestCaseGenerator},
+    test::{generate_full_test_db, TestCaseGenerator},
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
@@ -154,12 +154,6 @@ async fn e2e_test() -> Result<()> {
     let mut handle2 = handle2?;
 
     let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, INTERNAL_RNG_SEED, true);
-
-    // Disable test cases that are not yet supported
-    // TODO: enable these once supported
-
-    test_case_generator.disable_test_case(TestCase::CloseToThreshold);
-    test_case_generator.disable_test_case(TestCase::PreviouslyDeleted);
 
     // TODO: enable this once supported
     // test_case_generator.enable_bucket_statistic_checks(
