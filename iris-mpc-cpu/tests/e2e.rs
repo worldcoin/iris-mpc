@@ -1,7 +1,7 @@
 use eyre::Result;
 use iris_mpc_common::{
-    iris_db::db::IrisDB,
-    test::{generate_full_test_db, TestCase, TestCaseGenerator},
+    iris_db::{db::IrisDB, iris::IrisCode},
+    test::{generate_full_test_db, TestCaseGenerator},
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
