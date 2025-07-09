@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use super::{InStream, OutboundMsg};
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::{tcp::TcpConfig, value::NetworkValue, Networking},
+    network::{tcp::config::TcpConfig, value::NetworkValue, Networking},
 };
+use async_trait::async_trait;
 use eyre::{eyre, Result};
 use tokio::{sync::mpsc::UnboundedSender, time::timeout};
-use tonic::async_trait;
 use tracing::trace;
 
 #[derive(Debug)]
