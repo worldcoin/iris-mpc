@@ -73,6 +73,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use std::process::exit;
 use tokio::sync::mpsc::Receiver;
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},
@@ -828,7 +829,7 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+            exit(1);
         }
     }
     Ok(())

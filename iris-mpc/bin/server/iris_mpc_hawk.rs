@@ -1,5 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 
+use std::process::exit;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc::server::server_main;
@@ -29,7 +30,7 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("Server exited with error: {:?}", e);
-            return Err(e);
+            exit(1);
         }
     }
     Ok(())
