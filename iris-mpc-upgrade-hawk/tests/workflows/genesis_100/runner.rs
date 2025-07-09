@@ -21,9 +21,11 @@ impl Test {
 #[derive(Debug, Clone)]
 pub struct TestInputs {
     // Data used to launch each node process during a test run.
+    #[allow(dead_code)]
     net_process_inputs: NetProcessInputs,
 
     // Data used to initialise system state prior to a test run.
+    #[allow(dead_code)]
     system_state_inputs: Option<SystemStateInputs>,
 }
 

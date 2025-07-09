@@ -6,6 +6,7 @@ use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 #[derive(Debug, Clone)]
 pub struct NetProcessInputs {
     /// Node input arguments.
+    #[allow(dead_code)]
     pub node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
 }
 
@@ -22,9 +23,11 @@ impl NetProcessInputs {
 #[derive(Debug, Clone)]
 pub struct NodeProcessInputs {
     /// Node input arguments.
+    #[allow(dead_code)]
     pub args: NodeArgs,
 
     /// Node input configuration.
+    #[allow(dead_code)]
     pub config: NodeConfig,
 }
 
@@ -39,8 +42,10 @@ impl NodeProcessInputs {
 #[derive(Debug, Clone)]
 pub struct SystemStateInputs {
     // Serial idenfitiers of deleted Iris's.
+    #[allow(dead_code)]
     iris_deletions: Vec<IrisSerialId>,
 
     // Set of Iris shares to be processed.
+    #[allow(dead_code)]
     iris_shares: Vec<IrisSerialId>,
 }
