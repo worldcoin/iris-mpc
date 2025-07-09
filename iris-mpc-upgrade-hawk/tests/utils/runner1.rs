@@ -2,10 +2,7 @@ use super::{logger, types::TestRunInfo};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
 pub async fn exec_test(info: TestRunInfo) {
-    logger::log_info(
-        format!("{}", info).as_str(),
-        "Test execution starts".to_string(),
-    );
+    logger::log_info(format!("{}", info).as_str(), "Test execution starts");
 
     // Set collected futures.
     let exec_futures: Vec<_> = info
@@ -27,8 +24,5 @@ pub async fn exec_test(info: TestRunInfo) {
         }
     }
 
-    logger::log_info(
-        format!("{}", info).as_str(),
-        "Test execution ends".to_string(),
-    );
+    logger::log_info(format!("{}", info).as_str(), "Test execution ends");
 }

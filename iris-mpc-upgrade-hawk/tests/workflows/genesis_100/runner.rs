@@ -1,33 +1,42 @@
-use super::state::TestState;
-use crate::utils::{
-    runner::{Test, TestContextInfo},
-    TestError,
-};
+use super::inputs::TestInputs;
+use crate::utils::{runner::TestRun, TestError};
 
-pub struct TestRunner {}
+/// HNSW Genesis test.
+pub struct Test {
+    /// Data encapsulating test inputs.
+    inputs: Option<TestInputs>,
+}
 
-impl Test<TestState> for TestRunner {
-    async fn exec(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+/// Constructor.
+impl Test {
+    pub fn new() -> Self {
+        Self { inputs: None }
+    }
+}
+
+/// Trait: TestRun.
+impl TestRun for Test {
+    async fn exec(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 
-    async fn exec_assert(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+    async fn exec_assert(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 
-    async fn setup(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+    async fn setup(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 
-    async fn setup_assert(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+    async fn setup_assert(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 
-    async fn teardown(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+    async fn teardown(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 
-    async fn teardown_assert(&self, _ctx: TestContextInfo<TestState>) -> Result<(), TestError> {
+    async fn teardown_assert(&mut self) -> Result<(), TestError> {
         unimplemented!()
     }
 }
