@@ -1,7 +1,6 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
-    genesis::logger,
     hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
 };
 use eyre::Result;
