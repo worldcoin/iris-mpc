@@ -5,7 +5,7 @@
 
 use crate::hnsw::{
     sorting::{
-        batcher::partial_batcher_network, binary_search::BinarySearch,
+        batcher::partial_batcher_network, binary_search::BinarySearch, quicksort::apply_quicksort,
         swap_network::apply_swap_network,
     },
     VectorStore,
@@ -111,9 +111,6 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// Insert a collection of `(Vector, Distance)` pairs into the list,
     /// maintaining the ascending order, using an efficient sorting network on
     /// input values.
-    ///
-    /// TODO: give heuristic for when batched insertion is more efficient than
-    /// iterated single insertion
     pub async fn insert_batch<V>(
         &mut self,
         store: &mut V,
@@ -128,15 +125,11 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
             return Ok(());
         }
 
-        // TODO better selection criteria
-        if vals.len() > 5 {
-            self.batcher_insert(store, vals).await?;
-        } else {
-            for (e, eq) in vals.iter() {
-                self.insert(store, e.clone(), eq.clone()).await?;
-            }
-        }
-        Ok(())
+        // Note that quicksort insert does not suffer from reduced performance
+        // for small batch sizes, as the functionality gracefully degrades to
+        // the default individual binary insertion procedure as batch size
+        // approaches 1.
+        self.quicksort_insert(store, vals).await
     }
 
     pub fn edge_ids(&self) -> SortedEdgeIds<Vector> {
@@ -178,6 +171,7 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
     /// Insert the given unsorted list `vals` of new weighted edges into this
     /// sorted neighborhood using the Batcher odd-even merge sort sorting
     /// network.
+    #[allow(dead_code)]
     async fn batcher_insert<V>(&mut self, store: &mut V, vals: &[(Vector, Distance)]) -> Result<()>
     where
         V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
@@ -189,6 +183,24 @@ impl<Vector: Clone, Distance: Clone> SortedNeighborhood<Vector, Distance> {
         let network = partial_batcher_network(sorted_prefix_size, unsorted_size)?;
 
         apply_swap_network(store, &mut self.edges, &network).await
+    }
+
+    /// Insert the given unsorted list `vals` of new weighted edges into this
+    /// sorted neighborhood using a parallelized quicksort algorithm.
+    async fn quicksort_insert<V>(
+        &mut self,
+        store: &mut V,
+        vals: &[(Vector, Distance)],
+    ) -> Result<()>
+    where
+        V: VectorStore<VectorRef = Vector, DistanceRef = Distance>,
+    {
+        let sorted_prefix_size = self.edges.len();
+
+        self.edges.extend_from_slice(vals);
+        let mut buffer = self.edges.clone();
+
+        apply_quicksort(store, &mut self.edges, &mut buffer, sorted_prefix_size).await
     }
 
     /// Count the neighbors that match according to `store.is_match`.

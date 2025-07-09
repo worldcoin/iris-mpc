@@ -278,6 +278,7 @@ async fn exec_setup(
         args.max_indexation_id,
         max_modification_id,
         max_modification_id_to_persist,
+        modifications.clone(),
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
