@@ -242,6 +242,9 @@ async fn manage_connection<T: NetworkConnection>(
         stream_id,
     } = connection;
 
+    #[cfg(feature = "tcp_metrics")]
+    let stream_fd = stream.as_raw_fd();
+
     // We enter the loop only after receiving the first NewSessions
     let (mut inbound_forwarder, mut outbound_rx) = match cmd_ch.recv().await {
         Some(Cmd::NewSessions {
@@ -285,6 +288,15 @@ async fn manage_connection<T: NetworkConnection>(
             tracing::debug!("handle_inbound_traffic exited: {r:?}");
         };
 
+        // can't have a #[cfg] in a select!. make a future that never returns instead.
+        #[cfg(feature = "tcp_metrics")]
+        let health_task = async move {
+            let r = crate::network::tcp::health::watch_socket(stream_fd).await;
+            tracing::info!("health task exited: {r:?}");
+        };
+        #[cfg(not(feature = "tcp_metrics"))]
+        let health_task = futures::future::pending::<()>();
+
         enum Evt {
             Cmd(Cmd),
             Disconnected,
@@ -294,13 +306,14 @@ async fn manage_connection<T: NetworkConnection>(
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::debug!("cmd channel closed");
+                        tracing::info!("cmd channel closed");
                         return;
                     }
                 }
-            }
+            },
             _ = inbound_task => Evt::Disconnected,
             _ = outbound_task => Evt::Disconnected,
+            _ = health_task => Evt::Disconnected,
         };
 
         // update the Arcs depending on the event. wait for reconnect if needed.

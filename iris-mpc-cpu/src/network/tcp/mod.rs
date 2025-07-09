@@ -17,6 +17,7 @@ use itertools::izip;
 use std::sync::Once;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    os::fd::AsRawFd,
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -27,6 +28,9 @@ pub mod handle;
 pub mod networking;
 pub mod session;
 
+#[cfg(feature = "tcp_metrics")]
+mod health;
+
 use data::*;
 
 #[async_trait]
@@ -34,8 +38,8 @@ pub trait NetworkHandle: Send + Sync {
     async fn make_sessions(&mut self) -> Result<Vec<TcpSession>>;
 }
 
-pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized> NetworkConnection for T {}
+pub trait NetworkConnection: AsyncRead + AsyncWrite + AsRawFd + Send + Unpin {}
+impl<T: AsyncRead + AsyncWrite + AsRawFd + Unpin + Send + ?Sized> NetworkConnection for T {}
 
 // used to establish an outbound connection
 #[async_trait]
