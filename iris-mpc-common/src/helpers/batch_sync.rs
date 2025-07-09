@@ -179,7 +179,7 @@ pub async fn get_batch_sync_entries(
                     e
                 );
                 return Err(eyre!(
-                    "Failed to get a consistent batch_id from party {} due to: {:?}",
+                    "Failed to get a consistent batch_hash from party {} due to: {:?}",
                     host,
                     e
                 ));
