@@ -30,10 +30,9 @@ impl TestRun for Test {
             .inputs
             .as_ref()
             .unwrap()
-            .net_process_inputs()
+            .net_inputs()
             .node_process_inputs()
-            .to_vec()
-            .into_iter();
+            .iter();
 
         // Set node process futures.
         let node_futures: Vec<_> = node_inputs

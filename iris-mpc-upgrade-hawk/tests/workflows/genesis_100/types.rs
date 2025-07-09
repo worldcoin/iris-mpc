@@ -4,14 +4,13 @@ use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Inputs required to run a network.
 #[derive(Debug, Clone)]
-pub(super) struct NetProcessInputs {
+pub(super) struct NetInputs {
     /// Node input arguments.
-    #[allow(dead_code)]
     pub node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
 }
 
 /// Constructor.
-impl NetProcessInputs {
+impl NetInputs {
     pub fn new(node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES]) -> Self {
         Self {
             node_process_inputs,
@@ -20,7 +19,7 @@ impl NetProcessInputs {
 }
 
 /// Accessors.
-impl NetProcessInputs {
+impl NetInputs {
     pub fn node_process_inputs(&self) -> &[NodeProcessInputs; COUNT_OF_PARTIES] {
         &self.node_process_inputs
     }
@@ -94,7 +93,7 @@ impl SystemStateInputs {
 #[derive(Debug, Clone)]
 pub(super) struct TestInputs {
     // Data used to launch each node process during a test run.
-    net_process_inputs: NetProcessInputs,
+    net_inputs: NetInputs,
 
     // Data used to initialise system state prior to a test run.
     #[allow(dead_code)]
@@ -103,12 +102,9 @@ pub(super) struct TestInputs {
 
 /// Constructor.
 impl TestInputs {
-    pub fn new(
-        net_process_inputs: NetProcessInputs,
-        system_state_inputs: Option<SystemStateInputs>,
-    ) -> Self {
+    pub fn new(net_inputs: NetInputs, system_state_inputs: Option<SystemStateInputs>) -> Self {
         Self {
-            net_process_inputs,
+            net_inputs,
             system_state_inputs,
         }
     }
@@ -116,8 +112,8 @@ impl TestInputs {
 
 /// Accessors.
 impl TestInputs {
-    pub fn net_process_inputs(&self) -> &NetProcessInputs {
-        &self.net_process_inputs
+    pub fn net_inputs(&self) -> &NetInputs {
+        &self.net_inputs
     }
 
     #[allow(dead_code)]
