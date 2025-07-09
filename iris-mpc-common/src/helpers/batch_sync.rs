@@ -26,10 +26,10 @@ impl BatchSyncEntriesResult {
             all_states,
         }
     }
-    pub fn sha_matches(&self) -> bool {
-        self.my_state
-            .keys()
-            .all(|sha| self.all_states.iter().all(|state| state.contains_key(sha)))
+    pub fn sha_matches(&self, current_batch_sha: String) -> bool {
+        self.all_states
+            .iter()
+            .all(|s| s.contains_key(&current_batch_sha))
     }
 
     pub fn valid_entries_for_sha(&self, batch_sha: String) -> Vec<bool> {
@@ -128,7 +128,7 @@ pub async fn get_batch_sync_entries(
     let mut states = Vec::with_capacity(3);
     states.push(own_sync_state.clone());
 
-    let polling_timeout_duration = Duration::from_secs(config.batch_sync_polling_timeout_secs);
+    let polling_timeout_duration = Duration::from_secs(20);
 
     for host in [next_node, prev_node].iter() {
         let mut fetched_state: Option<InflightBatchMap> = None;

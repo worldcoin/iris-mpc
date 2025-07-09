@@ -212,7 +212,7 @@ impl BatchQuery {
             .collect::<Vec<_>>()
             .join(" | ");
 
-        if !batch_sync_entries_result.sha_matches() {
+        if !batch_sync_entries_result.sha_matches(current_batch_sha.clone()) {
             tracing::error!(
                 "Batch sync entries SHA mismatch: own batch SHAs: {}, all SHAs: {}",
                 own_batch_shas,

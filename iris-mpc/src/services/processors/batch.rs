@@ -17,7 +17,6 @@ use iris_mpc_common::helpers::batch_sync::{
     get_batch_sync_states, get_own_batch_sync_state, BatchSyncResult,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
-use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, ReAuthRequest, ResetCheckRequest, ResetUpdateRequest, SQSMessage,
@@ -31,9 +30,8 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides, INFLIGHT_BATCHES};
+use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
-use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -245,21 +243,6 @@ impl<'a> BatchProcessor<'a> {
                 .iter()
                 .zip(self.batch_query.request_types.iter())
                 .collect::<Vec<_>>()
-        );
-
-        let batch_hash = hex::encode(sha256_bytes(self.batch_query.sns_message_ids.join("")));
-        let batch_valid_entries = self.batch_query.valid_entries.clone();
-
-        INFLIGHT_BATCHES
-            .lock()
-            .expect("Failed to lock INFLIGHT_BATCHES")
-            .insert(batch_hash.clone(), batch_valid_entries.clone());
-
-        tracing::info!("Current batch hash: {}", &batch_hash[0..8].to_string());
-        tracing::info!(
-            "Received batch with {} valid entries and {} request types",
-            batch_valid_entries.clone().len(),
-            self.batch_query.request_types.len()
         );
 
         // Increment batch_id for the next batch
