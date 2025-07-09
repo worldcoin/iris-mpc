@@ -21,8 +21,9 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
+use iris_mpc_common::galois_engine::degree4::SHARE_OF_MAX_DISTANCE;
 use itertools::{izip, Itertools};
-use std::array;
+use std::{array, ops::Not};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -80,8 +81,9 @@ pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -
 /// - Lifts the two dot products to the ring Z_{2^32}.
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
-/// - Compares mask_dist * A < code_dist * B.
-pub async fn compare_threshold(
+/// - Compares mask_dist * A > code_dist * B.
+/// - This corresponds to "distance > threshold", that is NOT match.
+pub async fn greater_than_threshold(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<Share<Bit>>> {
@@ -90,7 +92,7 @@ pub async fn compare_threshold(
         .map(|d| {
             let x = d.mask_dot.clone() * A as u32;
             let y = d.code_dot.clone() * B as u32;
-            x - y
+            y - x
         })
         .collect();
 
@@ -206,15 +208,15 @@ pub async fn lift_and_compare_threshold(
     code_dist: Share<u16>,
     mask_dist: Share<u16>,
 ) -> Result<Share<Bit>> {
-    let y = mul_lift_2k::<B_BITS>(&code_dist);
+    let mut y = mul_lift_2k::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x
         .pop()
         .ok_or(eyre!("Expected a single element in the VecShare"))?;
     x *= A as u32;
-    x -= y;
+    y -= x;
 
-    single_extract_msb_u32(session, x).await
+    single_extract_msb_u32(session, y).await
 }
 
 /// Lifts a share of a vector (VecShare) of 16-bit values to a share of a vector
@@ -396,18 +398,23 @@ pub async fn cross_compare_and_swap(
 /// vector to be able to reshare it later.
 pub async fn galois_ring_pairwise_distance(
     _session: &mut Session,
-    pairs: &[(&GaloisRingSharedIris, &GaloisRingSharedIris)],
+    pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
 ) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
-        let (x, y) = pair;
-        let code_dist = x.code.trick_dot(&y.code);
-        let mask_dist = x.mask.trick_dot(&y.mask);
-        additive_shares.push(RingElement(code_dist));
+        let (code_dist, mask_dist) = if let Some((x, y)) = pair {
+            let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            (RingElement(a), RingElement(2) * RingElement(b))
+        } else {
+            // Non-existent vectors get the largest relative distance of 100%.
+            let (a, b) = SHARE_OF_MAX_DISTANCE;
+            (RingElement(a), RingElement(b))
+        };
+        additive_shares.push(code_dist);
         // When applying the trick dot on trimmed masks, we have to multiply with 2 the
         // result The intuition being that a GaloisRingTrimmedMask contains half
         // the elements that a full GaloisRingMask has.
-        additive_shares.push(RingElement(2) * RingElement(mask_dist));
+        additive_shares.push(mask_dist);
     }
     additive_shares
 }
@@ -446,15 +453,15 @@ pub async fn galois_ring_to_rep3(
     Ok(res)
 }
 
-/// Compares the given distance to a threshold and reveal the result.
-pub async fn compare_threshold_and_open(
+/// Compares the given distance to a threshold and reveal the bit "less than or equal".
+pub async fn lte_threshold_and_open(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
-    let bits = compare_threshold(session, distances).await?;
+    let bits = greater_than_threshold(session, distances).await?;
     open_bin(session, &bits)
         .await
-        .map(|v| v.into_iter().map(|x| x.convert()).collect())
+        .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -1011,7 +1018,7 @@ mod tests {
             let session = session.clone();
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let own_shares = own_shares.iter().map(|(x, y)| (x, y)).collect_vec();
+                let own_shares = own_shares.iter().map(|(x, y)| Some((x, y))).collect_vec();
                 let x = galois_ring_pairwise_distance(&mut player_session, &own_shares).await;
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
