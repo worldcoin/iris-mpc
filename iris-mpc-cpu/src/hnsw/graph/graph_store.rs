@@ -585,8 +585,11 @@ mod tests {
 
         let vectors = {
             let mut v = vec![];
-            for raw_query in IrisDB::new_random_rng(5, rng).db {
-                let q = Arc::new(raw_query);
+            for (idx, iris_code) in IrisDB::new_random_rng(5, rng).db.into_iter().enumerate() {
+                let q = Arc::new(IrisCodeWithSerialId {
+                    iris_code,
+                    serial_id: idx as u32 + 1,
+                });
                 v.push(vector_store.insert(&q).await);
             }
             v
@@ -594,7 +597,11 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let iris_code = vector_store.points[&1].clone();
+            let q = Arc::new(IrisCodeWithSerialId {
+                iris_code,
+                serial_id: 1,
+            });
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }

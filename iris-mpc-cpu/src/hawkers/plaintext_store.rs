@@ -6,9 +6,12 @@ use crate::hnsw::{
     GraphMem, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
-use iris_mpc_common::iris_db::{
-    db::IrisDB,
-    iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+use iris_mpc_common::{
+    iris_db::{
+        db::IrisDB,
+        iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    },
+    vector_id::SerialId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -22,7 +25,7 @@ use std::collections::HashMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct IrisCodeWithSerialId {
     pub iris_code: IrisCode,
-    pub serial_id: u32,
+    pub serial_id: SerialId,
 }
 
 /// Vector store which works over plaintext iris codes and distance computations.
@@ -30,7 +33,7 @@ pub struct IrisCodeWithSerialId {
 /// This variant is only suitable for single-threaded operation.
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
-    pub points: HashMap<u32, IrisCode>,
+    pub points: HashMap<SerialId, IrisCode>,
 }
 
 impl PlaintextStore {
