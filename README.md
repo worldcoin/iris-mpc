@@ -215,14 +215,21 @@ cargo test --release --features db_dependent -- --test-threads=1 # require a run
 If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
 
 ## CPU Genesis
+1. Create the generated data (this will be generated to the `iris-mpc-cpu/data` folder)
 
-1. Build the hawk genesis binary
+- note you can change the value of the benchmark data to generate less data (100 is required for local stack)
+
+```bash
+cargo run --bin generate_benchmark_data
+```
+
+2. Build the hawk genesis binary
 
 ```bash
 docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
 ```
 
-2. Run the upgrade server
+3. Run the upgrade server
 * note this also instantiates a shares database for Genesis to use (the default is 100). You can edit the value for this in `docker-compose.test.genesis.yaml`
 * by default genesis runs with a max index of 100. This can be edited in `scripts/run-sever-docker.sh`
 ```bash
