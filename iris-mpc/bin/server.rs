@@ -63,6 +63,7 @@ use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use std::process::exit;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -73,7 +74,6 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use std::process::exit;
 use tokio::sync::mpsc::Receiver;
 use tokio::{
     sync::{mpsc, oneshot, Semaphore},

@@ -1,7 +1,7 @@
-use std::process::exit;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_cpu::execution::hawk_main::{hawk_main, HawkArgs};
+use std::process::exit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
         Err(e) => {
             tracing::error!("Encountered an error during hawk_main processing: {}", e);
             exit(1);
-        },
+        }
     };
     Ok(())
 }

@@ -1,11 +1,11 @@
 #![allow(clippy::needless_range_loop)]
 
-use std::process::exit;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc::server::server_main;
 use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
+use std::process::exit;
 
 #[tokio::main]
 async fn main() -> Result<()> {
