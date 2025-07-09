@@ -21,7 +21,7 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::galois_engine::degree4::SHARE_OF_RATIO_ONE;
+use iris_mpc_common::galois_engine::degree4::SHARE_OF_MAX_DISTANCE;
 use itertools::{izip, Itertools};
 use std::{array, ops::Not};
 use tracing::instrument;
@@ -77,7 +77,8 @@ pub async fn setup_shared_seed(session: &mut NetworkSession, my_seed: PrfSeed) -
 /// - Multiplies with predefined threshold constants B = 2^16 and A = ((1. - 2.
 ///   * MATCH_THRESHOLD_RATIO) * B as f64).
 /// - Compares mask_dist * A > code_dist * B.
-pub async fn compare_threshold(
+/// - This corresponds to "distance > threshold", that is NOT match.
+pub async fn greater_than_threshold(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<Share<Bit>>> {
@@ -258,7 +259,7 @@ pub async fn galois_ring_pairwise_distance(
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
-            let (a, b) = SHARE_OF_RATIO_ONE;
+            let (a, b) = SHARE_OF_MAX_DISTANCE;
             (RingElement(a), RingElement(b))
         };
         additive_shares.push(code_dist);
@@ -304,12 +305,12 @@ pub async fn galois_ring_to_rep3(
     Ok(res)
 }
 
-/// Compares the given distance to a threshold and reveal the result.
-pub async fn compare_threshold_and_open(
+/// Compares the given distance to a threshold and reveal the bit "less than or equal".
+pub async fn lte_threshold_and_open(
     session: &mut Session,
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
-    let bits = compare_threshold(session, distances).await?;
+    let bits = greater_than_threshold(session, distances).await?;
     open_bin(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())

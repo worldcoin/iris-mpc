@@ -3,8 +3,8 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
-            batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
-            galois_ring_pairwise_distance, galois_ring_to_rep3,
+            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
+            galois_ring_to_rep3, lte_threshold_and_open,
         },
         shared_iris::GaloisRingSharedIris,
     },
@@ -450,7 +450,7 @@ impl VectorStore for Aby3Store {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(compare_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
+        Ok(lte_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -478,7 +478,7 @@ impl VectorStore for Aby3Store {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        compare_threshold_and_open(&mut self.session, distances).await
+        lte_threshold_and_open(&mut self.session, distances).await
     }
 }
 
@@ -903,12 +903,36 @@ mod tests {
         for (store, _graph) in vectors_and_graphs {
             let mut store = store.lock_owned().await;
             tasks.push(async move {
+                let none = VectorId::from_0_index(999);
                 let a = VectorId::from_0_index(0);
-                let v = vec![a, VectorId::from_0_index(1), VectorId::from_0_index(999)];
-                let q = store.vectors_as_queries(vec![a]).await;
-                let d = store.eval_distance_batch(&q, &v).await.unwrap();
-                let m = store.is_match_batch(&d).await.unwrap();
-                assert_eq!(m, vec![true, false, false]);
+                let b = VectorId::from_0_index(1);
+
+                let queries = store.vectors_as_queries(vec![a, b]).await;
+                let vectors = vec![a, b, none];
+                let n_vecs = vectors.len();
+
+                let distances = store.eval_distance_batch(&queries, &vectors).await.unwrap();
+
+                let is_match = store.is_match_batch(&distances).await.unwrap();
+                assert_eq!(
+                    is_match,
+                    [vec![true, false, false], vec![false, true, false]].concat(),
+                    "Vectors should match with themselves and not with the others"
+                );
+
+                let distances_to_none = vec![distances[2].clone(), distances[2 + n_vecs].clone()];
+                let pairs = distances_to_none
+                    .into_iter()
+                    .cartesian_product(distances)
+                    .collect_vec();
+                let less_than = store.less_than_batch(&pairs).await.unwrap();
+
+                assert_eq!(
+                    less_than,
+                    vec![false; pairs.len()],
+                    "Nothing is less than a distance to a non-existent vector"
+                );
+
                 Ok(())
             });
         }
