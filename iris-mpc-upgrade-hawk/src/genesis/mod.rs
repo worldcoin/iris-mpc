@@ -343,7 +343,7 @@ async fn exec_setup(
     }
 
     // If use_backup_as_source is set, restore graph tables from backup
-    if args.use_backup_as_source {
+    if args.use_backup_as_source && last_indexed_id != 0 {
         exec_use_backup_as_source(
             last_indexed_id,
             &graph_store_arc,

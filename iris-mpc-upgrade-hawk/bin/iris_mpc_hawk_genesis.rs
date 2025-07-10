@@ -29,7 +29,7 @@ struct Args {
     perform_snapshot: Option<String>,
 
     // User backup as source.
-    #[clap(long("user-backup-as-source"))]
+    #[clap(long("use-backup-as-source"))]
     use_backup_as_source: Option<String>,
 }
 
@@ -155,7 +155,7 @@ fn parse_args() -> Result<ExecutionArgs> {
 
     // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
     let use_backup_as_source = if args.use_backup_as_source.is_some() {
-        let use_backup_as_source_args = args.perform_snapshot.as_ref().unwrap();
+        let use_backup_as_source_args = args.use_backup_as_source.as_ref().unwrap();
         use_backup_as_source_args.parse().map_err(|_| {
             eprintln!(
                 "Error: --use-backup-as-source argument must be a valid boolean. Value: {}",
@@ -167,6 +167,7 @@ fn parse_args() -> Result<ExecutionArgs> {
             )
         })?
     } else {
+        eprintln!("--use-backup-as-source argument not provided, defaulting to false.");
         false
     };
 
