@@ -60,8 +60,8 @@ pub struct ExecutionArgs {
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
 
-    // User backup as source
-    user_backup_as_source: bool,
+    // Use backup as source
+    use_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -71,14 +71,14 @@ impl ExecutionArgs {
         batch_size: usize,
         batch_size_error_rate: usize,
         perform_snapshot: bool,
-        user_backup_as_source: bool,
+        use_backup_as_source: bool,
     ) -> Self {
         Self {
             max_indexation_id,
             batch_size,
             batch_size_error_rate,
             perform_snapshot,
-            user_backup_as_source,
+            use_backup_as_source,
         }
     }
 }
@@ -162,7 +162,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         args.batch_size,
         args.batch_size_error_rate,
         args.perform_snapshot,
-        args.user_backup_as_source
+        args.use_backup_as_source,
     ));
 
     // Phase 1: apply delta.
@@ -268,17 +268,6 @@ async fn exec_setup(
         last_indexed_id,
     ));
 
-    // Bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        config,
-        &iris_store,
-        graph_store_arc.clone(),
-        args.max_indexation_id,
-        last_indexed_id,
-    )
-    .await?;
-    log_info(String::from("Store consistency checks OK"));
-
     // Set Iris serial identifiers marked for deletion and thus excluded from indexation.
     let excluded_serial_ids =
         get_iris_deletions(config, &aws_s3_client, args.max_indexation_id).await?;
@@ -305,7 +294,6 @@ async fn exec_setup(
         max_modification_id,
     ));
 
-    // TODO: Add checks for user_backup_store and modifications for that
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
         args.batch_size,
@@ -316,6 +304,7 @@ async fn exec_setup(
         max_modification_id,
         max_modification_id_to_persist,
         modifications.clone(),
+        args.use_backup_as_source,
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
@@ -353,8 +342,8 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
-    // If user_backup_as_source is set, restore graph tables from backup
-    if args.user_backup_as_source {
+    // If use_backup_as_source is set, restore graph tables from backup
+    if args.use_backup_as_source {
         exec_use_backup_as_source(
             last_indexed_id,
             &graph_store_arc,
@@ -363,6 +352,17 @@ async fn exec_setup(
         )
         .await?;
     }
+
+    // Bail if stores are inconsistent.
+    validate_consistency_of_stores(
+        config,
+        &iris_store,
+        graph_store_arc.clone(),
+        args.max_indexation_id,
+        last_indexed_id,
+    )
+    .await?;
+    log_info(String::from("Store consistency checks OK"));
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config).await?;
@@ -775,14 +775,21 @@ async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<()
     Ok(())
 }
 
-/// If user_backup_as_source is set, restore graph tables from backup.
-/// This method is used when HNSW has enabled persistence which means the graph and iris data would have been modified
-/// This method restore the HNSW schema to the last known state
+/// Restores the HNSW graph and iris data from backup if `use_backup_as_source` is set.
+///
+/// This method is used when HNSW persistence is enabled and the graph/iris data may have been modified.
+/// It restores the HNSW schema and data to the last known consistent state by:
+///   1. Restoring graph tables from backup.
+///   2. Removing all iris data with serial IDs greater than the last indexed ID.
+///   3. Overriding iris data in the HNSW iris store for all modifications recorded in the modifications table,
+///      by copying the corresponding iris data from the main iris store.
+///
 /// # Arguments
 ///
+/// * `last_indexed_id` - The last indexed iris serial ID to keep in the HNSW iris store.
 /// * `graph_store_arc` - Arc-wrapped HNSW graph store instance.
-/// * `args` - Execution arguments.
-///
+/// * `hnsw_iris_store` - The HNSW iris store to restore.
+/// * `iris_store` - The main iris store to copy data from.
 pub async fn exec_use_backup_as_source(
     last_indexed_id: u32,
     graph_store_arc: &Arc<GraphPg<Aby3Store>>,
@@ -792,25 +799,29 @@ pub async fn exec_use_backup_as_source(
     log_info(String::from(
         "Restoring graph tables from backup as user_backup_as_source is set",
     ));
-    // TODO: add timings
+
     // Step 1: Restore graph tables from backup.
+    let mut now = Instant::now();
     graph_store_arc
         .restore_hawk_graph_tables_from_backup()
         .await?;
-    log_info(String::from("Graph tables restored from backup."));
+    log_info(format!(
+        "Graph tables restored from backup :: time {:?}s",
+        now.elapsed().as_secs_f64()
+    ));
 
     // Step 2: Remove all iris data except that is larger than the last indexed id.
-    log_info(format!(
-        "Removing all iris data except that larger than last indexed id: {}",
-        last_indexed_id
-    ));
+    now = Instant::now();
     hnsw_iris_store.rollback(last_indexed_id as usize).await?;
+    log_info(format!(
+        "Removing all iris data except that larger than last indexed id: {}:: time {:?}s",
+        last_indexed_id,
+        now.elapsed().as_secs_f64()
+    ));
 
     // Step 3: Use modifications table created during the last Genesis run to override the iris data in the HNSW iris store.
     // In the case that HNSW performed some modification that GPU did not, we would need to override the iris data
-    log_info(String::from(
-        "Restoring iris data from modifications table in HNSW iris store",
-    ));
+    now = Instant::now();
     let max_hnsw_serial_id = hnsw_iris_store.get_max_serial_id().await?;
     let (hnsw_mods, _max_id) = hnsw_iris_store
         .get_persisted_modifications_after_id(0, max_hnsw_serial_id as u32)
@@ -840,6 +851,10 @@ pub async fn exec_use_backup_as_source(
         }
         tx.commit().await?;
     }
+    log_info(format!(
+        "Restoring iris data from modifications table in HNSW iris store :: time {:?}s",
+        now.elapsed().as_secs_f64()
+    ));
 
     Ok(())
 }

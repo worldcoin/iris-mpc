@@ -30,7 +30,7 @@ struct Args {
 
     // User backup as source.
     #[clap(long("user-backup-as-source"))]
-    user_backup_as_source: Option<String>,
+    use_backup_as_source: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
@@ -153,23 +153,23 @@ fn parse_args() -> Result<ExecutionArgs> {
         true
     };
 
-    // Arg: user_backup_as_source (parse as string, convert to bool for ExecutionArgs).
-    let user_backup_as_source = if let Some(user_backup_as_source_arg) =
-        args.user_backup_as_source.as_ref()
+    // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
+    let use_backup_as_source = if let Some(use_backup_as_source_arg) =
+        args.use_backup_as_source.as_ref()
     {
-        match user_backup_as_source_arg.as_str() {
+        match use_backup_as_source_arg.as_str() {
             "true" => true,
             "false" => false,
             other => match other.parse::<usize>() {
                 Ok(val) => val != 0,
                 Err(_) => {
                     eprintln!(
-                        "Error: --user-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
-                        user_backup_as_source_arg
+                        "Error: --use-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
+                        use_backup_as_source_arg
                     );
                     return Err(eyre::eyre!(
-                        "--user-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
-                        user_backup_as_source_arg
+                        "--use-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
+                        use_backup_as_source_arg
                     ));
                 }
             },
@@ -183,6 +183,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         batch_size,
         batch_size_error_rate,
         perform_snapshot,
-        user_backup_as_source,
+        use_backup_as_source,
     ))
 }
