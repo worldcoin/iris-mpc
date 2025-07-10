@@ -1658,7 +1658,6 @@ impl ServerActor {
             modifications: batch.modifications,
             actor_data: (),
             full_face_mirror_attack_detected,
-            sns_message_ids: batch.sns_message_ids,
         };
 
         // Reset the results buffers for reuse

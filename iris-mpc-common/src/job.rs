@@ -289,8 +289,6 @@ pub struct ServerJobResult<A = ()> {
     // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
     // Used for roll forward in the case of needing to r-run mutations
     pub modifications: HashMap<ModificationKey, Modification>,
-    // SNS message ids to assert identical batch processing across parties
-    pub sns_message_ids: Vec<String>,
     // Actor-specific data (e.g. graph mutations).
     pub actor_data: A,
     // Reset Update specific fields

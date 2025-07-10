@@ -585,10 +585,6 @@ async fn run_main_server_loop(
                 Some(Ok(Some(batch))) => batch,
             };
 
-            println!(
-                "BATCH SNS MESSAGE IDS: {:?}",
-                batch.sns_message_ids.join("|")
-            );
             let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
             let batch_valid_entries = batch.valid_entries.clone();
             *CURRENT_BATCH_SHA
