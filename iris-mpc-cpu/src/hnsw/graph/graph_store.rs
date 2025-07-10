@@ -594,7 +594,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -645,7 +645,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -708,7 +708,6 @@ mod tests {
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
-
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {

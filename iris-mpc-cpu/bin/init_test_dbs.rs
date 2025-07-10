@@ -1,5 +1,5 @@
 use clap::Parser;
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
@@ -138,6 +138,9 @@ struct Args {
     /// are processed and persisted, without building the HNSW graph.
     #[clap(long, default_value = "false")]
     skip_hnsw_graph: bool,
+
+    #[clap(long, num_args = 1..)]
+    skip_insert_serial_ids: Vec<u32>,
 }
 
 impl Args {
@@ -170,6 +173,12 @@ impl From<&Args> for HnswParams {
 
         params
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct IrisCodeWithSerialId {
+    pub iris_code: IrisCode,
+    pub serial_id: SerialId,
 }
 
 #[allow(non_snake_case)]
@@ -294,10 +303,8 @@ async fn main() -> Result<()> {
         let stream = Deserializer::from_reader(reader)
             .into_iter::<Base64IrisCode>()
             .take(2 * n_existing_irises);
-
         for (count, json_pt) in stream.enumerate() {
             let raw_query = (&json_pt.unwrap()).into();
-
             let side = count % 2;
             let query = Arc::new(raw_query);
             vectors[side].insert(&query).await;
@@ -309,8 +316,8 @@ async fn main() -> Result<()> {
         args.path_to_iris_codes
     );
 
-    let (tx_l, rx_l) = mpsc::channel::<IrisCode>(256);
-    let (tx_r, rx_r) = mpsc::channel::<IrisCode>(256);
+    let (tx_l, rx_l) = mpsc::channel::<IrisCodeWithSerialId>(256);
+    let (tx_r, rx_r) = mpsc::channel::<IrisCodeWithSerialId>(256);
     let processors = [tx_l, tx_r];
     let receivers = [rx_l, rx_r];
     let mut jobs: JoinSet<Result<_>> = JoinSet::new();
@@ -324,9 +331,13 @@ async fn main() -> Result<()> {
             .into_iter::<Base64IrisCode>()
             .skip(2 * n_existing_irises);
         let stream = limited_iterator(stream, num_irises.map(|x| 2 * x));
-
         for (idx, json_pt) in stream.enumerate() {
-            let raw_query = (&json_pt.unwrap()).into();
+            let iris_code_query = (&json_pt.unwrap()).into();
+            let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;
+            let raw_query = IrisCodeWithSerialId {
+                iris_code: iris_code_query,
+                serial_id,
+            };
 
             let side = idx % 2;
             processors[side].blocking_send(raw_query).unwrap();
@@ -342,15 +353,24 @@ async fn main() -> Result<()> {
     ) {
         let params = params.clone();
         let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
+        let skip_serial_ids = args.skip_insert_serial_ids.clone();
 
         jobs.spawn(async move {
             let searcher = HnswSearcher { params };
             let mut counter = 0usize;
 
             while let Some(raw_query) = rx.recv().await {
-                let query = Arc::new(raw_query);
+                let serial_id = raw_query.serial_id;
+                if skip_serial_ids.contains(&serial_id) {
+                    info!(
+                        "Skipping insertion of serial id {} for {} side",
+                        serial_id, side
+                    );
+                    continue;
+                }
+                let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = vector_store.insert(&query).await;
+                let inserted_id = vector_store.insert_with_id(serial_id, &query);
                 let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
