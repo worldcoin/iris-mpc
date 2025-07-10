@@ -45,6 +45,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
         let json_pt = json_pt?;
         vector.points.insert(idx as u32 + 1, (&json_pt).into());
     }
+    vector.set_next_id((vector.points.len() + 1) as u32);
 
     if let Some(num) = len {
         if vector.points.len() != num {

@@ -14,14 +14,13 @@ impl PyPlaintextStore {
     }
 
     pub fn get(&self, id: u32) -> PyIrisCode {
-        self.0.points[&id].clone().into()
+        self.0.points[&(id + 1)].clone().into()
     }
 
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
         let serial_id = self.0.next_id;
-        self.0.points.insert(serial_id, iris.0);
-        self.0.next_id += 1;
-        serial_id
+        let vector_id = self.0.insert_with_id(serial_id, &iris.0);
+        vector_id.serial_id()
     }
 
     pub fn len(&self) -> usize {

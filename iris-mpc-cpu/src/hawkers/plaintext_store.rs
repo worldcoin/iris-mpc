@@ -25,7 +25,7 @@ use std::collections::HashMap;
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: HashMap<SerialId, IrisCode>,
     pub next_id: SerialId,
@@ -55,10 +55,7 @@ impl PlaintextStore {
             .map(|(idx, iris)| (idx as u32 + 1, iris))
             .collect::<HashMap<u32, IrisCode>>();
         let next_id = points.len() as u32 + 1;
-        Self {
-            points,
-            next_id: SerialId::new(next_id),
-        }
+        Self { points, next_id }
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this
@@ -98,6 +95,12 @@ impl PlaintextStore {
 
     pub fn set_next_id(&mut self, next_id: u32) {
         self.next_id = next_id;
+    }
+
+    pub fn insert_with_id(&mut self, serial_id: SerialId, query: &IrisCode) -> VectorId {
+        self.points.insert(serial_id, query.clone());
+        self.next_id = self.next_id.max(serial_id + 1);
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -155,9 +158,7 @@ impl VectorStore for PlaintextStore {
 impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         let serial_id = self.next_id;
-        self.points.insert(serial_id, query.clone());
-        self.next_id += 1;
-        VectorId::from_serial_id(serial_id)
+        self.insert_with_id(serial_id, query)
     }
 }
 
