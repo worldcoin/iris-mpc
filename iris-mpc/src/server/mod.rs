@@ -10,6 +10,7 @@ use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -19,7 +20,7 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::job::JobSubmissionHandle;
+use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
     get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
@@ -32,6 +33,7 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
+use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::atomic::AtomicU64;
@@ -573,7 +575,7 @@ async fn run_main_server_loop(
         loop {
             let now = Instant::now();
 
-            let batch = match batch_stream.recv().await {
+            let mut batch = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -583,6 +585,25 @@ async fn run_main_server_loop(
                 }
                 Some(Ok(Some(batch))) => batch,
             };
+
+            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_valid_entries = batch.valid_entries.clone();
+            *CURRENT_BATCH_SHA
+                .lock()
+                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
+
+            *CURRENT_BATCH_VALID_ENTRIES
+                .lock()
+                .expect("Failed to lock CURRENT_VALID_ENTRIES") = batch_valid_entries.clone();
+
+            tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
+            tracing::info!(
+                "Received batch with {} valid entries and {} request types",
+                batch_valid_entries.clone().len(),
+                batch.request_types.len()
+            );
+
+            batch.sync_batch_entries(config).await?;
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -610,7 +631,6 @@ async fn run_main_server_loop(
             let result = timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
-
             tx_results.send(result).await?;
 
             shutdown_handler.increment_batches_pending_completion()

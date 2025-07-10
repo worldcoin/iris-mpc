@@ -47,20 +47,12 @@ pub enum JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new_batch_indexation(
-        Batch {
-            batch_id,
-            vector_ids,
-            left_queries,
-            right_queries,
-            vector_ids_to_persist,
-        }: Batch,
-    ) -> Self {
+    pub fn new_batch_indexation(batch: &Batch) -> Self {
         Self::BatchIndexation {
-            batch_id,
-            vector_ids,
-            queries: Arc::new([left_queries, right_queries]),
-            vector_ids_to_persist,
+            batch_id: batch.batch_id,
+            vector_ids: batch.vector_ids.clone(),
+            queries: Arc::new([batch.left_queries.clone(), batch.right_queries.clone()]),
+            vector_ids_to_persist: batch.vector_ids_to_persist.clone(),
         }
     }
 
