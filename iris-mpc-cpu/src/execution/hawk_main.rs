@@ -15,9 +15,7 @@ use crate::{
         searcher::ConnectPlanV,
         GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::tcp::{
-        handle::TcpNetworkHandle, networking::connection_builder::PeerConnectionBuilder, TcpConfig,
-    },
+    network::tcp::{build_network_handle, NetworkHandle},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
@@ -27,11 +25,14 @@ use clap::Parser;
 use eyre::{eyre, Report, Result};
 use futures::try_join;
 use intra_batch::intra_batch_is_match;
-use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-    statistics::BucketStatistics,
-};
 use iris_mpc_common::job::Eye;
+use iris_mpc_common::{
+    config::TlsConfig,
+    helpers::{
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        statistics::BucketStatistics,
+    },
+};
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
     job::{BatchQuery, JobSubmissionHandle},
@@ -55,10 +56,9 @@ use std::{
     collections::HashMap,
     future::Future,
     hash::{Hash, Hasher},
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
     ops::Not,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
     vec,
 };
 use tokio::{
@@ -120,6 +120,9 @@ pub struct HawkArgs {
 
     #[clap(long, default_value_t = 10)]
     pub n_buckets: usize,
+
+    #[clap(flatten)]
+    pub tls: Option<TlsConfig>,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -141,7 +144,7 @@ pub struct HawkActor {
     distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
 
     // ---- My network setup ----
-    networking: TcpNetworkHandle,
+    networking: Box<dyn NetworkHandle>,
     party_id: usize,
 }
 
@@ -301,40 +304,8 @@ impl HawkActor {
             .collect();
 
         let my_index = args.party_index;
-        let my_identity = identities[my_index].clone();
-        let my_address = &args.addresses[my_index];
 
-        let tcp_config = TcpConfig::new(
-            Duration::from_secs(10),
-            args.connection_parallelism,
-            args.request_parallelism * 2, // x2 for both orientations.
-        );
-        tracing::debug!("{:?}", tcp_config);
-
-        let connection_builder = PeerConnectionBuilder::new(
-            my_identity,
-            to_inaddr_any(my_address.parse::<SocketAddr>()?),
-            tcp_config.clone(),
-        )
-        .await?;
-
-        // Connect to other players.
-        for (identity, address) in
-            izip!(&identities, &args.addresses).filter(|(_, address)| address != &my_address)
-        {
-            let socket_addr = address
-                .clone()
-                .to_socket_addrs()?
-                .next()
-                .ok_or(eyre::eyre!("invalid peer address"))?;
-            connection_builder
-                .include_peer(identity.clone(), socket_addr)
-                .await?;
-        }
-
-        let (reconnector, connections) = connection_builder.build().await?;
-        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-
+        let networking = build_network_handle(args, &identities).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
 
@@ -1518,15 +1489,6 @@ impl HawkHandle {
     }
 }
 
-fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
-    if socket.is_ipv4() {
-        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    } else {
-        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
-    }
-    socket
-}
-
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
     let hawk_actor = HawkActor::from_cli(&args).await?;
@@ -1551,7 +1513,7 @@ mod tests {
         job::{BatchMetadata, IrisQueryBatchEntries},
     };
     use rand::SeedableRng;
-    use std::ops::Not;
+    use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
 
     #[tokio::test]
@@ -1922,6 +1884,7 @@ mod tests_db {
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,
+            tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
