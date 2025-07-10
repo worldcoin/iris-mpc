@@ -28,6 +28,9 @@ pub struct Config {
 
     // The modifications that will be performed during the delta phase
     pub modifications: Vec<Modification>,
+
+    // The backup of the graph tables will be used as source
+    pub use_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -42,6 +45,7 @@ impl Config {
         max_modification_id: i64,
         max_modification_persisted_id: i64,
         modifications: Vec<Modification>,
+        use_backup_as_source: bool,
     ) -> Self {
         Self {
             batch_size,
@@ -52,6 +56,7 @@ impl Config {
             max_modification_id,
             max_modification_persisted_id,
             modifications,
+            use_backup_as_source,
         }
     }
 }
@@ -145,7 +150,17 @@ mod tests {
                 result_message_body: None,
                 graph_mutation: None,
             };
-            Self::new(64, 128, vec![3, 5], 50, 100, 100, 10, vec![mod_1, mod_2])
+            Self::new(
+                64,
+                128,
+                vec![3, 5],
+                50,
+                100,
+                100,
+                10,
+                vec![mod_1, mod_2],
+                false,
+            )
         }
         fn new_2() -> Self {
             let mod_1 = Modification {
@@ -158,7 +173,17 @@ mod tests {
                 result_message_body: Some("meow".to_string()),
                 graph_mutation: None,
             };
-            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200, 200, vec![mod_1])
+            Self::new(
+                64,
+                128,
+                vec![3, 5, 6],
+                150,
+                200,
+                200,
+                200,
+                vec![mod_1],
+                true,
+            )
         }
 
         fn new_3() -> Self {
@@ -172,7 +197,17 @@ mod tests {
                 result_message_body: Some("hello".to_string()),
                 graph_mutation: None,
             };
-            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200, 200, vec![mod_1])
+            Self::new(
+                64,
+                128,
+                vec![3, 5, 6],
+                150,
+                200,
+                200,
+                200,
+                vec![mod_1],
+                true,
+            )
         }
     }
 

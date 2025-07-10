@@ -190,6 +190,20 @@ impl Store {
         .fetch(&self.pool)
     }
 
+    pub async fn get_iris_data_by_id(&self, id: i64) -> Result<DbStoredIris> {
+        let iris = sqlx::query_as::<_, DbStoredIris>(
+            r#"
+            SELECT *
+            FROM irises
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(iris)
+    }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
@@ -640,6 +654,17 @@ WHERE id = $1;
         Ok(())
     }
 
+    /// Delete all modifications from the modifications table.
+    pub async fn clear_modifications_table(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM modifications")
+            .execute(tx.deref_mut())
+            .await?;
+        Ok(())
+    }
+
     /// Initialize the database with random shares and masks. Cleans up the db
     /// before inserting new generated irises.
     pub async fn init_db_with_random_shares(
@@ -959,6 +984,26 @@ pub mod tests {
             .insert_irises(&mut tx, &[iris1, iris2.clone()])
             .await?;
         tx.commit().await?;
+
+        // Test get_iris_data for id 1
+        let fetched_iris1 = store.get_iris_data_by_id(1).await?;
+        assert_eq!(fetched_iris1.id, 1);
+        assert_eq!(fetched_iris1.left_code(), &[123_u16; 12800]);
+        assert_eq!(fetched_iris1.left_mask(), &[456_u16; 6400]);
+        assert_eq!(fetched_iris1.right_code(), &[789_u16; 12800]);
+        assert_eq!(fetched_iris1.right_mask(), &[101_u16; 6400]);
+
+        // Test get_iris_data for id 2
+        let fetched_iris2 = store.get_iris_data_by_id(2).await?;
+        assert_eq!(fetched_iris2.id, 2);
+        assert_eq!(fetched_iris2.left_code(), &[123_u16; 12800]);
+        assert_eq!(fetched_iris2.left_mask(), &[456_u16; 6400]);
+        assert_eq!(fetched_iris2.right_code(), &[789_u16; 12800]);
+        assert_eq!(fetched_iris2.right_mask(), &[101_u16; 6400]);
+
+        // Test get_iris_data for non-existent id (should error)
+        let not_found = store.get_iris_data_by_id(999).await;
+        assert!(not_found.is_err());
 
         // update iris with id 1 in db
         let updated_left_code = GaloisRingIrisCodeShare {
@@ -1310,6 +1355,40 @@ pub mod tests {
         // We expect only one modification to remain (m1).
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, m1.id);
+
+        // Clean up the temporary schema.
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_clear_modifications_table() -> Result<()> {
+        // Set up a temporary schema and a new store.
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // Insert several modifications.
+        for i in 0..5 {
+            store
+                .insert_modification(Some(100 + i), IDENTITY_DELETION_MESSAGE_TYPE, None)
+                .await?;
+        }
+
+        // Ensure modifications are present.
+        let all_mods = store.last_modifications(10).await?;
+        assert_eq!(all_mods.len(), 5);
+
+        // Clear the modifications table.
+        let mut tx = store.tx().await?;
+        store.clear_modifications_table(&mut tx).await?;
+        tx.commit().await?;
+
+        // Ensure the table is empty.
+        let mods_after_clear = store.last_modifications(10).await?;
+        assert_eq!(mods_after_clear.len(), 0);
 
         // Clean up the temporary schema.
         cleanup(&postgres_client, &schema_name).await?;
