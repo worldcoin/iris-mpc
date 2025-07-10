@@ -31,7 +31,7 @@ use iris_mpc_cpu::{
         IndexationError, JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::graph::graph_store::GraphPg,
+    hnsw::{self, graph::graph_store::GraphPg},
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
@@ -59,6 +59,9 @@ pub struct ExecutionArgs {
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_snapshot: bool,
+
+    // User backup as source
+    user_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -68,12 +71,14 @@ impl ExecutionArgs {
         batch_size: usize,
         batch_size_error_rate: usize,
         perform_snapshot: bool,
+        user_backup_as_source: bool,
     ) -> Self {
         Self {
             max_indexation_id,
             batch_size,
             batch_size_error_rate,
             perform_snapshot,
+            user_backup_as_source,
         }
     }
 }
@@ -148,8 +153,17 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         mut hawk_handle,
         tx_results,
         graph_store,
+        hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
     log_info(String::from("Setup complete."));
+    log_info(format!(
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
+        args.max_indexation_id,
+        args.batch_size,
+        args.batch_size_error_rate,
+        args.perform_snapshot,
+        args.user_backup_as_source
+    ));
 
     // Phase 1: apply delta.
 
@@ -188,6 +202,24 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     log_info(String::from("Database backup begins"));
     exec_database_backup(graph_store.clone()).await?;
 
+    // Clear modifications from the HNSW iris store
+    // This is because after a genesis run - there should be no modifications left in the HNSW iris store
+    let mut tx = hnsw_iris_store.tx().await?;
+    hnsw_iris_store
+        .clear_modifications_table(&mut tx)
+        .await
+        .map_err(|err| {
+            eyre!(log_error(format!(
+                "Failed to clear modifications: {:?}",
+                err
+            )))
+        })?;
+    tx.commit().await?;
+
+    log_info(String::from(
+        "Cleared modifications from the HNSW iris store",
+    ));
+
     Ok(())
 }
 
@@ -210,6 +242,7 @@ async fn exec_setup(
     GenesisHawkHandle,
     Sender<JobResult>,
     Arc<GraphPg<Aby3Store>>,
+    IrisStore,
 )> {
     // Bail if config is invalid.
     validate_config(config)?;
@@ -272,6 +305,7 @@ async fn exec_setup(
         max_modification_id,
     ));
 
+    // TODO: Add checks for user_backup_store and modifications for that
     // Coordinator: Await coordination server to start.
     let genesis_config = GenesisConfig::new(
         args.batch_size,
@@ -319,24 +353,16 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
-    // Clear modifications from the HNSW iris store
-    // This is because after a genesis run, we expect there to be no modifications
-    // as it is already synced
-    let mut tx = hnsw_iris_store.tx().await?;
-    hnsw_iris_store
-        .clear_modifications_table(&mut tx)
-        .await
-        .map_err(|err| {
-            eyre!(log_error(format!(
-                "Failed to clear modifications: {:?}",
-                err
-            )))
-        })?;
-    tx.commit().await?;
-
-    log_info(String::from(
-        "Cleared modifications from the HNSW iris store",
-    ));
+    // If user_backup_as_source is set, restore graph tables from backup
+    if args.user_backup_as_source {
+        exec_use_backup_as_source(
+            last_indexed_id,
+            &graph_store_arc,
+            &hnsw_iris_store,
+            &iris_store,
+        )
+        .await?;
+    }
 
     // Initialise HNSW graph from previously indexed.
     let mut hawk_actor = get_hawk_actor(config).await?;
@@ -377,7 +403,7 @@ async fn exec_setup(
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
         Arc::clone(&imem_iris_stores),
-        hnsw_iris_store,
+        hnsw_iris_store.clone(),
         graph_store_arc.clone(),
         &mut task_monitor_bg,
         &shutdown_handler,
@@ -402,6 +428,7 @@ async fn exec_setup(
         hawk_handle,
         tx_results,
         graph_store_arc,
+        hnsw_iris_store,
     ))
 }
 
@@ -731,19 +758,7 @@ async fn exec_snapshot(
 ///
 /// * `graph_store` - Arc-wrapped HNSW graph store instance.
 async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<(), IndexationError> {
-    log_info(String::from("Schema snapshot begins"));
-    let now = Instant::now();
-    graph_store.copy_schema().await.map_err(|err| {
-        log_error(format!("Failed to copy schema: {}", err));
-        IndexationError::DatabaseCopyFailure(err.to_string())
-    })?;
-
-    log_info(format!(
-        "Schema snapshot ended - time taken is {:?}s",
-        now.elapsed().as_secs_f64()
-    ));
-
-    log_info(String::from("Table data snapshot begins"));
+    log_info(String::from("Graph table data snapshot begins"));
     let now = Instant::now();
     graph_store
         .backup_hawk_graph_tables()
@@ -753,9 +768,78 @@ async fn exec_database_backup(graph_store: Arc<GraphPg<Aby3Store>>) -> Result<()
             IndexationError::DatabaseCopyFailure(err.to_string())
         })?;
     log_info(format!(
-        "Table data snapshot ended - time taken is {:?}s",
+        "Graph table data snapshot ended - time taken is {:?}s",
         now.elapsed().as_secs_f64()
     ));
+
+    Ok(())
+}
+
+/// If user_backup_as_source is set, restore graph tables from backup.
+/// This method is used when HNSW has enabled persistence which means the graph and iris data would have been modified
+/// This method restore the HNSW schema to the last known state
+/// # Arguments
+///
+/// * `graph_store_arc` - Arc-wrapped HNSW graph store instance.
+/// * `args` - Execution arguments.
+///
+pub async fn exec_use_backup_as_source(
+    last_indexed_id: u32,
+    graph_store_arc: &Arc<GraphPg<Aby3Store>>,
+    hnsw_iris_store: &IrisStore,
+    iris_store: &IrisStore,
+) -> Result<()> {
+    log_info(String::from(
+        "Restoring graph tables from backup as user_backup_as_source is set",
+    ));
+    // TODO: add timings
+    // Step 1: Restore graph tables from backup.
+    graph_store_arc
+        .restore_hawk_graph_tables_from_backup()
+        .await?;
+    log_info(String::from("Graph tables restored from backup."));
+
+    // Step 2: Remove all iris data except that is larger than the last indexed id.
+    log_info(format!(
+        "Removing all iris data except that larger than last indexed id: {}",
+        last_indexed_id
+    ));
+    hnsw_iris_store.rollback(last_indexed_id as usize).await?;
+
+    // Step 3: Use modifications table created during the last Genesis run to override the iris data in the HNSW iris store.
+    // In the case that HNSW performed some modification that GPU did not, we would need to override the iris data
+    log_info(String::from(
+        "Restoring iris data from modifications table in HNSW iris store",
+    ));
+    let max_hnsw_serial_id = hnsw_iris_store.get_max_serial_id().await?;
+    let (hnsw_mods, _max_id) = hnsw_iris_store
+        .get_persisted_modifications_after_id(0, max_hnsw_serial_id as u32)
+        .await?;
+    if !hnsw_mods.is_empty() {
+        log_info(format!("Restoring {} iris modifications", hnsw_mods.len()));
+        let mut tx = hnsw_iris_store.tx().await?;
+        for modification in &hnsw_mods {
+            if let Some(serial_id) = modification.serial_id {
+                log_info(format!(
+                    "Restoring iris modification: id={}, serial_id={:?}",
+                    modification.id, modification.serial_id
+                ));
+
+                let iris = iris_store.get_iris_data(serial_id).await?;
+                let iris_ref = iris_mpc_store::StoredIrisRef {
+                    id: iris.serial_id() as i64,
+                    left_code: iris.left_code(),
+                    left_mask: iris.left_mask(),
+                    right_code: iris.right_code(),
+                    right_mask: iris.right_mask(),
+                };
+                hnsw_iris_store
+                    .update_iris_with_version_id(Some(&mut tx), iris.version_id(), &iris_ref)
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+    }
 
     Ok(())
 }
