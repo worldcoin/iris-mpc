@@ -13,7 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
 };
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
-use iris_mpc_common::job::{ServerJobResult, INFLIGHT_BATCHES};
+use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::izip;
@@ -477,33 +477,6 @@ pub async fn process_job_result(
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
     shutdown_handler.decrement_batches_pending_completion();
-    // remove batch sha from inflight batches
-    let batch_hash = hex::encode(sha256_bytes(sns_message_ids.join("")));
-    tracing::info!(
-        "Removing batch with hash {} from inflight batches",
-        batch_hash
-    );
-
-    INFLIGHT_BATCHES
-        .lock()
-        .expect("Failed to lock INFLIGHT_BATCHES")
-        .remove(&batch_hash);
-
-    let remaining_batch_hashes = INFLIGHT_BATCHES
-        .lock()
-        .expect("Failed to lock INFLIGHT_BATCHES")
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-
-    tracing::info!(
-        "Remaining inflight batches: {:?}",
-        remaining_batch_hashes
-            .into_iter()
-            .map(|h| h[0..8].to_string())
-            .collect::<Vec<_>>()
-            .join(", ")
-    );
 
     Ok(())
 }

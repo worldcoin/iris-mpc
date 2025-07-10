@@ -20,7 +20,7 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
-use iris_mpc_common::job::{JobSubmissionHandle, INFLIGHT_BATCHES};
+use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
     get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
@@ -589,15 +589,17 @@ async fn run_main_server_loop(
                 "BATCH SNS MESSAGE IDS: {:?}",
                 batch.sns_message_ids.join("|")
             );
-            let batch_hash = hex::encode(sha256_bytes(batch.sns_message_ids.join("")));
+            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
             let batch_valid_entries = batch.valid_entries.clone();
-
-            INFLIGHT_BATCHES
+            *CURRENT_BATCH_SHA
                 .lock()
-                .expect("Failed to lock INFLIGHT_BATCHES")
-                .insert(batch_hash.clone(), batch_valid_entries.clone());
+                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
 
-            tracing::info!("Current batch hash: {}", &batch_hash[0..8].to_string());
+            *CURRENT_BATCH_VALID_ENTRIES
+                .lock()
+                .expect("Failed to lock CURRENT_VALID_ENTRIES") = batch_valid_entries.clone();
+
+            tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
             tracing::info!(
                 "Received batch with {} valid entries and {} request types",
                 batch_valid_entries.clone().len(),

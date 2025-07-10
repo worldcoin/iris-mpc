@@ -36,7 +36,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 4;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_N_BATCHES: usize = 3;
 
