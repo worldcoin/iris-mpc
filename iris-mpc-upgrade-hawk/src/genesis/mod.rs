@@ -372,6 +372,7 @@ async fn exec_setup(
         graph_store_arc.clone(),
         &mut hawk_actor,
         Arc::clone(&shutdown_handler),
+        args.max_indexation_id as usize,
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -1194,6 +1195,7 @@ async fn get_sync_result(
 /// * `config` - Application configuration instance.
 /// * `graph_store` - Graph PostgreSQL store provider.
 /// * `hawk_actor` - Hawk actor managing graph access & indexation.
+/// * `max_index` - Optional maximum index to load (inclusive). If None, loads all data.
 ///
 async fn init_graph_from_stores(
     config: &Config,
@@ -1201,6 +1203,7 @@ async fn init_graph_from_stores(
     graph_store: Arc<GraphPg<Aby3Store>>,
     hawk_actor: &mut HawkActor,
     shutdown_handler: Arc<ShutdownHandler>,
+    max_index: usize,
 ) -> Result<()> {
     log_info(String::from("⚓️ ANCHOR: Load the database"));
 
@@ -1226,14 +1229,15 @@ async fn init_graph_from_stores(
     ));
 
     // -------------------------------------------------------------------
-    // TODO: use the number of currently processed entries for the amount
-    //       to read into memory
+    // Get total number of irises and apply max_index limit if specified
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
+    let load_count = std::cmp::min(max_index, store_len);
+
     load_iris_db(
         &mut iris_loader,
         iris_store,
-        store_len,
+        load_count,
         iris_db_parallelism,
         config,
         shutdown_handler,
