@@ -1036,7 +1036,7 @@ mod tests {
         graph.cleanup().await?;
         Ok(())
     }
-    
+
     #[tokio::test]
     async fn test_restore_hawk_graph_tables_from_backup() -> Result<()> {
         let graph = TestGraphPg::<PlaintextStore>::new().await?;

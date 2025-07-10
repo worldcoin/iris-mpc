@@ -31,7 +31,7 @@ use iris_mpc_cpu::{
         IndexationError, JobRequest, JobResult,
     },
     hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
-    hnsw::{self, graph::graph_store::GraphPg},
+    hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{

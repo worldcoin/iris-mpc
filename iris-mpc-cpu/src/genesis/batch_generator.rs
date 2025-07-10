@@ -155,6 +155,10 @@ impl BatchSize {
     #[allow(non_snake_case)]
     pub fn new_dynamic(error_correction: usize, hnsw_M: usize) -> Self {
         // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        log_info(format!(
+            "Creating dynamic batch size: error-correction={}, hnsw-M={}",
+            error_correction, hnsw_M
+        ));
         BatchSize::Dynamic {
             error_correction,
             hnsw_M,
@@ -163,6 +167,7 @@ impl BatchSize {
 
     pub fn new_static(size: usize) -> Self {
         // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        log_info(format!("Creating static batch size: size={}", size));
         BatchSize::Static(size)
     }
 
@@ -173,6 +178,10 @@ impl BatchSize {
         hnsw_M: usize,
     ) -> Self {
         // TODO: defensive guard by asserting reasonable threshold/floors for inputs.
+        log_info(format!(
+            "Creating static batch size from dynamic formula: last-indexed-id={}, error-correction={}, hnsw-M={}",
+            last_indexed_id, error_correction, hnsw_M
+        ));
         Self::new_static(Self::get_dynamic_size(
             last_indexed_id,
             error_correction,
