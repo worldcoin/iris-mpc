@@ -190,7 +190,7 @@ impl Store {
         .fetch(&self.pool)
     }
 
-    pub async fn get_iris_data(&self, id: i64) -> Result<DbStoredIris> {
+    pub async fn get_iris_data_by_id(&self, id: i64) -> Result<DbStoredIris> {
         let iris = sqlx::query_as::<_, DbStoredIris>(
             r#"
             SELECT *
@@ -986,7 +986,7 @@ pub mod tests {
         tx.commit().await?;
 
         // Test get_iris_data for id 1
-        let fetched_iris1 = store.get_iris_data(1).await?;
+        let fetched_iris1 = store.get_iris_data_by_id(1).await?;
         assert_eq!(fetched_iris1.id, 1);
         assert_eq!(fetched_iris1.left_code(), &[123_u16; 12800]);
         assert_eq!(fetched_iris1.left_mask(), &[456_u16; 6400]);
@@ -994,7 +994,7 @@ pub mod tests {
         assert_eq!(fetched_iris1.right_mask(), &[101_u16; 6400]);
 
         // Test get_iris_data for id 2
-        let fetched_iris2 = store.get_iris_data(2).await?;
+        let fetched_iris2 = store.get_iris_data_by_id(2).await?;
         assert_eq!(fetched_iris2.id, 2);
         assert_eq!(fetched_iris2.left_code(), &[123_u16; 12800]);
         assert_eq!(fetched_iris2.left_mask(), &[456_u16; 6400]);
@@ -1002,7 +1002,7 @@ pub mod tests {
         assert_eq!(fetched_iris2.right_mask(), &[101_u16; 6400]);
 
         // Test get_iris_data for non-existent id (should error)
-        let not_found = store.get_iris_data(999).await;
+        let not_found = store.get_iris_data_by_id(999).await;
         assert!(not_found.is_err());
 
         // update iris with id 1 in db

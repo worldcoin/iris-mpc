@@ -836,7 +836,7 @@ pub async fn exec_use_backup_as_source(
                     modification.id, modification.serial_id
                 ));
 
-                let iris = iris_store.get_iris_data(serial_id).await?;
+                let iris = iris_store.get_iris_data_by_id(serial_id).await?;
                 let iris_ref = iris_mpc_store::StoredIrisRef {
                     id: iris.serial_id() as i64,
                     left_code: iris.left_code(),

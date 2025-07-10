@@ -154,26 +154,18 @@ fn parse_args() -> Result<ExecutionArgs> {
     };
 
     // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
-    let use_backup_as_source = if let Some(use_backup_as_source_arg) =
-        args.use_backup_as_source.as_ref()
-    {
-        match use_backup_as_source_arg.as_str() {
-            "true" => true,
-            "false" => false,
-            other => match other.parse::<usize>() {
-                Ok(val) => val != 0,
-                Err(_) => {
-                    eprintln!(
-                        "Error: --use-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
-                        use_backup_as_source_arg
-                    );
-                    return Err(eyre::eyre!(
-                        "--use-backup-as-source argument must be 0 or 1 (or a valid usize). Value: {}",
-                        use_backup_as_source_arg
-                    ));
-                }
-            },
-        }
+    let use_backup_as_source = if args.use_backup_as_source.is_some() {
+        let use_backup_as_source_args = args.perform_snapshot.as_ref().unwrap();
+        use_backup_as_source_args.parse().map_err(|_| {
+            eprintln!(
+                "Error: --use-backup-as-source argument must be a valid boolean. Value: {}",
+                use_backup_as_source_args
+            );
+            eyre::eyre!(
+                "--use-backup-as-source argument must be a valid boolean. Value: {}",
+                use_backup_as_source_args
+            )
+        })?
     } else {
         false
     };
