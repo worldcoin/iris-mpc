@@ -575,20 +575,13 @@ async fn exec_indexation(
                 break;
             }
 
-            // Signal.
-            log_info(format!(
-                "Indexing new batch: {} :: time {:?}s",
-                batch,
-                now.elapsed().as_secs_f64(),
-            ));
-
             // Coordinator: check background task processing.
             task_monitor_bg.check_tasks();
 
             last_indexed_id = batch.id_end();
 
             // Submit batch to Hawk handle for indexation.
-            let request = JobRequest::new_batch_indexation(batch);
+            let request = JobRequest::new_batch_indexation(&batch);
             let result_future = hawk_handle.submit_request(request).await;
             let result = timeout(processing_timeout, result_future)
                 .await
@@ -602,6 +595,13 @@ async fn exec_indexation(
             // Send results to processing thread responsible for persisting to database.
             tx_results.send(result).await?;
             shutdown_handler.increment_batches_pending_completion();
+            // Signal.
+            log_info(format!(
+                "Indexing new batch: {} :: time {:?}s",
+                batch,
+                now.elapsed().as_secs_f64(),
+            ));
+            now = Instant::now();
         }
         Ok(())
     }
