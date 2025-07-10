@@ -530,11 +530,7 @@ async fn exec_indexation(
 
     // Set batch size.
     let batch_size = match ctx.args.batch_size {
-        0 => BatchSize::new_static_from_dynamic_formula(
-            ctx.last_indexed_id,
-            ctx.args.batch_size_error_rate,
-            ctx.config.hnsw_param_M,
-        ),
+        0 => BatchSize::new_dynamic(ctx.args.batch_size_error_rate, ctx.config.hnsw_param_M),
         _ => BatchSize::new_static(ctx.args.batch_size),
     };
 
@@ -559,7 +555,7 @@ async fn exec_indexation(
         log_info(String::from("Entering main indexation loop"));
 
         // Housekeeping.
-        let now = Instant::now();
+        let mut now = Instant::now();
         let processing_timeout = Duration::from_secs(ctx.config.processing_timeout_secs);
 
         // Index until generator is exhausted.
