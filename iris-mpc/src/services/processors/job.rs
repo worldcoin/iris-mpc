@@ -2,7 +2,6 @@ use crate::services::processors::result_message::send_results_to_sns;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::{bail, Result, WrapErr};
 use iris_mpc_common::config::Config;
-use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::helpers::smpc_request::{
     ANONYMIZED_STATISTICS_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -17,7 +16,6 @@ use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::izip;
-use sodiumoxide::hex;
 use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
@@ -66,7 +64,6 @@ pub async fn process_job_result(
         reset_update_request_ids,
         reset_update_indices,
         reset_update_shares,
-        sns_message_ids,
         ..
     } = job_result;
     let now = Instant::now();
