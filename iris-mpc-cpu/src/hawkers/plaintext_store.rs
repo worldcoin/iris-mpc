@@ -28,7 +28,16 @@ use std::collections::HashMap;
 #[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
     pub points: HashMap<SerialId, IrisCode>,
-    pub next_id: u32,
+    pub next_id: SerialId,
+}
+
+impl Default for PlaintextStore {
+    fn default() -> Self {
+        Self {
+            points: Default::default(),
+            next_id: 1u32,
+        }
+    }
 }
 
 impl PlaintextStore {
@@ -45,9 +54,10 @@ impl PlaintextStore {
             .enumerate()
             .map(|(idx, iris)| (idx as u32 + 1, iris))
             .collect::<HashMap<u32, IrisCode>>();
+        let next_id = points.len() as u32 + 1;
         Self {
             points,
-            next_id: store_size as u32 + 2,
+            next_id: SerialId::new(next_id),
         }
     }
 
