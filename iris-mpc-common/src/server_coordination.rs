@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::helpers::batch_sync::get_own_batch_sync_state;
+use crate::helpers::batch_sync::{get_own_batch_sync_entries, get_own_batch_sync_state};
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
 use aws_sdk_sqs::Client as SQSClient;
@@ -148,6 +148,23 @@ where
                                 (
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                     format!("Error fetching batch sync state: {}", e),
+                                )
+                                    .into_response()
+                            }
+                        }
+                    }),
+                )
+                .route(
+                    "/batch-sync-entries",
+                    get(move || async move {
+                        let own_batch_sync_entries = get_own_batch_sync_entries().await;
+                        match serde_json::to_string(&own_batch_sync_entries) {
+                            Ok(body) => (StatusCode::OK, body).into_response(),
+                            Err(e) => {
+                                tracing::error!("Failed to serialize batch sync entries: {:?}", e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Serialization error: {}", e),
                                 )
                                     .into_response()
                             }
