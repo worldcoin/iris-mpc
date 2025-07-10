@@ -2,6 +2,7 @@ use eyre::Result;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
     test::{generate_full_test_db, TestCaseGenerator},
+    vector_id::SerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
@@ -46,14 +47,14 @@ async fn create_graph_from_plain_dbs(
     params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let left_points: HashMap<u32, IrisCode> = left_db
+    let left_points: HashMap<SerialId, IrisCode> = left_db
         .db
         .iter()
         .enumerate()
         .map(|(idx, iris)| (idx as u32 + 1, iris.clone()))
         .collect();
 
-    let right_points: HashMap<u32, IrisCode> = right_db
+    let right_points: HashMap<SerialId, IrisCode> = right_db
         .db
         .iter()
         .enumerate()

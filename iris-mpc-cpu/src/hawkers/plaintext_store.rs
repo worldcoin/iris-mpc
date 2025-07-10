@@ -53,7 +53,7 @@ impl PlaintextStore {
             .into_iter()
             .enumerate()
             .map(|(idx, iris)| (idx as u32 + 1, iris))
-            .collect::<HashMap<u32, IrisCode>>();
+            .collect::<HashMap<SerialId, IrisCode>>();
         let next_id = points.len() as u32 + 1;
         Self { points, next_id }
     }
@@ -74,13 +74,13 @@ impl PlaintextStore {
         }
 
         // sort in order to ensure deterministic behavior
-        let mut keys: Vec<_> = self.points.keys().cloned().collect();
-        keys.sort();
-        keys.truncate(graph_size);
+        let mut serial_ids: Vec<_> = self.points.keys().cloned().collect();
+        serial_ids.sort();
+        serial_ids.truncate(graph_size);
 
-        for key in keys {
-            let query = self.points[&key].clone();
-            let query_id = VectorId::from_serial_id(key);
+        for serial_id in serial_ids {
+            let query = self.points[&serial_id].clone();
+            let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
@@ -91,10 +91,6 @@ impl PlaintextStore {
         }
 
         Ok(graph)
-    }
-
-    pub fn set_next_id(&mut self, next_id: u32) {
-        self.next_id = next_id;
     }
 
     pub fn insert_with_id(&mut self, serial_id: SerialId, query: &IrisCode) -> VectorId {
@@ -163,15 +159,30 @@ impl VectorStoreMut for PlaintextStore {
 }
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
-    pub points: Arc<RwLock<HashMap<u32, IrisCode>>>,
-    next_id: u32,
+    pub points: Arc<RwLock<HashMap<SerialId, IrisCode>>>,
+    next_id: SerialId,
+}
+
+impl Default for SharedPlaintextStore {
+    fn default() -> Self {
+        Self {
+            points: Default::default(),
+            next_id: 1u32,
+        }
+    }
 }
 
 impl SharedPlaintextStore {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub async fn insert_with_id(&mut self, serial_id: SerialId, query: &IrisCode) -> VectorId {
+        let mut store = self.points.write().await;
+        store.insert(serial_id, query.clone());
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -228,9 +239,7 @@ impl VectorStore for SharedPlaintextStore {
 impl VectorStoreMut for SharedPlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         let serial_id = self.next_id;
-        let mut store = self.points.write().await;
-        store.insert(serial_id, query.clone());
-        VectorId::from_serial_id(serial_id)
+        self.insert_with_id(serial_id, query).await
     }
 }
 

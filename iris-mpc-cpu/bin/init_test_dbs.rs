@@ -369,9 +369,8 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 let query = Arc::new(raw_query.iris_code);
-                vector_store.set_next_id(serial_id);
 
-                let inserted_id = vector_store.insert(&query).await;
+                let inserted_id = vector_store.insert_with_id(serial_id, &query);
                 let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
