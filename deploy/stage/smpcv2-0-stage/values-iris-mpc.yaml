@@ -161,10 +161,10 @@ env:
     value: "false"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "GtAnonStatsTestDynamicBatchSize"
+    value: "GtAnonStatsFixedBatchSizeRepro"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "GtAnonStatsTestDynamicBatchSize"
+    value: "GtAnonStatsFixedBatchSizeRepro"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
     value: "5000"
