@@ -26,6 +26,11 @@ function _exec_tests()
     popd || exit
 }
 
+function _get_now()
+{
+    echo $(date +%Y-%m-%dT%H:%M:%S.%6N)
+}
+
 function _get_path_to_monorepo()
 {
     local here
@@ -83,7 +88,7 @@ function _log ()
 {
     local MSG=${1}
 
-    echo -e "$(get_now) [INFO] [$$] HNSW-E2E :: ${MSG}"
+    echo -e "$(_get_now) [INFO] [$$] HNSW-E2E :: ${MSG}"
 }
 
 # ----------------------------------------------------------------
