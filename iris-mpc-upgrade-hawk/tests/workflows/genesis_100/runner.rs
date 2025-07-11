@@ -49,8 +49,13 @@ impl TestRun for Test {
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         // Assert node process results.
-        for node_result in self.node_results.as_ref().unwrap().iter() {
-            assert!(node_result.is_ok());
+        for (node_idx, node_result) in self.node_results.as_ref().unwrap().iter().enumerate() {
+            match node_result {
+                Ok(_) => (),
+                Err(err) => {
+                    return Err(TestError::NodeProcessPanicError(node_idx, err.to_string()));
+                }
+            }
         }
 
         // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state

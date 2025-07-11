@@ -1,5 +1,5 @@
 # Set base image.
-FROM  ubuntu:22.04 AS build-image
+FROM rust:1.85-slim-bullseye AS build-image
 
 WORKDIR /src
 
@@ -16,33 +16,33 @@ RUN apt-get update && apt-get install -y \
     debhelper \
     ca-certificates \
     protobuf-compiler \
-    wget
-
-# Install rust.
-RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
-ENV RUSTUP_HOME="/root/.rustup"
-ENV CARGO_HOME="/root/.cargo"
-RUN rustup toolchain install 1.85.0
-RUN rustup default 1.85.0
-RUN rustup component add cargo
-RUN cargo install cargo-build-deps
-RUN cargo install cargo-edit
-
-FROM build-image AS build-app
-WORKDIR /src
-COPY . .
-
-FROM ubuntu:22.04
-ENV DEBIAN_FRONTEND=noninteractive
+    wget \
+    vim \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install self-signed certificates.
 RUN apt-get update && apt-get install -y ca-certificates awscli curl
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-# Install software assets.
-COPY --from=build-app /src /src/iris-mpc
+# Install non-root user to run tests.
+RUN useradd -m -u 1000 -s /bin/bash runner
 
-# Set nobody user.
-USER 65534
+# Install software assets.
+FROM build-image AS build-app
+WORKDIR /src/iris-mpc
+COPY . .
+
+# Build software assets.
+# WORKDIR /src/iris-mpc
+# RUN cargo build --release
+
+# Set working directory.
+WORKDIR /
+
+# Set active user (nobody).
+# USER 65534
+
+# Set entrypoint for the container
+# ENTRYPOINT ["/src/iris-mpc/scripts/run-tests-hnsw-e2e.sh"]
