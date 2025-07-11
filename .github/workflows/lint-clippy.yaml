@@ -35,6 +35,25 @@ jobs:
               - rust-toolchain.toml
               - iris-*/**
 #              - .github/workflows/lint-clippy.yaml -- bring this back after Canonical incident
+      # remove this once the latest ubuntu image has been rolled out
+      - name: Fix APT mirror (Temporary workaround for protobuf install on Ubuntu 24.04)
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          echo "Removing /etc/apt/apt-mirrors.txt if present..."
+          sudo rm -f /etc/apt/apt-mirrors.txt || true
+          echo "Forcing APT to use archive.ubuntu.com"
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list || true
+          sudo apt-get update
+
+      # remove this once the latest ubuntu image has been rolled out
+      - name: Fix APT mirror (Temporary workaround for protobuf install on Ubuntu 24.04)
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          echo "Removing /etc/apt/apt-mirrors.txt if present..."
+          sudo rm -f /etc/apt/apt-mirrors.txt || true
+          echo "Forcing APT to use archive.ubuntu.com"
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list || true
+          sudo apt-get update
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
