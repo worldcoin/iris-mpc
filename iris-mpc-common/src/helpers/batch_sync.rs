@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::helpers::sqs::get_approximate_number_of_messages;
+use crate::job::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use crate::server_coordination::get_check_addresses;
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,61 @@ use tokio::time::{timeout, Duration};
 pub struct BatchSyncState {
     pub approximate_visible_messages: u32,
     pub batch_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchSyncEntries {
+    pub valid_entries: Vec<bool>,
+    pub batch_sha: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchSyncEntriesResult {
+    pub my_state: BatchSyncEntries,
+    pub all_states: Vec<BatchSyncEntries>,
+}
+
+impl BatchSyncEntriesResult {
+    pub fn new(my_state: BatchSyncEntries, all_states: Vec<BatchSyncEntries>) -> Self {
+        Self {
+            my_state,
+            all_states,
+        }
+    }
+    pub fn sha_matches(&self) -> bool {
+        self.all_states
+            .iter()
+            .all(|s| s.batch_sha == self.my_state.batch_sha)
+    }
+
+    pub fn valid_entries(&self) -> Vec<bool> {
+        self.all_states
+            .iter()
+            .map(|s| s.valid_entries.clone())
+            .fold(
+                vec![true; self.my_state.valid_entries.len()],
+                |mut acc, entries| {
+                    for (i, &entry) in entries.iter().enumerate() {
+                        if !entry {
+                            acc[i] = false;
+                        }
+                    }
+                    acc
+                },
+            )
+    }
+
+    pub fn own_sha_pretty(&self) -> String {
+        hex::encode(&self.my_state.batch_sha[0..4])
+    }
+
+    pub fn all_shas_pretty(&self) -> String {
+        self.all_states
+            .iter()
+            .map(|s| hex::encode(&s.batch_sha[0..4]))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +90,20 @@ impl BatchSyncResult {
     }
 }
 
+pub async fn get_own_batch_sync_entries() -> BatchSyncEntries {
+    let current_batch_valid_entries = CURRENT_BATCH_VALID_ENTRIES
+        .lock()
+        .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES");
+    let current_batch_hash = CURRENT_BATCH_SHA
+        .lock()
+        .expect("Failed to lock CURRENT_BATCH_SHA");
+
+    BatchSyncEntries {
+        valid_entries: current_batch_valid_entries.clone(),
+        batch_sha: current_batch_hash.to_owned(),
+    }
+}
+
 pub async fn get_own_batch_sync_state(
     config: &Config,
     sqs_client: &aws_sdk_sqs::Client,
@@ -51,6 +121,96 @@ pub async fn get_own_batch_sync_state(
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
+}
+
+pub async fn get_batch_sync_entries(
+    config: &Config,
+    own_state: Option<BatchSyncEntries>,
+) -> Result<Vec<BatchSyncEntries>> {
+    let all_batch_size_sync_entries_addresses = get_check_addresses(
+        &config.node_hostnames,
+        &config.healthcheck_ports,
+        "batch-sync-entries",
+    );
+
+    let own_sync_state = match own_state {
+        Some(state) => state.clone(),
+        None => get_own_batch_sync_entries().await,
+    };
+
+    let next_node = &all_batch_size_sync_entries_addresses[(config.party_id + 1) % 3];
+    let prev_node = &all_batch_size_sync_entries_addresses[(config.party_id + 2) % 3];
+
+    let mut states = Vec::with_capacity(3);
+    states.push(own_sync_state.clone());
+
+    let polling_timeout_duration = Duration::from_secs(20);
+
+    for host in [next_node, prev_node].iter() {
+        let mut fetched_state: Option<BatchSyncEntries> = None;
+
+        match timeout(polling_timeout_duration, async {
+            loop {
+                let res = reqwest::get(host.as_str()).await.with_context(|| {
+                    format!("Failed to fetch batch sync entries from party {}", host)
+                })?;
+                let state: BatchSyncEntries = res.json().await.with_context(|| {
+                    format!("Failed to parse batch sync entries from party {}", host)
+                })?;
+
+                if !state.batch_sha.eq(&own_sync_state.batch_sha) {
+                    tracing::info!(
+                        "Party {} (batch_hash {}) is differs own ({}). Retrying in 1 second...",
+                        host,
+                        hex::encode(&state.batch_sha[0..4]),
+                        hex::encode(&own_sync_state.batch_sha[0..4])
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                } else {
+                    fetched_state = Some(state);
+                    break;
+                }
+            }
+            Ok::<(), eyre::Error>(())
+        })
+        .await
+        {
+            Ok(Ok(_)) => {
+                if let Some(state) = fetched_state {
+                    states.push(state);
+                } else {
+                    tracing::error!("Fetched_state is None after successful polling loop from party {}. This is a bug.", host);
+                    return Err(eyre!("Internal logic error fetching state from {}", host));
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "Error polling party {}: {:?}. Using potentially stale or default sync entries.",
+                    host,
+                    e
+                );
+                return Err(eyre!(
+                    "Failed to get a consistent batch_hash from party {} due to: {:?}",
+                    host,
+                    e
+                ));
+            }
+            Err(_) => {
+                tracing::error!(
+                    "Timeout polling party {} for batch sync entries with hash {}",
+                    host,
+                    hex::encode(&own_sync_state.batch_sha[0..4])
+                );
+                return Err(eyre!(
+                    "Timeout waiting for party {} to reach batch hash {}",
+                    host,
+                    hex::encode(&own_sync_state.batch_sha[0..4])
+                ));
+            }
+        }
+    }
+    Ok(states)
 }
 
 pub async fn get_batch_sync_states(

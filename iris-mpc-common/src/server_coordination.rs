@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::helpers::batch_sync::get_own_batch_sync_state;
+use crate::helpers::batch_sync::{get_own_batch_sync_entries, get_own_batch_sync_state};
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
 use aws_sdk_sqs::Client as SQSClient;
@@ -153,6 +153,23 @@ where
                             }
                         }
                     }),
+                )
+                .route(
+                    "/batch-sync-entries",
+                    get(move || async move {
+                        let own_batch_sync_entries = get_own_batch_sync_entries().await;
+                        match serde_json::to_string(&own_batch_sync_entries) {
+                            Ok(body) => (StatusCode::OK, body).into_response(),
+                            Err(e) => {
+                                tracing::error!("Failed to serialize batch sync entries: {:?}", e);
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Serialization error: {}", e),
+                                )
+                                    .into_response()
+                            }
+                        }
+                    }),
                 );
             let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", health_check_port))
                 .await
@@ -225,6 +242,11 @@ pub async fn init_heartbeat_task(
             for (i, host) in [next_node, prev_node].iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    tracing::warn!(
+                        "Node {} did not respond with success, response: {:?}",
+                        host,
+                        res
+                    );
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
                     if last_response[i] == String::default()

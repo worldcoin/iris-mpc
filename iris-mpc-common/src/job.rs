@@ -1,3 +1,7 @@
+use crate::config::Config;
+use crate::helpers::batch_sync::{
+    get_batch_sync_entries, get_own_batch_sync_entries, BatchSyncEntriesResult,
+};
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
@@ -6,13 +10,18 @@ use crate::{
     },
 };
 use core::fmt;
-use eyre::Result;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
+use std::sync::{LazyLock, Mutex};
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     future::Future,
 };
+
+pub static CURRENT_BATCH_SHA: LazyLock<Mutex<[u8; 32]>> = LazyLock::new(|| Mutex::new([0; 32]));
+pub static CURRENT_BATCH_VALID_ENTRIES: LazyLock<Mutex<Vec<bool>>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -161,6 +170,48 @@ impl BatchQuery {
         self.reset_update_request_ids.push(request_id);
         self.reset_update_indices.push(reset_update_0_index);
         self.reset_update_shares.push(shares);
+    }
+    pub async fn sync_batch_entries(&mut self, config: &Config) -> Result<(), eyre::Error> {
+        let own_sync_state = get_own_batch_sync_entries().await;
+        let batch_sync_entries =
+            get_batch_sync_entries(config, Some(own_sync_state.clone())).await?;
+
+        let batch_sync_entries_result =
+            BatchSyncEntriesResult::new(own_sync_state.clone(), batch_sync_entries);
+
+        if !batch_sync_entries_result.sha_matches() {
+            tracing::error!(
+                "Batch sync entries SHA mismatch: own batch SHAs: {}, all SHAs: {}",
+                batch_sync_entries_result.own_sha_pretty(),
+                batch_sync_entries_result.all_shas_pretty()
+            );
+            return Err(eyre!("Batch sync entries SHA mismatch"));
+        }
+        tracing::info!(
+            "Batch sync entries SHA match: {}",
+            batch_sync_entries_result.all_shas_pretty()
+        );
+
+        let valid_entries = batch_sync_entries_result.valid_entries();
+        tracing::info!(
+            "Batch sync entries valid entries: {}",
+            valid_entries.clone().into_iter().filter(|b| *b).count()
+        );
+
+        if !valid_entries.eq(&own_sync_state.clone().valid_entries) {
+            tracing::warn!(
+                "Valid entries from sync does not equal own valid entries: (own) {}, (sync) {}",
+                own_sync_state
+                    .valid_entries
+                    .clone()
+                    .into_iter()
+                    .filter(|b| *b)
+                    .count(),
+                valid_entries.clone().into_iter().filter(|b| *b).count()
+            );
+            self.valid_entries = valid_entries.clone();
+        }
+        Ok(())
     }
 }
 

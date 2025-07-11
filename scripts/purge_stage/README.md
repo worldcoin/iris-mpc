@@ -60,11 +60,19 @@ sh purge_stage_mongo_collections.sh cpu
 sh purge_stage_mongo_collections.sh gpu
 ```
 #### Purge stage dbs
+The script also contains an optional schema suffix name as a parameter
 * to purge rds CPU SMPC clusters
 ```bash
-sh purge_stage_dbs.sh cpu
+sh purge_stage_dbs.sh cpu 
+sh purge_stage_dbs.sh cpu schema_suffix
+```
+* to purge rds tempCPU SMPC clusters
+```bash
+sh purge_stage_dbs.sh cpu_temp
+sh purge_stage_dbs.sh cpu_temp schema_suffix
 ```
 * to purge rds GPU SMPC clusters
 ```bash
 sh purge_stage_dbs.sh gpu
+sh purge_stage_dbs.sh gpu schema_suffix
 ```

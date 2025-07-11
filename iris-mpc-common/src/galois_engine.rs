@@ -14,6 +14,12 @@ pub mod degree4 {
 
     const CODE_COLS: usize = 200;
 
+    /// A representation of a 100% relative distance as a fraction.
+    /// The numerator is chosen as -1 meaning 1 difference.
+    /// The denominator is chosen as 1 meaning 1 unmasked bits.
+    /// When treated as additive shares, it becomes -3 / 3, also representing 100% distance.
+    pub const SHARE_OF_MAX_DISTANCE: (u16, u16) = (u16::MAX, 1);
+
     fn preprocess_coefs(id: usize, coefs: &mut [u16]) {
         let lagrange_coeffs = ShamirGaloisRingShare::deg_2_lagrange_polys_at_zero();
         for i in (0..coefs.len()).step_by(4) {

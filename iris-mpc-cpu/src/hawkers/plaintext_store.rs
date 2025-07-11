@@ -6,9 +6,12 @@ use crate::hnsw::{
     GraphMem, HnswSearcher, VectorStore,
 };
 use aes_prng::AesRng;
-use iris_mpc_common::iris_db::{
-    db::IrisDB,
-    iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+use iris_mpc_common::{
+    iris_db::{
+        db::IrisDB,
+        iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    },
+    vector_id::SerialId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -17,13 +20,24 @@ use tracing::debug;
 
 use super::aby3::aby3_store::VectorId;
 use eyre::{bail, Result};
+use std::collections::HashMap;
 
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
-#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PlaintextStore {
-    pub points: Vec<IrisCode>,
+    pub points: HashMap<SerialId, IrisCode>,
+    pub next_id: SerialId,
+}
+
+impl Default for PlaintextStore {
+    fn default() -> Self {
+        Self {
+            points: Default::default(),
+            next_id: 1u32,
+        }
+    }
 }
 
 impl PlaintextStore {
@@ -34,8 +48,14 @@ impl PlaintextStore {
 
     /// Generate a new `PlaintextStore` of specified size with random entries.
     pub fn new_random<R: RngCore + Clone + CryptoRng>(rng: &mut R, store_size: usize) -> Self {
-        let points = IrisDB::new_random_rng(store_size, rng).db;
-        Self { points }
+        let points_codes = IrisDB::new_random_rng(store_size, rng).db;
+        let points = points_codes
+            .into_iter()
+            .enumerate()
+            .map(|(idx, iris)| (idx as u32 + 1, iris))
+            .collect::<HashMap<SerialId, IrisCode>>();
+        let next_id = points.len() as u32 + 1;
+        Self { points, next_id }
     }
 
     /// Generate an HNSW graph over the first `graph_size` entries of this
@@ -53,9 +73,14 @@ impl PlaintextStore {
             bail!("Cannot generate graph larger than underlying vector store");
         }
 
-        for idx in 0..graph_size {
-            let query = self.points[idx].clone();
-            let query_id = VectorId::from_0_index(idx as u32);
+        // sort in order to ensure deterministic behavior
+        let mut serial_ids: Vec<_> = self.points.keys().cloned().collect();
+        serial_ids.sort();
+        serial_ids.truncate(graph_size);
+
+        for serial_id in serial_ids {
+            let query = self.points[&serial_id].clone();
+            let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
@@ -66,6 +91,12 @@ impl PlaintextStore {
         }
 
         Ok(graph)
+    }
+
+    pub fn insert_with_id(&mut self, serial_id: SerialId, query: &IrisCode) -> VectorId {
+        self.points.insert(serial_id, query.clone());
+        self.next_id = self.next_id.max(serial_id + 1);
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -88,7 +119,7 @@ impl VectorStore for PlaintextStore {
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         vectors
             .iter()
-            .map(|id| self.points.get(id.index() as usize).unwrap().clone())
+            .map(|id| self.points.get(&id.serial_id()).unwrap().clone())
             .collect()
     }
 
@@ -98,7 +129,11 @@ impl VectorStore for PlaintextStore {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        let vector_code = &self.points[vector.index() as usize];
+        let serial_id = vector.serial_id();
+        let vector_code = &self
+            .points
+            .get(&vector.serial_id())
+            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
 
@@ -118,20 +153,36 @@ impl VectorStore for PlaintextStore {
 
 impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.points.push(query.clone());
-        VectorId::from_0_index((self.points.len() - 1) as u32)
+        let serial_id = self.next_id;
+        self.insert_with_id(serial_id, query)
     }
 }
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct SharedPlaintextStore {
-    pub points: Arc<RwLock<Vec<IrisCode>>>,
+    pub points: Arc<RwLock<HashMap<SerialId, IrisCode>>>,
+    next_id: SerialId,
+}
+
+impl Default for SharedPlaintextStore {
+    fn default() -> Self {
+        Self {
+            points: Default::default(),
+            next_id: 1u32,
+        }
+    }
 }
 
 impl SharedPlaintextStore {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub async fn insert_with_id(&mut self, serial_id: SerialId, query: &IrisCode) -> VectorId {
+        let mut store = self.points.write().await;
+        store.insert(serial_id, query.clone());
+        VectorId::from_serial_id(serial_id)
     }
 }
 
@@ -139,6 +190,7 @@ impl From<PlaintextStore> for SharedPlaintextStore {
     fn from(value: PlaintextStore) -> Self {
         Self {
             points: Arc::new(RwLock::new(value.points)),
+            next_id: value.next_id,
         }
     }
 }
@@ -152,7 +204,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.points.read().await;
         vectors
             .iter()
-            .map(|id| store.get(id.index() as usize).unwrap().clone())
+            .map(|id| store.get(&id.serial_id()).unwrap().clone())
             .collect()
     }
 
@@ -163,7 +215,10 @@ impl VectorStore for SharedPlaintextStore {
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.points.read().await;
-        let vector_code = &store[vector.index() as usize];
+        let serial_id = vector.serial_id();
+        let vector_code = store
+            .get(&serial_id)
+            .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
 
@@ -183,9 +238,8 @@ impl VectorStore for SharedPlaintextStore {
 
 impl VectorStoreMut for SharedPlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        let mut store = self.points.write().await;
-        store.push(query.clone());
-        VectorId::from_0_index((store.len() - 1) as u32)
+        let serial_id = self.next_id;
+        self.insert_with_id(serial_id, query).await
     }
 }
 
@@ -271,7 +325,8 @@ mod tests {
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
         for i in 0..database_size {
-            let query = Arc::new(ptxt_vector.points.get(i).unwrap().clone());
+            let serial_id = i as u32 + 1;
+            let query = ptxt_vector.points.get(&serial_id).unwrap().clone();
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;

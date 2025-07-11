@@ -187,8 +187,8 @@ pub struct ServerActor {
     anonymized_bucket_statistics_right: BucketStatistics,
     anonymized_bucket_statistics_left_mirror: BucketStatistics,
     anonymized_bucket_statistics_right_mirror: BucketStatistics,
-    flip_full_scan_side: bool,
     full_scan_side: Eye,
+    full_scan_side_switching_enabled: bool,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -207,8 +207,8 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
-        flip_full_scan_side: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Starting Device Manager");
         let device_manager = Arc::new(DeviceManager::init());
@@ -225,8 +225,8 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
-            flip_full_scan_side,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )
     }
     #[allow(clippy::too_many_arguments)]
@@ -243,8 +243,8 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
-        flip_full_scan_side: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         tracing::info!("GPU Actor: Initializing NCCL");
         let ids = device_manager.get_ids_from_magic(0);
@@ -263,8 +263,8 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
-            flip_full_scan_side,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )
     }
 
@@ -283,8 +283,8 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
-        flip_full_scan_side: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<(Self, ServerActorHandle)> {
         let (tx, rx) = mpsc::channel(job_queue_size);
         let actor = Self::init(
@@ -301,8 +301,8 @@ impl ServerActor {
             return_partial_results,
             disable_persistence,
             enable_debug_timing,
-            flip_full_scan_side,
             full_scan_side,
+            full_scan_side_switching_enabled,
         )?;
         Ok((actor, ServerActorHandle { job_queue: tx }))
     }
@@ -322,8 +322,8 @@ impl ServerActor {
         return_partial_results: bool,
         disable_persistence: bool,
         enable_debug_timing: bool,
-        flip_full_scan_side: bool,
         full_scan_side: Eye,
+        full_scan_side_switching_enabled: bool,
     ) -> Result<Self> {
         assert_ne!(max_batch_size, 0);
         let mut kdf_nonce = 0;
@@ -597,8 +597,8 @@ impl ServerActor {
             anonymized_bucket_statistics_right,
             anonymized_bucket_statistics_left_mirror,
             anonymized_bucket_statistics_right_mirror,
-            flip_full_scan_side,
             full_scan_side,
+            full_scan_side_switching_enabled,
         })
     }
 
@@ -664,8 +664,8 @@ impl ServerActor {
 
             metrics::histogram!("full_batch_duration").record(now.elapsed().as_secs_f64());
 
-            // Alternate the full scan side for the next batch
-            if self.flip_full_scan_side {
+            if self.full_scan_side_switching_enabled {
+                // Alternate the full scan side for the next batch
                 self.full_scan_side = self.full_scan_side.other();
                 tracing::info!("Switching full scan side to {}", self.full_scan_side);
             }

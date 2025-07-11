@@ -329,7 +329,12 @@ mod tests {
 
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let searcher = searcher.clone();
-                let q = store.lock().await.storage.get_vector(&vector_id).await;
+                let q = store
+                    .lock()
+                    .await
+                    .storage
+                    .get_vector_or_empty(&vector_id)
+                    .await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 let graph = graph.clone();

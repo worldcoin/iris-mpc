@@ -222,7 +222,7 @@ impl DbContext {
         // get the distance from point[0] to every other point
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }

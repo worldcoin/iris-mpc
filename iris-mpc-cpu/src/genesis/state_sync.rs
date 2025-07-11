@@ -1,5 +1,5 @@
 use eyre::{ensure, Result};
-use iris_mpc_common::{config::CommonConfig, IrisSerialId};
+use iris_mpc_common::{config::CommonConfig, helpers::sync::Modification, IrisSerialId};
 use serde::{Deserialize, Serialize};
 
 /// Encpasulates common Genesis specific configuration information.  This is a network level type.
@@ -22,10 +22,20 @@ pub struct Config {
 
     // Identifier of the last modification ID to be indexed.
     pub max_modification_id: i64,
+
+    // Identifier of the max completed modification the node has seen
+    pub max_modification_persisted_id: i64,
+
+    // The modifications that will be performed during the delta phase
+    pub modifications: Vec<Modification>,
+
+    // The backup of the graph tables will be used as source
+    pub use_backup_as_source: bool,
 }
 
 /// Constructor.
 impl Config {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_size: usize,
         batch_size_error_rate: usize,
@@ -33,6 +43,9 @@ impl Config {
         last_indexed_id: IrisSerialId,
         max_indexation_id: IrisSerialId,
         max_modification_id: i64,
+        max_modification_persisted_id: i64,
+        modifications: Vec<Modification>,
+        use_backup_as_source: bool,
     ) -> Self {
         Self {
             batch_size,
@@ -41,6 +54,9 @@ impl Config {
             last_indexed_id,
             max_indexation_id,
             max_modification_id,
+            max_modification_persisted_id,
+            modifications,
+            use_backup_as_source,
         }
     }
 }
@@ -103,14 +119,95 @@ impl SyncResult {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
+    use iris_mpc_common::helpers::{
+        smpc_request::{IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE},
+        sync::Modification,
+    };
+
     use super::*;
 
     impl Config {
         fn new_1() -> Self {
-            Self::new(64, 128, vec![3, 5], 50, 100, 100)
+            let mod_1 = Modification {
+                id: 1,
+                serial_id: Some(1),
+                request_type: REAUTH_MESSAGE_TYPE.to_string(),
+                s3_url: Some("s3_url_1".to_string()),
+                status: "status_1".to_string(),
+                persisted: false,
+                result_message_body: None,
+                graph_mutation: None,
+            };
+            let mod_2 = Modification {
+                id: 2,
+                serial_id: Some(2),
+                request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
+                s3_url: Some("s3_url_2".to_string()),
+                status: "status_2".to_string(),
+                persisted: false,
+                result_message_body: None,
+                graph_mutation: None,
+            };
+            Self::new(
+                64,
+                128,
+                vec![3, 5],
+                50,
+                100,
+                100,
+                10,
+                vec![mod_1, mod_2],
+                false,
+            )
         }
         fn new_2() -> Self {
-            Self::new(64, 128, vec![3, 5, 6], 150, 200, 200)
+            let mod_1 = Modification {
+                id: 1,
+                serial_id: Some(1),
+                request_type: REAUTH_MESSAGE_TYPE.to_string(),
+                s3_url: Some("s3_url_1".to_string()),
+                status: "status_1".to_string(),
+                persisted: false,
+                result_message_body: Some("meow".to_string()),
+                graph_mutation: None,
+            };
+            Self::new(
+                64,
+                128,
+                vec![3, 5, 6],
+                150,
+                200,
+                200,
+                200,
+                vec![mod_1],
+                true,
+            )
+        }
+
+        fn new_3() -> Self {
+            let mod_1 = Modification {
+                id: 1,
+                serial_id: Some(1),
+                request_type: REAUTH_MESSAGE_TYPE.to_string(),
+                s3_url: Some("s3_url_1".to_string()),
+                status: "status_1".to_string(),
+                persisted: false,
+                result_message_body: Some("hello".to_string()),
+                graph_mutation: None,
+            };
+            Self::new(
+                64,
+                128,
+                vec![3, 5, 6],
+                150,
+                200,
+                200,
+                200,
+                vec![mod_1],
+                true,
+            )
         }
     }
 
@@ -123,6 +220,9 @@ mod tests {
         }
         fn new_2() -> Self {
             Self::new_0(Config::new_2())
+        }
+        fn new_3() -> Self {
+            Self::new_0(Config::new_3())
         }
     }
 
@@ -150,5 +250,14 @@ mod tests {
             SyncState::new_2(),
         ]);
         assert!(result.check_synced_state().is_err());
+    }
+    #[test]
+    fn test_check_genesis_config_modifications_equal_except_body() {
+        let result = SyncResult::new_0(vec![
+            SyncState::new_3(),
+            SyncState::new_2(),
+            SyncState::new_2(),
+        ]);
+        assert!(result.check_synced_state().is_ok());
     }
 }

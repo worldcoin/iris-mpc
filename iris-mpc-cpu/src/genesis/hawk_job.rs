@@ -33,6 +33,9 @@ pub enum JobRequest {
         // Incoming batch of iris identifiers for subsequent correlation.
         vector_ids: Vec<IrisVectorId>,
 
+        /// Iris data for persistence.
+        vector_ids_to_persist: Vec<IrisVectorId>,
+
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
     },
@@ -44,20 +47,12 @@ pub enum JobRequest {
 
 /// Constructor.
 impl JobRequest {
-    pub fn new_batch_indexation(
-        Batch {
-            batch_id,
-            vector_ids,
-            left_queries,
-            right_queries,
-        }: Batch,
-    ) -> Self {
-        assert!(!vector_ids.is_empty(), "Invalid batch: is empty");
-
+    pub fn new_batch_indexation(batch: &Batch) -> Self {
         Self::BatchIndexation {
-            batch_id,
-            vector_ids,
-            queries: Arc::new([left_queries, right_queries]),
+            batch_id: batch.batch_id,
+            vector_ids: batch.vector_ids.clone(),
+            queries: Arc::new([batch.left_queries.clone(), batch.right_queries.clone()]),
+            vector_ids_to_persist: batch.vector_ids_to_persist.clone(),
         }
     }
 
@@ -79,15 +74,20 @@ pub enum JobResult {
         /// Set of Iris identifiers being indexed.
         vector_ids: Vec<IrisVectorId>,
 
+        /// Vector ids for persistence
+        vector_ids_to_persist: Vec<IrisVectorId>,
+
         /// Iris serial id of batch's first element.
         first_serial_id: IrisSerialId,
-
         /// Iris serial id of batch's last element.
         last_serial_id: IrisSerialId,
     },
     Modification {
-        /// Modification id of associated modifications table entry
+        /// Modification id of associated modifications table entry.
         modification_id: i64,
+
+        /// Vector id for persistence.
+        vector_id_to_persist: IrisVectorId,
 
         /// Connect plans for updating HNSW graph in DB.
         connect_plans: HawkMutation,
@@ -100,26 +100,30 @@ impl JobResult {
         batch_id: usize,
         vector_ids: Vec<IrisVectorId>,
         connect_plans: HawkMutation,
+        vector_ids_to_persist: Vec<IrisVectorId>,
     ) -> Self {
-        let first_serial_id = vector_ids.first().unwrap().serial_id();
-        let last_serial_id = vector_ids.last().unwrap().serial_id();
+        let first_serial_id = vector_ids_to_persist.first().unwrap().serial_id();
+        let last_serial_id = vector_ids_to_persist.last().unwrap().serial_id();
+
         Self::BatchIndexation {
             connect_plans,
             batch_id,
             vector_ids,
+            vector_ids_to_persist,
             first_serial_id,
             last_serial_id,
         }
     }
 
-    #[allow(dead_code)]
     pub(crate) fn new_modification_result(
         modification_id: i64,
         connect_plans: HawkMutation,
+        vector_id_to_persist: IrisVectorId,
     ) -> Self {
         Self::Modification {
             modification_id,
             connect_plans,
+            vector_id_to_persist,
         }
     }
 }
@@ -137,7 +141,7 @@ impl fmt::Display for JobResult {
             } => {
                 write!(
                     f,
-                    "batch-id={}, batch-size={}, range=({}..{})",
+                    "batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
                     first_serial_id,

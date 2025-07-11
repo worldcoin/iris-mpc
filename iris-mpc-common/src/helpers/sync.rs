@@ -52,7 +52,7 @@ impl FromStr for ModificationStatus {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct Modification {
     pub id: i64,
     pub serial_id: Option<i64>,
@@ -63,6 +63,20 @@ pub struct Modification {
     pub result_message_body: Option<String>,
     pub graph_mutation: Option<Vec<u8>>,
 }
+
+impl PartialEq for Modification {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.serial_id == other.serial_id
+            && self.request_type == other.request_type
+            && self.s3_url == other.s3_url
+            && self.status == other.status
+            && self.persisted == other.persisted
+        // result_message_body graph_mutation are ignored since they are difference across nodes
+    }
+}
+
+impl Eq for Modification {}
 
 impl fmt::Debug for Modification {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
