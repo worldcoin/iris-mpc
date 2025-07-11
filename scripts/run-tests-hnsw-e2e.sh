@@ -22,7 +22,7 @@ function _exec_tests()
 
 function _get_path_to_iris_shares()
 {
-    echo "${_get_path_to_monorepo_root}/iris-mpc-upgrade-hawk/tests/resources/iris-shares-plaintext/store-1000.ndjson"
+    echo "${_get_path_to_monorepo_root}/iris-mpc-upgrade-hawk/tests/resources/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson"
 }
 
 function _get_path_to_monorepo_root()
