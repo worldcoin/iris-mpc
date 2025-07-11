@@ -117,7 +117,7 @@ env:
         name: application
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "65"
+    value: "56"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
