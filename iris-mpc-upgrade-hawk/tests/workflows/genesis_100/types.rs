@@ -2,11 +2,44 @@ use crate::utils::constants::COUNT_OF_PARTIES;
 use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
+/// Excapsulates data used to drive a test run.
+#[derive(Debug, Clone)]
+pub(super) struct TestInputs {
+    // Data used to launch each node process during a test run.
+    net_inputs: NetInputs,
+
+    // Data used to initialise system state prior to a test run.
+    #[allow(dead_code)]
+    system_state_inputs: Option<SystemStateInputs>,
+}
+
+/// Constructor.
+impl TestInputs {
+    pub fn new(net_inputs: NetInputs, system_state_inputs: Option<SystemStateInputs>) -> Self {
+        Self {
+            net_inputs,
+            system_state_inputs,
+        }
+    }
+}
+
+/// Accessors.
+impl TestInputs {
+    pub fn net_inputs(&self) -> &NetInputs {
+        &self.net_inputs
+    }
+
+    #[allow(dead_code)]
+    pub fn system_state_inputs(&self) -> &Option<SystemStateInputs> {
+        &self.system_state_inputs
+    }
+}
+
 /// Inputs required to run a network.
 #[derive(Debug, Clone)]
 pub(super) struct NetInputs {
     /// Node input arguments.
-    pub node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
+    node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
 }
 
 /// Constructor.
@@ -56,7 +89,7 @@ impl NodeProcessInputs {
 /// Inputs required to initialise system state prior to a test run.
 #[derive(Debug, Clone)]
 pub(super) struct SystemStateInputs {
-    // Serial idenfitiers of deleted Iris's.
+    // Serial identifiers of deleted Iris's.
     #[allow(dead_code)]
     iris_deletions: Vec<IrisSerialId>,
 
@@ -86,38 +119,5 @@ impl SystemStateInputs {
     #[allow(dead_code)]
     pub fn iris_shares(&self) -> &Vec<IrisSerialId> {
         &self.iris_shares
-    }
-}
-
-/// Excapsulates data used to drive a test run.
-#[derive(Debug, Clone)]
-pub(super) struct TestInputs {
-    // Data used to launch each node process during a test run.
-    net_inputs: NetInputs,
-
-    // Data used to initialise system state prior to a test run.
-    #[allow(dead_code)]
-    system_state_inputs: Option<SystemStateInputs>,
-}
-
-/// Constructor.
-impl TestInputs {
-    pub fn new(net_inputs: NetInputs, system_state_inputs: Option<SystemStateInputs>) -> Self {
-        Self {
-            net_inputs,
-            system_state_inputs,
-        }
-    }
-}
-
-/// Accessors.
-impl TestInputs {
-    pub fn net_inputs(&self) -> &NetInputs {
-        &self.net_inputs
-    }
-
-    #[allow(dead_code)]
-    pub fn system_state_inputs(&self) -> &Option<SystemStateInputs> {
-        &self.system_state_inputs
     }
 }
