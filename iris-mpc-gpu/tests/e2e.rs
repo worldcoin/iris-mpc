@@ -203,11 +203,7 @@ mod e2e_test {
 
         let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, internal_seed, false);
 
-        test_case_generator.enable_bucket_statistic_checks(
-            N_BUCKETS,
-            num_devices,
-            MATCH_DISTANCES_BUFFER_SIZE,
-        );
+        test_case_generator.enable_bucket_statistic_checks(N_BUCKETS);
 
         test_case_generator
             .run_n_batches(

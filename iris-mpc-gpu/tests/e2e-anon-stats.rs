@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod e2e_anon_stats_test {
     use cudarc::nccl::Id;
     use eyre::Result;
@@ -203,13 +203,8 @@ mod e2e_anon_stats_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        let mut test_case_generator = SimpleAnonStatsTestGenerator::new(
-            test_db,
-            internal_seed,
-            num_devices,
-            N_BUCKETS,
-            MATCH_DISTANCES_BUFFER_SIZE,
-        );
+        let mut test_case_generator =
+            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS);
 
         tracing::info!("Setup done, starting tests");
         test_case_generator

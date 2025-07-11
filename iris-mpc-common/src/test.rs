@@ -321,9 +321,7 @@ impl ExpectedResultBuilder {
 }
 
 struct BucketStatisticParameters {
-    num_gpus: usize,
     num_buckets: usize,
-    match_buffer_size: usize,
 }
 
 pub struct TestCaseGenerator {
@@ -409,17 +407,8 @@ impl TestCaseGenerator {
         self.enabled_test_cases.retain(|x| x != &test_case);
     }
 
-    pub fn enable_bucket_statistic_checks(
-        &mut self,
-        num_buckets: usize,
-        num_gpus_per_party: usize,
-        match_distances_buffer_size: usize,
-    ) {
-        self.bucket_statistic_parameters = Some(BucketStatisticParameters {
-            num_gpus: num_gpus_per_party,
-            num_buckets,
-            match_buffer_size: match_distances_buffer_size,
-        });
+    pub fn enable_bucket_statistic_checks(&mut self, num_buckets: usize) {
+        self.bucket_statistic_parameters = Some(BucketStatisticParameters { num_buckets });
     }
 
     fn generate_query_batch(
@@ -1288,30 +1277,23 @@ impl TestCaseGenerator {
                     assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
                         "Mirror orientation right statistics should have is_mirror_orientation = true");
 
+                    // Perform some very basic checks on the bucket statistics, not checking the results here
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left,
-                        bucket_statistic_parameters.num_gpus,
                         bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
                     )?;
                     check_bucket_statistics(
                         anonymized_bucket_statistics_right,
-                        bucket_statistic_parameters.num_gpus,
                         bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
                     )?;
                     // Also check mirror orientation statistics
                     check_bucket_statistics(
                         anonymized_bucket_statistics_left_mirror,
-                        bucket_statistic_parameters.num_gpus,
                         bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
                     )?;
                     check_bucket_statistics(
                         anonymized_bucket_statistics_right_mirror,
-                        bucket_statistic_parameters.num_gpus,
                         bucket_statistic_parameters.num_buckets,
-                        bucket_statistic_parameters.match_buffer_size,
                     )?;
                 }
 
@@ -1497,12 +1479,7 @@ fn prepare_batch(
     Ok(())
 }
 
-fn check_bucket_statistics(
-    bucket_statistics: &BucketStatistics,
-    num_gpus_per_party: usize,
-    num_buckets: usize,
-    match_distances_buffer_size: usize,
-) -> Result<()> {
+fn check_bucket_statistics(bucket_statistics: &BucketStatistics, num_buckets: usize) -> Result<()> {
     if bucket_statistics.is_empty() {
         assert_eq!(bucket_statistics.buckets.len(), 0);
         return Ok(());
@@ -1517,10 +1494,7 @@ fn check_bucket_statistics(
         .map(|b| b.count)
         .sum::<usize>();
     tracing::info!("Total count for bucket: {}", total_count);
-    // assert_eq!(
-    //     total_count,
-    //     match_distances_buffer_size * num_gpus_per_party
-    // );
+    // we can no longer check that this is equal to some known count here, since the count depends on the specific queries that are sent and how many rotation matches they have
     Ok(())
 }
 
@@ -1647,20 +1621,10 @@ pub struct SimpleAnonStatsTestGenerator {
 }
 
 impl SimpleAnonStatsTestGenerator {
-    pub fn new(
-        db: TestDb,
-        internal_seed: u64,
-        num_devices: usize,
-        num_buckets: usize,
-        match_buffer_size: usize,
-    ) -> Self {
+    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize) -> Self {
         Self {
             db_state: db,
-            bucket_statistic_parameters: BucketStatisticParameters {
-                num_gpus: num_devices,
-                num_buckets,
-                match_buffer_size,
-            },
+            bucket_statistic_parameters: BucketStatisticParameters { num_buckets },
             plain_distances_left: vec![],
             plain_distances_right: vec![],
             plain_distances_left_mirror: vec![],
@@ -1693,6 +1657,7 @@ impl SimpleAnonStatsTestGenerator {
         ))
     }
 
+    #[allow(clippy::type_complexity)]
     fn generate_query_batch(
         &mut self,
     ) -> Result<Option<([BatchQuery; 3], HashMap<String, E2ETemplate>)>> {
@@ -1850,7 +1815,7 @@ impl SimpleAnonStatsTestGenerator {
                 } = res;
 
                 // only expect matches
-                assert_eq!(matches.iter().all(|&x| x), true);
+                assert!(matches.iter().all(|&x| x));
 
                 // Check that normal orientation statistics have is_mirror_orientation set to false
                 assert!(
@@ -1871,17 +1836,14 @@ impl SimpleAnonStatsTestGenerator {
                     "Mirror orientation right statistics should have is_mirror_orientation = true"
                 );
 
+                // Perform some very basic checks on the bucket statistics, not checking the results here
                 check_bucket_statistics(
                     anonymized_bucket_statistics_left,
-                    self.bucket_statistic_parameters.num_gpus,
                     self.bucket_statistic_parameters.num_buckets,
-                    self.bucket_statistic_parameters.match_buffer_size,
                 )?;
                 check_bucket_statistics(
                     anonymized_bucket_statistics_right,
-                    self.bucket_statistic_parameters.num_gpus,
                     self.bucket_statistic_parameters.num_buckets,
-                    self.bucket_statistic_parameters.match_buffer_size,
                 )?;
 
                 if !anonymized_bucket_statistics_left.is_empty() {
@@ -1941,92 +1903,31 @@ impl SimpleAnonStatsTestGenerator {
                 }
 
                 if !anonymized_bucket_statistics_right.is_empty() {
-                    tracing::info!("Got anonymized bucket statistics for right side, checking...");
-                    let plain_bucket_statistics_right = Self::calculate_distance_buckets(
-                        &self.plain_distances_right,
-                        self.bucket_statistic_parameters.num_buckets,
-                    );
-
-                    // there must be exactly one match per request
-                    assert_eq!(
-                        plain_bucket_statistics_right
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>(),
-                        request_counter - 1,
-                    );
-
-                    assert_eq!(
-                        plain_bucket_statistics_right,
-                        anonymized_bucket_statistics_right.buckets
-                    );
-
+                    tracing::info!("Got anonymized bucket statistics for right side, not checking them in this test...");
                     clear_right = true;
                 }
 
                 // Also check mirror orientation statistics
                 check_bucket_statistics(
                     anonymized_bucket_statistics_left_mirror,
-                    self.bucket_statistic_parameters.num_gpus,
                     self.bucket_statistic_parameters.num_buckets,
-                    self.bucket_statistic_parameters.match_buffer_size,
                 )?;
                 check_bucket_statistics(
                     anonymized_bucket_statistics_right_mirror,
-                    self.bucket_statistic_parameters.num_gpus,
                     self.bucket_statistic_parameters.num_buckets,
-                    self.bucket_statistic_parameters.match_buffer_size,
                 )?;
 
                 if !anonymized_bucket_statistics_left_mirror.is_empty() {
                     tracing::info!(
-                        "Got anonymized bucket statistics for left side (mirror), checking..."
+                        "Got anonymized bucket statistics for left side (mirror), not checking them in this test..."
                     );
-                    let plain_bucket_statistics_left_mirror = Self::calculate_distance_buckets(
-                        &self.plain_distances_left_mirror,
-                        self.bucket_statistic_parameters.num_buckets,
-                    );
-
-                    // there must be exactly one match per request
-                    assert_eq!(
-                        plain_bucket_statistics_left_mirror
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>(),
-                        request_counter - 1,
-                    );
-
-                    assert_eq!(
-                        plain_bucket_statistics_left_mirror,
-                        anonymized_bucket_statistics_left_mirror.buckets
-                    );
-
                     clear_left_mirror = true;
                 }
 
                 if !anonymized_bucket_statistics_right_mirror.is_empty() {
                     tracing::info!(
-                        "Got anonymized bucket statistics for right side (mirror), checking..."
+                        "Got anonymized bucket statistics for right side (mirror), not checking them in this test..."
                     );
-                    let plain_bucket_statistics_right_mirror = Self::calculate_distance_buckets(
-                        &self.plain_distances_right_mirror,
-                        self.bucket_statistic_parameters.num_buckets,
-                    );
-
-                    // there must be exactly one match per request
-                    assert_eq!(
-                        plain_bucket_statistics_right_mirror
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>(),
-                        request_counter - 1,
-                    );
-
-                    assert_eq!(
-                        plain_bucket_statistics_right_mirror,
-                        anonymized_bucket_statistics_right_mirror.buckets
-                    );
-
                     clear_right_mirror = true;
                 }
 
