@@ -10,10 +10,10 @@ function _main()
 
     path_to_monorepo="$(_get_path_to_monorepo)"
 
-    echo "Initialising system state"
+    _log "Initialising system state"
     _init_system_state "${path_to_monorepo}"
 
-    echo "Executing end to end tests"
+    _log "Executing end to end tests"
     _exec_tests "${path_to_monorepo}"
 }
 
@@ -47,10 +47,10 @@ function _init_system_state()
 
     local path_to_monorepo="${1}"
 
-    echo "Initialising postgres dBs"
+    _log "Initialising postgres dBs"
     _init_system_state_pgres "${path_to_monorepo}"
 
-    echo "Initialising AWS services"
+    _log "Initialising AWS services"
     _init_system_state_aws "${path_to_monorepo}"
 }
 
@@ -77,7 +77,14 @@ function _init_system_state_aws()
 {
     local path_to_monorepo="${1}"
 
-    echo "TODO: initialise local stack S3 bucket for Iris deletions"
+    _log "TODO: initialise local stack S3 bucket for Iris deletions"
+}
+
+function _log ()
+{
+    local MSG=${1}
+
+    echo -e "$(get_now) [INFO] [$$] HNSW-E2E :: ${MSG}"
 }
 
 # ----------------------------------------------------------------

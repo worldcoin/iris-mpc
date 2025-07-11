@@ -82,4 +82,4 @@ jobs:
       - name: Execute end-to-end tests in running services
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
-          docker compose -f "docker-compose.test.hnsw.e2e.yaml" exec "hnsw_tests_e2e" "./run-tests-hnsw-e2e.sh"
+          docker compose -f "docker-compose.test.hnsw.e2e.yaml" exec "hnsw_tests_e2e" "/src/iris-mpc/scripts/run-tests-hnsw-e2e.sh"

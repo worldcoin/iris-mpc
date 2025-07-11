@@ -1,8 +1,6 @@
 # Set base image.
 FROM rust:1.85-slim-bullseye AS build-image
 
-WORKDIR /src
-
 # Install pre-requisites.
 RUN apt-get update && apt-get install -y \
     curl \
@@ -21,8 +19,11 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install self-signed certificates.
-RUN apt-get update && apt-get install -y ca-certificates awscli curl
+# Install root certificate.
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    awscli \
+    curl
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
@@ -34,15 +35,8 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-# Build software assets.
-# WORKDIR /src/iris-mpc
-# RUN cargo build --release
-
 # Set working directory.
 WORKDIR /
-
-# Set active user (nobody).
-# USER 65534
 
 # Set entrypoint for the container
 # ENTRYPOINT ["/src/iris-mpc/scripts/run-tests-hnsw-e2e.sh"]
