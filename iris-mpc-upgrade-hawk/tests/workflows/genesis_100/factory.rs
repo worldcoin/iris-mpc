@@ -16,6 +16,7 @@ pub(super) fn get_test_inputs() -> TestInputs {
                     constants::DEFAULT_BATCH_SIZE_ERROR_RATE,
                     100,
                     constants::DEFAULT_SNAPSHOT_STRATEGY,
+                    constants::DEFAULT_BACKUP_AS_SOURCE_STRATEGY,
                 )
             }
 
