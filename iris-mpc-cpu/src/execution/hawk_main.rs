@@ -144,11 +144,39 @@ pub struct HawkActor {
     /// Cache of distances for each eye.
     /// Eye -> List of Lists of distances, where the inner list is all distances for rotations of a query.
     /// In a later step, these distances will be reduced to a single, minimum distance per query.
-    distances_cache: BothEyes<Vec<Vec<DistanceShare<u32>>>>,
+    distances_cache: BothEyes<DistanceCache>,
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
     party_id: usize,
+}
+
+#[derive(Clone, Default)]
+struct DistanceCache {
+    distances_cache: Vec<Vec<DistanceShare<u32>>>,
+    total_size: usize,
+}
+
+impl DistanceCache {
+    fn total_size(&self) -> usize {
+        self.total_size
+    }
+
+    fn extend(&mut self, other: impl Iterator<Item = Vec<DistanceShare<u32>>>) {
+        let mut count = 0;
+        self.distances_cache
+            .extend(other.inspect(|v| count += v.len()));
+        self.total_size += count;
+    }
+
+    fn clear(&mut self) {
+        self.distances_cache.clear();
+        self.total_size = 0;
+    }
+
+    fn as_slice(&self) -> &[Vec<DistanceShare<u32>>] {
+        &self.distances_cache
+    }
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq)]
@@ -333,7 +361,7 @@ impl HawkActor {
             iris_store,
             graph_store,
             anonymized_bucket_statistics: [bucket_statistics_left, bucket_statistics_right],
-            distances_cache: [vec![], vec![]],
+            distances_cache: [Default::default(), Default::default()],
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
@@ -536,9 +564,8 @@ impl HawkActor {
 
         tracing::info!(
             "Keeping distances for eye {side} out of {} search results. Cache size: {}/{}",
-            // distances.clone().count(),
             search_results.len(),
-            self.distances_cache[side].len(),
+            self.distances_cache[side].total_size(),
             self.args.match_distances_buffer_size,
         );
         self.distances_cache[side].extend(distances_with_ids.into_values());
@@ -562,10 +589,10 @@ impl HawkActor {
         session: &mut Session,
         side: usize,
     ) -> Result<()> {
-        if self.distances_cache[side].len() > self.args.match_distances_buffer_size {
+        if self.distances_cache[side].total_size() > self.args.match_distances_buffer_size {
             tracing::info!(
                 "Gathered enough distances for eye {side}: {}, filling anonymized stats buckets",
-                self.distances_cache[side].len()
+                self.distances_cache[side].total_size()
             );
             let buckets = self.compute_buckets(session, side).await?;
             self.anonymized_bucket_statistics[side].fill_buckets(
