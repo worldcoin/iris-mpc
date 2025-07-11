@@ -68,9 +68,8 @@ function _init_system_state_pgres()
     export SMPC_INIT_SKIP_HNSW_GRAPH
     export SMPC_INIT_TARGET_DB_SIZE
     export SMPC_INIT_PATH_TO_IRIS_PLAINTEXT
-    set +a
-
     source "${path_to_monorepo}/scripts/tools/init_db_from_plaintext_iris_file.sh"
+    set +a
 }
 
 function _init_system_state_aws()
