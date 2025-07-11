@@ -144,9 +144,7 @@ env:
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
-  
-  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "genesis"
+
 
 initContainer:
   enabled: true
