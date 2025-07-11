@@ -242,6 +242,11 @@ pub async fn init_heartbeat_task(
             for (i, host) in [next_node, prev_node].iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    tracing::warn!(
+                        "Node {} did not respond with success, response: {:?}",
+                        host,
+                        res
+                    );
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
                     if last_response[i] == String::default()

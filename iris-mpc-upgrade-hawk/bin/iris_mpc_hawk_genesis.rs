@@ -27,6 +27,10 @@ struct Args {
     // Whether to perform a snapshot.
     #[clap(long("perform-snapshot"))]
     perform_snapshot: Option<String>,
+
+    // User backup as source.
+    #[clap(long("use-backup-as-source"))]
+    use_backup_as_source: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
@@ -149,10 +153,29 @@ fn parse_args() -> Result<ExecutionArgs> {
         true
     };
 
+    // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
+    let use_backup_as_source = if args.use_backup_as_source.is_some() {
+        let use_backup_as_source_args = args.use_backup_as_source.as_ref().unwrap();
+        use_backup_as_source_args.parse().map_err(|_| {
+            eprintln!(
+                "Error: --use-backup-as-source argument must be a valid boolean. Value: {}",
+                use_backup_as_source_args
+            );
+            eyre::eyre!(
+                "--use-backup-as-source argument must be a valid boolean. Value: {}",
+                use_backup_as_source_args
+            )
+        })?
+    } else {
+        eprintln!("--use-backup-as-source argument not provided, defaulting to false.");
+        false
+    };
+
     Ok(ExecutionArgs::new(
         batch_size,
         batch_size_error_rate,
         max_indexation_id,
         perform_snapshot,
+        use_backup_as_source,
     ))
 }
