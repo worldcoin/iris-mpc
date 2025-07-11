@@ -12,7 +12,6 @@ use crate::{
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use eyre::Result;
-use itertools::Itertools;
 use std::io;
 use std::{
     collections::HashMap,
@@ -115,7 +114,6 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
     async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
         let num_connections = self.config.num_connections;
-        let max_sessions_per_connection = self.config.max_sessions_per_connection;
         let request_parallelism = self.config.request_parallelism;
 
         // spawn the forwarders
@@ -149,7 +147,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         {
             let mut tx_map = HashMap::new();
             let mut rx_map = HashMap::new();
-            let stream_id = StreamId::from((idx / max_sessions_per_connection) as u32);
+            let stream_id = StreamId::from((idx % num_connections) as u32);
 
             for peer_id in &self.peers {
                 let outbound_tx = sc
@@ -198,28 +196,18 @@ fn make_channels(
         let mut inbound_tx = HashMap::new();
         let mut inbound_rx = HashMap::new();
 
-        let mut session_ids = (next_session_id..next_session_id + config.request_parallelism)
-            .map(|x| SessionId::from(x as u32))
-            .chunks(config.max_sessions_per_connection)
-            .into_iter()
-            .map(|chunk| chunk.collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-
-        for (stream_id, sessions) in (0..config.num_connections)
-            .map(|x| StreamId::from(x as u32))
-            .zip(session_ids.drain(..))
-        {
-            // insert one pair of outbound channels per TcpStream
+        for stream_id in (0..config.num_connections).map(|x| StreamId::from(x as u32)) {
             let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
             outbound_tx.insert(stream_id, tx);
             outbound_rx.insert(stream_id, rx);
+        }
 
-            // insert one pair of inbound channels per stream_parallelism
-            for session_id in sessions {
-                let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
-                inbound_tx.insert(session_id, tx);
-                inbound_rx.insert(session_id, rx);
-            }
+        for session_id in (next_session_id..next_session_id + config.request_parallelism)
+            .map(|x| SessionId::from(x as u32))
+        {
+            let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
+            inbound_tx.insert(session_id, tx);
+            inbound_rx.insert(session_id, rx);
         }
 
         sc.outbound_tx.insert(peer_id.clone(), outbound_tx);
