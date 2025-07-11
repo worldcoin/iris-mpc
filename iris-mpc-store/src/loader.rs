@@ -69,7 +69,7 @@ async fn load_db_records_from_aurora<'a>(
 pub async fn load_iris_db(
     actor: &mut impl InMemoryStore,
     store: &Store,
-    store_len: usize,
+    max_serial_id_to_load: usize,
     store_load_parallelism: usize,
     config: &Config,
     download_shutdown_handler: Arc<ShutdownHandler>,
@@ -78,8 +78,8 @@ pub async fn load_iris_db(
     let now = Instant::now();
 
     let mut record_counter = 0;
-    let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(store_len as i64));
-    actor.reserve(store_len);
+    let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(max_serial_id_to_load as i64));
+    actor.reserve(max_serial_id_to_load);
 
     if config.enable_s3_importer {
         tracing::info!("S3 importer enabled. Fetching from s3 + db");
@@ -141,11 +141,11 @@ pub async fn load_iris_db(
             if serial_id == 0 {
                 tracing::error!("Invalid iris serial_id {}", serial_id);
                 bail!("Invalid iris serial_id {}", serial_id);
-            } else if serial_id > store_len {
+            } else if serial_id > max_serial_id_to_load {
                 tracing::warn!(
-                    "Skip loading rolled back item: serial_id {} > store_len {}",
+                    "Skip loading item: serial_id {} > max_serial_id_to_load {}. This can happen if the max in the case of roll-backs or where the max_serial_id_to_load is specified",
                     serial_id,
-                    store_len
+                    max_serial_id_to_load,
                 );
                 continue;
             } else if !all_serial_ids.contains(&(serial_id as i64)) {
