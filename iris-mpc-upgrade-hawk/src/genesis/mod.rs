@@ -1203,7 +1203,7 @@ async fn init_graph_from_stores(
     graph_store: Arc<GraphPg<Aby3Store>>,
     hawk_actor: &mut HawkActor,
     shutdown_handler: Arc<ShutdownHandler>,
-    max_index: usize,
+    max_indexation_id: usize,
 ) -> Result<()> {
     log_info(String::from("⚓️ ANCHOR: Load the database"));
 
@@ -1232,12 +1232,12 @@ async fn init_graph_from_stores(
     // Get total number of irises and apply max_index limit if specified
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
-    let load_count = std::cmp::min(max_index, store_len);
+    let max_index = std::cmp::min(max_indexation_id, store_len);
 
     load_iris_db(
         &mut iris_loader,
         iris_store,
-        load_count,
+        max_index,
         iris_db_parallelism,
         config,
         shutdown_handler,
