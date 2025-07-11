@@ -19,12 +19,11 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       
       # remove this once the latest ubuntu image has been rolled out
-      - name: Fix APT mirror (Temporary workaround for protobuf install on Ubuntu 24.04)
+      - name: Fix APT mirror (working patch)
         run: |
-          echo "Removing /etc/apt/apt-mirrors.txt if present..."
-          sudo rm -f /etc/apt/apt-mirrors.txt || true
-          echo "Forcing APT to use archive.ubuntu.com"
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list || true
+          echo "Patching sources.list..."
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          sudo apt-get clean
           sudo apt-get update
 
       - name: Install Dependencies
@@ -61,12 +60,11 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       
       # remove this once the latest ubuntu image has been rolled out
-      - name: Fix APT mirror (Temporary workaround for protobuf install on Ubuntu 24.04)
+      - name: Fix APT mirror (working patch)
         run: |
-          echo "Removing /etc/apt/apt-mirrors.txt if present..."
-          sudo rm -f /etc/apt/apt-mirrors.txt || true
-          echo "Forcing APT to use archive.ubuntu.com"
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list || true
+          echo "Patching sources.list..."
+          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+          sudo apt-get clean
           sudo apt-get update
 
       - name: Install Dependencies
