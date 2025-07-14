@@ -90,6 +90,8 @@ nginxSidecar:
           optional: false
   config:
     nginx.conf: |
+      # Run nginx as non-root user - use /tmp for PID file
+      pid /tmp/nginx.pid;
       worker_processes  auto;
   
       # Send error logs to stderr
