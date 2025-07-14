@@ -41,8 +41,17 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
-    for (i, iris) in plain_store.points.iter().enumerate() {
-        let vector_id = VectorId::from_0_index(i as u32);
+    // sort the iris codes by their serial id
+    // Collect and sort keys
+    let mut sorted_serial_ids: Vec<_> = plain_store.points.keys().cloned().collect();
+    sorted_serial_ids.sort();
+
+    for serial_id in sorted_serial_ids {
+        let iris = plain_store
+            .points
+            .get(&serial_id)
+            .expect("Key not found in plain store");
+        let vector_id = VectorId::from_serial_id(serial_id);
         let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
@@ -115,11 +124,11 @@ pub async fn eval_vector_distance(
     vector1: &<Aby3Store as VectorStore>::VectorRef,
     vector2: &<Aby3Store as VectorStore>::VectorRef,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
-    let point1 = store.storage.get_vector(vector1).await;
-    let mut point2 = (*store.storage.get_vector(vector2).await).clone();
+    let point1 = store.storage.get_vector_or_empty(vector1).await;
+    let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = vec![(&*point1, &point2)];
+    let pairs = &[Some((&*point1, &point2))];
     let dist = store.eval_pairwise_distances(pairs).await?;
     Ok(store.lift_distances(dist).await?[0].clone())
 }

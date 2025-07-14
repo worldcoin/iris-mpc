@@ -1,12 +1,12 @@
-use crate::{execution::player::Identity, network::tcp::data::StreamId};
-use eyre::{eyre, Result};
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
+use crate::{
+    execution::player::Identity,
+    network::tcp::{data::StreamId, NetworkConnection},
 };
+use eyre::{eyre, Result};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-pub async fn outbound(
-    stream: &mut TcpStream,
+pub async fn outbound<T: NetworkConnection>(
+    stream: &mut T,
     own_id: &Identity,
     stream_id: &StreamId,
 ) -> Result<()> {
@@ -44,7 +44,7 @@ pub async fn outbound(
     Ok(())
 }
 
-pub async fn inbound(stream: &mut TcpStream) -> Result<(Identity, StreamId)> {
+pub async fn inbound<T: NetworkConnection>(stream: &mut T) -> Result<(Identity, StreamId)> {
     let stream_id = match stream.read_u32().await {
         Ok(id) => id,
         Err(e) => {

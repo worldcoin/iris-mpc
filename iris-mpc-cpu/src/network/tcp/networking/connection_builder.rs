@@ -1,20 +1,21 @@
 use crate::{
     execution::player::Identity,
     network::tcp::{
-        data::{PeerConnections, StreamId, TcpConnection},
+        config::TcpConfig,
+        data::{Connection, PeerConnections, StreamId},
         networking::handshake,
-        TcpConfig,
+        Client, NetworkConnection, Server,
     },
 };
 use eyre::{eyre, Result};
 use std::{
     collections::{HashMap, HashSet},
     io,
+    marker::PhantomData,
     net::SocketAddr,
     time::Duration,
 };
 use tokio::{
-    net::{TcpListener, TcpStream},
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot,
@@ -25,20 +26,31 @@ use tokio_util::sync::CancellationToken;
 
 /// creates a list of peer connections, used to initialize a
 /// TcpNetworkHandle
-pub struct PeerConnectionBuilder {
+pub struct PeerConnectionBuilder<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>>
+{
     id: Identity,
-    config: TcpConfig,
-    cmd_tx: UnboundedSender<Cmd>,
+    tcp_config: TcpConfig,
+    cmd_tx: UnboundedSender<Cmd<T>>,
+    _marker: PhantomData<(T, C, S)>,
 }
 
 /// re-uses the Worker task from PeerConnectionBuilder
 /// allows waiting for pending connections to complete
-#[derive(Clone)]
-pub struct Reconnector {
-    cmd_tx: UnboundedSender<Cmd>,
+pub struct Reconnector<T: NetworkConnection> {
+    cmd_tx: UnboundedSender<Cmd<T>>,
 }
 
-enum Cmd {
+// the #[derive(Clone)] macro may require that all generics implement Clone.
+// that is not needed for the Reconnector
+impl<T: NetworkConnection> Clone for Reconnector<T> {
+    fn clone(&self) -> Self {
+        Self {
+            cmd_tx: self.cmd_tx.clone(),
+        }
+    }
+}
+
+enum Cmd<T> {
     Connect {
         peer: Identity,
         addr: SocketAddr,
@@ -46,12 +58,12 @@ enum Cmd {
         rsp: oneshot::Sender<Result<()>>,
     },
     WaitForConnections {
-        rsp: oneshot::Sender<Result<PeerConnections>>,
+        rsp: oneshot::Sender<Result<PeerConnections<T>>>,
     },
     Reconnect {
         peer: Identity,
         stream_id: StreamId,
-        rsp: oneshot::Sender<TcpStream>,
+        rsp: oneshot::Sender<T>,
     },
     WaitForReconnections {
         rsp: oneshot::Sender<()>,
@@ -64,10 +76,25 @@ enum State {
     Reconnect,
 }
 
-impl PeerConnectionBuilder {
-    pub async fn new(id: Identity, addr: SocketAddr, config: TcpConfig) -> Result<Self> {
-        let cmd_tx = Worker::spawn(id.clone(), addr).await?;
-        Ok(Self { id, config, cmd_tx })
+impl<T, C, S> PeerConnectionBuilder<T, C, S>
+where
+    T: NetworkConnection + 'static,
+    C: Client<Output = T> + 'static,
+    S: Server<Output = T> + 'static,
+{
+    pub async fn new(
+        id: Identity,
+        tcp_config: TcpConfig,
+        listener: S,
+        connector: C,
+    ) -> Result<Self> {
+        let cmd_tx = Worker::spawn(id.clone(), listener, connector).await?;
+        Ok(Self {
+            id,
+            tcp_config,
+            cmd_tx,
+            _marker: std::marker::PhantomData,
+        })
     }
 
     // returns when the command is queued. will not block for long.
@@ -75,7 +102,7 @@ impl PeerConnectionBuilder {
         if peer == self.id {
             return Err(eyre!("cannot connect to self"));
         }
-        for idx in 0..self.config.num_connections {
+        for idx in 0..self.tcp_config.num_connections {
             let stream_id = StreamId::from(idx as u32);
             let (tx, rx) = oneshot::channel();
             self.cmd_tx.send(Cmd::Connect {
@@ -89,7 +116,7 @@ impl PeerConnectionBuilder {
         Ok(())
     }
 
-    pub async fn build(self) -> Result<(Reconnector, PeerConnections)> {
+    pub async fn build(self) -> Result<(Reconnector<T>, PeerConnections<T>)> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx.send(Cmd::WaitForConnections { rsp: tx })?;
         let connections = rx.await.unwrap()?;
@@ -102,7 +129,7 @@ impl PeerConnectionBuilder {
     }
 }
 
-impl Reconnector {
+impl<T: NetworkConnection> Reconnector<T> {
     pub async fn wait_for_reconnections(&self) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
@@ -111,7 +138,7 @@ impl Reconnector {
         rx.await.map_err(|_| eyre!("worker task dropped"))?;
         Ok(())
     }
-    pub async fn reconnect(&self, peer: Identity, stream_id: StreamId) -> Result<TcpStream> {
+    pub async fn reconnect(&self, peer: Identity, stream_id: StreamId) -> Result<T> {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(Cmd::Reconnect {
@@ -124,46 +151,58 @@ impl Reconnector {
     }
 }
 
-struct Worker {
+struct Worker<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>> {
     id: Identity,
-    cmd_rx: UnboundedReceiver<Cmd>,
+    cmd_rx: UnboundedReceiver<Cmd<T>>,
 
     ct: CancellationToken,
 
     // used to reconnect
     peer_addrs: HashMap<Identity, SocketAddr>,
+    connector: C,
 
     // used for both the initial connection setup and reconnection
-    pending_connections: HashMap<Identity, HashMap<StreamId, TcpConnection>>,
-    pending_tx: UnboundedSender<TcpConnection>,
-    pending_rx: UnboundedReceiver<TcpConnection>,
+    pending_connections: HashMap<Identity, HashMap<StreamId, Connection<T>>>,
+    pending_tx: UnboundedSender<Connection<T>>,
+    pending_rx: UnboundedReceiver<Connection<T>>,
 
     // after State::Connect, requested_connections is used
     // to determine which incoming connections are allowed.
     requested_connections: HashMap<Identity, HashSet<StreamId>>,
-    connect_rsp: Option<oneshot::Sender<Result<PeerConnections>>>,
+    connect_rsp: Option<oneshot::Sender<Result<PeerConnections<T>>>>,
 
     // reconnections are requested by a forwarder. instead of one response with all connections,
     // (which is what happens with the initial connection), there is now one response per
     // connection
-    requested_reconnections: HashMap<Identity, HashMap<StreamId, oneshot::Sender<TcpStream>>>,
+    requested_reconnections: HashMap<Identity, HashMap<StreamId, oneshot::Sender<T>>>,
 
     // used when waiting for all reconnections to finish
     reconnect_rsp: Option<oneshot::Sender<()>>,
 
     state: State,
+
+    _marker: PhantomData<S>,
 }
 
-impl Worker {
-    pub async fn spawn(id: Identity, own_addr: SocketAddr) -> io::Result<UnboundedSender<Cmd>> {
-        let listener = TcpListener::bind(own_addr).await?;
+impl<T, C, S> Worker<T, C, S>
+where
+    T: NetworkConnection + 'static,
+    C: Client<Output = T> + 'static,
+    S: Server<Output = T> + 'static,
+{
+    pub async fn spawn(
+        id: Identity,
+        listener: S,
+        connector: C,
+    ) -> io::Result<UnboundedSender<Cmd<T>>> {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-        let (pending_tx, pending_rx) = mpsc::unbounded_channel::<TcpConnection>();
+        let (pending_tx, pending_rx) = mpsc::unbounded_channel::<Connection<T>>();
         let mut worker = Self {
             id: id.clone(),
             cmd_rx,
             ct: CancellationToken::new(),
             peer_addrs: HashMap::new(),
+            connector,
             pending_connections: HashMap::new(),
             pending_tx,
             pending_rx,
@@ -172,6 +211,7 @@ impl Worker {
             requested_reconnections: HashMap::new(),
             reconnect_rsp: None,
             state: State::Connect,
+            _marker: PhantomData,
         };
 
         tokio::spawn(async move {
@@ -184,7 +224,7 @@ impl Worker {
         Ok(cmd_tx)
     }
 
-    async fn run(&mut self, listener: TcpListener) -> io::Result<()> {
+    async fn run(&mut self, listener: S) -> Result<()> {
         let (accept_tx, mut accept_rx) = oneshot::channel();
         let own_id = self.id.clone();
         let pending_tx2 = self.pending_tx.clone();
@@ -216,7 +256,8 @@ impl Worker {
                 }
             }
 
-            self.handle_reconnections();
+            self.handle_reconnections()
+                .map_err(|e| eyre!("reconnect failed: {:?}", e))?;
             if self.is_reconnect_ready() {
                 tracing::debug!("{:?}: ready: no pending re-connections", self.id);
             }
@@ -227,9 +268,7 @@ impl Worker {
         Ok(())
     }
 
-    fn handle_pending_connection(&mut self, c: TcpConnection) {
-        c.stream.set_nodelay(true).unwrap();
-
+    fn handle_pending_connection(&mut self, c: Connection<T>) {
         if self
             .pending_connections
             .get(&c.peer_id())
@@ -261,7 +300,7 @@ impl Worker {
         }
     }
 
-    fn handle_cmd(&mut self, cmd: Cmd) {
+    fn handle_cmd(&mut self, cmd: Cmd<T>) {
         match cmd {
             Cmd::Connect {
                 peer,
@@ -319,9 +358,9 @@ impl Worker {
         }
     }
 
-    fn handle_reconnections(&mut self) {
+    fn handle_reconnections(&mut self) -> Result<()> {
         if self.state != State::Reconnect {
-            return;
+            return Ok(());
         }
 
         // For each requested reconnection, if the connection is ready, send it immediately.
@@ -338,9 +377,18 @@ impl Worker {
                 }
 
                 for stream_id in ready {
-                    let c = peer_pc.remove(&stream_id).unwrap();
-                    let rsp = peer_rc.remove(&stream_id).unwrap();
-                    rsp.send(c.stream).unwrap();
+                    let c = peer_pc.remove(&stream_id).ok_or(eyre!(
+                        "pending connection lookup failed: {:?}, {:?}",
+                        peer,
+                        stream_id
+                    ))?;
+                    let rsp = peer_rc.remove(&stream_id).ok_or(eyre!(
+                        "requested connection lookup failed: {:?}, {:?}",
+                        peer,
+                        stream_id
+                    ))?;
+                    rsp.send(c.stream)
+                        .map_err(|_| eyre!("reconnect failed to send response"))?;
                 }
             }
 
@@ -353,6 +401,7 @@ impl Worker {
         for peer in peers_to_remove {
             self.requested_reconnections.remove(&peer);
         }
+        Ok(())
     }
 
     fn is_connect_ready(&mut self) -> bool {
@@ -412,6 +461,7 @@ impl Worker {
         let own_id = self.id.clone();
         let pending_tx = self.pending_tx.clone();
         let ct = self.ct.clone();
+        let connector = self.connector.clone();
         tokio::spawn(async move {
             tracing::trace!(
                 "{:?}: initiating connection to {:?} for {:?}",
@@ -422,7 +472,7 @@ impl Worker {
             let retry = Duration::from_millis(500);
             loop {
                 let r = tokio::select! {
-                    res = TcpStream::connect(addr) => res,
+                    res = connector.connect(addr) => res,
                     _ = ct.cancelled() => {
                         return;
                     }
@@ -432,9 +482,10 @@ impl Worker {
                         if let Err(e) = handshake::outbound(&mut stream, &own_id, &stream_id).await
                         {
                             tracing::error!("{e:?}");
+                            sleep(retry).await;
                             continue;
                         }
-                        let pending = TcpConnection::new(peer, stream, stream_id);
+                        let pending = Connection::new(peer, stream, stream_id);
                         if pending_tx.send(pending).is_err() {
                             tracing::error!("accept loop receiver dropped");
                         }
@@ -444,17 +495,17 @@ impl Worker {
                         tracing::warn!(%e, "dial {:?} failed, retrying", addr);
                         sleep(retry).await;
                     }
-                }
+                };
             }
         });
     }
 }
 
 /// Just accepts and forwards new connections
-async fn accept_loop(
+async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     id: Identity,
-    listener: TcpListener,
-    pending_tx: UnboundedSender<TcpConnection>,
+    listener: S,
+    pending_tx: UnboundedSender<Connection<T>>,
     ct: CancellationToken,
 ) {
     loop {
@@ -465,26 +516,17 @@ async fn accept_loop(
             }
         };
         match r {
-            Ok((mut stream, _addr)) => {
-                let peer_addr = match stream.peer_addr() {
-                    Ok(addr) => addr,
-                    Err(e) => {
-                        tracing::error!(error=%e, "Failed to get peer_addr");
-                        continue;
-                    }
-                };
+            Ok((peer_addr, mut stream)) => {
                 tracing::trace!("{:?} accepted connection from {:?}", id, peer_addr);
-
                 let (peer_id, stream_id) = match handshake::inbound(&mut stream).await {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::error!("{e:?}");
+                        tracing::error!(error=%e, "application level handshake failed");
                         continue;
                     }
                 };
-
                 if pending_tx
-                    .send(TcpConnection::new(peer_id, stream, stream_id))
+                    .send(Connection::new(peer_id, stream, stream_id))
                     .is_err()
                 {
                     tracing::error!("accept_loop: incoming_rx dropped");

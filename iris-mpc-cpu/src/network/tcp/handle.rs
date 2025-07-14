@@ -1,31 +1,53 @@
-use super::{
-    session::TcpSession, OutStream, OutboundMsg, PeerConnections, StreamId, TcpConnection,
-};
+use super::{session::TcpSession, Connection, OutStream, OutboundMsg, PeerConnections, StreamId};
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
-        tcp::{networking::connection_builder::Reconnector, TcpConfig},
+        tcp::{
+            config::TcpConfig, networking::connection_builder::Reconnector, NetworkConnection,
+            NetworkHandle,
+        },
         value::{DescriptorByte, NetworkValue},
     },
 };
-use bytes::BytesMut;
+use async_trait::async_trait;
+use bytes::{Buf, BytesMut};
 use eyre::Result;
-use itertools::Itertools;
-use std::{collections::HashMap, time::Instant};
-use std::{io, sync::Arc, time::Duration};
+use std::io;
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
-    net::tcp::{OwnedReadHalf, OwnedWriteHalf},
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
         mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
-        oneshot, Mutex,
+        oneshot,
     },
-    task::JoinSet,
 };
 
 const FLUSH_INTERVAL_US: u64 = 500;
 const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
 const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+
+/// spawns a task for each TCP connection (there are x connections per peer and each of the x
+/// connections has y sessions, of the same session id)
+pub struct TcpNetworkHandle<T: NetworkConnection> {
+    peers: Vec<Identity>,
+    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
+    reconnector: Reconnector<T>,
+    config: TcpConfig,
+    next_session_id: usize,
+}
+
+#[async_trait]
+impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
+    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
+        tracing::debug!("make_sessions");
+        self.reconnector.wait_for_reconnections().await?;
+        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
+        Ok(self.make_sessions_inner(sc).await)
+    }
+}
 
 #[derive(Default)]
 struct SessionChannels {
@@ -33,16 +55,6 @@ struct SessionChannels {
     outbound_rx: HashMap<Identity, HashMap<StreamId, UnboundedReceiver<OutboundMsg>>>,
     inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
     inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
-}
-
-/// spawns a task for each TCP connection (there are x connections per peer and each of the x
-/// connections has y sessions, of the same session id)
-pub struct TcpNetworkHandle {
-    peers: Vec<Identity>,
-    ch_map: HashMap<Identity, HashMap<StreamId, UnboundedSender<Cmd>>>,
-    reconnector: Reconnector,
-    config: TcpConfig,
-    next_session_id: usize,
 }
 
 enum Cmd {
@@ -55,9 +67,12 @@ enum Cmd {
     TestReconnect { rsp: oneshot::Sender<Result<()>> },
 }
 
-impl TcpNetworkHandle {
-    pub fn new(reconnector: Reconnector, connections: PeerConnections, config: TcpConfig) -> Self {
-        tracing::info!("TcpNetworkHandle with config: {:?}", config);
+impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
+    pub fn new(
+        reconnector: Reconnector<T>,
+        connections: PeerConnections<T>,
+        config: TcpConfig,
+    ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
         for (peer_id, connections) in connections {
@@ -85,13 +100,6 @@ impl TcpNetworkHandle {
         }
     }
 
-    pub async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
-        tracing::debug!("make_sessions");
-        self.reconnector.wait_for_reconnections().await?;
-        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        Ok(self.make_sessions_inner(sc).await)
-    }
-
     #[cfg(test)]
     pub async fn test_reconnect(&self, peer: Identity, stream_id: StreamId) -> Result<()> {
         let ch = self
@@ -106,7 +114,6 @@ impl TcpNetworkHandle {
 
     async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
         let num_connections = self.config.num_connections;
-        let max_sessions_per_connection = self.config.max_sessions_per_connection;
         let request_parallelism = self.config.request_parallelism;
 
         // spawn the forwarders
@@ -140,7 +147,7 @@ impl TcpNetworkHandle {
         {
             let mut tx_map = HashMap::new();
             let mut rx_map = HashMap::new();
-            let stream_id = StreamId::from((idx / max_sessions_per_connection) as u32);
+            let stream_id = StreamId::from((idx % num_connections) as u32);
 
             for peer_id in &self.peers {
                 let outbound_tx = sc
@@ -189,28 +196,18 @@ fn make_channels(
         let mut inbound_tx = HashMap::new();
         let mut inbound_rx = HashMap::new();
 
-        let mut session_ids = (next_session_id..next_session_id + config.request_parallelism)
-            .map(|x| SessionId::from(x as u32))
-            .chunks(config.max_sessions_per_connection)
-            .into_iter()
-            .map(|chunk| chunk.collect::<Vec<_>>())
-            .collect::<Vec<_>>();
-
-        for (stream_id, sessions) in (0..config.num_connections)
-            .map(|x| StreamId::from(x as u32))
-            .zip(session_ids.drain(..))
-        {
-            // insert one pair of outbound channels per TcpStream
+        for stream_id in (0..config.num_connections).map(|x| StreamId::from(x as u32)) {
             let (tx, rx) = mpsc::unbounded_channel::<OutboundMsg>();
             outbound_tx.insert(stream_id, tx);
             outbound_rx.insert(stream_id, rx);
+        }
 
-            // insert one pair of inbound channels per stream_parallelism
-            for session_id in sessions {
-                let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
-                inbound_tx.insert(session_id, tx);
-                inbound_rx.insert(session_id, rx);
-            }
+        for session_id in (next_session_id..next_session_id + config.request_parallelism)
+            .map(|x| SessionId::from(x as u32))
+        {
+            let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
+            inbound_tx.insert(session_id, tx);
+            inbound_rx.insert(session_id, rx);
         }
 
         sc.outbound_tx.insert(peer_id.clone(), outbound_tx);
@@ -221,25 +218,20 @@ fn make_channels(
     sc
 }
 
-async fn manage_connection(
-    connection: TcpConnection,
-    reconnector: Reconnector,
+async fn manage_connection<T: NetworkConnection>(
+    connection: Connection<T>,
+    reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
 ) {
-    let TcpConnection {
+    let Connection {
         peer,
         stream,
         stream_id,
     } = connection;
 
-    let (reader, writer) = stream.into_split();
-    // these are made so that the stream can be dropped for testing purposes.
-    let reader = Arc::new(Mutex::new(Some(BufReader::new(reader))));
-    let writer = Arc::new(Mutex::new(Some(writer)));
-
     // We enter the loop only after receiving the first NewSessions
-    let (inbound_forwarder, outbound_rx) = match cmd_ch.recv().await {
+    let (mut inbound_forwarder, mut outbound_rx) = match cmd_ch.recv().await {
         Some(Cmd::NewSessions {
             inbound_forwarder,
             outbound_rx,
@@ -258,19 +250,28 @@ async fn manage_connection(
             return;
         }
     };
-    let inbound_forwarder = Arc::new(Mutex::new(inbound_forwarder));
-    let outbound_rx = Arc::new(Mutex::new(outbound_rx));
+
+    // need to wrap these in an Option to drop them before reconnecting.
+    let (reader, writer) = tokio::io::split(stream);
+    let mut reader = Some(BufReader::new(reader));
+    let mut writer = Some(writer);
 
     // on disconnect, reconnect automatically. tear down and stand up the forwarders.
     // when new sessions are requested, also tear down and stand up the forwarders.
     loop {
-        let mut set = spawn_forwarders(
-            reader.clone(),
-            writer.clone(),
-            inbound_forwarder.clone(),
-            outbound_rx.clone(),
-            num_sessions,
-        );
+        let r_writer = writer.as_mut().expect("writer should be Some");
+        let r_outbound = &mut outbound_rx;
+        let outbound_task = async move {
+            let r = handle_outbound_traffic(r_writer, r_outbound, num_sessions).await;
+            tracing::debug!("handle_outbound_traffic exited: {r:?}");
+        };
+
+        let r_reader = reader.as_mut().expect("reader should be Some");
+        let r_inbound = &inbound_forwarder;
+        let inbound_task = async move {
+            let r = handle_inbound_traffic(r_reader, r_inbound).await;
+            tracing::debug!("handle_inbound_traffic exited: {r:?}");
+        };
 
         enum Evt {
             Cmd(Cmd),
@@ -286,12 +287,9 @@ async fn manage_connection(
                     }
                 }
             }
-            _ = set.join_next() => Evt::Disconnected,
+            _ = inbound_task => Evt::Disconnected,
+            _ = outbound_task => Evt::Disconnected,
         };
-
-        // shut down the forwarders
-        tracing::info!("shutting down tasks for {:?}: {:?}", peer, stream_id);
-        set.shutdown().await;
 
         // update the Arcs depending on the event. wait for reconnect if needed.
         match event {
@@ -302,93 +300,65 @@ async fn manage_connection(
                     rsp,
                 } => {
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
-                    *inbound_forwarder.lock().await = tx;
-                    *outbound_rx.lock().await = rx;
+                    inbound_forwarder = tx;
+                    outbound_rx = rx;
                     let _ = rsp.send(());
                     continue;
                 }
                 #[cfg(test)]
                 Cmd::TestReconnect { rsp } => {
-                    if let Err(e) =
-                        reconnect_and_replace(&reconnector, &peer, stream_id, &reader, &writer)
-                            .await
+                    if let Err(e) = reconnect_and_replace(
+                        &reconnector,
+                        &peer,
+                        stream_id,
+                        &mut reader,
+                        &mut writer,
+                    )
+                    .await
                     {
                         tracing::error!("reconnect failed: {e:?}");
                         return;
-                    }
+                    };
                     rsp.send(Ok(())).unwrap();
                 }
             },
             Evt::Disconnected => {
                 tracing::info!("reconnecting to {:?}: {:?}", peer, stream_id);
                 if let Err(e) =
-                    reconnect_and_replace(&reconnector, &peer, stream_id, &reader, &writer).await
+                    reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
+                        .await
                 {
                     tracing::error!("reconnect failed: {e:?}");
                     return;
-                }
+                };
             }
         }
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn spawn_forwarders(
-    reader: Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
-    writer: Arc<Mutex<Option<OwnedWriteHalf>>>,
-    inbound_forwarder: Arc<Mutex<HashMap<SessionId, UnboundedSender<NetworkValue>>>>,
-    outbound_rx: Arc<Mutex<UnboundedReceiver<(SessionId, NetworkValue)>>>,
-    num_sessions: usize,
-) -> JoinSet<()> {
-    let mut join_set = JoinSet::new();
-
-    let writer = writer.clone();
-    let outbound_rx = outbound_rx.clone();
-    join_set.spawn(async move {
-        let mut writer = writer.lock().await;
-        let mut outbound_rx = outbound_rx.lock().await;
-        let r =
-            handle_outbound_traffic(writer.as_mut().unwrap(), &mut outbound_rx, num_sessions).await;
-        tracing::debug!("handle_outbound_traffic exited: {r:?}");
-    });
-
-    let reader = reader.clone();
-    let inbound_forwarder = inbound_forwarder.clone();
-    join_set.spawn(async move {
-        let mut reader = reader.lock().await;
-        let inbound = inbound_forwarder.lock().await;
-        let r = handle_inbound_traffic(reader.as_mut().unwrap(), &inbound).await;
-        tracing::debug!("handle_inbound_traffic exited: {r:?}");
-    });
-
-    join_set
-}
-
-async fn reconnect_and_replace(
-    reconnector: &Reconnector,
+async fn reconnect_and_replace<T: NetworkConnection>(
+    reconnector: &Reconnector<T>,
     peer: &Identity,
     stream_id: StreamId,
-    reader: &Arc<Mutex<Option<BufReader<OwnedReadHalf>>>>,
-    writer: &Arc<Mutex<Option<OwnedWriteHalf>>>,
+    reader: &mut Option<BufReader<ReadHalf<T>>>,
+    writer: &mut Option<WriteHalf<T>>,
 ) -> Result<(), eyre::Report> {
-    let old_writer = writer.lock().await.take();
-    let old_reader = reader.lock().await.take().map(|br| br.into_inner());
-    drop(old_writer);
-    drop(old_reader);
+    reader.take();
+    writer.take();
 
     let stream = reconnector.reconnect(peer.clone(), stream_id).await?;
-    let (r, w) = stream.into_split();
+    let (r, w) = tokio::io::split(stream);
 
-    reader.lock().await.replace(BufReader::new(r));
-    writer.lock().await.replace(w);
+    reader.replace(BufReader::new(r));
+    writer.replace(w);
 
     Ok(())
 }
 
 /// Outbound: send messages from rx to the socket.
 /// the sender needs to prepend the session id to the message.
-async fn handle_outbound_traffic(
-    stream: &mut OwnedWriteHalf,
+async fn handle_outbound_traffic<T: NetworkConnection>(
+    stream: &mut WriteHalf<T>,
     outbound_rx: &mut UnboundedReceiver<OutboundMsg>,
     num_sessions: usize,
 ) -> io::Result<()> {
@@ -456,8 +426,8 @@ async fn handle_outbound_traffic(
 }
 
 /// Inbound: read from the socket and send to tx.
-async fn handle_inbound_traffic(
-    reader: &mut BufReader<OwnedReadHalf>,
+async fn handle_inbound_traffic<T: NetworkConnection>(
+    reader: &mut BufReader<ReadHalf<T>>,
     inbound_tx: &HashMap<SessionId, UnboundedSender<NetworkValue>>,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; READ_BUF_SIZE];
@@ -509,19 +479,19 @@ async fn handle_inbound_traffic(
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
-            let nv = match NetworkValue::deserialize(&buf[..total_len]) {
-                Ok(m) => m,
+            match NetworkValue::deserialize(&buf[..total_len]) {
+                Ok(nv) => {
+                    if ch.send(nv).is_err() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Other,
+                            "failed to forward message",
+                        ));
+                    }
+                }
                 Err(e) => {
                     tracing::error!("failed to deserialize message: {e}");
-                    continue;
                 }
             };
-            if ch.send(nv).is_err() {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "failed to forward message",
-                ));
-            }
         } else {
             tracing::warn!(
                 "failed to forward message for {:?} - channel not found",
@@ -532,8 +502,8 @@ async fn handle_inbound_traffic(
 }
 
 /// Helper to write & flush, then clear the buffer
-async fn write_buf(
-    writer: &mut OwnedWriteHalf,
+async fn write_buf<T: NetworkConnection>(
+    stream: &mut WriteHalf<T>,
     buf: &mut BytesMut,
     buffered_msgs: &mut usize,
 ) -> io::Result<()> {
@@ -543,7 +513,13 @@ async fn write_buf(
         metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
     }
     *buffered_msgs = 0;
-    writer.write_all(buf).await?;
+
+    // maybe faster than write_all()?
+    while !buf.is_empty() {
+        let n = stream.write(buf).await?;
+        buf.advance(n);
+    }
+    stream.flush().await?;
     buf.clear();
     Ok(())
 }

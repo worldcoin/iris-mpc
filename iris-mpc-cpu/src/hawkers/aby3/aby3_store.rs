@@ -3,8 +3,8 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
-            batch_signed_lift_vec, compare_threshold_and_open, cross_compare,
-            galois_ring_pairwise_distance, galois_ring_to_rep3,
+            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
+            galois_ring_to_rep3, lte_threshold_and_open,
         },
         shared_iris::GaloisRingSharedIris,
     },
@@ -154,11 +154,17 @@ impl SharedIrises {
         self.points.get(&serial_id).map(|(version, _iris)| *version)
     }
 
-    fn get_vector(&self, vector: &VectorId) -> IrisRef {
-        // TODO: Handle missing vectors.
+    fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
         match self.points.get(&vector.serial_id()) {
             Some((version, iris)) if vector.version_matches(*version) => Arc::clone(iris),
             _ => Arc::clone(&self.empty_iris),
+        }
+    }
+
+    fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
+        match self.points.get(&vector.serial_id()) {
+            Some((version, iris)) if vector.version_matches(*version) => Some(Arc::clone(iris)),
+            _ => None,
         }
     }
 
@@ -229,12 +235,16 @@ impl SharedIrisesRef {
         *self.get_vector_ids(&[serial_id]).await.first().unwrap()
     }
 
-    pub async fn get_vector(&self, vector: &VectorId) -> IrisRef {
+    pub async fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
+        self.data.read().await.get_vector_or_empty(vector)
+    }
+
+    pub async fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
         self.data.read().await.get_vector(vector)
     }
 
     pub async fn get_query(&self, vector_id: &VectorId) -> QueryRef {
-        let vector_ref = self.get_vector(vector_id).await.clone();
+        let vector_ref = self.get_vector_or_empty(vector_id).await.clone();
         prepare_query((*vector_ref).clone())
     }
 
@@ -253,7 +263,7 @@ impl SharedIrisesRef {
     pub async fn get_vectors(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<IrisRef> {
+    ) -> Vec<Option<IrisRef>> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
@@ -261,11 +271,22 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
+    pub async fn get_vectors_or_empty(
+        &self,
+        vector_ids: impl IntoIterator<Item = &VectorId>,
+    ) -> Vec<IrisRef> {
+        let body = self.data.read().await;
+        vector_ids
+            .into_iter()
+            .map(|v| body.get_vector_or_empty(v))
+            .collect_vec()
+    }
+
     pub async fn get_queries(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
     ) -> Vec<QueryRef> {
-        self.get_vectors(vector_ids)
+        self.get_vectors_or_empty(vector_ids)
             .await
             .into_iter()
             .map(|v| prepare_query((*v).clone()))
@@ -340,12 +361,12 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
-        pairs: Vec<(&GaloisRingSharedIris, &GaloisRingSharedIris)>,
+        pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
     ) -> Result<Vec<Share<u16>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, &pairs).await;
+        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, pairs).await;
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
     }
 }
@@ -378,7 +399,11 @@ impl VectorStore for Aby3Store {
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
-        let pairs = vec![(&query.processed_query, &*vector_point)];
+        let pairs = if let Some(v) = &vector_point {
+            &[Some((&query.processed_query, &**v))]
+        } else {
+            &[None]
+        };
         let dist = self.eval_pairwise_distances(pairs).await?;
         Ok(self.lift_distances(dist).await?[0].clone())
     }
@@ -394,10 +419,10 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), v)| (&q.processed_query, &**v))
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&q.processed_query, &**v)))
             .collect_vec();
 
-        let dist = self.eval_pairwise_distances(pairs).await?;
+        let dist = self.eval_pairwise_distances(&pairs).await?;
         self.lift_distances(dist).await
     }
 
@@ -413,15 +438,19 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(vectors).await;
         let pairs = queries
             .iter()
-            .flat_map(|q| vectors.iter().map(|vector| (&q.processed_query, &**vector)))
+            .flat_map(|q| {
+                vectors
+                    .iter()
+                    .map(|vector| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+            })
             .collect::<Vec<_>>();
 
-        let dist = self.eval_pairwise_distances(pairs).await?;
+        let dist = self.eval_pairwise_distances(&pairs).await?;
         self.lift_distances(dist).await
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(compare_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
+        Ok(lte_threshold_and_open(&mut self.session, &[distance.clone()]).await?[0])
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
@@ -449,7 +478,7 @@ impl VectorStore for Aby3Store {
         if distances.is_empty() {
             return Ok(vec![]);
         }
-        compare_threshold_and_open(&mut self.session, distances).await
+        lte_threshold_and_open(&mut self.session, distances).await
     }
 }
 
@@ -465,6 +494,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        execution::hawk_main::scheduler::parallelize,
         hawkers::{
             aby3::test_utils::{
                 eval_vector_distance, get_owner_index, lazy_random_setup,
@@ -522,7 +552,7 @@ mod tests {
                 // Search for the same codes and find matches.
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
-                    let query = store.storage.get_vector(&v).await;
+                    let query = store.storage.get_vector_or_empty(&v).await;
                     let query = prepare_query((*query).clone());
                     let neighbors = db
                         .search(&mut *store, &aby3_graph, &query, 1)
@@ -574,7 +604,12 @@ mod tests {
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
-            let query = cleartext_data.0.points.get(i).unwrap().clone();
+            let query = cleartext_data
+                .0
+                .points
+                .get(&vector_id.serial_id())
+                .unwrap()
+                .clone();
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
@@ -589,7 +624,7 @@ mod tests {
                 let hawk_searcher = hawk_searcher.clone();
                 let v_lock = v.lock().await;
                 let g = g.clone();
-                let q = v_lock.storage.get_vector(&vector_id).await;
+                let q = v_lock.storage.get_vector_or_empty(&vector_id).await;
                 let q = prepare_query((*q).clone());
                 let v = v.clone();
                 jobs.spawn(async move {
@@ -611,7 +646,7 @@ mod tests {
                 let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let query = v_lock.storage.get_vector(&vector_id).await;
+                    let query = v_lock.storage.get_vector_or_empty(&vector_id).await;
                     let query = prepare_query((*query).clone());
                     let secret_neighbors = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
@@ -835,7 +870,12 @@ mod tests {
             for (store, graph) in vectors_and_graphs.iter_mut() {
                 let graph = graph.clone();
                 let searcher = searcher.clone();
-                let q = store.lock().await.storage.get_vector(&vector_id).await;
+                let q = store
+                    .lock()
+                    .await
+                    .storage
+                    .get_vector_or_empty(&vector_id)
+                    .await;
                 let q = prepare_query((*q).clone());
                 let store = store.clone();
                 jobs.spawn(async move {
@@ -853,5 +893,54 @@ mod tests {
                 assert!(r, "Failed at index {:?} by party {:?}", i, party_index);
             }
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_gr_non_existent_vectors() {
+        let mut rng = AesRng::seed_from_u64(0_u64);
+        let database_size = 2;
+        let vectors_and_graphs = shared_random_setup(&mut rng, database_size, NetworkType::Local)
+            .await
+            .unwrap();
+
+        let mut tasks = vec![];
+        for (store, _graph) in vectors_and_graphs {
+            let mut store = store.lock_owned().await;
+            tasks.push(async move {
+                let none = VectorId::from_0_index(999);
+                let a = VectorId::from_0_index(0);
+                let b = VectorId::from_0_index(1);
+
+                let queries = store.vectors_as_queries(vec![a, b]).await;
+                let vectors = vec![a, b, none];
+                let n_vecs = vectors.len();
+
+                let distances = store.eval_distance_batch(&queries, &vectors).await.unwrap();
+
+                let is_match = store.is_match_batch(&distances).await.unwrap();
+                assert_eq!(
+                    is_match,
+                    [vec![true, false, false], vec![false, true, false]].concat(),
+                    "Vectors should match with themselves and not with the others"
+                );
+
+                let distances_to_none = vec![distances[2].clone(), distances[2 + n_vecs].clone()];
+                let pairs = distances_to_none
+                    .into_iter()
+                    .cartesian_product(distances)
+                    .collect_vec();
+                let less_than = store.less_than_batch(&pairs).await.unwrap();
+
+                assert_eq!(
+                    less_than,
+                    vec![false; pairs.len()],
+                    "Nothing is less than a distance to a non-existent vector"
+                );
+
+                Ok(())
+            });
+        }
+        parallelize(tasks.into_iter()).await.unwrap();
     }
 }
