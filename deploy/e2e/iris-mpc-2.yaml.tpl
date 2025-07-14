@@ -191,7 +191,7 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__INIT_DB_SIZE
-      value: "5000"
+      value: "0"
 
     - name: SMPC__MAX_DB_SIZE
       value: "10000"
@@ -201,9 +201,6 @@ iris-mpc-2:
 
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
       value: "64"
-
-    - name: SMPC__N_BUCKETS
-      value: "5"
 
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
       value: "true"
