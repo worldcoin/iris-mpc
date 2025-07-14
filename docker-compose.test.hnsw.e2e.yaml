@@ -27,9 +27,9 @@ services:
     healthcheck:
       test: ["CMD-SHELL", "test -f /tmp/init_db_complete"]
       interval: 5s
-      timeout: 3s
+      timeout: 5s
       retries: 20
-      start_period: 10s
+      start_period: 180s
 
   hnsw_tests_e2e:
     image: hnsw-tests-e2e-local:latest
