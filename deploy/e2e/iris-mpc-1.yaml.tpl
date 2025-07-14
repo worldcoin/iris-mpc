@@ -191,7 +191,7 @@ iris-mpc-1:
       value: "true"
 
     - name: SMPC__INIT_DB_SIZE
-      value: "5000"
+      value: "0"
 
     - name: SMPC__MAX_DB_SIZE
       value: "10000"
