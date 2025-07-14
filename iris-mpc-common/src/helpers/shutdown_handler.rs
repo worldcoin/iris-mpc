@@ -96,3 +96,37 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_shutdown_handler() {
+        let mut handler = ShutdownHandler::new(1);
+        handler.last_results_sync_timeout /= 10; // Shorten timeout for test
+
+        // Start work.
+        assert!(!handler.is_shutting_down());
+        handler.increment_batches_pending_completion();
+
+        // Initiate a shutdown.
+        handler.trigger_manual_shutdown();
+        assert!(handler.is_shutting_down());
+
+        // If batches do not complete, return anyway after timeout.
+        handler.wait_for_pending_batches_completion().await;
+
+        // Complete the batch.
+        handler.decrement_batches_pending_completion();
+
+        // Should return quickly since no batches are pending
+        let quick = timeout(
+            Duration::from_millis(10),
+            handler.wait_for_pending_batches_completion(),
+        );
+        assert!(quick.await.is_ok());
+    }
+}

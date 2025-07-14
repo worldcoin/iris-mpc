@@ -237,11 +237,20 @@ pub async fn init_heartbeat_task(
         let mut last_response = [String::default(), String::default()];
         let mut connected = [false, false];
         let mut retries = [0, 0];
+        // Track consecutive failures
+        let mut consecutive_failures = [0, 0];
+        // Number of consecutive failures before triggering shutdown
+        const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
         loop {
             for (i, host) in [next_node, prev_node].iter().enumerate() {
                 let res = reqwest::get(host.as_str()).await;
                 if res.is_err() || !res.as_ref().unwrap().status().is_success() {
+                    tracing::warn!(
+                        "Node {} did not respond with success, response: {:?}",
+                        host,
+                        res
+                    );
                     // If it's the first time after startup, we allow a few retries to let the other
                     // nodes start up as well.
                     if last_response[i] == String::default()
@@ -251,32 +260,47 @@ pub async fn init_heartbeat_task(
                         tracing::warn!("Node {} did not respond with success, retrying...", host);
                         continue;
                     }
-                    tracing::info!(
-                        "Node {} did not respond with success, starting graceful shutdown",
-                        host
-                    );
+
                     // if the nodes are still starting up and they get a failure - we can panic and
                     // not start graceful shutdown
+                    // we ignore consecutive failures for the initial response
                     if last_response[i] == String::default() {
                         panic!(
-                            "Node {} did not respond with success during heartbeat init phase, \
-                             killing server...",
+                            "Node {} did not respond with success during heartbeat init phase, killing server...",
                             host
                         );
                     }
 
-                    if !heartbeat_shutdown_handler.is_shutting_down() {
-                        heartbeat_shutdown_handler.trigger_manual_shutdown();
+                    consecutive_failures[i] += 1;
+                    tracing::warn!(
+                        "Node {} failed health check {} times consecutively",
+                        host,
+                        consecutive_failures[i]
+                    );
+
+                    // Only trigger shutdown after multiple consecutive failures
+                    if consecutive_failures[i] >= MAX_CONSECUTIVE_FAILURES {
                         tracing::error!(
-                            "Node {} has not completed health check, therefore graceful shutdown \
-                             has been triggered",
-                            host
+                            "Node {} has failed {} consecutive health checks, starting graceful shutdown",
+                            host,
+                            MAX_CONSECUTIVE_FAILURES
                         );
-                    } else {
-                        tracing::info!("Node {} has already started graceful shutdown.", host);
+
+                        if !heartbeat_shutdown_handler.is_shutting_down() {
+                            heartbeat_shutdown_handler.trigger_manual_shutdown();
+                            tracing::error!(
+                                "Node {} has failed consecutive health checks, therefore graceful shutdown has been triggered",
+                                host
+                            );
+                        } else {
+                            tracing::info!("Node {} has already started graceful shutdown.", host);
+                        }
                     }
                     continue;
                 }
+
+                // Reset consecutive failures counter on successful health check
+                consecutive_failures[i] = 0;
 
                 let probe_response = res
                     .unwrap()

@@ -604,7 +604,12 @@ mod tests {
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
-            let query = cleartext_data.0.points.get(i).unwrap().clone();
+            let query = cleartext_data
+                .0
+                .points
+                .get(&vector_id.serial_id())
+                .unwrap()
+                .clone();
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;

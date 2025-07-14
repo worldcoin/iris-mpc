@@ -142,6 +142,79 @@ impl<V: VectorStore> GraphPg<V> {
 
         Ok(())
     }
+
+    /// Copies the `hawk_graph_entry` and `hawk_graph_links` tables to backup tables with a `_backup` suffix in the same schema.
+    ///
+    /// - Drops the backup tables (`hawk_graph_entry_backup`, `hawk_graph_links_backup`) if they exist.
+    /// - Recreates the backup tables with the same structure as the originals.
+    /// - Copies all data from the original tables to the backup tables.
+    ///
+    /// This is a destructive operation for the backup tables: any existing data in them will be lost.
+    ///
+    /// Example usage:
+    ///     graph_pg.backup_hawk_graph_tables().await?;
+    pub async fn backup_hawk_graph_tables(&self) -> Result<()> {
+        let schema = &self.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        let backup_entry = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let backup_links = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Drop backup tables if they exist, then create and populate in one step
+        for (src, dest) in [
+            (entry_table.as_str(), backup_entry.as_str()),
+            (links_table.as_str(), backup_links.as_str()),
+        ] {
+            // Drop backup table if exists
+            sqlx::query(&format!("DROP TABLE IF EXISTS {dest} CASCADE"))
+                .execute(&self.pool)
+                .await?;
+            // Create backup table as a copy of the source (fastest for stable schema)
+            sqlx::query(&format!("CREATE TABLE {dest} AS TABLE {src}"))
+                .execute(&self.pool)
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Restores the `hawk_graph_entry` and `hawk_graph_links` tables from their backup tables in the same schema.
+    ///
+    /// - Drops the main tables (`hawk_graph_entry`, `hawk_graph_links`) if they exist.
+    /// - Recreates the main tables with the data from the backup tables (`hawk_graph_entry_backup`, `hawk_graph_links_backup`).
+    /// - This is a destructive operation for the main tables: any existing data in them will be lost.
+    ///
+    /// Example usage:
+    ///     graph_pg.restore_hawk_graph_tables_from_backup().await?;
+    pub async fn restore_hawk_graph_tables_from_backup(&self) -> Result<()> {
+        let schema = &self.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        let backup_entry = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let backup_links = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Drop main tables if they exist
+        sqlx::query(&format!("DROP TABLE IF EXISTS {entry_table} CASCADE"))
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&format!("DROP TABLE IF EXISTS {links_table} CASCADE"))
+            .execute(&self.pool)
+            .await?;
+
+        // Recreate main tables from backup
+        sqlx::query(&format!(
+            "CREATE TABLE {entry_table} AS TABLE {backup_entry}"
+        ))
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(&format!(
+            "CREATE TABLE {links_table} AS TABLE {backup_links}"
+        ))
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 pub struct GraphTx<'a, V> {
@@ -594,7 +667,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -645,7 +718,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[0].clone();
+            let q = vector_store.points[&1].clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -708,7 +781,6 @@ mod tests {
             .into_iter()
             .map(Arc::new)
             .collect::<Vec<_>>();
-
         // Insert the codes.
         let mut tx = graph_pg.tx().await?;
         for query in queries1.iter() {
@@ -808,6 +880,261 @@ mod tests {
         let value: Option<String> = store.get_persistent_state(&domain, &key).await?;
         assert_eq!(value, None);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backup_hawk_graph_tables_creates_and_copies() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let schema = &graph.graph.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        let entry_backup = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let links_backup = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Insert a row into hawk_graph_entry and hawk_graph_links
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_table
+        ))
+        .bind(1i16)
+        .bind(42i64)
+        .bind(0i16)
+        .bind(0i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table))
+            .bind(1i16)
+            .bind(42i64)
+            .bind(0i16)
+            .bind(0i16)
+            .bind(vec![1u8,2u8,3u8])
+            .execute(pool)
+            .await?;
+
+        // Run backup
+        graph.graph.backup_hawk_graph_tables().await?;
+
+        // Check backup tables exist and have the data
+        let entry_row: Option<(i16, i64, i16, i16)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer FROM {}",
+            entry_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(entry_row.is_some(), "Entry backup row should exist");
+        let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 42);
+        assert_eq!(version_id, 0);
+        assert_eq!(layer, 0);
+
+        let links_row: Option<(i16, i64, i16, i16, Vec<u8>)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer, links FROM {}",
+            links_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(links_row.is_some(), "Links backup row should exist");
+        let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 42);
+        assert_eq!(version_id, 0);
+        assert_eq!(layer, 0);
+        assert_eq!(links, vec![1u8, 2u8, 3u8]);
+
+        // Clean up
+        graph.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_backup_hawk_graph_tables_overwrites_existing_backup() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let schema = &graph.graph.schema_name;
+        let entry_backup = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let links_backup = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Create backup tables with dummy data
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2)", entry_backup)).execute(pool).await?;
+        sqlx::query(&format!("CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2, links BYTEA)", links_backup)).execute(pool).await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_backup
+        ))
+        .bind(0i16)
+        .bind(99i64)
+        .bind(99i16)
+        .bind(99i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_backup))
+            .bind(0i16)
+            .bind(99i64)
+            .bind(99i16)
+            .bind(99i16)
+            .bind(vec![9u8,9u8,9u8])
+            .execute(pool)
+            .await?;
+
+        // Insert a row into hawk_graph_entry and hawk_graph_links
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_table
+        ))
+        .bind(1i16)
+        .bind(43i64)
+        .bind(1i16)
+        .bind(1i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!("INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table))
+            .bind(1i16)
+            .bind(43i64)
+            .bind(1i16)
+            .bind(1i16)
+            .bind(vec![4u8,5u8,6u8])
+            .execute(pool)
+            .await?;
+
+        // Run backup (should overwrite backup tables)
+        graph.graph.backup_hawk_graph_tables().await?;
+
+        // Check backup tables have only the new data
+        let entry_row: Option<(i16, i64, i16, i16)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer FROM {}",
+            entry_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(entry_row.is_some(), "Entry backup row should exist");
+        let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 43);
+        assert_eq!(version_id, 1);
+        assert_eq!(layer, 1);
+
+        let links_row: Option<(i16, i64, i16, i16, Vec<u8>)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer, links FROM {}",
+            links_backup
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(links_row.is_some(), "Links backup row should exist");
+        let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 43);
+        assert_eq!(version_id, 1);
+        assert_eq!(layer, 1);
+        assert_eq!(links, vec![4u8, 5u8, 6u8]);
+
+        // Clean up
+        graph.cleanup().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_restore_hawk_graph_tables_from_backup() -> Result<()> {
+        let graph = TestGraphPg::<PlaintextStore>::new().await?;
+        let pool = graph.pool();
+        let schema = &graph.graph.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+        let entry_backup = format!("\"{}\".hawk_graph_entry_backup", schema);
+        let links_backup = format!("\"{}\".hawk_graph_links_backup", schema);
+
+        // Insert a row into backup tables
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2)", entry_backup
+        )).execute(pool).await?;
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2, links BYTEA)", links_backup
+        )).execute(pool).await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_backup
+        ))
+        .bind(1i16)
+        .bind(99i64)
+        .bind(2i16)
+        .bind(3i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_backup
+        ))
+        .bind(1i16)
+        .bind(99i64)
+        .bind(2i16)
+        .bind(3i16)
+        .bind(vec![7u8, 8u8, 9u8])
+        .execute(pool)
+        .await?;
+
+        // Overwrite main tables with dummy data
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2)", entry_table
+        )).execute(pool).await?;
+        sqlx::query(&format!(
+            "CREATE TABLE IF NOT EXISTS {} (graph_id INT2, serial_id INT8, version_id INT2, layer INT2, links BYTEA)", links_table
+        )).execute(pool).await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer) VALUES ($1, $2, $3, $4)",
+            entry_table
+        ))
+        .bind(0i16)
+        .bind(1i64)
+        .bind(1i16)
+        .bind(1i16)
+        .execute(pool)
+        .await?;
+        sqlx::query(&format!(
+            "INSERT INTO {} (graph_id, serial_id, version_id, layer, links) VALUES ($1, $2, $3, $4, $5)", links_table
+        ))
+        .bind(0i16)
+        .bind(1i64)
+        .bind(1i16)
+        .bind(1i16)
+        .bind(vec![1u8, 2u8, 3u8])
+        .execute(pool)
+        .await?;
+
+        // Now restore from backup
+        graph.graph.restore_hawk_graph_tables_from_backup().await?;
+
+        // Check that main tables now have the backup data
+        let entry_row: Option<(i16, i64, i16, i16)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer FROM {}",
+            entry_table
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(entry_row.is_some(), "Entry row should exist after restore");
+        let (graph_id, serial_id, version_id, layer) = entry_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 99);
+        assert_eq!(version_id, 2);
+        assert_eq!(layer, 3);
+
+        let links_row: Option<(i16, i64, i16, i16, Vec<u8>)> = sqlx::query_as(&format!(
+            "SELECT graph_id, serial_id, version_id, layer, links FROM {}",
+            links_table
+        ))
+        .fetch_optional(pool)
+        .await?;
+        assert!(links_row.is_some(), "Links row should exist after restore");
+        let (graph_id, serial_id, version_id, layer, links) = links_row.unwrap();
+        assert_eq!(graph_id, 1);
+        assert_eq!(serial_id, 99);
+        assert_eq!(version_id, 2);
+        assert_eq!(layer, 3);
+        assert_eq!(links, vec![7u8, 8u8, 9u8]);
+
+        graph.cleanup().await?;
         Ok(())
     }
 }

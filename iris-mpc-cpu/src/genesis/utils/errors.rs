@@ -39,4 +39,7 @@ pub enum IndexationError {
 
     #[error("Failed to unset genesis Graph indexation state element {0} to PostgreSQL dB: {1}")]
     UnsetIndexationStateElement(String, String),
+
+    #[error("Failed to make a copy of the database: {0}")]
+    DatabaseCopyFailure(String),
 }

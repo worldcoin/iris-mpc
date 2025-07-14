@@ -56,6 +56,82 @@ podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
 
+preStop:
+  # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
+  sleepPeriod: 10
+
+# terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
 # long enough to allow for graceful shutdown to safely process 2 batches
 # single batch timeout in stage is 240 seconds
 terminationGracePeriodSeconds: 500
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
+
+nginxSidecar:
+  enabled: true
+  port: 6443
+  ports:
+    - containerPort: 4100
+      name: tcp-4000
+      protocol: TCP
+    - containerPort: 4101
+      name: tcp-4001
+      protocol: TCP
+    - containerPort: 4102
+      name: tcp-4002
+      protocol: TCP
+  secrets:
+    enabled: true
+    volumeMount:
+      - name: nginx-certs
+        mountPath: /etc/nginx/cert
+    volume:
+      - name: nginx-certs
+        secret:
+          secretName: application
+          items:
+            - key: certificate.crt
+              path: certificate.crt
+            - key: key.pem
+              path: key.pem
+          optional: false
+  config:
+    nginx.conf: |
+      worker_processes  auto;
+  
+      # Send error logs to stderr
+      error_log /dev/stderr info;
+
+      events {
+          worker_connections 1024;
+      }
+
+      stream {
+          # Send access logs to stdout
+          access_log /dev/stdout;
+
+          ssl_certificate /etc/nginx/cert/certificate.crt;
+          ssl_certificate_key /etc/nginx/cert/key.pem;
+          ssl_protocols       TLSv1.3;
+          ssl_ciphers         HIGH:!aNULL:!MD5;
+
+          # TCP listener for port 4000
+          server {
+              listen 4100 ssl;
+              proxy_pass 127.0.0.1:4000;
+          }
+
+          # TCP listener for port 4001
+          server {
+              listen 4101 ssl;
+              proxy_pass 127.0.0.1:4001;
+          }
+
+          # TCP listener for port 4002
+          server {
+              listen 4102 ssl;
+              proxy_pass 127.0.0.1:4002;
+          }
+      }

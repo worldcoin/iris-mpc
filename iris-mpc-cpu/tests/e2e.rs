@@ -1,7 +1,8 @@
 use eyre::Result;
 use iris_mpc_common::{
-    iris_db::db::IrisDB,
+    iris_db::{db::IrisDB, iris::IrisCode},
     test::{generate_full_test_db, TestCaseGenerator},
+    vector_id::SerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
@@ -46,11 +47,26 @@ async fn create_graph_from_plain_dbs(
     params: &HnswParams,
 ) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
+    let left_points: HashMap<SerialId, IrisCode> = left_db
+        .db
+        .iter()
+        .enumerate()
+        .map(|(idx, iris)| (idx as u32 + 1, iris.clone()))
+        .collect();
+
+    let right_points: HashMap<SerialId, IrisCode> = right_db
+        .db
+        .iter()
+        .enumerate()
+        .map(|(idx, iris)| (idx as u32 + 1, iris.clone()))
+        .collect();
     let mut left_store = PlaintextStore {
-        points: left_db.db.clone(),
+        points: left_points,
+        next_id: left_db.db.len() as u32 + 1,
     };
     let mut right_store = PlaintextStore {
-        points: right_db.db.clone(),
+        points: right_points,
+        next_id: right_db.db.len() as u32 + 1,
     };
     let searcher = HnswSearcher {
         params: params.clone(),
@@ -68,14 +84,27 @@ async fn create_graph_from_plain_dbs(
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();
 
-    for (vector_id, iris) in left_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
+    // sort the points by serial id to ensure consistent ordering
+    let mut left_points_sorted: Vec<_> = left_store.points.keys().cloned().collect();
+    left_points_sorted.sort();
+
+    let mut right_points_sorted: Vec<_> = right_store.points.keys().cloned().collect();
+    right_points_sorted.sort();
+
+    for serial_id in left_points_sorted {
+        let vector_id: VectorId = VectorId::from_serial_id(serial_id);
+        let shares = GaloisRingSharedIris::generate_shares_locally(
+            &mut rng,
+            left_store.points.get(&serial_id).unwrap().clone(),
+        );
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
-    for (vector_id, iris) in right_store.points.iter().enumerate() {
-        let vector_id: VectorId = VectorId::from_0_index(vector_id as u32);
-        let shares = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris.clone());
+    for serial_id in right_points_sorted {
+        let vector_id: VectorId = VectorId::from_serial_id(serial_id);
+        let shares = GaloisRingSharedIris::generate_shares_locally(
+            &mut rng,
+            right_store.points.get(&serial_id).unwrap().clone(),
+        );
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
