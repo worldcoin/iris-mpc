@@ -202,9 +202,6 @@ iris-mpc-2:
     - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
       value: "64"
 
-    - name: SMPC__N_BUCKETS
-      value: "5"
-
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
       value: "true"
 
