@@ -506,6 +506,9 @@ pub struct TlsConfig {
     // used by the client to make them trust the server cert
     #[arg(required = false)]
     pub root_cert: String,
+
+    #[arg(required = false)]
+    pub client_only_tls: bool,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

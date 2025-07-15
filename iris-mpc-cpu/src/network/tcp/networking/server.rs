@@ -1,5 +1,7 @@
 use std::{net::SocketAddr, sync::Arc};
 
+use crate::network::tcp::networking::client::DynStream;
+use crate::network::tcp::Server;
 use async_trait::async_trait;
 use eyre::Result;
 use tokio::net::{TcpListener, TcpStream};
@@ -9,8 +11,6 @@ use tokio_rustls::rustls::{
     RootCertStore, ServerConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsStream};
-
-use crate::network::tcp::Server;
 
 pub struct TlsServer {
     listener: TcpListener,
@@ -74,5 +74,25 @@ impl Server for TcpServer {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         tcp_stream.set_nodelay(true)?;
         Ok((peer_addr, tcp_stream))
+    }
+}
+
+pub struct BoxTcpServer(pub TcpServer);
+#[async_trait]
+impl Server for BoxTcpServer {
+    type Output = DynStream;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
+        let (addr, stream) = self.0.accept().await?;
+        Ok((addr, Box::new(stream)))
+    }
+}
+
+pub struct BoxTlsServer(pub TlsServer);
+#[async_trait]
+impl Server for BoxTlsServer {
+    type Output = DynStream;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
+        let (addr, stream) = self.0.accept().await?;
+        Ok((addr, Box::new(stream)))
     }
 }
