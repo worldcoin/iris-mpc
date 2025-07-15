@@ -19,19 +19,20 @@ pub struct TlsClient {
 pub struct TcpClient {}
 
 impl TlsClient {
-    pub async fn new_with_root_certs() -> Result<Self> {
-        let mut roots = RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
-        {
-            roots.add(cert)?;
-        }
-
-        let client_config = ClientConfig::builder()
-            .with_root_certificates(roots)
-            .with_no_client_auth();
-        let tls_connector = TlsConnector::from(Arc::new(client_config));
-        Ok(Self { tls_connector })
-    }
+    // pub async fn new_with_root_certs() -> Result<Self> {
+    //     let mut roots = RootCertStore::empty();
+    //     for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
+    //     {
+    //         roots.add(cert)?;
+    //     }
+    //
+    //     let client_config = ClientConfig::builder()
+    //         .with_root_certificates(roots)
+    //         .with_no_client_auth();
+    //
+    //     let tls_connector = TlsConnector::from(Arc::new(client_config));
+    //     Ok(Self { tls_connector })
+    // }
 
     pub async fn new(key_file: &str, cert_file: &str, root_cert: &str) -> Result<Self> {
         let mut root_cert_store = RootCertStore::empty();
@@ -48,6 +49,19 @@ impl TlsClient {
             .with_client_auth_cert(certs, key)?;
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
+        Ok(Self { tls_connector })
+    }
+
+    /// Create a client that trusts only the given CA certificate file (PEM)
+    pub async fn new_with_ca(ca_cert_path: &str) -> Result<Self> {
+        let mut root_store = RootCertStore::empty();
+        for cert in CertificateDer::pem_file_iter(ca_cert_path)? {
+            root_store.add(cert?)?;
+        }
+        let config = ClientConfig::builder()
+            .with_root_certificates(root_store)
+            .with_no_client_auth();
+        let tls_connector = TlsConnector::from(Arc::new(config));
         Ok(Self { tls_connector })
     }
 }

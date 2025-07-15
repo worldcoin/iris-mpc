@@ -85,8 +85,15 @@ pub async fn build_network_handle(
         );
 
         if tls.client_only_tls {
+            if tls.ca_cert_path.is_none() {
+                return Err(eyre::eyre!(
+                    "CA certificate path is required for client-only TLS"
+                ));
+            }
+
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-            let connector = BoxTlsClient(TlsClient::new_with_root_certs().await?);
+            let connector =
+                BoxTlsClient(TlsClient::new_with_ca(&tls.ca_cert_path.clone().unwrap()).await?);
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
@@ -108,10 +115,28 @@ pub async fn build_network_handle(
             let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
             Ok(Box::new(networking))
         } else {
-            let listener =
-                TlsServer::new(my_addr, &tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
-            let connector =
-                TlsClient::new(&tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
+            if tls.private_key.is_none() || tls.leaf_cert.is_none() || tls.root_cert.is_none() {
+                return Err(eyre::eyre!(
+                    "TLS configuration is required for this operation"
+                ));
+            }
+            let root_cert = tls
+                .root_cert
+                .as_ref()
+                .ok_or(eyre::eyre!("Root certificate is required for TLS"))?;
+
+            let private_key = tls
+                .private_key
+                .as_ref()
+                .ok_or(eyre::eyre!("Private key is required for TLS"))?;
+
+            let leaf_cert = tls
+                .leaf_cert
+                .as_ref()
+                .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
+
+            let listener = TlsServer::new(my_addr, private_key, leaf_cert, root_cert).await?;
+            let connector = TlsClient::new(private_key, leaf_cert, root_cert).await?;
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
