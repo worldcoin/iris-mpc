@@ -191,7 +191,11 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
     log_info(String::from("Indexation complete."));
 
-    // Phase 3: snapshot.
+    // Phase 3: database backup.
+    log_info(String::from("Database backup begins"));
+    exec_database_backup(graph_store.clone()).await?;
+
+    // Phase 4: snapshot.
     if !args.perform_snapshot {
         log_info(String::from("Snapshot skipped ... as requested."));
     } else {
@@ -201,6 +205,24 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     // Phase 4: database backup.
     log_info(String::from("Database backup begins"));
     exec_database_backup(graph_store.clone()).await?;
+
+    // Clear modifications from the HNSW iris store
+    // This is because after a genesis run - there should be no modifications left in the HNSW iris store
+    let mut tx = hnsw_iris_store.tx().await?;
+    hnsw_iris_store
+        .clear_modifications_table(&mut tx)
+        .await
+        .map_err(|err| {
+            eyre!(log_error(format!(
+                "Failed to clear modifications: {:?}",
+                err
+            )))
+        })?;
+    tx.commit().await?;
+
+    log_info(String::from(
+        "Cleared modifications from the HNSW iris store",
+    ));
 
     // Clear modifications from the HNSW iris store
     // This is because after a genesis run - there should be no modifications left in the HNSW iris store
@@ -372,6 +394,7 @@ async fn exec_setup(
         graph_store_arc.clone(),
         &mut hawk_actor,
         Arc::clone(&shutdown_handler),
+        args.max_indexation_id as usize,
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -1194,6 +1217,7 @@ async fn get_sync_result(
 /// * `config` - Application configuration instance.
 /// * `graph_store` - Graph PostgreSQL store provider.
 /// * `hawk_actor` - Hawk actor managing graph access & indexation.
+/// * `max_index` - Optional maximum index to load (inclusive). If None, loads all data.
 ///
 async fn init_graph_from_stores(
     config: &Config,
@@ -1201,6 +1225,7 @@ async fn init_graph_from_stores(
     graph_store: Arc<GraphPg<Aby3Store>>,
     hawk_actor: &mut HawkActor,
     shutdown_handler: Arc<ShutdownHandler>,
+    max_indexation_id: usize,
 ) -> Result<()> {
     log_info(String::from("⚓️ ANCHOR: Load the database"));
 
@@ -1226,14 +1251,15 @@ async fn init_graph_from_stores(
     ));
 
     // -------------------------------------------------------------------
-    // TODO: use the number of currently processed entries for the amount
-    //       to read into memory
+    // Get total number of irises and apply max_index limit if specified
     // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
+    let max_index = std::cmp::min(max_indexation_id, store_len);
+
     load_iris_db(
         &mut iris_loader,
         iris_store,
-        store_len,
+        max_index,
         iris_db_parallelism,
         config,
         shutdown_handler,
