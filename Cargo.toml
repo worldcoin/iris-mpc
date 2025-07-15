@@ -28,7 +28,6 @@ async-trait = "0.1.83"
 axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22.1"
-bytes = "1.5"
 bytemuck = { version = "1.17", features = ["derive"] }
 dotenvy = "0.15"
 eyre = "0.6"
