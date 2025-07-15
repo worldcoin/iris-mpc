@@ -202,27 +202,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         exec_snapshot(&ctx, &aws_rds_client).await?;
         log_info(String::from("Snapshot complete."));
     };
-    // Phase 4: database backup.
-    log_info(String::from("Database backup begins"));
-    exec_database_backup(graph_store.clone()).await?;
-
-    // Clear modifications from the HNSW iris store
-    // This is because after a genesis run - there should be no modifications left in the HNSW iris store
-    let mut tx = hnsw_iris_store.tx().await?;
-    hnsw_iris_store
-        .clear_modifications_table(&mut tx)
-        .await
-        .map_err(|err| {
-            eyre!(log_error(format!(
-                "Failed to clear modifications: {:?}",
-                err
-            )))
-        })?;
-    tx.commit().await?;
-
-    log_info(String::from(
-        "Cleared modifications from the HNSW iris store",
-    ));
 
     // Clear modifications from the HNSW iris store
     // This is because after a genesis run - there should be no modifications left in the HNSW iris store
