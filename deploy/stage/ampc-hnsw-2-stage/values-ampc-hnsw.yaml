@@ -148,6 +148,12 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "true"
+
+  - name: SMPC__TLS__SKIP_TLS_VERIFICATION
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
