@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "240" # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -45,10 +45,7 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "512"
-
-  - name: SMPC__N_BUCKETS
-    value: "16"
+    value: "64"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "false"
@@ -63,7 +60,7 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
     value: "5"
@@ -78,7 +75,7 @@ env:
     value: '["4000","4001","4002"]'
 
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
-    value: '3000'
+    value: "3000"
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["0.0.0.0","node.1.stage.hnsw.worldcoin.dev","node.2.stage.hnsw.worldcoin.dev"]'
@@ -147,6 +144,12 @@ env:
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "GtAnonStatsCPUGPU"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "GtAnonStatsCPUGPU"
 
 initContainer:
   enabled: true
