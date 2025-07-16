@@ -1,14 +1,18 @@
+use crate::network::tcp::{Client, NetworkConnection};
 use async_trait::async_trait;
 use eyre::Result;
+use std::fmt::{Debug, Formatter};
 use std::{net::SocketAddr, sync::Arc};
 use tokio::net::TcpStream;
+use tokio_rustls::rustls::client::danger::{
+    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
+};
+use tokio_rustls::rustls::pki_types::UnixTime;
 use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName},
-    ClientConfig, RootCertStore,
+    ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
 use tokio_rustls::{TlsConnector, TlsStream};
-
-use crate::network::tcp::{Client, NetworkConnection};
 
 #[derive(Clone)]
 pub struct TlsClient {
@@ -18,21 +22,79 @@ pub struct TlsClient {
 #[derive(Clone)]
 pub struct TcpClient {}
 
+/// A `ServerCertVerifier` that blindly accepts **any** certificate.
+pub struct NoCertificateVerification;
+
+impl Debug for NoCertificateVerification {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NoCertificateVerification")
+    }
+}
+
+impl ServerCertVerifier for NoCertificateVerification {
+    #[allow(clippy::too_many_arguments)]
+    fn verify_server_cert(
+        &self,
+        _end_entity: &CertificateDer<'_>,
+        _intermediates: &[CertificateDer<'_>],
+        _server_name: &ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: UnixTime,
+    ) -> Result<ServerCertVerified, Error> {
+        // Simply say “everything is fine”.
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &CertificateDer<'_>,
+        _dss: &DigitallySignedStruct,
+    ) -> std::result::Result<HandshakeSignatureValid, Error> {
+        Ok(HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        vec![
+            SignatureScheme::RSA_PKCS1_SHA1,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::RSA_PKCS1_SHA384,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::RSA_PKCS1_SHA512,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            SignatureScheme::RSA_PSS_SHA256,
+            SignatureScheme::RSA_PSS_SHA384,
+            SignatureScheme::RSA_PSS_SHA512,
+            SignatureScheme::ED25519,
+            SignatureScheme::ED448,
+        ]
+    }
+}
+
 impl TlsClient {
-    // pub async fn new_with_root_certs() -> Result<Self> {
-    //     let mut roots = RootCertStore::empty();
-    //     for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
-    //     {
-    //         roots.add(cert)?;
-    //     }
-    //
-    //     let client_config = ClientConfig::builder()
-    //         .with_root_certificates(roots)
-    //         .with_no_client_auth();
-    //
-    //     let tls_connector = TlsConnector::from(Arc::new(client_config));
-    //     Ok(Self { tls_connector })
-    // }
+    pub async fn new_with_skip_verification() -> Result<Self> {
+        let client_config = ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification {}))
+            .with_no_client_auth();
+
+        let tls_connector = TlsConnector::from(Arc::new(client_config));
+        Ok(Self { tls_connector })
+    }
 
     pub async fn new(key_file: &str, cert_file: &str, root_cert: &str) -> Result<Self> {
         let mut root_cert_store = RootCertStore::empty();

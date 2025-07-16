@@ -513,6 +513,9 @@ pub struct TlsConfig {
 
     #[arg(required = false)]
     pub client_only_tls: bool,
+
+    #[arg(required = false)]
+    pub skip_tls_verification: bool,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
