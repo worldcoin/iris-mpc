@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc@sha256:32356dcc31c306823504e3571723ba8f3e6b939bff47b373ad28587a47d5bb05" #  v0.20.2
+image: "ghcr.io/worldcoin/iris-mpc@sha256:d1d7fa4cc2fbbd372ff7562619acfddc129e93d5eca5913482a73af95a859553" #  latest iris-mpc, full scan side switching disabled
 
 environment: stage
 replicaCount: 1
