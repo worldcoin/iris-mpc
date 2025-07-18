@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -75,7 +75,7 @@ env:
     value: "eu-north-1"
 
   - name: SMPC__SERVICE_PORTS
-    value: '["4000","4001","4002"]'
+    value: '["4100","4001","4102"]'
 
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
     value: '3000'
@@ -146,6 +146,12 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
+
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "true"
+
+  - name: SMPC__TLS__SKIP_TLS_VERIFICATION
     value: "true"
 
 initContainer:
