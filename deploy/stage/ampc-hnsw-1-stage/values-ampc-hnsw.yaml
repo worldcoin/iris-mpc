@@ -1,5 +1,3 @@
-replicaCount: 0
-
 env:
   - name: RUST_LOG
     value: "info"
