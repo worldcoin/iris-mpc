@@ -49,14 +49,52 @@ impl IrisDB {
         Self { db }
     }
 
+    /// Only use for testing
+    pub fn new_random_par_with_pattern<R: Rng>(size: usize, rng: &mut R) -> Self {
+        // Fork out the rngs to be able to use them concurrently
+        let rng_seeds = (0..size).map(|_| rng.gen()).collect::<Vec<_>>();
+
+        let db = (0..size)
+            .into_par_iter()
+            .map(|i| {
+                let mut rng = StdRng::from_seed(rng_seeds[i]);
+                const PATTERN_SIZES: [usize; 4] = [2, 4, 8, 10];
+                let pattern_size = PATTERN_SIZES[rng.gen_range(0..PATTERN_SIZES.len())];
+                IrisCode::random_rng_with_pattern(&mut rng, pattern_size)
+            })
+            .collect::<Vec<_>>();
+
+        Self { db }
+    }
+
     pub fn iris_in_db(&self, iris: &IrisCode) -> bool {
         self.db.iter().any(|x| iris.is_close(x))
     }
 
+    pub fn iris_in_db_with_rotations(&self, iris: &IrisCode) -> bool {
+        self.db.iter().any(|x| iris.is_close_with_rotations(x))
+    }
+
     pub fn calculate_distances(&self, iris: &IrisCode) -> Vec<f64> {
         self.db
-            .iter()
-            .map(|other_code| iris.get_distance(other_code))
+            .par_iter()
+            .map(|db_code| iris.get_distance(db_code))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn calculate_min_distances(&self, iris: &IrisCode) -> Vec<f64> {
+        let rotations = iris.all_rotations();
+        self.db
+            .par_iter()
+            .map(|db_code| db_code.get_min_distance_against_many(&rotations))
+            .collect::<Vec<_>>()
+    }
+
+    pub fn calculate_all_distances(&self, iris: &IrisCode) -> Vec<f64> {
+        let rotations = iris.all_rotations();
+        self.db
+            .par_iter()
+            .flat_map(|db_code| db_code.get_distances_against_many(&rotations))
             .collect::<Vec<_>>()
     }
 }
@@ -76,7 +114,7 @@ mod iris_test {
             let iris = IrisCode::random_rng(&mut rng);
             assert_eq!(db.iris_in_db(&iris), db.db.iter().any(|x| iris.is_close(x)));
             let index = rng.gen_range(0..DB_SIZE);
-            let iris = db.db[index].get_similar_iris(&mut rng);
+            let iris = db.db[index].get_similar_iris(&mut rng, 0.05);
             let in_db = db.iris_in_db(&iris);
             assert!(in_db);
             assert_eq!(in_db, db.db.iter().any(|x| iris.is_close(x)));
