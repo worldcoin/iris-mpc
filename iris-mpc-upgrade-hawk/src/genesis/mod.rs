@@ -191,16 +191,17 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     .await?;
     log_info(String::from("Indexation complete."));
 
-    // Phase 3: snapshot.
+    // Phase 3: database backup.
+    log_info(String::from("Database backup begins"));
+    exec_database_backup(graph_store.clone()).await?;
+
+    // Phase 4: snapshot.
     if !args.perform_snapshot {
         log_info(String::from("Snapshot skipped ... as requested."));
     } else {
         exec_snapshot(&ctx, &aws_rds_client).await?;
         log_info(String::from("Snapshot complete."));
     };
-    // Phase 4: database backup.
-    log_info(String::from("Database backup begins"));
-    exec_database_backup(graph_store.clone()).await?;
 
     // Clear modifications from the HNSW iris store
     // This is because after a genesis run - there should be no modifications left in the HNSW iris store

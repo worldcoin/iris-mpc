@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "1240"
+    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -189,3 +189,8 @@ initContainer:
 
       # Execute AWS CLI command with the generated JSON
       aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+  - sg-0f46719bab0ff90e7 # smpc1-stage ampc-hnsw pod sg
