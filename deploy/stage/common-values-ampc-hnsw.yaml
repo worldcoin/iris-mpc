@@ -35,11 +35,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 21
-    memory: 120Gi
+    cpu: 31
+    memory: 1020Gi
   requests:
-    cpu: 20
-    memory: 120Gi
+    cpu: 31
+    memory: 1020Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -50,7 +50,7 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: amd64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "r7a.8xlarge"
+  node.kubernetes.io/instance-type: "x2iedn.8xlarge"
 
 podSecurityContext:
   runAsUser: 65534
