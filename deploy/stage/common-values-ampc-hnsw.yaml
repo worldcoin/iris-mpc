@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:130450d3b6609cc3de8bd2daf6d15cf4cdca8434"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:3c309f9a5e04ef5b7c10bac0d45c5e655b4f183a"
 
 environment: stage
 replicaCount: 1
@@ -14,6 +14,24 @@ hostNetwork: false
 ports:
   - containerPort: 3000
     name: health
+    protocol: TCP
+  - containerPort: 4000
+    name: tcp-4000
+    protocol: TCP
+  - containerPort: 4001
+    name: tcp-4001
+    protocol: TCP
+  - containerPort: 4002
+    name: tcp-4002
+    protocol: TCP
+  - containerPort: 4100
+    name: tcp-4100
+    protocol: TCP
+  - containerPort: 4101
+    name: tcp-4101
+    protocol: TCP
+  - containerPort: 4102
+    name: tcp-4102
     protocol: TCP
 
 livenessProbe:

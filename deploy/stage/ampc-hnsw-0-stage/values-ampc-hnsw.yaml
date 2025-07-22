@@ -155,10 +155,10 @@ initContainer:
   env:
     - name: PARTY_ID
       value: "0"
-    - name: MY_NODE_IP
+    - name: POD_IP
       valueFrom:
         fieldRef:
-          fieldPath: status.hostIP
+          fieldPath: status.podIP
   configMap:
     init.sh: |
       #!/usr/bin/env bash
@@ -169,7 +169,7 @@ initContainer:
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
       {
-        "Comment": "Upsert the A record for hnsw-mpc NCCL_COMM_ID",
+        "Comment": "Upsert the A record for HNSW pod",
         "Changes": [
           {
             "Action": "UPSERT",
@@ -178,7 +178,7 @@ initContainer:
               "TTL": 5,
               "Type": "A",
               "ResourceRecords": [{
-                "Value": "$MY_NODE_IP"
+                "Value": "$POD_IP"
               }]
             }
           }
