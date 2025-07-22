@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:2911edd5e421c560cf080f6d5cbd0ab019b04469"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:836c3b4c3b5b212d72a1806f0d18573ef4ae863c"
 
 environment: stage
 replicaCount: 1
@@ -13,6 +13,7 @@ ports:
   - containerPort: 3000
     name: health
     protocol: TCP
+
 
 hostNetwork: false
 
