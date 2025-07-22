@@ -9,6 +9,8 @@ strategy:
 datadog:
   enabled: true
 
+hostNetwork: false
+
 ports:
   - containerPort: 3000
     name: health
