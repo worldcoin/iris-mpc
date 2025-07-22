@@ -57,11 +57,9 @@ resources:
   limits:
     cpu: 31
     memory: 930Gi
-    vpc.amazonaws.com/pod-eni: 1
   requests:
     cpu: 31
     memory: 930Gi
-    vpc.amazonaws.com/pod-eni: 1
 
 imagePullSecrets:
   - name: github-secret
