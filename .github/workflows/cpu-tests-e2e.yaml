@@ -78,7 +78,7 @@ jobs:
         run: df -h && docker system df -v
 
       - name: Run docker compose
-        id: compose-up
+        id: compose_up
         continue-on-error: true
         env:
           COMPOSE_PROGRESS: plain          # no fancy TTY bars
@@ -88,12 +88,16 @@ jobs:
         with:
           compose-file: "./docker-compose.test.hnsw.e2e.yaml"
         
-      - name: Dump compose logs if it failed
-        if: failure()
-        run: |
-          docker compose -f docker-compose.test.hnsw.e2e.yaml ps
-          docker compose -f docker-compose.test.hnsw.e2e.yaml logs --no-color || true
-          df -h
+      - name: Save compose logs if failed
+        if: steps.compose_up.outcome == 'failure'
+        run: docker compose -f docker-compose.test.hnsw.e2e.yaml logs --no-color > compose.log
+
+      - name: Upload logs
+        if: steps.compose_up.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: compose.log
         
       - name: Re-fail the job if compose failed
         if: steps.compose-up.outcome == 'failure'
