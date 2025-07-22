@@ -87,14 +87,11 @@ pub async fn build_network_handle(
         if tls.client_only_tls {
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
             let connector: BoxTlsClient = if tls.skip_tls_verification {
-                BoxTlsClient(TlsClient::new_with_root_certs().await?)
+                tracing::info!("Building TlsClient with verification skip");
+                BoxTlsClient(TlsClient::new_with_skip_verification().await?)
             } else {
-                if tls.ca_cert_path.is_none() {
-                    return Err(eyre::eyre!(
-                        "CA certificate path is required for client-only TLS without skip-verification"
-                    ));
-                }
-                BoxTlsClient(TlsClient::new_with_ca(tls.ca_cert_path.as_ref().unwrap()).await?)
+                tracing::info!("Building TlsClient with OS root certificate store");
+                BoxTlsClient(TlsClient::new_with_root_certs().await?)
             };
 
             let connection_builder =

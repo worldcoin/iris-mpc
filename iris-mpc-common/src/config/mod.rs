@@ -506,14 +506,11 @@ pub struct TlsConfig {
     // used by the client to make them trust the server cert
     #[arg(required = false)]
     pub root_cert: Option<String>,
-
-    // used by the client to make them trust the server cert
-    #[arg(required = false)]
-    pub ca_cert_path: Option<String>,
-
+    // if true, the client will not verify the server's TLS certificate
     #[arg(required = false)]
     pub client_only_tls: bool,
-
+    // only relevant with "client_only_tls" if true, the server will not verify the client's TLS certificate
+    // if false, the server will be built with OS root certificates
     #[arg(required = false)]
     pub skip_tls_verification: bool,
 }
