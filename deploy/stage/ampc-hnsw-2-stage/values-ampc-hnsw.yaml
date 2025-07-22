@@ -152,7 +152,7 @@ env:
     value: "true"
 
   - name: SMPC__TLS__SKIP_TLS_VERIFICATION
-    value: "true"
+    value: "false"
 
 initContainer:
   enabled: true
