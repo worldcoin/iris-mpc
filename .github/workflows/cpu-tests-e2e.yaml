@@ -1,4 +1,4 @@
-name: CPU Integration Tests
+name: CPU E2E Tests
 
 on:
   pull_request:
