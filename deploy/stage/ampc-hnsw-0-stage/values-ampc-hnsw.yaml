@@ -175,7 +175,7 @@ initContainer:
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
       {
-        "Comment": "Upsert the A record for hnsw-mpc NCCL_COMM_ID",
+        "Comment": "Upsert the A record for HNSW pod",
         "Changes": [
           {
             "Action": "UPSERT",
