@@ -87,7 +87,7 @@ pub async fn build_network_handle(
         if tls.client_only_tls {
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
             let connector: BoxTlsClient = if tls.skip_tls_verification {
-                BoxTlsClient(TlsClient::new_with_skip_verification().await?)
+                BoxTlsClient(TlsClient::new_with_root_certs().await?)
             } else {
                 if tls.ca_cert_path.is_none() {
                     return Err(eyre::eyre!(

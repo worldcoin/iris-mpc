@@ -114,6 +114,22 @@ impl TlsClient {
         Ok(Self { tls_connector })
     }
 
+    /// Create a client that trusts the system CAs
+    pub async fn new_with_root_certs() -> Result<Self> {
+        let mut roots = RootCertStore::empty();
+        for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
+        {
+            roots.add(cert)?;
+        }
+    
+        let client_config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    
+        let tls_connector = TlsConnector::from(Arc::new(client_config));
+        Ok(Self { tls_connector })
+    }
+    
     /// Create a client that trusts only the given CA certificate file (PEM)
     pub async fn new_with_ca(ca_cert_path: &str) -> Result<Self> {
         let mut root_store = RootCertStore::empty();
