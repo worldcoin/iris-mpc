@@ -9,6 +9,8 @@ strategy:
 datadog:
   enabled: true
 
+hostNetwork: false
+
 ports:
   - containerPort: 3000
     name: health
@@ -36,10 +38,10 @@ startupProbe:
 resources:
   limits:
     cpu: 31
-    memory: 1020Gi
+    memory: 930Gi
   requests:
     cpu: 31
-    memory: 1020Gi
+    memory: 930Gi
 
 imagePullSecrets:
   - name: github-secret
