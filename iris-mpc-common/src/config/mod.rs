@@ -499,13 +499,23 @@ pub struct MetricsConfig {
 #[group(requires_all = ["private_key", "leaf_cert", "root_cert"])]
 pub struct TlsConfig {
     #[arg(required = false)]
-    pub private_key: String,
+    pub private_key: Option<String>,
     // used by a peer to identify itself
     #[arg(required = false)]
-    pub leaf_cert: String,
+    pub leaf_cert: Option<String>,
     // used by the client to make them trust the server cert
     #[arg(required = false)]
-    pub root_cert: String,
+    pub root_cert: Option<String>,
+
+    // used by the client to make them trust the server cert
+    #[arg(required = false)]
+    pub ca_cert_path: Option<String>,
+
+    #[arg(required = false)]
+    pub client_only_tls: bool,
+
+    #[arg(required = false)]
+    pub skip_tls_verification: bool,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

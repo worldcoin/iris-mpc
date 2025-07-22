@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -75,7 +75,7 @@ env:
     value: "eu-north-1"
 
   - name: SMPC__SERVICE_PORTS
-    value: '["4000","4001","4002"]'
+    value: '["4100","4101","4002"]'
 
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
     value: '3000'
@@ -148,6 +148,12 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "true"
+
+  - name: SMPC__TLS__SKIP_TLS_VERIFICATION
+    value: "true"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
@@ -155,10 +161,10 @@ initContainer:
   env:
     - name: PARTY_ID
       value: "2"
-    - name: MY_NODE_IP
+    - name: POD_IP
       valueFrom:
         fieldRef:
-          fieldPath: status.hostIP
+          fieldPath: status.podIP
   configMap:
     init.sh: |
       #!/usr/bin/env bash
@@ -169,7 +175,7 @@ initContainer:
       # Generate the JSON content in memory
       BATCH_JSON=$(cat <<EOF
       {
-        "Comment": "Upsert the A record for hnsw-mpc NCCL_COMM_ID",
+        "Comment": "Upsert the A record for HNSW pod",
         "Changes": [
           {
             "Action": "UPSERT",
@@ -178,7 +184,7 @@ initContainer:
               "TTL": 5,
               "Type": "A",
               "ResourceRecords": [{
-                "Value": "$MY_NODE_IP"
+                "Value": "$POD_IP"
               }]
             }
           }
