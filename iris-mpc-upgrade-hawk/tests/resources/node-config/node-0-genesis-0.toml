@@ -68,17 +68,17 @@ batch_sync_polling_timeout_secs = 10
 service_name = "smpcv2-server-dev"
 
 [database]
-url = "postgres://postgres:postgres@localhost:5432/SMPC_dev_0"
+url = "postgres://postgres:postgres@deb_db:5432/SMPC_dev_0"
 migrate = false
 create = false
 load_parallelism = 8
 
 [cpu_database]
-url = "postgres://postgres:postgres@localhost:5432/SMPC_dev_0"
+url = "postgres://postgres:postgres@deb_db:5432/SMPC_dev_0"
 migrate = true
 create = true
 load_parallelism = 8
 
 [aws]
-endpoint = "http://127.0.0.1:4566"
+endpoint = "localstack:4566"
 region = "us-east-1"
