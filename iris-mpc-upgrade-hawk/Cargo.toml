@@ -48,6 +48,7 @@ thiserror.workspace = true
 
 [features]
 default = []
+db_dependent = []
 
 [[bin]]
 name = "iris-mpc-hawk-genesis"
