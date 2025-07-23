@@ -3,6 +3,7 @@ mod errors;
 mod logger;
 pub mod resources;
 pub mod runner;
+mod store;
 
 pub use errors::TestError;
 pub use runner::{TestRun, TestRunInfo};
