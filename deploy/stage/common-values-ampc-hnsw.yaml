@@ -147,18 +147,21 @@ nginxSidecar:
           # TCP listener for port 4000
           server {
               listen 4100 ssl;
+              ssl_verify_client off;
               proxy_pass 127.0.0.1:4000;
           }
 
           # TCP listener for port 4001
           server {
               listen 4101 ssl;
+              ssl_verify_client off;
               proxy_pass 127.0.0.1:4001;
           }
 
           # TCP listener for port 4002
           server {
               listen 4102 ssl;
+              ssl_verify_client off;
               proxy_pass 127.0.0.1:4002;
           }
       }
