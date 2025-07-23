@@ -13,7 +13,7 @@ mod workflows;
 ///     node processes exit normally;
 ///     graph construction is equivalent for each node;
 #[tokio::test]
-#[cfg(feature = "db_dependent")]
+#[ignore="requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
 
