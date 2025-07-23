@@ -122,7 +122,7 @@ nginxSidecar:
       # Run nginx as non-root user - use /tmp for PID file
       pid /tmp/nginx.pid;
       worker_processes  auto;
-  
+      
       # Send error logs to stderr
       error_log /dev/stderr info;
 
@@ -138,8 +138,9 @@ nginxSidecar:
 
           # Send access logs to stdout with custom format
           access_log /dev/stdout basic;
-
-          ssl_certificate /etc/nginx/cert/certificate.crt;
+          
+          # This is full chain certificate, including the CA
+          ssl_certificate     /etc/nginx/cert/certificate.crt;
           ssl_certificate_key /etc/nginx/cert/key.pem;
           ssl_protocols       TLSv1.3;
           ssl_ciphers         HIGH:!aNULL:!MD5;
@@ -147,21 +148,18 @@ nginxSidecar:
           # TCP listener for port 4000
           server {
               listen 4100 ssl;
-              ssl_verify_client off;
               proxy_pass 127.0.0.1:4000;
           }
 
           # TCP listener for port 4001
           server {
               listen 4101 ssl;
-              ssl_verify_client off;
               proxy_pass 127.0.0.1:4001;
           }
 
           # TCP listener for port 4002
           server {
               listen 4102 ssl;
-              ssl_verify_client off;
               proxy_pass 127.0.0.1:4002;
           }
       }
