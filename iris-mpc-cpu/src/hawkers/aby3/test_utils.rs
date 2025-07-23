@@ -12,7 +12,7 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{aby3::aby3_store::QueryInput, plaintext_store::PlaintextStore},
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -128,7 +128,10 @@ pub async fn eval_vector_distance(
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = &[Some((&*point1, &point2))];
+    let pairs = vec![Some((
+        QueryInput::from_iris_ref(point1.clone()),
+        QueryInput::from_shared_iris(point2),
+    ))];
     let dist = store.eval_pairwise_distances(pairs).await?;
     Ok(store.lift_distances(dist).await?[0].clone())
 }

@@ -4,7 +4,8 @@ use super::{
     BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::QueryRef,
+    execution::hawk_main::scheduler::parallelize,
+    hawkers::aby3::aby3_store::{QueryInput, QueryRef},
     hnsw::VectorStore,
 };
 use eyre::Result;
@@ -68,22 +69,25 @@ async fn per_session(
         .collect_vec();
 
     // Compare the rotated and processed irises of one request, to the centered unprocessed iris of the other request.
-    let query_pairs = pairs
+    let query_pairs: Vec<Option<(QueryInput, QueryInput)>> = pairs
         .iter()
         .map(|pair| {
             Some((
-                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
-                    .processed_query,
-                &search_queries[batch.i_eye][pair.earlier_request]
-                    .center()
-                    .query,
+                QueryInput::from_processed_query(
+                    search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].clone(),
+                ),
+                QueryInput::from_query(
+                    search_queries[batch.i_eye][pair.earlier_request]
+                        .center()
+                        .clone(),
+                ),
             ))
         })
         .collect_vec();
 
     let distances = session
         .aby3_store
-        .eval_pairwise_distances(&query_pairs)
+        .eval_pairwise_distances(query_pairs)
         .await?;
     let distances = session.aby3_store.lift_distances(distances).await?;
     let is_matches = session.aby3_store.is_match_batch(&distances).await?;
