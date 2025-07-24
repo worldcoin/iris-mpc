@@ -89,7 +89,7 @@ pub async fn build_network_handle(
 
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
             let connector = BoxTlsClient(TlsClient::new_with_root_certs().await?);
-            
+
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
