@@ -503,9 +503,10 @@ pub struct TlsConfig {
     // used by a peer to identify itself
     #[arg(required = false)]
     pub leaf_cert: String,
-    // used by the client to make them trust the server cert
+    // used by the client to make them trust the server certs
     #[arg(required = false)]
-    pub root_cert: String,
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub root_certs: Vec<String>,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
