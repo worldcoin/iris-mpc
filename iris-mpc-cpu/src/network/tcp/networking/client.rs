@@ -1,8 +1,8 @@
 use crate::network::tcp::{Client, NetworkConnection};
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{eyre, Result};
 use std::fmt::{Debug, Formatter};
-use std::{net::SocketAddr, sync::Arc};
+use std::{sync::Arc};
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
@@ -117,7 +117,7 @@ impl TlsClient {
 
     /// Create a client that trusts the system CAs
     pub async fn new_with_root_certs() -> Result<Self> {
-        
+
         let mut roots = RootCertStore::empty();
         for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
         {
@@ -127,25 +127,12 @@ impl TlsClient {
             }
             roots.add(cert)?;
         }
-        
+
         let client_config = ClientConfig::builder()
             .with_root_certificates(roots)
             .with_no_client_auth();
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
-        Ok(Self { tls_connector })
-    }
-
-    /// Create a client that trusts only the given CA certificate file (PEM)
-    pub async fn new_with_ca(ca_cert_path: &str) -> Result<Self> {
-        let mut root_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_file_iter(ca_cert_path)? {
-            root_store.add(cert?)?;
-        }
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        let tls_connector = TlsConnector::from(Arc::new(config));
         Ok(Self { tls_connector })
     }
 }
@@ -159,10 +146,17 @@ impl TcpClient {
 #[async_trait]
 impl Client for TlsClient {
     type Output = TlsStream<TcpStream>;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
-        let stream = TcpStream::connect(addr).await?;
+    async fn connect(&self, url: String) -> Result<Self::Output> {
+        let hostname = url
+            .split(':')
+            .next()
+            .ok_or_else(|| eyre!("Invalid URL: missing hostname"))?
+            .to_string();
+
+        let domain = ServerName::try_from(hostname)?;
+        let stream = TcpStream::connect(url).await?;
         stream.set_nodelay(true)?;
-        let domain = ServerName::IpAddress(addr.ip().into());
+
         let tls_stream = self.tls_connector.connect(domain, stream).await?;
         Ok(TlsStream::Client(tls_stream))
     }
@@ -171,8 +165,8 @@ impl Client for TlsClient {
 #[async_trait]
 impl Client for TcpClient {
     type Output = TcpStream;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
-        let stream = TcpStream::connect(addr).await?;
+    async fn connect(&self, url: String) -> Result<Self::Output> {
+        let stream = TcpStream::connect(url).await?;
         stream.set_nodelay(true)?;
         Ok(stream)
     }
@@ -187,8 +181,8 @@ pub struct BoxTcpClient(pub TcpClient);
 #[async_trait]
 impl Client for BoxTcpClient {
     type Output = DynStream;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
-        let stream = self.0.connect(addr).await?;
+    async fn connect(&self, url: String) -> Result<Self::Output> {
+        let stream = self.0.connect(url).await?;
         Ok(Box::new(stream))
     }
 }
@@ -198,8 +192,8 @@ pub struct BoxTlsClient(pub TlsClient);
 #[async_trait]
 impl Client for BoxTlsClient {
     type Output = DynStream;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
-        let stream = self.0.connect(addr).await?;
+    async fn connect(&self, url: String) -> Result<Self::Output> {
+        let stream = self.0.connect(url).await?;
         Ok(Box::new(stream))
     }
 }

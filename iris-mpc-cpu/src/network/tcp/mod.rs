@@ -16,7 +16,7 @@ use eyre::Result;
 use itertools::izip;
 use std::sync::Once;
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -43,7 +43,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send + ?Sized + Sync> NetworkConnection
 #[async_trait]
 pub trait Client: Send + Sync + Clone {
     type Output: NetworkConnection;
-    async fn connect(&self, addr: SocketAddr) -> Result<Self::Output>;
+    async fn connect(&self, url: String) -> Result<Self::Output>;
 }
 
 // used for a server to accept an incoming connection
@@ -98,16 +98,11 @@ pub async fn build_network_handle(
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
             // Connect to other players.
-            for (identity, address) in
+            for (identity, url) in
                 izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
             {
-                let socket_addr = address
-                    .clone()
-                    .to_socket_addrs()?
-                    .next()
-                    .ok_or(eyre::eyre!("invalid peer address"))?;
                 connection_builder
-                    .include_peer(identity.clone(), socket_addr)
+                    .include_peer(identity.clone(), url.clone())
                     .await?;
             }
 
@@ -141,16 +136,11 @@ pub async fn build_network_handle(
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
             // Connect to other players.
-            for (identity, address) in
+            for (identity, url) in
                 izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
             {
-                let socket_addr = address
-                    .clone()
-                    .to_socket_addrs()?
-                    .next()
-                    .ok_or(eyre::eyre!("invalid peer address"))?;
                 connection_builder
-                    .include_peer(identity.clone(), socket_addr)
+                    .include_peer(identity.clone(), url.clone())
                     .await?;
             }
 
@@ -170,17 +160,11 @@ pub async fn build_network_handle(
                 .await?;
 
         // Connect to other players.
-        for (identity, address) in
+        for (identity, url) in
             izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
         {
-            let socket_addr = address
-                .clone()
-                .to_socket_addrs()?
-                .next()
-                .ok_or(eyre::eyre!("invalid peer address"))?;
-
             connection_builder
-                .include_peer(identity.clone(), socket_addr)
+                .include_peer(identity.clone(), url.clone())
                 .await?;
         }
 
@@ -278,7 +262,7 @@ pub mod testing {
             for j in 0..builders.len() {
                 if i != j {
                     builders[i]
-                        .include_peer(parties[j].clone(), addresses[j])
+                        .include_peer(parties[j].clone(), addresses[j].to_string())
                         .await?;
                 }
             }

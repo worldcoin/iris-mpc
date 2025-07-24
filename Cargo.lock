@@ -2437,6 +2437,7 @@ version = "0.1.0"
 dependencies = [
  "aes-prng",
  "ansiterm",
+ "anyhow",
  "async-channel",
  "async-stream",
  "async-trait",
