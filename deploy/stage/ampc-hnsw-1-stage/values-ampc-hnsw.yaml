@@ -148,10 +148,16 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name: SMPC__TLS__CLIENT_ONLY_TLS
-    value: "true"
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
 
-  - name: SMPC__TLS__SKIP_TLS_VERIFICATION
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERT
+    value: "/usr/local/share/ca-certificates/ca_party_stage_1.crt"
+
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
     value: "false"
 
 initContainer:
