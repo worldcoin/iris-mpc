@@ -888,6 +888,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
         tls: config.tls.clone(),
+        cpu_threads: config.cpu_threads,
     };
 
     log_info(format!(

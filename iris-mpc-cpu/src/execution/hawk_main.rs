@@ -2,7 +2,7 @@ use super::player::Identity;
 pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
-        hawk_main::search::SearchIds,
+        hawk_main::{cpu_threadpool::CpuWorkerHandle, search::SearchIds},
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -69,6 +69,7 @@ use tokio::{
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
+pub(crate) mod cpu_threadpool;
 pub(crate) mod insert;
 mod intra_batch;
 mod is_match_batch;
@@ -123,6 +124,9 @@ pub struct HawkArgs {
 
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
+
+    #[clap(short, long, default_value_t = 8)]
+    pub cpu_threads: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -134,6 +138,7 @@ pub struct HawkActor {
     searcher: Arc<HnswSearcher>,
     prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
+    cpu_worker_handle: CpuWorkerHandle,
 
     // ---- My state ----
     /// A size used by the startup loader.
@@ -322,6 +327,8 @@ impl HawkActor {
             Eye::Right,
         );
 
+        let cpu_worker_handle = cpu_threadpool::init_workers(args.cpu_threads);
+
         Ok(HawkActor {
             args: args.clone(),
             searcher,
@@ -334,6 +341,7 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
+            cpu_worker_handle,
         })
     }
 
@@ -447,6 +455,7 @@ impl HawkActor {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let hnsw_prf_key = hnsw_prf_key.clone();
+        let cpu_worker_handle = self.cpu_worker_handle.clone();
 
         async move {
             let my_session_seed = thread_rng().gen();
@@ -459,6 +468,7 @@ impl HawkActor {
                         prf,
                     },
                     storage,
+                    cpu_worker_handle,
                 },
                 graph_store,
                 hnsw_prf_key,

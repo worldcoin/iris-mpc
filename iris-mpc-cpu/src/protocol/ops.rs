@@ -246,14 +246,7 @@ pub async fn cross_compare(
 /// Computes the dot product between the iris pairs; for both the code and the
 /// mask of the irises. We pack the dot products of the code and mask into one
 /// vector to be able to reshare it later.
-pub async fn galois_ring_pairwise_distance(
-    pairs: Vec<Option<(QueryInput, QueryInput)>>,
-) -> Vec<RingElement<u16>> {
-    let worker = tokio::task::spawn_blocking(move || galois_ring_pairwise_distance_(pairs));
-    worker.await.expect("failed to receive response")
-}
-
-fn galois_ring_pairwise_distance_(
+pub fn galois_ring_pairwise_distance(
     pairs: Vec<Option<(QueryInput, QueryInput)>>,
 ) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
@@ -733,8 +726,16 @@ mod tests {
             let session = session.clone();
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let own_shares = own_shares.iter().map(|(x, y)| Some((x, y))).collect_vec();
-                let x = galois_ring_pairwise_distance(&own_shares).await;
+                let own_shares = own_shares
+                    .drain(..)
+                    .map(|(x, y)| {
+                        Some((
+                            QueryInput::from_shared_iris(x),
+                            QueryInput::from_shared_iris(y),
+                        ))
+                    })
+                    .collect_vec();
+                let x = galois_ring_pairwise_distance(own_shares);
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();

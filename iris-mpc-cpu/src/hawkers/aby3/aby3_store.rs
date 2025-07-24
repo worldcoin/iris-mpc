@@ -1,11 +1,11 @@
 use crate::{
-    execution::{hawk_main::state_check::SetHash, session::Session},
+    execution::{
+        hawk_main::{cpu_threadpool::CpuWorkerHandle, state_check::SetHash},
+        session::Session,
+    },
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
-        ops::{
-            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
-            galois_ring_to_rep3, lte_threshold_and_open,
-        },
+        ops::{batch_signed_lift_vec, cross_compare, galois_ring_to_rep3, lte_threshold_and_open},
         shared_iris::GaloisRingSharedIris,
     },
     shares::share::{DistanceShare, Share},
@@ -29,6 +29,7 @@ pub type IrisRef = Arc<GaloisRingSharedIris>;
 /// a Query.processed_query, and yet others on a GaloisRingSharedIris. galois_ring_pairwise_distance()
 /// spawns work on a thread which takes a closure that must be 'static - which references are not.
 /// also, it is desirable to avoid cloning a GaloisRingSharedIris retrieved from an Arc<Query> (QueryRef)
+#[derive(Clone, Debug)]
 pub enum QueryInput {
     Query(QueryRef),
     ProcessedQuery(QueryRef),
@@ -56,7 +57,7 @@ impl QueryInput {
         match self {
             QueryInput::Query(q) => &q.query,
             QueryInput::ProcessedQuery(q) => &q.processed_query,
-            QueryInput::SharedIris(iris) => &**iris,
+            QueryInput::SharedIris(iris) => iris,
         }
     }
 }
@@ -370,6 +371,8 @@ pub struct Aby3Store {
     pub storage: SharedIrisesRef,
     /// Session for the SMPC operations
     pub session: Session,
+    /// used to spawn cpu bound tasks on a thread pool
+    pub cpu_worker_handle: CpuWorkerHandle,
 }
 
 impl Aby3Store {
@@ -404,8 +407,13 @@ impl Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
+        histogram!("galois_ring_pairwise_distance.num_pairs").record(pairs.len() as f64);
         let start = Instant::now();
-        let ds_and_ts = galois_ring_pairwise_distance(pairs).await;
+        let ds_and_ts = self
+            .cpu_worker_handle
+            .galois_ring_pairwise_distances(pairs)
+            .await;
+
         let elapsed = start.elapsed().as_micros();
 
         histogram!("galois_ring_pairwise_distance.avg_us").record(elapsed as f64);
@@ -569,7 +577,6 @@ mod tests {
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
     use rand::SeedableRng;
-    use std::time::Instant;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
 

@@ -9,6 +9,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
+        hawk_main::cpu_threadpool,
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
@@ -71,17 +72,25 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 ) -> Result<Vec<Aby3StoreRef>> {
     let storages = setup_aby3_shared_iris_stores_with_preloaded_db(rng, plain_store);
     let runtime = LocalRuntime::mock_setup(network_t).await?;
+    let cpu_worker_handle = cpu_threadpool::init_workers(4);
 
     runtime
         .sessions
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(session, storage)| Ok(Arc::new(Mutex::new(Aby3Store { session, storage }))))
+        .map(|(session, storage)| {
+            Ok(Arc::new(Mutex::new(Aby3Store {
+                session,
+                storage,
+                cpu_worker_handle: cpu_worker_handle.clone(),
+            })))
+        })
         .collect()
 }
 
 pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Vec<Aby3StoreRef>> {
     let runtime = LocalRuntime::mock_setup(network_t).await?;
+    let cpu_worker_handle = cpu_threadpool::init_workers(4);
     runtime
         .sessions
         .into_iter()
@@ -89,6 +98,7 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
                 storage: SharedIrises::default().to_arc(),
+                cpu_worker_handle: cpu_worker_handle.clone(),
             })))
         })
         .collect()
