@@ -82,8 +82,8 @@ pub async fn build_network_handle(
             tcp_config
         );
         let listener =
-            TlsServer::new(my_addr, &tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
-        let connector = TlsClient::new(&tls.private_key, &tls.leaf_cert, &tls.root_cert).await?;
+            TlsServer::new(my_addr, &tls.private_key, &tls.leaf_cert, &tls.root_certs).await?;
+        let connector = TlsClient::new(&tls.private_key, &tls.leaf_cert, &tls.root_certs).await?;
         let connection_builder =
             PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                 .await?;
