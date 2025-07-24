@@ -5,4 +5,4 @@ pub mod resources;
 pub mod runner;
 
 pub use errors::TestError;
-pub use runner::{TestRun, TestRunInfo};
+pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};

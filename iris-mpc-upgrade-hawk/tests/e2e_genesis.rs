@@ -1,5 +1,5 @@
 use eyre::Result;
-use utils::{TestRun, TestRunInfo};
+use utils::{TestRun, TestRunContextInfo};
 
 mod utils;
 mod workflows;
@@ -17,7 +17,8 @@ mod workflows;
 async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
 
-    Test::new().run(TestRunInfo::new(100)).await?;
+    let ctx = TestRunContextInfo::new(100, 1);
+    Test::new().run(ctx).await?;
 
     Ok(())
 }

@@ -6,9 +6,9 @@ use std::fmt::Debug;
 #[allow(async_fn_in_trait)]
 pub trait TestRun {
     /// Executes test workflow.
-    async fn run(&mut self, ctx: TestRunInfo) -> Result<(), TestError> {
+    async fn run(&mut self, ctx: TestRunContextInfo) -> Result<(), TestError> {
         ctx.log_info("Phase 1.1: Setup");
-        self.setup().await?;
+        self.setup(&ctx).await?;
 
         ctx.log_info("Phase 1.2: Setup Assertion");
         self.setup_assert().await?;
@@ -35,7 +35,7 @@ pub trait TestRun {
     async fn exec_assert(&mut self) -> Result<(), TestError>;
 
     /// Setup phase of a test's workflow.
-    async fn setup(&mut self) -> Result<(), TestError>;
+    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError>;
 
     /// Asserts that a test workflow's setup phase was successful.
     async fn setup_assert(&mut self) -> Result<(), TestError>;
@@ -48,8 +48,11 @@ pub trait TestRun {
 }
 
 /// Metadata associated with a test run.
-#[derive(Debug, Clone)]
-pub struct TestRunInfo {
+#[derive(Debug, Clone, Copy)]
+pub struct TestRunContextInfo {
+    /// Test run execution environment.
+    pub env: TestRunEnvironment,
+
     /// Test run ordinal identifier.
     pub idx: usize,
 
@@ -58,28 +61,36 @@ pub struct TestRunInfo {
 }
 
 /// Constructor.
-impl TestRunInfo {
-    pub fn new(kind: usize) -> Self {
-        Self { idx: 1, kind }
-    }
-
-    #[allow(dead_code)]
-    pub fn new_in_batch(kind: usize, idx: usize) -> Self {
-        Self { idx, kind }
+impl TestRunContextInfo {
+    pub fn new(kind: usize, idx: usize) -> Self {
+        // TODO: pull test run environment from an optional env var.
+        Self {
+            env: TestRunEnvironment::Docker,
+            idx,
+            kind,
+        }
     }
 }
 
 /// Trait: fmt::Display.
-impl fmt::Display for TestRunInfo {
+impl fmt::Display for TestRunContextInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}-{:02}", self.kind, self.idx)
     }
 }
 
 /// Methods.
-impl TestRunInfo {
+impl TestRunContextInfo {
     /// Logs an informational message.
     pub fn log_info(&self, msg: &str) {
         logger::log_info(format!("{}", self).as_str(), msg);
     }
+}
+
+/// Enumeration over set of test run execution environments.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub enum TestRunEnvironment {
+    Local,
+    Docker,
 }
