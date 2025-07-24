@@ -49,7 +49,7 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "120"
-  
+
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
 
@@ -72,7 +72,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-2-stage--eun1-az3--x-s3"
@@ -85,12 +85,12 @@ env:
 
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
     value: "1024"
-  
+
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "1000" # "1200000"
+    value: "0" # "1200000"
 
   - name: SMPC__MAX_DB_SIZE
     value: "100000" # "1300000"
@@ -100,9 +100,6 @@ env:
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
-    
-  - name: SMPC__N_BUCKETS
-    value: "10"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
@@ -123,7 +120,7 @@ env:
     value: "50"
 
   - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
-    value: "true"
+    value: "false"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
@@ -157,8 +154,14 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name : SMPC__ENABLE_DEBUG_TIMING
+  - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
+
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "AnonStatsTest"
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "5000"
 
 initContainer:
   enabled: true

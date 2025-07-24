@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "240" # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -45,13 +45,10 @@ env:
     value: "false"
 
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
-    value: "512"
-
-  - name: SMPC__N_BUCKETS
-    value: "16"
+    value: "64"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
@@ -63,7 +60,7 @@ env:
     value: "true"
 
   - name: SMPC__LUC_ENABLED
-    value: "true"
+    value: "false"
 
   - name: SMPC__LUC_LOOKBACK_RECORDS
     value: "5"
@@ -78,7 +75,7 @@ env:
     value: '["4000","4001","4002"]'
 
   - name: SMPC__HAWK_SERVER_HEALTHCHECK_PORT
-    value: '3000'
+    value: "3000"
 
   - name: SMPC__NODE_HOSTNAMES
     value: '["node.0.stage.hnsw.worldcoin.dev","node.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
@@ -87,7 +84,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-2-stage--eun1-az3--x-s3"
@@ -148,6 +145,9 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "AnonStatsTest"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
@@ -193,4 +193,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-07e1f312cce8c974b # smpc2-stage ampc-hnsw pod sg
+    - sg-07e1f312cce8c974b # smpc2-stage ampc-hnsw pod sg
