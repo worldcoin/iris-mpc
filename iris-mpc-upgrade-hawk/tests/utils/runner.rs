@@ -1,13 +1,15 @@
 use super::{errors::TestError, logger};
-use std::fmt;
-use std::fmt::Debug;
+use std::{
+    fmt::{self, Debug},
+    path::Path,
+};
 
 /// A trait encpasulating a test's workflow lifecycle.
 #[allow(async_fn_in_trait)]
 pub trait TestRun {
     /// Executes test workflow.
     async fn run(&mut self, ctx: TestRunContextInfo) -> Result<(), TestError> {
-        ctx.log_info("Phase 1.1: Setup");
+        ctx.log_info(format!("Phase 1.1: Setup (EXECUTION ENV = {:?})", ctx.env()).as_str());
         self.setup(&ctx).await?;
 
         ctx.log_info("Phase 1.2: Setup Assertion");
@@ -51,31 +53,45 @@ pub trait TestRun {
 #[derive(Debug, Clone, Copy)]
 pub struct TestRunContextInfo {
     /// Test run execution environment.
-    pub env: TestRunEnvironment,
+    env: TestRunEnvironment,
 
     /// Test run ordinal identifier.
-    pub idx: usize,
+    idx: usize,
 
     /// Test kind, e.g. 100.
-    pub kind: usize,
+    kind: usize,
 }
 
 /// Constructor.
 impl TestRunContextInfo {
     pub fn new(kind: usize, idx: usize) -> Self {
-        // TODO: pull test run environment from an optional env var.
         Self {
-            env: TestRunEnvironment::Docker,
+            env: TestRunEnvironment::new(),
             idx,
             kind,
         }
     }
 }
 
+/// Accessors.
+impl TestRunContextInfo {
+    pub fn env(&self) -> &TestRunEnvironment {
+        &self.env
+    }
+
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    pub fn kind(&self) -> usize {
+        self.kind
+    }
+}
+
 /// Trait: fmt::Display.
 impl fmt::Display for TestRunContextInfo {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}-{:02}", self.kind, self.idx)
+        write!(f, "{}-{:02}", self.kind(), self.idx())
     }
 }
 
@@ -89,8 +105,18 @@ impl TestRunContextInfo {
 
 /// Enumeration over set of test run execution environments.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum TestRunEnvironment {
     Local,
     Docker,
+}
+
+/// Constructor.
+impl TestRunEnvironment {
+    pub fn new() -> Self {
+        if Path::new("/.dockerenv").exists() {
+            TestRunEnvironment::Docker
+        } else {
+            TestRunEnvironment::Local
+        }
+    }
 }

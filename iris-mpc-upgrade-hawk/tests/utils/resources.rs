@@ -27,7 +27,7 @@ pub fn read_node_config(
     let path_to_cfg = format!(
         "{}/node-config/{}/{}.toml",
         get_path_to_resources(),
-        ctx.env.subdirectory(),
+        ctx.env().subdirectory(),
         config_fname
     );
     let cfg = std::fs::read_to_string(path_to_cfg)?;
