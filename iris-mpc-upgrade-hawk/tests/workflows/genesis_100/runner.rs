@@ -1,5 +1,5 @@
 use super::{factory, types::TestInputs};
-use crate::utils::{TestError, TestRun};
+use crate::utils::{TestError, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
@@ -64,9 +64,9 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn setup(&mut self) -> Result<(), TestError> {
+    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::get_test_inputs());
+        self.inputs = Some(factory::get_test_inputs(ctx));
 
         // Write 100 Iris shares -> GPU dB.
         // TODO

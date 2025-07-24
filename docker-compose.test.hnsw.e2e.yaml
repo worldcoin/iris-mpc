@@ -11,7 +11,7 @@ services:
     environment:
       - SMPC_INIT_SKIP_HNSW_GRAPH=true
       - SMPC_INIT_TARGET_DB_SIZE=100
-      - SMPC_INIT_PATH_TO_IRIS_PLAINTEXT=/workspace/iris-mpc-cpu/data/store.ndjson
+      - SMPC_INIT_PATH_TO_IRIS_PLAINTEXT=/workspace/iris-mpc-upgrade-hawk/tests/resources/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson
     working_dir: /workspace
     entrypoint:
       [
@@ -33,6 +33,8 @@ services:
 
   hnsw_tests_e2e:
     image: hnsw-tests-e2e-local:latest
+    env_file:
+      - .test.env
     depends_on:
       localstack:
         condition: service_healthy

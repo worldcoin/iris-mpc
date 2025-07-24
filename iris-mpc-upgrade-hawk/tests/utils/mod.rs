@@ -6,4 +6,4 @@ pub mod runner;
 mod store;
 
 pub use errors::TestError;
-pub use runner::{TestRun, TestRunInfo};
+pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};
