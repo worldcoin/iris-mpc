@@ -85,15 +85,11 @@ pub async fn build_network_handle(
         );
 
         if tls.client_only_tls {
-            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-            let connector: BoxTlsClient = if tls.skip_tls_verification {
-                tracing::info!("Building TlsClient with verification skip");
-                BoxTlsClient(TlsClient::new_with_skip_verification().await?)
-            } else {
-                tracing::info!("Building TlsClient with OS root certificate store");
-                BoxTlsClient(TlsClient::new_with_root_certs().await?)
-            };
+            tracing::info!("Running in client-only TLS mode");
 
+            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
+            let connector = BoxTlsClient(TlsClient::new_with_root_certs().await?);
+            
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;

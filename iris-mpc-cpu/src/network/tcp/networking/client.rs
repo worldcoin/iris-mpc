@@ -87,16 +87,6 @@ impl ServerCertVerifier for NoCertificateVerification {
 }
 
 impl TlsClient {
-    pub async fn new_with_skip_verification() -> Result<Self> {
-        let client_config = ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoCertificateVerification {}))
-            .with_no_client_auth();
-
-        let tls_connector = TlsConnector::from(Arc::new(client_config));
-        Ok(Self { tls_connector })
-    }
-
     pub async fn new(key_file: &str, cert_file: &str, root_cert: &str) -> Result<Self> {
         let mut root_cert_store = RootCertStore::empty();
         for cert in CertificateDer::pem_file_iter(root_cert)? {

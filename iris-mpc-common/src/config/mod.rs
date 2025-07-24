@@ -509,10 +509,6 @@ pub struct TlsConfig {
     // if true, the client will not verify the server's TLS certificate
     #[arg(required = false)]
     pub client_only_tls: bool,
-    // only relevant with "client_only_tls" if true, the server will not verify the client's TLS certificate
-    // if false, the server will be built with OS root certificates
-    #[arg(required = false)]
-    pub skip_tls_verification: bool,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
