@@ -1485,6 +1485,10 @@ impl HawkHandle {
 
         // Validate the common state after processing the requests.
         HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
+
+        // validate that the RNGs have not diverged
+        HawkSession::prf_check(sessions).await?;
+
         Ok(())
     }
 }
