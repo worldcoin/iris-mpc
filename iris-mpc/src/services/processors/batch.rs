@@ -32,6 +32,7 @@ use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
+use std::cmp;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -202,8 +203,10 @@ impl<'a> BatchProcessor<'a> {
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
 
-            let num_to_poll =
-                std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
+            let num_to_poll = cmp::max(
+                cmp::min(max_visible_messages, self.config.max_batch_size as u32),
+                1,
+            );
 
             tracing::info!(
                 "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
