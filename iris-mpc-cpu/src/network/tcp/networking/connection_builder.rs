@@ -345,10 +345,7 @@ where
                             self.initiate_connection(peer.clone(), url, stream_id);
                         }
                         None => {
-                            tracing::error!(
-                                "reconnect for {:?} requested but URL not found",
-                                peer
-                            );
+                            tracing::error!("reconnect for {:?} requested but URL not found", peer);
                         }
                     }
                 }

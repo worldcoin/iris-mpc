@@ -2,7 +2,7 @@ use crate::network::tcp::{Client, NetworkConnection};
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 use std::fmt::{Debug, Formatter};
-use std::{sync::Arc};
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::rustls::client::danger::{
     HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
@@ -117,13 +117,15 @@ impl TlsClient {
 
     /// Create a client that trusts the system CAs
     pub async fn new_with_root_certs() -> Result<Self> {
-
         let mut roots = RootCertStore::empty();
         for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
         {
             if let Ok((_, parsed)) = parse_x509_certificate(&cert) {
                 let subject = parsed.subject();
-                println!("#Loaded CA certificate from OS store with subject: {}", subject);
+                println!(
+                    "#Loaded CA certificate from OS store with subject: {}",
+                    subject
+                );
             }
             roots.add(cert)?;
         }
