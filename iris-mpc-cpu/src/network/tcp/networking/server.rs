@@ -35,8 +35,7 @@ impl TlsServer {
             }
         }
 
-        let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_cert_store)).build()?;
-
+        let client_verifier = rustls::server::NoClientAuth::boxed();
         let certs = CertificateDer::pem_file_iter(cert_file)?.collect::<Result<Vec<_>, _>>()?;
         let key = PrivateKeyDer::from_pem_file(key_file)?;
         let server_config = ServerConfig::builder()
