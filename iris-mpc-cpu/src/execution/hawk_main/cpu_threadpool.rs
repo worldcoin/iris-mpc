@@ -21,7 +21,7 @@ enum CpuTask {
 
 #[derive(Clone, Debug)]
 pub struct CpuWorkerHandle {
-    workers: Vec<Sender<CpuTask>>,
+    workers: Arc<Vec<Sender<CpuTask>>>,
     next_counter: Arc<AtomicU64>,
 }
 
@@ -70,7 +70,7 @@ pub fn init_workers(num_workers: usize) -> CpuWorkerHandle {
     }
 
     CpuWorkerHandle {
-        workers: channels,
+        workers: Arc::new(channels),
         next_counter: Arc::new(AtomicU64::new(0)),
     }
 }
