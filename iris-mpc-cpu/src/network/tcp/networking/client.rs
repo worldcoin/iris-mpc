@@ -9,7 +9,7 @@ use tokio_rustls::rustls::client::danger::{
 };
 use tokio_rustls::rustls::pki_types::UnixTime;
 use tokio_rustls::rustls::{
-    pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerName},
+    pki_types::{pem::PemObject, CertificateDer, ServerName},
     ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
 use tokio_rustls::{TlsConnector, TlsStream};
@@ -86,24 +86,6 @@ impl ServerCertVerifier for NoCertificateVerification {
 }
 
 impl TlsClient {
-    pub async fn new(key_file: &str, cert_file: &str, root_cert: &str) -> Result<Self> {
-        let mut root_cert_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_file_iter(root_cert)? {
-            root_cert_store.add(cert?)?;
-        }
-
-        let certs = CertificateDer::pem_file_iter(cert_file)?
-            .map(|res| res.map_err(eyre::Report::from))
-            .collect::<Result<Vec<_>>>()?;
-        let key = PrivateKeyDer::from_pem_file(key_file)?;
-        let client_config = ClientConfig::builder()
-            .with_root_certificates(root_cert_store)
-            .with_client_auth_cert(certs, key)?;
-
-        let tls_connector = TlsConnector::from(Arc::new(client_config));
-        Ok(Self { tls_connector })
-    }
-
     /// Create a client that trusts the given CAs
     pub async fn new_with_ca_certs(root_certs: &[String]) -> Result<Self> {
         let mut roots = RootCertStore::empty();

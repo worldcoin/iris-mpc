@@ -83,7 +83,7 @@ pub async fn build_network_handle(
             "Building NetworkHandle, with TLS, from config: {:?}",
             tcp_config
         );
-        
+
         let root_certs = tls
             .root_certs
             .as_ref()
@@ -97,7 +97,7 @@ pub async fn build_network_handle(
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
-            
+
             // Connect to other players.
             for (identity, url) in
                 izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
