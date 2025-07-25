@@ -2073,7 +2073,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
- "socket2",
+ "socket2 0.5.7",
  "tokio",
  "tower-service",
  "tracing",
@@ -2178,7 +2178,7 @@ dependencies = [
  "http-body 1.0.1",
  "hyper 1.5.2",
  "pin-project-lite",
- "socket2",
+ "socket2 0.5.7",
  "tokio",
  "tower-service",
  "tracing",
@@ -2382,7 +2382,6 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",
- "libc",
  "metrics 0.22.3",
  "num-traits",
  "num_enum",
@@ -2394,6 +2393,7 @@ dependencies = [
  "serde",
  "serde_json",
  "siphasher",
+ "socket2 0.6.0",
  "sqlx",
  "static_assertions",
  "thiserror",
@@ -4348,6 +4348,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "socket2"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "sodiumoxide"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4818,7 +4828,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2",
+ "socket2 0.5.7",
  "tokio-macros",
  "windows-sys 0.52.0",
 ]
@@ -4945,7 +4955,7 @@ dependencies = [
  "prost",
  "rustls-native-certs 0.8.0",
  "rustls-pemfile 2.2.0",
- "socket2",
+ "socket2 0.5.7",
  "tokio",
  "tokio-rustls 0.26.2",
  "tokio-stream",

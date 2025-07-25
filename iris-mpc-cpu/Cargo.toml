@@ -27,7 +27,6 @@ futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
-libc = "0.2.174"
 num-traits.workspace = true
 prost = "0.13"
 rand.workspace = true
@@ -36,6 +35,7 @@ rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
 siphasher = "1"
+socket2 = { version = "0.6.0", features = ["all"] }
 static_assertions.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
