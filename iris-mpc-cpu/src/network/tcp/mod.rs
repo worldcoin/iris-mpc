@@ -84,16 +84,12 @@ pub async fn build_network_handle(
             tcp_config
         );
 
-        let root_certs = tls
-            .root_certs
-            .as_ref()
-            .ok_or(eyre::eyre!("Root certificates are required for TLS"))?;
-
+        let root_certs = tls.clone().root_certs;
         if tls.with_nginx_sidecar {
             tracing::info!("Running in client-only TLS mode.");
 
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(root_certs).await?);
+            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
@@ -112,7 +108,7 @@ pub async fn build_network_handle(
             Ok(Box::new(networking))
         } else {
             tracing::info!("Running in full app TLS mode.");
-            if tls.private_key.is_none() || tls.leaf_cert.is_none() || tls.root_certs.is_none() {
+            if tls.private_key.is_none() || tls.leaf_cert.is_none() {
                 return Err(eyre::eyre!(
                     "TLS configuration is required for this operation"
                 ));
@@ -127,8 +123,8 @@ pub async fn build_network_handle(
                 .as_ref()
                 .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
 
-            let listener = TlsServer::new(my_addr, private_key, leaf_cert, root_certs).await?;
-            let connector = TlsClient::new_with_ca_certs(root_certs).await?;
+            let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
+            let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
 
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
