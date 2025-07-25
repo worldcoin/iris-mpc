@@ -154,8 +154,8 @@ env:
   - name: SMPC__TLS__LEAF_CERT
     value: "/etc/ssl/private/certificate.crt"
 
-  - name: SMPC__TLS__ROOT_CERT
-    value: "/usr/local/share/ca-certificates/ca_party_stage_0.crt"
+  - name: SMPC__TLS__ROOT_CERTS
+    value: ["/usr/local/share/ca-certificates/ca_party_stage_0.crt","/usr/local/share/ca-certificates/ca_party_stage_1.crt","/usr/local/share/ca-certificates/ca_party_stage_2.crt"],
 
   - name: SMPC__TLS__CLIENT_ONLY_TLS
     value: "false"

@@ -26,12 +26,15 @@ impl TlsServer {
         own_addr: SocketAddr,
         key_file: &str,
         cert_file: &str,
-        root_cert: &str,
+        root_certs: &[String],
     ) -> Result<Self> {
         let mut root_cert_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_file_iter(root_cert)? {
-            root_cert_store.add(cert?)?;
+        for root_cert in root_certs {
+            for cert in CertificateDer::pem_file_iter(root_cert)? {
+                root_cert_store.add(cert?)?;
+            }
         }
+
         let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_cert_store)).build()?;
 
         let certs = CertificateDer::pem_file_iter(cert_file)?.collect::<Result<Vec<_>, _>>()?;

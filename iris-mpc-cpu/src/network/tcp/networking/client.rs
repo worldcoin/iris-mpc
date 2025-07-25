@@ -13,7 +13,6 @@ use tokio_rustls::rustls::{
     ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
 };
 use tokio_rustls::{TlsConnector, TlsStream};
-use x509_parser::parse_x509_certificate;
 
 #[derive(Clone)]
 pub struct TlsClient {
@@ -105,19 +104,13 @@ impl TlsClient {
         Ok(Self { tls_connector })
     }
 
-    /// Create a client that trusts the system CAs
-    pub async fn new_with_root_certs() -> Result<Self> {
+    /// Create a client that trusts the given CAs
+    pub async fn new_with_ca_certs(root_certs: &[String]) -> Result<Self> {
         let mut roots = RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().expect("could not load platform certs")
-        {
-            if let Ok((_, parsed)) = parse_x509_certificate(&cert) {
-                let subject = parsed.subject();
-                println!(
-                    "#Loaded CA certificate from OS store with subject: {}",
-                    subject
-                );
+        for root_cert in root_certs {
+            for cert in CertificateDer::pem_file_iter(root_cert)? {
+                roots.add(cert?)?;
             }
-            roots.add(cert)?;
         }
 
         let client_config = ClientConfig::builder()
