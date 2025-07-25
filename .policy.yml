@@ -1,0 +1,27 @@
+policy:
+  approval:
+    - or:
+        - dev_stage
+        - security_team_approved
+  disapproval:
+    requires:
+      organizations:
+        - "worldcoin"
+        - "worldcoin-foundation"
+
+approval_rules:
+  - name: security_team_approved
+    requires:
+      count: 1
+      teams:
+        - "worldcoin/security"
+  - name: organizations-trusted
+    description: Always approve PRs from trusted organizations.
+    if:
+      only_has_contributors_in:
+        organizations: ["worldcoin", "worldcoin-foundation"] #expand the list of trusted orgs as needed
+    requires:
+      count: 0
+
+options:
+  invalidate_on_push: true
