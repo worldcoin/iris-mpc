@@ -1,4 +1,4 @@
-use crate::network::tcp::{Client, NetworkConnection};
+use crate::network::tcp::{networking::configure_tcp_stream, Client, NetworkConnection};
 use async_trait::async_trait;
 use eyre::{eyre, Result};
 use std::fmt::{Debug, Formatter};
@@ -122,7 +122,7 @@ impl Client for TlsClient {
 
         let domain = ServerName::try_from(hostname)?;
         let stream = TcpStream::connect(url).await?;
-        stream.set_nodelay(true)?;
+        configure_tcp_stream(&stream)?;
 
         let tls_stream = self.tls_connector.connect(domain, stream).await?;
         Ok(TlsStream::Client(tls_stream))
@@ -134,7 +134,7 @@ impl Client for TcpClient {
     type Output = TcpStream;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let stream = TcpStream::connect(url).await?;
-        stream.set_nodelay(true)?;
+        configure_tcp_stream(&stream)?;
         Ok(stream)
     }
 }
