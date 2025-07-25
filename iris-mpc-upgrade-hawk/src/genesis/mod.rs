@@ -67,16 +67,16 @@ pub struct ExecutionArgs {
 /// Constructor.
 impl ExecutionArgs {
     pub fn new(
-        max_indexation_id: IrisSerialId,
         batch_size: usize,
         batch_size_error_rate: usize,
+        max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            max_indexation_id,
             batch_size,
             batch_size_error_rate,
+            max_indexation_id,
             perform_snapshot,
             use_backup_as_source,
         }
