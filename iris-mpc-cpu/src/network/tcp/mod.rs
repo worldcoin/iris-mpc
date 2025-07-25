@@ -83,22 +83,21 @@ pub async fn build_network_handle(
             "Building NetworkHandle, with TLS, from config: {:?}",
             tcp_config
         );
+        
+        let root_certs = tls
+            .root_certs
+            .as_ref()
+            .ok_or(eyre::eyre!("Root certificates are required for TLS"))?;
 
         if tls.with_nginx_sidecar {
             tracing::info!("Running in client-only TLS mode.");
 
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-
-            let certs = tls
-                .root_certs
-                .as_ref()
-                .ok_or(eyre::eyre!("Root certificates are required for TLS"))?;
-
-            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(certs).await?);
-
+            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(root_certs).await?);
             let connection_builder =
                 PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                     .await?;
+            
             // Connect to other players.
             for (identity, url) in
                 izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
@@ -118,12 +117,6 @@ pub async fn build_network_handle(
                     "TLS configuration is required for this operation"
                 ));
             }
-
-            let root_certs = tls
-                .root_certs
-                .as_ref()
-                .ok_or(eyre::eyre!("Root certificates are required for TLS"))?;
-
             let private_key = tls
                 .private_key
                 .as_ref()
