@@ -1,11 +1,11 @@
 use crate::{
-    execution::{hawk_main::state_check::SetHash, session::Session},
+    execution::{
+        hawk_main::{cpu_threadpool::CpuWorkerHandle, state_check::SetHash},
+        session::Session,
+    },
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
-        ops::{
-            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
-            galois_ring_to_rep3, lte_threshold_and_open,
-        },
+        ops::{batch_signed_lift_vec, cross_compare, galois_ring_to_rep3, lte_threshold_and_open},
         shared_iris::GaloisRingSharedIris,
     },
     shares::share::{DistanceShare, Share},
@@ -13,7 +13,9 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::vector_id::{SerialId, VersionId};
 use itertools::{izip, Itertools};
+use metrics::{counter, histogram};
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::instrument;
@@ -22,6 +24,43 @@ pub use iris_mpc_common::vector_id::VectorId;
 
 /// Reference to an iris in the Shamir secret shared form over a Galois ring.
 pub type IrisRef = Arc<GaloisRingSharedIris>;
+
+/// Some parts of the codebase want to call galois_ring_pairwise_distance() on a Query.query, others on
+/// a Query.processed_query, and yet others on a GaloisRingSharedIris. galois_ring_pairwise_distance()
+/// spawns work on a thread which takes a closure that must be 'static - which references are not.
+/// also, it is desirable to avoid cloning a GaloisRingSharedIris retrieved from an Arc<Query> (QueryRef)
+#[derive(Clone, Debug)]
+pub enum QueryInput {
+    Query(QueryRef),
+    ProcessedQuery(QueryRef),
+    SharedIris(IrisRef),
+}
+
+impl QueryInput {
+    pub fn from_query(q: QueryRef) -> Self {
+        Self::Query(q)
+    }
+
+    pub fn from_processed_query(q: QueryRef) -> Self {
+        Self::ProcessedQuery(q)
+    }
+
+    pub fn from_shared_iris(iris: GaloisRingSharedIris) -> Self {
+        Self::SharedIris(Arc::new(iris))
+    }
+
+    pub fn from_iris_ref(iris: IrisRef) -> Self {
+        Self::SharedIris(iris)
+    }
+
+    pub fn get_iris(&self) -> &GaloisRingSharedIris {
+        match self {
+            QueryInput::Query(q) => &q.query,
+            QueryInput::ProcessedQuery(q) => &q.processed_query,
+            QueryInput::SharedIris(iris) => iris,
+        }
+    }
+}
 
 /// Iris to be searcher or inserted into the store.
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
@@ -332,6 +371,8 @@ pub struct Aby3Store {
     pub storage: SharedIrisesRef,
     /// Session for the SMPC operations
     pub session: Session,
+    /// used to spawn cpu bound tasks on a thread pool
+    pub cpu_worker_handle: CpuWorkerHandle,
 }
 
 impl Aby3Store {
@@ -361,12 +402,23 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
-        pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
+        pairs: Vec<Option<(QueryInput, QueryInput)>>,
     ) -> Result<Vec<Share<u16>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(pairs).await;
+        histogram!("galois_ring_pairwise_distance.num_pairs").record(pairs.len() as f64);
+        let start = Instant::now();
+        let ds_and_ts = self
+            .cpu_worker_handle
+            .galois_ring_pairwise_distances(pairs)
+            .await;
+
+        let elapsed = start.elapsed().as_micros();
+
+        histogram!("galois_ring_pairwise_distance.avg_us").record(elapsed as f64);
+        counter!("galois_ring_pairwise_distance.total_us").increment(elapsed as u64);
+
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
     }
 }
@@ -400,9 +452,12 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            &[Some((&query.processed_query, &**v))]
+            vec![Some((
+                QueryInput::from_processed_query(query.clone()),
+                QueryInput::from_iris_ref(v.clone()),
+            ))]
         } else {
-            &[None]
+            vec![None]
         };
         let dist = self.eval_pairwise_distances(pairs).await?;
         Ok(self.lift_distances(dist).await?[0].clone())
@@ -419,10 +474,17 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+            .map(|((q, _), vector)| {
+                vector.as_ref().map(|v| {
+                    (
+                        QueryInput::from_processed_query(q.clone()),
+                        QueryInput::from_iris_ref(v.clone()),
+                    )
+                })
+            })
             .collect_vec();
 
-        let dist = self.eval_pairwise_distances(&pairs).await?;
+        let dist = self.eval_pairwise_distances(pairs).await?;
         self.lift_distances(dist).await
     }
 
@@ -439,13 +501,18 @@ impl VectorStore for Aby3Store {
         let pairs = queries
             .iter()
             .flat_map(|q| {
-                vectors
-                    .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+                vectors.iter().map(|vector| {
+                    vector.as_ref().map(|v| {
+                        (
+                            QueryInput::from_processed_query(q.clone()),
+                            QueryInput::from_iris_ref(v.clone()),
+                        )
+                    })
+                })
             })
             .collect::<Vec<_>>();
 
-        let dist = self.eval_pairwise_distances(&pairs).await?;
+        let dist = self.eval_pairwise_distances(pairs).await?;
         self.lift_distances(dist).await
     }
 

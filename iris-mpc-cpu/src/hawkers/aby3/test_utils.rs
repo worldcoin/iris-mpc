@@ -9,10 +9,11 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
+        hawk_main::cpu_threadpool,
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{aby3::aby3_store::QueryInput, plaintext_store::PlaintextStore},
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -71,17 +72,25 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
 ) -> Result<Vec<Aby3StoreRef>> {
     let storages = setup_aby3_shared_iris_stores_with_preloaded_db(rng, plain_store);
     let runtime = LocalRuntime::mock_setup(network_t).await?;
+    let cpu_worker_handle = cpu_threadpool::init_workers(4);
 
     runtime
         .sessions
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(session, storage)| Ok(Arc::new(Mutex::new(Aby3Store { session, storage }))))
+        .map(|(session, storage)| {
+            Ok(Arc::new(Mutex::new(Aby3Store {
+                session,
+                storage,
+                cpu_worker_handle: cpu_worker_handle.clone(),
+            })))
+        })
         .collect()
 }
 
 pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Vec<Aby3StoreRef>> {
     let runtime = LocalRuntime::mock_setup(network_t).await?;
+    let cpu_worker_handle = cpu_threadpool::init_workers(4);
     runtime
         .sessions
         .into_iter()
@@ -89,6 +98,7 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
                 storage: SharedIrises::default().to_arc(),
+                cpu_worker_handle: cpu_worker_handle.clone(),
             })))
         })
         .collect()
@@ -128,7 +138,10 @@ pub async fn eval_vector_distance(
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = &[Some((&*point1, &point2))];
+    let pairs = vec![Some((
+        QueryInput::from_iris_ref(point1.clone()),
+        QueryInput::from_shared_iris(point2),
+    ))];
     let dist = store.eval_pairwise_distances(pairs).await?;
     Ok(store.lift_distances(dist).await?[0].clone())
 }

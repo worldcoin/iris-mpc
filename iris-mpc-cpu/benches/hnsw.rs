@@ -5,7 +5,7 @@ use iris_mpc_cpu::{
     execution::local::LocalRuntime,
     hawkers::{
         aby3::{
-            aby3_store::prepare_query,
+            aby3_store::{prepare_query, QueryInput},
             test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
         },
         plaintext_store::PlaintextStore,
@@ -171,8 +171,17 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y1.mask.preprocess_mask_code_query_share();
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
-                    let pairs = [Some((&x1, &y1)), Some((&x2, &y2))];
-                    let ds_and_ts = galois_ring_pairwise_distance(&pairs).await;
+                    let pairs = vec![
+                        Some((
+                            QueryInput::from_shared_iris(x1),
+                            QueryInput::from_shared_iris(y1),
+                        )),
+                        Some((
+                            QueryInput::from_shared_iris(x2),
+                            QueryInput::from_shared_iris(y2),
+                        )),
+                    ];
+                    let ds_and_ts = galois_ring_pairwise_distance(pairs);
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
