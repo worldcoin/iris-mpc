@@ -408,12 +408,12 @@ fn default_full_scan_side_switching_enabled() -> bool {
 
 fn default_tokio_threads() -> usize {
     let logical_cores = num_cpus::get();
-    std::cmp::max(1, logical_cores.saturating_sub(default_cpu_threads()))
+    logical_cores
 }
 
 fn default_cpu_threads() -> usize {
     let logical_cores = num_cpus::get();
-    std::cmp::max(1, logical_cores.div_ceil(4))
+    std::cmp::max(1, logical_cores.saturating_sub(1))
 }
 
 impl Config {
