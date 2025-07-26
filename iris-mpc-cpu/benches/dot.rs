@@ -5,14 +5,19 @@ use iris_mpc_cpu::protocol::{
 };
 use itertools::Itertools;
 use rand::{thread_rng, Rng};
+use rayon::{prelude::*, ThreadPoolBuilder};
 
 pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
     // Generate a dataset larger than CPU caches.
     let ram_size = 1_000_000_000; // 1 GB
-    let batch_size = 1;
 
-    let mut c = c.benchmark_group("galois_ring_pairwise_distance");
-    c.throughput(Throughput::Elements(batch_size));
+    // --- Single-threaded Version ---
+
+    let batch_size = 1;
+    let mut g = c.benchmark_group(format!(
+        "galois_ring_pairwise_distance * batch_size={batch_size} * single-threaded"
+    ));
+    g.throughput(Throughput::Elements(batch_size));
 
     let iris_size = (IRIS_CODE_LENGTH + MASK_CODE_LENGTH) * size_of::<u16>();
     let dataset_size = ram_size / iris_size;
@@ -26,30 +31,106 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
         })
         .collect_vec();
 
-    c.bench_function("Compute", |b| {
-        let cached_pairs = vec![Some((&shares[0], &shares[1])); batch_size as usize];
-        b.iter_with_large_drop(|| galois_ring_pairwise_distance(black_box(&cached_pairs)))
-    });
-
-    c.bench_function("RAM-bound", |b| {
+    g.bench_function("Compute-bound", |b| {
         b.iter_batched(
             || {
-                // Generate a batch of iris pairs.
+                // Generate *one* batch of *cacheable* iris pairs.
+                (0..batch_size)
+                    .map(|_| Some((&shares[0], &shares[1])))
+                    .collect_vec()
+            },
+            |pairs| galois_ring_pairwise_distance(black_box(&pairs)),
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("RAM-bound", |b| {
+        b.iter_batched(
+            || {
+                // Generate *one* batch of *non-cacheable* iris pairs.
                 (0..batch_size)
                     .map(|_| {
-                        // Randomly select two shares from the dataset.
                         let a = rng.gen::<usize>() % shares.len();
                         let b = rng.gen::<usize>() % shares.len();
                         Some((&shares[a], &shares[b]))
                     })
                     .collect_vec()
             },
-            |uncached_pairs| galois_ring_pairwise_distance(black_box(&uncached_pairs)),
+            |pairs| galois_ring_pairwise_distance(black_box(&pairs)),
             BatchSize::SmallInput,
         )
     });
+    g.finish();
 
-    c.finish();
+    // --- Parallel Version ---
+
+    let batch_size = 8;
+    let num_threads = num_cpus::get_physical();
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .unwrap();
+
+    let mut g = c.benchmark_group(format!(
+        "galois_ring_pairwise_distance * batch_size={batch_size} * num_threads={num_threads}"
+    ));
+    g.throughput(Throughput::Elements(batch_size * num_threads as u64));
+
+    g.bench_function("Compute-bound", |b| {
+        pool.install(|| {
+            b.iter_batched(
+                || {
+                    // Generate *multiple* batches of *cacheable* iris pairs.
+                    (0..num_threads)
+                        .map(|_| {
+                            (0..batch_size)
+                                .map(|_| Some((&shares[0], &shares[1])))
+                                .collect_vec()
+                        })
+                        .collect_vec()
+                },
+                |batches| {
+                    batches
+                        .par_iter()
+                        .map(|pairs| galois_ring_pairwise_distance(black_box(pairs)))
+                        .collect::<Vec<_>>()
+                },
+                BatchSize::SmallInput,
+            )
+        })
+    });
+
+    g.bench_function("RAM-bound", |b| {
+        pool.install(|| {
+            b.iter_batched(
+                || {
+                    // Generate *multiple* batches of *non-cacheable* iris pairs.
+                    let rng = &mut thread_rng();
+                    (0..num_threads)
+                        .map(|_| {
+                            (0..batch_size)
+                                .map(|_| {
+                                    let a = rng.gen::<usize>() % shares.len();
+                                    let b = rng.gen::<usize>() % shares.len();
+                                    Some((&shares[a], &shares[b]))
+                                })
+                                .collect_vec()
+                        })
+                        .collect_vec()
+                },
+                |batches| {
+                    batches
+                        .par_iter()
+                        .map(|pairs| galois_ring_pairwise_distance(black_box(pairs)))
+                        .collect::<Vec<_>>()
+                },
+                BatchSize::SmallInput,
+            )
+        })
+    });
+
+    g.finish();
 }
 
 criterion_group!(benches, bench_galois_ring_pairwise_distance);
