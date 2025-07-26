@@ -85,6 +85,10 @@ harness = false
 name = "set_hash"
 harness = false
 
+[[bench]]
+name = "dot"
+harness = false
+
 [[example]]
 name = "hnsw-ex"
 
