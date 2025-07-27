@@ -224,7 +224,7 @@ impl VectorStore for Aby3Store {
 
 impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.append(query).await
+        self.storage.append(&query.iris).await
     }
 }
 
@@ -461,7 +461,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.append(p).await);
+                player_inserts.push(store_lock.storage.append(&p.iris).await);
             }
             aby3_inserts.push(player_inserts);
         }

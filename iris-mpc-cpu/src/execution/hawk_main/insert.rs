@@ -80,8 +80,8 @@ async fn insert_one(
         let storage = &mut session.aby3_store.storage;
 
         match insert_id {
-            None => storage.append(&insert_plan.query).await,
-            Some(id) => storage.insert(id, &insert_plan.query).await,
+            None => storage.append(&insert_plan.query.iris).await,
+            Some(id) => storage.insert(id, &insert_plan.query.iris).await,
         }
     };
 
