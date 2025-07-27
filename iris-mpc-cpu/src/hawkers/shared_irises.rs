@@ -191,11 +191,6 @@ impl SharedIrisesRef {
         self.data.read().await.get_vector(vector)
     }
 
-    pub async fn get_query(&self, vector_id: &VectorId) -> Aby3Query {
-        let vector_ref = self.get_vector_or_empty(vector_id).await.clone();
-        Aby3Query::new(&vector_ref)
-    }
-
     pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
         let body = self.data.read().await;
 
@@ -228,17 +223,6 @@ impl SharedIrisesRef {
             .into_iter()
             .map(|v| body.get_vector_or_empty(v))
             .collect_vec()
-    }
-
-    pub async fn get_queries(
-        &self,
-        vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<Aby3Query> {
-        self.get_vectors_or_empty(vector_ids)
-            .await
-            .into_iter()
-            .map(|v| Aby3Query::new(&v))
-            .collect()
     }
 
     /// Obtain a write lock for the underlying irises data, and insert the given

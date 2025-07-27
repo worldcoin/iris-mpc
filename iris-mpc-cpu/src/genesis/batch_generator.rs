@@ -324,11 +324,25 @@ impl BatchIterator for BatchGenerator {
 
         self.batch_count += 1;
 
+        let left_queries = imem_iris_stores[LEFT]
+            .get_vectors_or_empty(vector_ids.iter())
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect();
+
+        let right_queries = imem_iris_stores[RIGHT]
+            .get_vectors_or_empty(vector_ids.iter())
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect();
+
         Ok(Some(Batch::new(
             self.batch_count,
             vector_ids.clone(),
-            imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
-            imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
+            left_queries,
+            right_queries,
             vector_ids_for_persistence.clone(),
         )))
     }

@@ -115,7 +115,12 @@ impl VectorStore for Aby3Store {
     type DistanceRef = DistanceShare<u32>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        self.storage.get_queries(&vectors).await
+        self.storage
+            .get_vectors_or_empty(&vectors)
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect_vec()
     }
 
     async fn only_valid_vectors(
