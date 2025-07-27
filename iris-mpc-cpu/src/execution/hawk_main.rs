@@ -8,7 +8,7 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
-        aby3::aby3_store::{prepare_query, Aby3Store, Query},
+        aby3::aby3_store::{Aby3Query, Aby3Store},
         shared_irises::{SharedIrises, SharedIrisesMut, SharedIrisesRef},
     },
     hnsw::{
@@ -752,17 +752,16 @@ impl From<BatchQuery> for HawkRequest {
                         // Collect the rotations for one request.
                         chunk
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the type of Aby3Store and into Arc.
-                                Query::from_processed(
-                                    GaloisRingSharedIris {
-                                        code: code.clone(),
-                                        mask: mask.clone(),
-                                    },
-                                    GaloisRingSharedIris {
-                                        code: code_proc.clone(),
-                                        mask: mask_proc.clone(),
-                                    },
-                                )
+                                // Convert to the query type of Aby3Store
+                                let iris = Arc::new(GaloisRingSharedIris {
+                                    code: code.clone(),
+                                    mask: mask.clone(),
+                                });
+                                let pp_iris = Arc::new(GaloisRingSharedIris {
+                                    code: code_proc.clone(),
+                                    mask: mask_proc.clone(),
+                                });
+                                Aby3Query { iris, pp_iris }
                             })
                             .collect_vec()
                             .into()
@@ -872,7 +871,7 @@ impl HawkRequest {
                             mask: iris.mask_right.clone(),
                         }
                     };
-                    let query = prepare_query(iris);
+                    let query = Aby3Query::new_from_raw(iris);
                     VecRots::new_center_only(query)
                 })
                 .collect_vec()

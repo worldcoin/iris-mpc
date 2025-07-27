@@ -13,7 +13,6 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use serde::{Deserialize, Serialize};
 use std::{fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
@@ -23,40 +22,42 @@ pub use iris_mpc_common::vector_id::VectorId;
 pub type IrisRef = Arc<GaloisRingSharedIris>;
 
 /// Iris to be searcher or inserted into the store.
-#[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
-pub struct Query {
+///
+/// This is an iris reference along with cached preprocessed version, used for
+/// efficient Galois ring MPC comparison.
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+pub struct Aby3Query {
     /// Iris in the Shamir secret shared form over a Galois ring.
-    pub query: Arc<GaloisRingSharedIris>,
-    /// Preprocessed iris for faster evaluation of distances, see [Aby3Store::eval_distance].
-    pub processed_query: Arc<GaloisRingSharedIris>,
+    pub iris: Arc<GaloisRingSharedIris>,
+
+    /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
+    pub pp_iris: Arc<GaloisRingSharedIris>,
 }
 
-impl Query {
-    pub fn from_processed(
-        query: GaloisRingSharedIris,
-        processed_query: GaloisRingSharedIris,
-    ) -> Query {
-        Query {
-            query: Arc::new(query),
-            processed_query: Arc::new(processed_query),
+impl Aby3Query {
+    /// Creates a new query from a secret shared iris. The input iris is preprocessed for
+    /// faster evaluation of distances; see [Aby3Store::eval_distance].
+    pub fn new(iris_ref: &Arc<GaloisRingSharedIris>) -> Self {
+        let iris = iris_ref.clone();
+
+        let mut preprocessed = (**iris_ref).clone();
+        preprocessed.code.preprocess_iris_code_query_share();
+        preprocessed.mask.preprocess_mask_code_query_share();
+        let pp_iris = Arc::new(preprocessed);
+
+        Self { iris, pp_iris }
+    }
+
+    pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
+        let iris = Arc::new(iris);
+        Self::new(&iris)
+    }
+
+    pub fn from_processed(iris: GaloisRingSharedIris, pp_iris: GaloisRingSharedIris) -> Self {
+        Self {
+            iris: Arc::new(iris),
+            pp_iris: Arc::new(pp_iris),
         }
-    }
-
-    pub fn iris(&self) -> IrisRef {
-        self.query.clone()
-    }
-}
-
-/// Creates a new query from a secret shared iris.
-/// The input iris is preprocessed for faster evaluation of distances, see [Aby3Store::eval_distance].
-pub fn prepare_query(raw_query: GaloisRingSharedIris) -> Query {
-    let mut preprocessed_query = raw_query.clone();
-    preprocessed_query.code.preprocess_iris_code_query_share();
-    preprocessed_query.mask.preprocess_mask_code_query_share();
-
-    Query {
-        query: Arc::new(raw_query),
-        processed_query: Arc::new(preprocessed_query),
     }
 }
 
@@ -110,7 +111,7 @@ impl Aby3Store {
 
 impl VectorStore for Aby3Store {
     /// Arc ref to a query.
-    type QueryRef = Query;
+    type QueryRef = Aby3Query;
     /// Point ID of an inserted iris.
     type VectorRef = VectorId;
     /// Distance represented as a pair of u32 shares.
@@ -137,7 +138,7 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            &[Some((&*query.processed_query, &**v))]
+            &[Some((&*query.pp_iris, &**v))]
         } else {
             &[None]
         };
@@ -156,7 +157,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.processed_query, &**v)))
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.pp_iris, &**v)))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -178,7 +179,7 @@ impl VectorStore for Aby3Store {
             .flat_map(|q| {
                 vectors
                     .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&*q.processed_query, &**v)))
+                    .map(|vector| vector.as_ref().map(|v| (&*q.pp_iris, &**v)))
             })
             .collect::<Vec<_>>();
 
@@ -266,7 +267,7 @@ mod tests {
         for store in stores.iter() {
             let player_index = get_owner_index(store).await?;
             let queries = (0..database_size)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect::<Vec<_>>();
             let mut rng = rng.clone();
             let store = store.clone();
@@ -289,8 +290,8 @@ mod tests {
                 // Search for the same codes and find matches.
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
-                    let query = store.storage.get_vector_or_empty(&v).await;
-                    let query = prepare_query((*query).clone());
+                    let iris = store.storage.get_vector_or_empty(&v).await;
+                    let query = Aby3Query::new(&iris);
                     let neighbors = db
                         .search(&mut *store, &aby3_graph, &query, 1)
                         .await
@@ -362,7 +363,7 @@ mod tests {
                 let v_lock = v.lock().await;
                 let g = g.clone();
                 let q = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                let q = prepare_query((*q).clone());
+                let q = Aby3Query::new(&q);
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
@@ -383,8 +384,8 @@ mod tests {
                 let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let query = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                    let query = prepare_query((*query).clone());
+                    let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
+                    let query = Aby3Query::new(&iris);
                     let secret_neighbors = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
                         .await
@@ -453,7 +454,7 @@ mod tests {
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_dim)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect();
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
@@ -545,7 +546,7 @@ mod tests {
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_size)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect();
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
@@ -613,7 +614,7 @@ mod tests {
                     .storage
                     .get_vector_or_empty(&vector_id)
                     .await;
-                let q = prepare_query((*q).clone());
+                let q = Aby3Query::new(&q);
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;

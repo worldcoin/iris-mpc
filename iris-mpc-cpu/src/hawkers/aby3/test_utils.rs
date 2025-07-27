@@ -13,6 +13,7 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
+        aby3::aby3_store::Aby3Query,
         plaintext_store::PlaintextStore,
         shared_irises::{SharedIrises, SharedIrisesRef},
     },
@@ -26,7 +27,7 @@ use crate::{
     shares::{RingElement, Share},
 };
 
-use super::aby3_store::{prepare_query, Aby3Store, IrisRef, VectorId};
+use super::aby3_store::{Aby3Store, IrisRef, VectorId};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
@@ -328,7 +329,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
         let role = get_owner_index(store).await?;
         let mut rng_searcher = rng_searcher.clone();
         let queries = (0..database_size)
-            .map(|id| prepare_query(shared_irises[id][role].clone()))
+            .map(|id| Aby3Query::new_from_raw(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         let store = store.clone();
         let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3Store>)>> =

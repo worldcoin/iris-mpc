@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     execution::hawk_main::state_check::SetHash,
-    hawkers::aby3::aby3_store::{prepare_query, IrisRef, Query},
+    hawkers::aby3::aby3_store::{Aby3Query, IrisRef},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 
@@ -190,9 +190,9 @@ impl SharedIrisesRef {
         self.data.read().await.get_vector(vector)
     }
 
-    pub async fn get_query(&self, vector_id: &VectorId) -> Query {
+    pub async fn get_query(&self, vector_id: &VectorId) -> Aby3Query {
         let vector_ref = self.get_vector_or_empty(vector_id).await.clone();
-        prepare_query((*vector_ref).clone())
+        Aby3Query::new(&vector_ref)
     }
 
     pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
@@ -229,11 +229,14 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
-    pub async fn get_queries(&self, vector_ids: impl IntoIterator<Item = &VectorId>) -> Vec<Query> {
+    pub async fn get_queries(
+        &self,
+        vector_ids: impl IntoIterator<Item = &VectorId>,
+    ) -> Vec<Aby3Query> {
         self.get_vectors_or_empty(vector_ids)
             .await
             .into_iter()
-            .map(|v| prepare_query((*v).clone()))
+            .map(|v| Aby3Query::new(&v))
             .collect()
     }
 
@@ -241,16 +244,16 @@ impl SharedIrisesRef {
     /// `query` iris at the specified `id`.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn insert(&mut self, id: VectorId, query: &Query) -> VectorId {
-        self.data.write().await.insert(id, query.iris())
+    pub async fn insert(&mut self, id: VectorId, query: &Aby3Query) -> VectorId {
+        self.data.write().await.insert(id, query.iris.clone())
     }
 
     /// Obtain a write lock for the underlying irises data, and insert the given
     /// `query` iris at the next unused `VectorId` serial number, with version 0.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn append(&mut self, query: &Query) -> VectorId {
-        self.data.write().await.append(query.iris())
+    pub async fn append(&mut self, query: &Aby3Query) -> VectorId {
+        self.data.write().await.append(query.iris.clone())
     }
 
     /// Obtain a write lock for the underlying irises data, and insert the given
@@ -258,8 +261,11 @@ impl SharedIrisesRef {
     /// with equal serial id and incremented version number.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn update(&mut self, original_id: VectorId, query: &Query) -> VectorId {
-        self.data.write().await.update(original_id, query.iris())
+    pub async fn update(&mut self, original_id: VectorId, query: &Aby3Query) -> VectorId {
+        self.data
+            .write()
+            .await
+            .update(original_id, query.iris.clone())
     }
 
     pub async fn checksum(&self) -> u64 {
