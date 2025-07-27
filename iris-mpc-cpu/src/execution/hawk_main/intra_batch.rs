@@ -4,7 +4,7 @@ use super::{
     BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::QueryRef,
+    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Query,
     hnsw::VectorStore,
 };
 use eyre::Result;
@@ -20,7 +20,7 @@ pub struct IntraMatch {
 
 pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSessionRef>>,
-    search_queries: &Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
+    search_queries: &Arc<BothEyes<VecRequests<VecRots<Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
@@ -48,7 +48,7 @@ pub async fn intra_batch_is_match(
 }
 
 async fn per_session(
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    search_queries: &BothEyes<VecRequests<VecRots<Query>>>,
     session: &mut HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,
@@ -72,9 +72,9 @@ async fn per_session(
         .iter()
         .map(|pair| {
             Some((
-                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
+                &*search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
                     .processed_query,
-                &search_queries[batch.i_eye][pair.earlier_request]
+                &*search_queries[batch.i_eye][pair.earlier_request]
                     .center()
                     .query,
             ))

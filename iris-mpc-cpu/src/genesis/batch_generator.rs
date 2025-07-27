@@ -1,7 +1,7 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
-    hawkers::{aby3::aby3_store::QueryRef, shared_irises::SharedIrisesRef},
+    hawkers::{aby3::aby3_store::Query, shared_irises::SharedIrisesRef},
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
@@ -17,10 +17,10 @@ pub struct Batch {
     pub batch_id: usize,
 
     /// Array of left iris codes, in query format.
-    pub left_queries: Vec<QueryRef>,
+    pub left_queries: Vec<Query>,
 
     /// Array of right iris codes, in query format.
-    pub right_queries: Vec<QueryRef>,
+    pub right_queries: Vec<Query>,
 
     /// Array of vector ids of iris enrollments.
     pub vector_ids: Vec<VectorId>,
@@ -34,8 +34,8 @@ impl Batch {
     fn new(
         batch_id: usize,
         vector_ids: Vec<VectorId>,
-        left_queries: Vec<QueryRef>,
-        right_queries: Vec<QueryRef>,
+        left_queries: Vec<Query>,
+        right_queries: Vec<Query>,
         vector_ids_to_persist: Vec<VectorId>,
     ) -> Self {
         Self {

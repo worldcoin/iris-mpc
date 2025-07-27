@@ -26,41 +26,38 @@ pub type IrisRef = Arc<GaloisRingSharedIris>;
 #[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
 pub struct Query {
     /// Iris in the Shamir secret shared form over a Galois ring.
-    pub query: GaloisRingSharedIris,
+    pub query: Arc<GaloisRingSharedIris>,
     /// Preprocessed iris for faster evaluation of distances, see [Aby3Store::eval_distance].
-    pub processed_query: GaloisRingSharedIris,
+    pub processed_query: Arc<GaloisRingSharedIris>,
 }
-
-/// Reference to a query.
-pub type QueryRef = Arc<Query>;
 
 impl Query {
     pub fn from_processed(
         query: GaloisRingSharedIris,
         processed_query: GaloisRingSharedIris,
-    ) -> QueryRef {
-        Arc::new(Query {
-            query,
-            processed_query,
-        })
+    ) -> Query {
+        Query {
+            query: Arc::new(query),
+            processed_query: Arc::new(processed_query),
+        }
     }
 
     pub fn iris(&self) -> IrisRef {
-        Arc::new(self.query.clone())
+        self.query.clone()
     }
 }
 
 /// Creates a new query from a secret shared iris.
 /// The input iris is preprocessed for faster evaluation of distances, see [Aby3Store::eval_distance].
-pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
+pub fn prepare_query(raw_query: GaloisRingSharedIris) -> Query {
     let mut preprocessed_query = raw_query.clone();
     preprocessed_query.code.preprocess_iris_code_query_share();
     preprocessed_query.mask.preprocess_mask_code_query_share();
 
-    Arc::new(Query {
-        query: raw_query,
-        processed_query: preprocessed_query,
-    })
+    Query {
+        query: Arc::new(raw_query),
+        processed_query: Arc::new(preprocessed_query),
+    }
 }
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
@@ -113,7 +110,7 @@ impl Aby3Store {
 
 impl VectorStore for Aby3Store {
     /// Arc ref to a query.
-    type QueryRef = QueryRef;
+    type QueryRef = Query;
     /// Point ID of an inserted iris.
     type VectorRef = VectorId;
     /// Distance represented as a pair of u32 shares.
@@ -140,7 +137,7 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            &[Some((&query.processed_query, &**v))]
+            &[Some((&*query.processed_query, &**v))]
         } else {
             &[None]
         };
@@ -159,7 +156,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.processed_query, &**v)))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -181,7 +178,7 @@ impl VectorStore for Aby3Store {
             .flat_map(|q| {
                 vectors
                     .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+                    .map(|vector| vector.as_ref().map(|v| (&*q.processed_query, &**v)))
             })
             .collect::<Vec<_>>();
 

@@ -7,7 +7,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     execution::hawk_main::state_check::SetHash,
-    hawkers::aby3::aby3_store::{prepare_query, IrisRef, QueryRef},
+    hawkers::aby3::aby3_store::{prepare_query, IrisRef, Query},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 
@@ -190,7 +190,7 @@ impl SharedIrisesRef {
         self.data.read().await.get_vector(vector)
     }
 
-    pub async fn get_query(&self, vector_id: &VectorId) -> QueryRef {
+    pub async fn get_query(&self, vector_id: &VectorId) -> Query {
         let vector_ref = self.get_vector_or_empty(vector_id).await.clone();
         prepare_query((*vector_ref).clone())
     }
@@ -229,10 +229,7 @@ impl SharedIrisesRef {
             .collect_vec()
     }
 
-    pub async fn get_queries(
-        &self,
-        vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<QueryRef> {
+    pub async fn get_queries(&self, vector_ids: impl IntoIterator<Item = &VectorId>) -> Vec<Query> {
         self.get_vectors_or_empty(vector_ids)
             .await
             .into_iter()
@@ -244,7 +241,7 @@ impl SharedIrisesRef {
     /// `query` iris at the specified `id`.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn insert(&mut self, id: VectorId, query: &QueryRef) -> VectorId {
+    pub async fn insert(&mut self, id: VectorId, query: &Query) -> VectorId {
         self.data.write().await.insert(id, query.iris())
     }
 
@@ -252,7 +249,7 @@ impl SharedIrisesRef {
     /// `query` iris at the next unused `VectorId` serial number, with version 0.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn append(&mut self, query: &QueryRef) -> VectorId {
+    pub async fn append(&mut self, query: &Query) -> VectorId {
         self.data.write().await.append(query.iris())
     }
 
@@ -261,7 +258,7 @@ impl SharedIrisesRef {
     /// with equal serial id and incremented version number.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn update(&mut self, original_id: VectorId, query: &QueryRef) -> VectorId {
+    pub async fn update(&mut self, original_id: VectorId, query: &Query) -> VectorId {
         self.data.write().await.update(original_id, query.iris())
     }
 

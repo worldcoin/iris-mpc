@@ -8,14 +8,14 @@ use crate::{
         scheduler::{collect_results, parallelize},
         StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3Store, QueryRef},
+    hawkers::aby3::aby3_store::{Aby3Store, Query},
     hnsw::{GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<QueryRef, ROT>>>>;
+pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<Query, ROT>>>>;
 pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<InsertPlan, ROT>>>;
 
 /// Identifiers of requests
@@ -106,7 +106,7 @@ async fn per_session<ROT>(
 
 async fn per_query(
     session: &mut HawkSession,
-    query: QueryRef,
+    query: Query,
     search_params: &SearchParams,
     graph_store: &GraphMem<Aby3Store>,
     insertion_layer: usize,
@@ -144,7 +144,7 @@ async fn per_query(
 /// (The `match_count` field returned is always set to 0.)
 pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     session: HawkSessionRef,
-    query: QueryRef,
+    query: Query,
     searcher: &HnswSearcher,
     identifier: &H,
 ) -> Result<InsertPlan> {
