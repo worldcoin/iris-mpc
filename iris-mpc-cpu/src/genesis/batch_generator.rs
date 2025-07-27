@@ -1,7 +1,7 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
-    hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
+    hawkers::{aby3::aby3_store::QueryRef, shared_irises::SharedIrisesRef},
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};

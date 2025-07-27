@@ -12,7 +12,10 @@ use crate::{
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{
+        plaintext_store::PlaintextStore,
+        shared_irises::{SharedIrises, SharedIrisesRef},
+    },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -23,9 +26,7 @@ use crate::{
     shares::{RingElement, Share},
 };
 
-use super::aby3_store::{
-    prepare_query, Aby3Store, IrisRef, SharedIrises, SharedIrisesRef, VectorId,
-};
+use super::aby3_store::{prepare_query, Aby3Store, IrisRef, VectorId};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 

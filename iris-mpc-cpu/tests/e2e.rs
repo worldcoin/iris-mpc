@@ -7,8 +7,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
-        aby3::aby3_store::{Aby3Store, SharedIrises},
-        plaintext_store::PlaintextStore,
+        aby3::aby3_store::Aby3Store, plaintext_store::PlaintextStore, shared_irises::SharedIrises,
     },
     hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
