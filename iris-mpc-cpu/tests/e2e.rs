@@ -7,7 +7,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
-        aby3::aby3_store::Aby3Store, plaintext_store::PlaintextStore, shared_irises::SharedIrises,
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store}, plaintext_store::PlaintextStore,
     },
     hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
@@ -44,7 +44,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     params: &HnswParams,
-) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3Store>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<SerialId, IrisCode> = left_db
         .db
@@ -107,8 +107,8 @@ async fn create_graph_from_plain_dbs(
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
-    let left_iris_store = SharedIrises::new(left_shared_irises);
-    let right_iris_store = SharedIrises::new(right_shared_irises);
+    let left_iris_store = Aby3Store::new_storage(Some(left_shared_irises));
+    let right_iris_store = Aby3Store::new_storage(Some(right_shared_irises));
 
     Ok((
         [left_mpc_graph, right_mpc_graph],

@@ -13,9 +13,8 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::Aby3Query,
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
         plaintext_store::PlaintextStore,
-        shared_irises::{SharedIrises, SharedIrisesRef},
     },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
@@ -31,16 +30,10 @@ use super::aby3_store::{Aby3Store, VectorId};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
-pub fn setup_local_player_preloaded_db(
-    database: HashMap<VectorId, Arc<GaloisRingSharedIris>>,
-) -> SharedIrisesRef {
-    SharedIrises::new(database).to_arc()
-}
-
 pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
-) -> Vec<SharedIrisesRef> {
+) -> Vec<Aby3SharedIrisesRef> {
     let identities = generate_local_identities();
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
@@ -64,7 +57,7 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     shared_irises
         .into_iter()
-        .map(setup_local_player_preloaded_db)
+        .map(|db| Aby3Store::new_storage(Some(db)).to_arc())
         .collect()
 }
 
@@ -92,7 +85,7 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .map(|session| {
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
-                storage: SharedIrises::default().to_arc(),
+                storage: Aby3Store::new_storage(None).to_arc(),
             })))
         })
         .collect()

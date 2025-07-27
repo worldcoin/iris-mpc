@@ -1,6 +1,6 @@
 use crate::{
     execution::session::Session,
-    hawkers::shared_irises::SharedIrisesRef,
+    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -13,7 +13,7 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use std::{fmt::Debug, sync::Arc, vec};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
 pub use iris_mpc_common::vector_id::VectorId;
@@ -58,13 +58,19 @@ impl Aby3Query {
     }
 }
 
+pub type Aby3StoredIris = Arc<GaloisRingSharedIris>;
+
+pub type Aby3SharedIrises = SharedIrises<Aby3StoredIris>;
+pub type Aby3SharedIrisesRef = SharedIrisesRef<Aby3StoredIris>;
+
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
 pub struct Aby3Store {
     /// Reference to the shared irises
-    pub storage: SharedIrisesRef,
+    pub storage: Aby3SharedIrisesRef,
+
     /// Session for the SMPC operations
     pub session: Session,
 }
@@ -103,6 +109,14 @@ impl Aby3Store {
         }
         let ds_and_ts = galois_ring_pairwise_distance(pairs).await;
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+    }
+
+    /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
+    pub fn new_storage(points: Option<HashMap<VectorId, Aby3StoredIris>>) -> Aby3SharedIrises {
+        SharedIrises::new(
+            points.unwrap_or_default(),
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+        )
     }
 }
 

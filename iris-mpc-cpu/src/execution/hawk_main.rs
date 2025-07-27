@@ -7,10 +7,9 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
-    hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3Store},
-        shared_irises::{SharedIrises, SharedIrisesMut, SharedIrisesRef},
-    },
+    hawkers::{aby3::aby3_store::{
+        Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store
+    }, shared_irises::SharedIrises},
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,
@@ -139,7 +138,7 @@ pub struct HawkActor {
     // ---- My state ----
     /// A size used by the startup loader.
     loader_db_size: usize,
-    iris_store: BothEyes<SharedIrisesRef>,
+    iris_store: BothEyes<Aby3SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
@@ -277,7 +276,7 @@ impl HawkActor {
         Self::from_cli_with_graph_and_store(
             args,
             [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
-            [(); 2].map(|_| SharedIrises::default()),
+            [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
         .await
     }
@@ -285,7 +284,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         graph: BothEyes<GraphMem<Aby3Store>>,
-        iris_store: BothEyes<SharedIrises>,
+        iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         let search_params = HnswParams::new(
             args.hnsw_param_ef_constr,
@@ -342,7 +341,7 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn iris_store(&self, store_id: StoreId) -> Aby3SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
@@ -591,10 +590,12 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
     ChaCha8Rng::seed_from_u64(seed)
 }
 
+pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
+
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
-    irises: BothEyes<SharedIrisesMut<'a>>,
+    irises: BothEyes<Aby3SharedIrisesMut<'a>>,
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -791,7 +792,7 @@ impl From<BatchQuery> for HawkRequest {
 impl HawkRequest {
     fn request_types(
         &self,
-        iris_store: &SharedIrises,
+        iris_store: &Aby3SharedIrises,
         orient: Orientation,
     ) -> VecRequests<RequestType> {
         use RequestType::*;
@@ -836,7 +837,7 @@ impl HawkRequest {
         }
     }
 
-    fn luc_ids(&self, iris_store: &SharedIrises) -> VecRequests<Vec<VectorId>> {
+    fn luc_ids(&self, iris_store: &Aby3SharedIrises) -> VecRequests<Vec<VectorId>> {
         let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
 
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
@@ -854,7 +855,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn reset_updates(&self, iris_store: &SharedIrises) -> ResetRequests {
+    fn reset_updates(&self, iris_store: &Aby3SharedIrises) -> ResetRequests {
         let queries = [LEFT, RIGHT].map(|side| {
             self.batch
                 .reset_update_shares
@@ -883,7 +884,7 @@ impl HawkRequest {
         }
     }
 
-    fn deletion_ids(&self, iris_store: &SharedIrises) -> Vec<VectorId> {
+    fn deletion_ids(&self, iris_store: &Aby3SharedIrises) -> Vec<VectorId> {
         iris_store.from_0_indices(&self.batch.deletion_requests_indices)
     }
 }

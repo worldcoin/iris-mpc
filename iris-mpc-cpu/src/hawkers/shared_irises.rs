@@ -5,30 +5,19 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::{
-    execution::hawk_main::state_check::SetHash,
-    protocol::shared_iris::GaloisRingSharedIris,
-};
-
-type IrisRef = Arc<GaloisRingSharedIris>;
+use crate::execution::hawk_main::state_check::SetHash;
 
 /// Storage of inserted irises.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct SharedIrises {
-    pub points: HashMap<SerialId, (VersionId, IrisRef)>,
+pub struct SharedIrises<I: Clone> {
+    pub points: HashMap<SerialId, (VersionId, I)>,
     pub next_id: u32,
-    pub empty_iris: IrisRef,
+    pub empty_iris: I,
     pub set_hash: SetHash,
 }
 
-impl Default for SharedIrises {
-    fn default() -> Self {
-        SharedIrises::new(HashMap::new())
-    }
-}
-
-impl SharedIrises {
-    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
+impl<I: Clone> SharedIrises<I> {
+    pub fn new(points: HashMap<VectorId, I>, empty_iris: I) -> Self {
         let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
 
         let points = points
@@ -39,7 +28,7 @@ impl SharedIrises {
         SharedIrises {
             points,
             next_id,
-            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            empty_iris,
             set_hash: SetHash::default(),
         }
     }
@@ -51,7 +40,7 @@ impl SharedIrises {
     /// associated serial id, and updates the `next_id` field to be the next
     /// value after the inserted serial id if this value is larger than the
     /// current value of `next_id`.
-    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) -> VectorId {
+    pub fn insert(&mut self, vector_id: VectorId, iris: I) -> VectorId {
         let prev_entry = self
             .points
             .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
@@ -70,7 +59,7 @@ impl SharedIrises {
 
     /// Insert the given iris at the next unused serial ID, with version
     /// initialized to 0.
-    pub fn append(&mut self, iris: IrisRef) -> VectorId {
+    pub fn append(&mut self, iris: I) -> VectorId {
         let new_id = self.next_id();
         self.insert(new_id, iris);
         new_id
@@ -78,7 +67,7 @@ impl SharedIrises {
 
     /// Insert the given iris at ID given by `original_id.next_version()`, i.e.
     /// with identical serial number, and one higher version number.
-    pub fn update(&mut self, original_id: VectorId, iris: IrisRef) -> VectorId {
+    pub fn update(&mut self, original_id: VectorId, iris: I) -> VectorId {
         let new_id = original_id.next_version();
         self.insert(new_id, iris);
         new_id
@@ -102,16 +91,16 @@ impl SharedIrises {
         self.points.get(&serial_id).map(|(version, _iris)| *version)
     }
 
-    fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
+    fn get_vector_or_empty(&self, vector: &VectorId) -> I {
         match self.points.get(&vector.serial_id()) {
-            Some((version, iris)) if vector.version_matches(*version) => Arc::clone(iris),
-            _ => Arc::clone(&self.empty_iris),
+            Some((version, iris)) if vector.version_matches(*version) => iris.clone(),
+            _ => self.empty_iris.clone(),
         }
     }
 
-    fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
+    fn get_vector(&self, vector: &VectorId) -> Option<I> {
         match self.points.get(&vector.serial_id()) {
-            Some((version, iris)) if vector.version_matches(*version) => Some(Arc::clone(iris)),
+            Some((version, iris)) if vector.version_matches(*version) => Some(iris.clone()),
             _ => None,
         }
     }
@@ -121,7 +110,7 @@ impl SharedIrises {
             Some((version, _)) if vector.version_matches(*version))
     }
 
-    pub fn to_arc(self) -> SharedIrisesRef {
+    pub fn to_arc(self) -> SharedIrisesRef<I> {
         SharedIrisesRef {
             data: Arc::new(RwLock::new(self)),
         }
@@ -156,26 +145,23 @@ impl SharedIrises {
 
 /// Reference to inserted irises.
 #[derive(Clone)]
-pub struct SharedIrisesRef {
-    pub data: Arc<RwLock<SharedIrises>>,
+pub struct SharedIrisesRef<I: Clone> {
+    pub data: Arc<RwLock<SharedIrises<I>>>,
 }
 
-/// Mutable reference to inserted irises.
-pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
-
-impl std::fmt::Debug for SharedIrisesRef {
+impl <I: Clone> std::fmt::Debug for SharedIrisesRef<I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt("SharedIrisesRef", f)
     }
 }
 
 // Getters, iterators and mutators of the iris storage.
-impl SharedIrisesRef {
-    pub async fn write(&self) -> SharedIrisesMut {
+impl <I: Clone> SharedIrisesRef<I> {
+    pub async fn write(&self) -> RwLockWriteGuard<'_, SharedIrises<I>> {
         self.data.write().await
     }
 
-    pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
+    pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises<I>> {
         self.data.read().await
     }
 
@@ -183,11 +169,11 @@ impl SharedIrisesRef {
         *self.get_vector_ids(&[serial_id]).await.first().unwrap()
     }
 
-    pub async fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
+    pub async fn get_vector_or_empty(&self, vector: &VectorId) -> I {
         self.data.read().await.get_vector_or_empty(vector)
     }
 
-    pub async fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
+    pub async fn get_vector(&self, vector: &VectorId) -> Option<I> {
         self.data.read().await.get_vector(vector)
     }
 
@@ -206,7 +192,7 @@ impl SharedIrisesRef {
     pub async fn get_vectors(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<Option<IrisRef>> {
+    ) -> Vec<Option<I>> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
@@ -217,7 +203,7 @@ impl SharedIrisesRef {
     pub async fn get_vectors_or_empty(
         &self,
         vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<IrisRef> {
+    ) -> Vec<I> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
@@ -229,7 +215,7 @@ impl SharedIrisesRef {
     /// `query` iris at the specified `id`.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn insert(&mut self, id: VectorId, iris_ref: &IrisRef) -> VectorId {
+    pub async fn insert(&mut self, id: VectorId, iris_ref: &I) -> VectorId {
         self.data.write().await.insert(id, iris_ref.clone())
     }
 
@@ -237,7 +223,7 @@ impl SharedIrisesRef {
     /// `query` iris at the next unused `VectorId` serial number, with version 0.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn append(&mut self, iris_ref: &IrisRef) -> VectorId {
+    pub async fn append(&mut self, iris_ref: &I) -> VectorId {
         self.data.write().await.append(iris_ref.clone())
     }
 
@@ -246,7 +232,7 @@ impl SharedIrisesRef {
     /// with equal serial id and incremented version number.
     ///
     /// Returns the `VectorId` at which the query is inserted.
-    pub async fn update(&mut self, original_id: VectorId, iris_ref: &IrisRef) -> VectorId {
+    pub async fn update(&mut self, original_id: VectorId, iris_ref: &I) -> VectorId {
         self.data
             .write()
             .await
