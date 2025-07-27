@@ -6,10 +6,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
-    execution::hawk_main::state_check::SetHash,
-    hawkers::aby3::aby3_store::{Aby3Query, IrisRef},
+    execution::hawk_main::state_check::SetHash, hawkers::aby3::aby3_store::Aby3Query,
     protocol::shared_iris::GaloisRingSharedIris,
 };
+
+type IrisRef = Arc<GaloisRingSharedIris>;
 
 /// Storage of inserted irises.
 #[derive(Clone, Serialize, Deserialize)]

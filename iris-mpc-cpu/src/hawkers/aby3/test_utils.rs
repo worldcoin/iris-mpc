@@ -27,11 +27,13 @@ use crate::{
     shares::{RingElement, Share},
 };
 
-use super::aby3_store::{Aby3Store, IrisRef, VectorId};
+use super::aby3_store::{Aby3Store, VectorId};
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
-pub fn setup_local_player_preloaded_db(database: HashMap<VectorId, IrisRef>) -> SharedIrisesRef {
+pub fn setup_local_player_preloaded_db(
+    database: HashMap<VectorId, Arc<GaloisRingSharedIris>>,
+) -> SharedIrisesRef {
     SharedIrises::new(database).to_arc()
 }
 

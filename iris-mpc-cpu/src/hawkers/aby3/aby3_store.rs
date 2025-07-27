@@ -18,9 +18,6 @@ use tracing::instrument;
 
 pub use iris_mpc_common::vector_id::VectorId;
 
-/// Reference to an iris in the Shamir secret shared form over a Galois ring.
-pub type IrisRef = Arc<GaloisRingSharedIris>;
-
 /// Iris to be searcher or inserted into the store.
 ///
 /// This is an iris reference along with cached preprocessed version, used for
