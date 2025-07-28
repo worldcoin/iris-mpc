@@ -223,6 +223,14 @@ impl GrpcHandle {
         Ok(())
     }
 
+    pub async fn make_sessions(&self) -> Result<Vec<GrpcSession>> {
+        let futures: Vec<_> = (0..self.config.request_parallelism)
+            .map(|idx| self.create_session(SessionId::from(idx as u32)))
+            .collect();
+        let results = futures::future::try_join_all(futures).await?;
+        Ok(results)
+    }
+
     pub async fn create_session(&self, session_id: SessionId) -> Result<GrpcSession> {
         // Create outgoing streams and ask other parties to send incoming streams
         let task = GrpcTask::CreateOutgoingStreams(session_id);

@@ -16,7 +16,7 @@ use eyre::Result;
 use itertools::izip;
 use std::sync::Once;
 use std::{
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{SocketAddr, ToSocketAddrs},
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -70,7 +70,7 @@ pub async fn build_network_handle(
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
-    let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
+    let my_addr = super::to_inaddr_any(my_address.parse::<SocketAddr>()?);
 
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
@@ -166,15 +166,6 @@ pub async fn build_network_handle(
         let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
         Ok(Box::new(networking))
     }
-}
-
-fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
-    if socket.is_ipv4() {
-        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    } else {
-        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
-    }
-    socket
 }
 
 pub mod testing {

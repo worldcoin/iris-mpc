@@ -20,6 +20,12 @@ pub struct GrpcSession {
     pub config: GrpcConfig,
 }
 
+impl GrpcSession {
+    pub fn id(&self) -> SessionId {
+        self.session_id.clone()
+    }
+}
+
 #[async_trait]
 impl Networking for GrpcSession {
     async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {

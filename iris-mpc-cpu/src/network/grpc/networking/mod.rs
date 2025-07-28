@@ -199,6 +199,7 @@ pub async fn setup_local_grpc_networking(
         timeout_duration: Duration::from_secs(5),
         connection_parallelism,
         stream_parallelism,
+        request_parallelism: connection_parallelism * stream_parallelism,
     };
 
     let nets = parties

@@ -1,8 +1,15 @@
-use crate::{execution::player::Identity, proto_generated::party_node::SendRequest};
+use crate::{
+    execution::{hawk_main::HawkArgs, player::Identity},
+    proto_generated::party_node::{party_node_server::PartyNodeServer, SendRequest},
+};
 use eyre::Result;
-use std::{collections::HashMap, time::Duration};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-use tonic::Status;
+use itertools::izip;
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use tokio::{
+    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    task::JoinSet,
+};
+use tonic::{transport::Server, Status};
 
 mod handle;
 mod networking;
@@ -30,8 +37,62 @@ pub struct GrpcConfig {
     pub connection_parallelism: usize,
     // number of application level sessions per gRPC stream.
     pub stream_parallelism: usize,
+    // number of requests to handle at once
+    pub request_parallelism: usize,
 }
 
+pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> Result<GrpcHandle> {
+    let my_index = args.party_index;
+    let my_identity = identities[my_index].clone();
+    let my_address = &args.addresses[my_index];
+    let my_addr = super::to_inaddr_any(my_address.parse::<SocketAddr>()?);
+
+    // 31 rotations * 4
+    let request_parallelism = args.request_parallelism * 124;
+
+    let grpc_config = GrpcConfig {
+        timeout_duration: Duration::from_secs(10),
+        connection_parallelism: args.connection_parallelism,
+        request_parallelism,
+        stream_parallelism: request_parallelism / args.connection_parallelism,
+    };
+
+    let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
+    let networking = GrpcHandle::new(networking).await?;
+
+    {
+        let player = networking.clone();
+        tracing::info!("Starting Hawk server on {}", my_addr);
+        tokio::spawn(async move {
+            Server::builder()
+                .add_service(PartyNodeServer::new(player))
+                .serve(my_addr)
+                .await
+                .unwrap();
+        });
+    }
+
+    izip!(identities, &args.addresses)
+        .filter(|(_, address)| address != &my_address)
+        .map(|(identity, address)| {
+            let player = networking.clone();
+            let identity = identity.clone();
+            let url = format!("http://{}", address);
+            async move {
+                tracing::info!("Connecting to {}…", url);
+                player.connect_to_party(identity, &url).await?;
+                tracing::info!("_connected to {}!", url);
+                Ok(())
+            }
+        })
+        .collect::<JoinSet<_>>()
+        .join_all()
+        .await
+        .into_iter()
+        .collect::<Result<()>>()?;
+
+    Ok(networking)
+}
 #[cfg(test)]
 mod tests {
     use super::{session::GrpcSession, *};
