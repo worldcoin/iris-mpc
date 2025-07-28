@@ -3,7 +3,7 @@ use std::{net::SocketAddr, sync::Arc};
 use crate::network::tcp::networking::client::DynStream;
 use crate::network::tcp::Server;
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{eyre, Result};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
@@ -35,7 +35,12 @@ impl TlsServer {
             }
         }
 
-        let client_verifier = rustls::server::NoClientAuth::boxed();
+        let client_verifier =
+            WebPkiClientVerifier::builder(<Arc<RootCertStore>>::from(root_cert_store))
+                .allow_unauthenticated()
+                .build()
+                .map_err(|e| eyre!(e))?;
+
         let certs = CertificateDer::pem_file_iter(cert_file)?.collect::<Result<Vec<_>, _>>()?;
         let key = PrivateKeyDer::from_pem_file(key_file)?;
         let server_config = ServerConfig::builder()
