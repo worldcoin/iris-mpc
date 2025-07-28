@@ -16,7 +16,7 @@ use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
-pub use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::vector_id::VectorId;
 
 /// Iris to be searcher or inserted into the store.
 ///

@@ -1,5 +1,4 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
         hawk_main::search::SearchIds,
@@ -33,6 +32,7 @@ use iris_mpc_common::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
+    vector_id::VectorId,
 };
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
@@ -1819,12 +1819,9 @@ mod tests {
 #[cfg(feature = "db_dependent")]
 mod tests_db {
     use super::*;
-    use crate::{
-        hawkers::aby3::aby3_store::VectorId,
-        hnsw::{
-            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-            searcher::ConnectPlanLayerV,
-        },
+    use crate::hnsw::{
+        graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
+        searcher::ConnectPlanLayerV,
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -1916,7 +1913,6 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hawkers::aby3::aby3_store::VectorId;
     use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
     use iris_mpc_common::helpers::sync::ModificationKey;
 

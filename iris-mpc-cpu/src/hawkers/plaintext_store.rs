@@ -9,15 +9,17 @@ use crate::{
     },
 };
 use aes_prng::AesRng;
-use iris_mpc_common::iris_db::{
-    db::IrisDB,
-    iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+use iris_mpc_common::{
+    iris_db::{
+        db::IrisDB,
+        iris::{IrisCode, MATCH_THRESHOLD_RATIO},
+    },
+    vector_id::VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use super::aby3::aby3_store::VectorId;
 use eyre::{bail, Result};
 use std::collections::HashMap;
 

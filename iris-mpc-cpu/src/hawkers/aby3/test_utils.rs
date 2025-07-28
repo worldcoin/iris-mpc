@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use aes_prng::AesRng;
 use eyre::{bail, Result};
 use futures::future::join_all;
-use iris_mpc_common::iris_db::db::IrisDB;
+use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -26,7 +26,7 @@ use crate::{
     shares::{RingElement, Share},
 };
 
-use super::aby3_store::{Aby3Store, VectorId};
+use super::aby3_store::Aby3Store;
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
 
