@@ -28,7 +28,7 @@ pub struct Aby3Query {
     pub iris: Arc<GaloisRingSharedIris>,
 
     /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub pp_iris: Arc<GaloisRingSharedIris>,
+    pub iris_proc: Arc<GaloisRingSharedIris>,
 }
 
 impl Aby3Query {
@@ -40,9 +40,9 @@ impl Aby3Query {
         let mut preprocessed = (**iris_ref).clone();
         preprocessed.code.preprocess_iris_code_query_share();
         preprocessed.mask.preprocess_mask_code_query_share();
-        let pp_iris = Arc::new(preprocessed);
+        let iris_proc = Arc::new(preprocessed);
 
-        Self { iris, pp_iris }
+        Self { iris, iris_proc }
     }
 
     pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
@@ -50,10 +50,10 @@ impl Aby3Query {
         Self::new(&iris)
     }
 
-    pub fn from_processed(iris: GaloisRingSharedIris, pp_iris: GaloisRingSharedIris) -> Self {
+    pub fn from_processed(iris: GaloisRingSharedIris, iris_proc: GaloisRingSharedIris) -> Self {
         Self {
             iris: Arc::new(iris),
-            pp_iris: Arc::new(pp_iris),
+            iris_proc: Arc::new(iris_proc),
         }
     }
 }
@@ -154,7 +154,7 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            &[Some((&*query.pp_iris, &**v))]
+            &[Some((&*query.iris_proc, &**v))]
         } else {
             &[None]
         };
@@ -173,7 +173,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.pp_iris, &**v)))
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -195,7 +195,7 @@ impl VectorStore for Aby3Store {
             .flat_map(|q| {
                 vectors
                     .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&*q.pp_iris, &**v)))
+                    .map(|vector| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
             })
             .collect::<Vec<_>>();
 

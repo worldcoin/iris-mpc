@@ -71,12 +71,12 @@ async fn per_session(
     let query_pairs = pairs
         .iter()
         .map(|pair| {
-            let pp_iris1 =
-                &*search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].pp_iris;
+            let iris1_proc =
+                &*search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
             let iris2 = &*search_queries[batch.i_eye][pair.earlier_request]
                 .center()
                 .iris;
-            Some((pp_iris1, iris2))
+            Some((iris1_proc, iris2))
         })
         .collect_vec();
 

@@ -759,11 +759,11 @@ impl From<BatchQuery> for HawkRequest {
                                     code: code.clone(),
                                     mask: mask.clone(),
                                 });
-                                let pp_iris = Arc::new(GaloisRingSharedIris {
+                                let iris_proc = Arc::new(GaloisRingSharedIris {
                                     code: code_proc.clone(),
                                     mask: mask_proc.clone(),
                                 });
-                                Aby3Query { iris, pp_iris }
+                                Aby3Query { iris, iris_proc }
                             })
                             .collect_vec()
                             .into()
