@@ -8,6 +8,7 @@ use crate::{
 use backon::{ExponentialBuilder, Retryable};
 use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
+use iris_mpc_common::config::TlsConfig;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
@@ -68,7 +69,12 @@ impl GrpcNetworking {
             .with_max_times(27) // about 60 seconds overall delay
     }
 
-    pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
+    pub async fn connect_to_party(
+        &mut self,
+        party_id: Identity,
+        address: &str,
+        tls: Option<TlsConfig>,
+    ) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             bail!(
                 "{:?} has already connected to {:?}",
@@ -79,9 +85,12 @@ impl GrpcNetworking {
         let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
                 let address = address.to_string();
-                (move || PartyNodeClient::connect(address.clone()))
-                    .retry(self.backoff())
-                    .sleep(tokio::time::sleep)
+                match tls.as_ref() {
+                    Some(config) => {}
+                    None => (move || PartyNodeClient::connect(address.clone()))
+                        .retry(self.backoff())
+                        .sleep(tokio::time::sleep),
+                }
             })
             .map(tokio::spawn)
             .collect::<JoinAll<_>>()

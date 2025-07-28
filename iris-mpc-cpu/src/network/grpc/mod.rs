@@ -60,16 +60,33 @@ pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> R
     let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
     let networking = GrpcHandle::new(networking).await?;
 
-    {
-        let player = networking.clone();
-        tracing::info!("Starting Hawk server on {}", my_addr);
-        tokio::spawn(async move {
-            Server::builder()
-                .add_service(PartyNodeServer::new(player))
-                .serve(my_addr)
-                .await
-                .unwrap();
-        });
+    tracing::info!("Starting Hawk server on {}", my_addr);
+    let player = networking.clone();
+    match args.tls {
+        Some(config) => {
+            let cert = fs::read_to_string(config.leaf_cert)?;
+            let key = fs::read_to_string(config.private_key)?;
+            let identity = tonic::transport::Identity::from_pem(cert, key);
+            let tls_config = tonic::transport::ServerTlsConfig::new().identity(identity);
+
+            tokio::spawn(async move {
+                Server::builder()
+                    .tls_config(tls_config)?
+                    .add_service(PartyNodeServer::new(player))
+                    .serve(my_addr)
+                    .await
+                    .unwrap();
+            });
+        }
+        None => {
+            tokio::spawn(async move {
+                Server::builder()
+                    .add_service(PartyNodeServer::new(player))
+                    .serve(my_addr)
+                    .await
+                    .unwrap();
+            });
+        }
     }
 
     izip!(identities, &args.addresses)
