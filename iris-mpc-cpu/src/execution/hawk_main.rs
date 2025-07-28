@@ -7,9 +7,10 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
-    hawkers::{aby3::aby3_store::{
-        Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store
-    }, shared_irises::SharedIrises},
+    hawkers::{
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store},
+        shared_irises::SharedIrises,
+    },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
         searcher::ConnectPlanV,

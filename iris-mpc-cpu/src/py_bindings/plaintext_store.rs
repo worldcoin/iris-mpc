@@ -1,9 +1,13 @@
 use crate::hawkers::plaintext_store::PlaintextStore;
-use iris_mpc_common::{iris_db::iris::{IrisCode, IrisCodeArray}, IrisVectorId};
+use iris_mpc_common::{
+    iris_db::iris::{IrisCode, IrisCodeArray},
+    IrisVectorId,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
-    io::{self, BufReader, BufWriter, Write}, sync::Arc,
+    io::{self, BufReader, BufWriter, Write},
+    sync::Arc,
 };
 
 /// Iris code representation using base64 encoding compatible with Open IRIS
@@ -44,7 +48,9 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     for (idx, json_pt) in stream.into_iter().enumerate() {
         let json_pt = json_pt?;
         let iris = (&json_pt).into();
-        vector.storage.insert(IrisVectorId::from_0_index(idx as u32), Arc::new(iris));
+        vector
+            .storage
+            .insert(IrisVectorId::from_0_index(idx as u32), Arc::new(iris));
     }
 
     if let Some(num) = len {
@@ -72,7 +78,13 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     serial_ids.sort();
     // to keep all old ndjson files backwards compatible, we write the iris codes only
     for serial_id in serial_ids {
-        let pt = vector.storage.points.get(&serial_id).expect("Key not found").1.clone();
+        let pt = vector
+            .storage
+            .points
+            .get(&serial_id)
+            .expect("Key not found")
+            .1
+            .clone();
         let json_pt: Base64IrisCode = (&*pt).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object

@@ -1,7 +1,7 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
-    hawkers::{aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef}},
+    hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
@@ -480,11 +480,12 @@ mod tests {
     // Returns a test imem Iris store.
     fn get_iris_imem_stores() -> (BothEyes<Aby3SharedIrisesRef>, usize) {
         let mut rng = AesRng::seed_from_u64(RNG_SEED);
-        let iris_stores: BothEyes<Aby3SharedIrisesRef> = [StoreId::Left, StoreId::Right].map(|_| {
-            let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
-            setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
-                .remove(PARTY_ID)
-        });
+        let iris_stores: BothEyes<Aby3SharedIrisesRef> =
+            [StoreId::Left, StoreId::Right].map(|_| {
+                let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
+                setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
+                    .remove(PARTY_ID)
+            });
 
         (iris_stores, SIZE_OF_IRIS_DB)
     }

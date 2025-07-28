@@ -6,7 +6,9 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrises, Aby3Store}, plaintext_store::PlaintextStore, shared_irises::SharedIrises,
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store},
+        plaintext_store::PlaintextStore,
+        shared_irises::SharedIrises,
     },
     hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
@@ -61,8 +63,12 @@ async fn create_graph_from_plain_dbs(
         .collect();
     let right_storage = SharedIrises::new(right_points, Default::default());
 
-    let mut left_store = PlaintextStore { storage: left_storage };
-    let mut right_store = PlaintextStore { storage: right_storage };
+    let mut left_store = PlaintextStore {
+        storage: left_storage,
+    };
+    let mut right_store = PlaintextStore {
+        storage: right_storage,
+    };
 
     let searcher = HnswSearcher {
         params: params.clone(),

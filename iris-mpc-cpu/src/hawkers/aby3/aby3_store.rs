@@ -546,10 +546,16 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[Arc::new(plaintext_database[0].clone())], &plaintext_inserts)
+            .eval_distance_batch(
+                &[Arc::new(plaintext_database[0].clone())],
+                &plaintext_inserts,
+            )
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[Arc::new(plaintext_database[1].clone())], &plaintext_inserts)
+            .eval_distance_batch(
+                &[Arc::new(plaintext_database[1].clone())],
+                &plaintext_inserts,
+            )
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
