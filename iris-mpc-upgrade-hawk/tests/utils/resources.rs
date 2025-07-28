@@ -58,6 +58,30 @@ pub fn read_iris_code_pairs(
     Ok(stream)
 }
 
+/// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
+///
+/// # Arguments
+///
+/// * `batch_size` - Size of chunks to split Iris shares into.
+/// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
+/// * `max_items` - Maximum number of Iris code pairs to read.
+///
+/// # Returns
+///
+/// A chunked iterator over Iris code pairs.
+///
+pub fn read_iris_code_pairs_batch(
+    batch_size: usize,
+    skip_offset: usize,
+    max_items: usize,
+) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
+    let stream = read_iris_code_pairs(skip_offset, max_items)
+        .unwrap()
+        .chunks(batch_size);
+
+    Ok(stream)
+}
+
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
 ///
 /// # Arguments
@@ -140,9 +164,9 @@ pub fn read_node_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_path_to_resources, get_subdirectory_of_env, read_iris_code_pairs, read_iris_shares,
-        read_iris_shares_batch, read_node_config, TestRunContextInfo, TestRunEnvironment,
-        COUNT_OF_PARTIES,
+        get_path_to_resources, get_subdirectory_of_env, read_iris_code_pairs,
+        read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
+        TestRunContextInfo, TestRunEnvironment, COUNT_OF_PARTIES,
     };
     use std::path::Path;
 
@@ -182,6 +206,28 @@ mod tests {
     }
 
     #[test]
+    fn test_read_iris_code_pairs_batch() {
+        // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
+        for (skip_offset, max_items, batch_size, expected_batches) in
+            [(0, 100, 10, 10), (838, 81, 9, 9)]
+        {
+            let mut n_read = 0;
+            for chunk in read_iris_code_pairs_batch(batch_size, skip_offset, max_items)
+                .unwrap()
+                .into_iter()
+            {
+                n_read += 1;
+                let mut n_items = 0;
+                for _ in chunk.into_iter() {
+                    n_items += 1;
+                }
+                assert_eq!(n_items, batch_size);
+            }
+            assert_eq!(n_read, expected_batches);
+        }
+    }
+
+    #[test]
     fn test_read_iris_shares() {
         for (skip_offset, max_items) in [(0, 100), (838, 81)] {
             let mut n_read = 0;
@@ -198,14 +244,20 @@ mod tests {
         for (skip_offset, max_items, batch_size, expected_batches) in
             [(0, 100, 10, 10), (838, 81, 9, 9)]
         {
-            let mut n_batches = 0;
-            for _ in read_iris_shares_batch(batch_size, DEFAULT_RNG_STATE, skip_offset, max_items)
-                .unwrap()
-                .into_iter()
+            let mut n_chunks = 0;
+            for chunk in
+                read_iris_shares_batch(batch_size, DEFAULT_RNG_STATE, skip_offset, max_items)
+                    .unwrap()
+                    .into_iter()
             {
-                n_batches += 1;
+                n_chunks += 1;
+                let mut n_items = 0;
+                for _ in chunk.into_iter() {
+                    n_items += 1;
+                }
+                assert_eq!(n_items, batch_size);
             }
-            assert_eq!(n_batches, expected_batches);
+            assert_eq!(n_chunks, expected_batches);
         }
     }
 
