@@ -39,8 +39,15 @@ pub fn to_galois_ring_shares(
 
 #[cfg(test)]
 mod tests {
+    use super::{to_galois_ring_shares, IrisCodePair};
+    use crate::utils::constants::COUNT_OF_PARTIES;
+
+    const DEFAULT_RNG_STATE: u64 = 93;
+
     #[test]
     fn test_to_galois_ring_shares() {
-        unimplemented!()
+        let entity = IrisCodePair::default();
+        let mapped = to_galois_ring_shares(DEFAULT_RNG_STATE, &entity);
+        assert!(mapped.len() == COUNT_OF_PARTIES)
     }
 }
