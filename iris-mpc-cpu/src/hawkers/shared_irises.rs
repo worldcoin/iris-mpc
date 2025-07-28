@@ -8,12 +8,23 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::execution::hawk_main::state_check::SetHash;
 
 /// Storage of inserted irises.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SharedIrises<I: Clone> {
     pub points: HashMap<SerialId, (VersionId, I)>,
     pub next_id: u32,
     pub empty_iris: I,
     pub set_hash: SetHash,
+}
+
+impl<I: Clone + Default> Default for SharedIrises<I> {
+    fn default() -> Self {
+        Self {
+            points: Default::default(),
+            next_id: 1,
+            empty_iris: Default::default(),
+            set_hash: Default::default(),
+        }
+    }
 }
 
 impl<I: Clone> SharedIrises<I> {
@@ -91,14 +102,14 @@ impl<I: Clone> SharedIrises<I> {
         self.points.get(&serial_id).map(|(version, _iris)| *version)
     }
 
-    fn get_vector_or_empty(&self, vector: &VectorId) -> I {
+    pub fn get_vector_or_empty(&self, vector: &VectorId) -> I {
         match self.points.get(&vector.serial_id()) {
             Some((version, iris)) if vector.version_matches(*version) => iris.clone(),
             _ => self.empty_iris.clone(),
         }
     }
 
-    fn get_vector(&self, vector: &VectorId) -> Option<I> {
+    pub fn get_vector(&self, vector: &VectorId) -> Option<I> {
         match self.points.get(&vector.serial_id()) {
             Some((version, iris)) if vector.version_matches(*version) => Some(iris.clone()),
             _ => None,
@@ -149,14 +160,14 @@ pub struct SharedIrisesRef<I: Clone> {
     pub data: Arc<RwLock<SharedIrises<I>>>,
 }
 
-impl <I: Clone> std::fmt::Debug for SharedIrisesRef<I> {
+impl<I: Clone> std::fmt::Debug for SharedIrisesRef<I> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt("SharedIrisesRef", f)
     }
 }
 
 // Getters, iterators and mutators of the iris storage.
-impl <I: Clone> SharedIrisesRef<I> {
+impl<I: Clone> SharedIrisesRef<I> {
     pub async fn write(&self) -> RwLockWriteGuard<'_, SharedIrises<I>> {
         self.data.write().await
     }

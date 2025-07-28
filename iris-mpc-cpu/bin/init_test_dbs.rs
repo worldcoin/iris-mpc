@@ -1,5 +1,5 @@
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
@@ -370,7 +370,7 @@ async fn main() -> Result<()> {
                 }
                 let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = vector_store.insert_with_id(serial_id, &query);
+                let inserted_id = vector_store.storage.insert(IrisVectorId::from_0_index(serial_id), query.clone());
                 let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, set_ep) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
@@ -408,7 +408,7 @@ async fn main() -> Result<()> {
 
     info!(
         "Finished building HNSW graphs with {} nodes",
-        results[0].1.points.len()
+        results[0].1.len()
     );
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();

@@ -360,8 +360,8 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let query = cleartext_data
                 .0
-                .points
-                .get(&vector_id.serial_id())
+                .storage
+                .get_vector(&vector_id)
                 .unwrap()
                 .clone();
             let cleartext_neighbors = hawk_searcher
@@ -546,10 +546,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[Arc::new(plaintext_database[0].clone())], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(&[Arc::new(plaintext_database[1].clone())], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
