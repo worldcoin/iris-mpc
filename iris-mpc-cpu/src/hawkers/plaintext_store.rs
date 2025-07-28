@@ -42,6 +42,24 @@ impl PlaintextStore {
         Self::default()
     }
 
+    /// Return the size of the underlying set of irises.
+    pub fn len(&self) -> usize {
+        self.storage.db_size()
+    }
+
+    /// Return whether the underlying iris set is empty.
+    pub fn is_empty(&self) -> bool {
+        self.storage.db_size() == 0
+    }
+
+    pub fn insert_with_id(
+        &mut self,
+        id: VectorId,
+        query: <Self as VectorStore>::QueryRef,
+    ) -> <Self as VectorStore>::VectorRef {
+        self.storage.insert(id, query)
+    }
+
     /// Generate a new `PlaintextStore` of specified size with random entries.
     pub fn new_random<R: RngCore + Clone + CryptoRng>(rng: &mut R, store_size: usize) -> Self {
         let points_codes = IrisDB::new_random_rng(store_size, rng).db;
@@ -88,16 +106,6 @@ impl PlaintextStore {
         }
 
         Ok(graph)
-    }
-
-    /// Return the size of the underlying set of irises.
-    pub fn len(&self) -> usize {
-        self.storage.db_size()
-    }
-
-    /// Return whether the underlying iris set is empty.
-    pub fn is_empty(&self) -> bool {
-        self.storage.db_size() == 0
     }
 }
 

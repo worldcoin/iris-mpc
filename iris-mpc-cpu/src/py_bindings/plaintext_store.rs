@@ -48,9 +48,8 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     for (idx, json_pt) in stream.into_iter().enumerate() {
         let json_pt = json_pt?;
         let iris = (&json_pt).into();
-        vector
-            .storage
-            .insert(IrisVectorId::from_0_index(idx as u32), Arc::new(iris));
+        let id = IrisVectorId::from_0_index(idx as u32);
+        vector.insert_with_id(id, Arc::new(iris));
     }
 
     if let Some(num) = len {
