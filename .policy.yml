@@ -1,7 +1,7 @@
 policy:
   approval:
     - or:
-        - dev_stage
+        - organizations-trusted
         - security_team_approved
   disapproval:
     requires:
