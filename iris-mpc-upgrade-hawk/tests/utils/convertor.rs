@@ -19,7 +19,7 @@ use rand::{prelude::StdRng, SeedableRng};
 pub fn to_galois_ring_shares(
     rng_state: u64,
     code_pair: &IrisCodePair,
-) -> [GaloisRingSharedIrisPair; COUNT_OF_PARTIES] {
+) -> Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]> {
     // Set RNG for each pair to match shares_encoding.rs behavior
     let mut shares_seed = StdRng::seed_from_u64(rng_state);
 
@@ -30,11 +30,11 @@ pub fn to_galois_ring_shares(
     let shares_r =
         GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_r.to_owned());
 
-    [
+    Box::new([
         (shares_l[0].to_owned(), shares_r[0].to_owned()),
         (shares_l[1].to_owned(), shares_r[1].to_owned()),
         (shares_l[2].to_owned(), shares_r[2].to_owned()),
-    ]
+    ])
 }
 
 #[cfg(test)]
@@ -46,8 +46,7 @@ mod tests {
 
     #[test]
     fn test_to_galois_ring_shares() {
-        let entity = IrisCodePair::default();
-        let mapped = to_galois_ring_shares(DEFAULT_RNG_STATE, &entity);
-        assert!(mapped.len() == COUNT_OF_PARTIES)
+        let converted = to_galois_ring_shares(DEFAULT_RNG_STATE, &IrisCodePair::default());
+        assert!(converted.len() == COUNT_OF_PARTIES)
     }
 }

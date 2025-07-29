@@ -1,11 +1,13 @@
-use super::types::IrisCodePair;
+use super::{
+    constants::COUNT_OF_PARTIES, resources::read_iris_shares_batch, types::GaloisRingSharedIrisPair,
+};
 use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
 };
 use iris_mpc_store::Store as IrisStore;
-use itertools::IntoChunks;
+use itertools::{IntoChunks, Itertools};
 
 /// Encapsulates information required to connect to a database.
 pub struct DatabaseConnectionInfo {
@@ -91,57 +93,53 @@ impl DatabaseContext {
     }
 }
 
-pub async fn write_iris_shares_to_store(
-    batch_size: usize,
-    iris_shares_rnd: u64,
-    iris_serial_id_max: usize,
-    iris_code_pair_batch_stream: IntoChunks<impl Iterator<Item = IrisCodePair>>,
+/// Persists Iris shares to remote databases.
+///
+/// # Arguments
+///
+/// * `batch_size` - Size of chunks to split Iris shares into.
+/// * `rng_state` - State of an RNG being used to inject entropy to share creation.
+/// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
+/// * `max_items` - Maximum number of Iris code pairs to read.
+///
+/// # Returns
+///
+/// A chunked iterator over Iris shares.
+///
+pub async fn write_iris_shares_to_stores(
+    _stores: Option<[&IrisStore; COUNT_OF_PARTIES]>,
+    shares_batch_generator: IntoChunks<
+        impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>,
+    >,
 ) -> Result<()> {
+    for (batch_idx, batch) in shares_batch_generator.into_iter().enumerate() {
+        println!("batch-idx {}", batch_idx);
+        for (shares_idx, shares) in batch.into_iter().enumerate() {
+            println!("shares {} :: {}", shares_idx, shares.len());
+            for (share_idx, _share) in shares.to_vec().iter().enumerate() {
+                println!("share-idx {}", share_idx);
+            }
+        }
+    }
+
     unimplemented!()
-    // let mut n_iris_code_pair_read: usize = 0;
-    // let mut batch: Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>> = (0..COUNT_OF_PARTIES)
-    //     .map(|_| Vec::with_capacity(batch_size))
-    //     .collect();
+}
 
-    // for (iris_code_pair_batch_idx, iris_code_pair_batch_iter) in
-    //     iris_code_pair_batch_stream.into_iter().enumerate()
-    // {
-    //     let iris_code_pair_batch: Vec<(_, _)> = iris_code_pair_batch_iter.collect();
-    //     n_iris_code_pair_read += iris_code_pair_batch.len();
+#[cfg(test)]
+mod tests {
+    use super::{read_iris_shares_batch, write_iris_shares_to_stores};
 
-    //     for (left, right) in iris_code_pair_batch {
-    //         // Reset RNG for each pair to match shares_encoding.rs behavior
-    //         let mut shares_seed = StdRng::seed_from_u64(iris_shares_rnd);
+    #[tokio::test]
+    async fn test_write_iris_shares_to_store() {
+        let batch_size = 10;
+        let rng_state = 93;
+        let skip_offset = 0;
+        let max_items = 100;
 
-    //         let left_shares =
-    //             GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, left.clone());
-    //         let right_shares =
-    //             GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, right.clone());
-    //         for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-    //             batch[party].push((shares_l, shares_r));
-    //         }
-    //     }
-
-    //     let cur_batch_len = batch[0].len();
-    //     let iris_serial_id_last =
-    //         (iris_code_pair_batch_idx * batch_size) + cur_batch_len + iris_serial_id_max;
-
-    //     for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-    //         #[allow(clippy::drain_collect)]
-    //         let (_, iris_serial_id_last_persisted) =
-    //             db.persist_vector_shares(shares.drain(..).collect()).await?;
-    //         assert_eq!(iris_serial_id_last_persisted, iris_serial_id_last);
-    //     }
-
-    //     logger::log_info(
-    //         "Store",
-    //         format!(
-    //             "Persisted {} locally generated shares",
-    //             iris_serial_id_last - iris_serial_id_max
-    //         )
-    //         .as_str(),
-    //     );
-    // }
-
-    // Ok(())
+        let shares_batch_generator =
+            read_iris_shares_batch(batch_size, rng_state, skip_offset, max_items).unwrap();
+        write_iris_shares_to_stores(None, shares_batch_generator)
+            .await
+            .unwrap();
+    }
 }

@@ -86,7 +86,7 @@ pub fn read_iris_code_pairs_batch(
 ///
 /// # Arguments
 ///
-/// * `rng_state` - State of an RNG being used to inject entropy to sahre creation.
+/// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 /// * `max_items` - Maximum number of Iris code pairs to read.
 ///
@@ -98,7 +98,7 @@ pub fn read_iris_shares(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<impl Iterator<Item = [GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>, Error> {
+) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>, Error> {
     let stream = read_iris_code_pairs(skip_offset, max_items)
         .unwrap()
         .map(move |code_pair| to_galois_ring_shares(rng_state, &code_pair));
@@ -111,7 +111,7 @@ pub fn read_iris_shares(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `rng_state` - State of an RNG being used to inject entropy to sahre creation.
+/// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 /// * `max_items` - Maximum number of Iris code pairs to read.
 ///
@@ -124,7 +124,10 @@ pub fn read_iris_shares_batch(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<IntoChunks<impl Iterator<Item = [GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>, Error> {
+) -> Result<
+    IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>>,
+    Error,
+> {
     let stream = read_iris_shares(rng_state, skip_offset, max_items)
         .unwrap()
         .chunks(batch_size);
@@ -211,19 +214,19 @@ mod tests {
         for (skip_offset, max_items, batch_size, expected_batches) in
             [(0, 100, 10, 10), (838, 81, 9, 9)]
         {
-            let mut n_read = 0;
+            let mut n_chunks = 0;
             for chunk in read_iris_code_pairs_batch(batch_size, skip_offset, max_items)
                 .unwrap()
                 .into_iter()
             {
-                n_read += 1;
+                n_chunks += 1;
                 let mut n_items = 0;
                 for _ in chunk.into_iter() {
                     n_items += 1;
                 }
                 assert_eq!(n_items, batch_size);
             }
-            assert_eq!(n_read, expected_batches);
+            assert_eq!(n_chunks, expected_batches);
         }
     }
 
@@ -252,7 +255,8 @@ mod tests {
             {
                 n_chunks += 1;
                 let mut n_items = 0;
-                for _ in chunk.into_iter() {
+                for item in chunk.into_iter() {
+                    assert_eq!(item.len(), COUNT_OF_PARTIES);
                     n_items += 1;
                 }
                 assert_eq!(n_items, batch_size);
