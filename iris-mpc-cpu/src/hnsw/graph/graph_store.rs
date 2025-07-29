@@ -662,7 +662,6 @@ mod tests {
                 let q = Arc::new(raw_query);
                 v.push(vector_store.insert(&q).await);
             }
-            println!("v: {v:?}");
             v
         };
 
