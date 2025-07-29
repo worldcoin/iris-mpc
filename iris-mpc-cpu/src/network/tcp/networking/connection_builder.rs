@@ -8,6 +8,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Result};
+use rand::{thread_rng, Rng};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -460,6 +461,13 @@ where
         let pending_tx = self.pending_tx.clone();
         let ct = self.ct.clone();
         let connector = self.connector.clone();
+
+        // don't want all the connections to come in at the same time
+        let mut rng = thread_rng();
+        let delay_ms = rng.gen_range(0..=3000);
+        // backoff when retrying
+        let mut retry_sec = 2;
+
         tokio::spawn(async move {
             tracing::trace!(
                 "{:?}: initiating connection to {:?} for {:?}",
@@ -467,7 +475,7 @@ where
                 peer,
                 stream_id
             );
-            let retry = Duration::from_millis(500);
+            sleep(Duration::from_millis(delay_ms)).await;
             loop {
                 let r = tokio::select! {
                     res = connector.connect(url.clone()) => res,
@@ -480,20 +488,22 @@ where
                         if let Err(e) = handshake::outbound(&mut stream, &own_id, &stream_id).await
                         {
                             tracing::error!("{e:?}");
-                            sleep(retry).await;
-                            continue;
+                        } else {
+                            let pending = Connection::new(peer, stream, stream_id);
+                            if pending_tx.send(pending).is_err() {
+                                tracing::error!("accept loop receiver dropped");
+                            }
+                            break;
                         }
-                        let pending = Connection::new(peer, stream, stream_id);
-                        if pending_tx.send(pending).is_err() {
-                            tracing::error!("accept loop receiver dropped");
-                        }
-                        break;
                     }
                     Err(e) => {
                         tracing::warn!(%e, "dial {:?} failed, retrying", url.clone());
-                        sleep(retry).await;
                     }
                 };
+                sleep(Duration::from_secs(retry_sec)).await;
+                if retry_sec < 32 {
+                    retry_sec *= 2;
+                }
             }
         });
     }
