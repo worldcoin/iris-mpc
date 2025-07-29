@@ -1,5 +1,5 @@
-use super::{factory, types::TestInputs};
-use crate::utils::{TestError, TestRun, TestRunContextInfo};
+use super::factory;
+use crate::utils::{TestError, TestInputs, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 

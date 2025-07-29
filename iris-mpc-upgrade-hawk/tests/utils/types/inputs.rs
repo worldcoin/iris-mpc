@@ -41,7 +41,7 @@ impl TestInputs {
 
 /// Inputs required to run a network.
 #[derive(Debug, Clone)]
-pub(super) struct NetInputs {
+pub struct NetInputs {
     /// Node input arguments.
     node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
 }
@@ -64,7 +64,7 @@ impl NetInputs {
 
 /// Inputs required to run a node.
 #[derive(Debug, Clone)]
-pub(super) struct NodeProcessInputs {
+pub struct NodeProcessInputs {
     /// Node input arguments.
     args: NodeArgs,
 
@@ -92,7 +92,7 @@ impl NodeProcessInputs {
 
 /// Inputs required to initialise system state prior to a test run.
 #[derive(Debug, Clone)]
-pub(super) struct SystemStateInputs {
+pub struct SystemStateInputs {
     // Serial identifiers of deleted Iris's.
     #[allow(dead_code)]
     iris_deletions: Vec<IrisSerialId>,

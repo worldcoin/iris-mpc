@@ -1,5 +1,5 @@
-use super::types::{NetInputs, NodeProcessInputs, TestInputs};
-use crate::utils::{constants, resources, TestRunContextInfo};
+use super::types::{NetInputs, NodeProcessInputs};
+use crate::utils::{constants, resources, TestInputs, TestRunContextInfo};
 use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
