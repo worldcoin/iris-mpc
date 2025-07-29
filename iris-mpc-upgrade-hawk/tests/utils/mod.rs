@@ -1,13 +1,14 @@
 pub mod constants;
 mod convertor;
 mod errors;
-pub mod factory;
+mod factory;
 mod logger;
 pub mod resources;
 pub mod runner;
 mod store;
-pub mod types;
+mod types;
 
 pub use errors::TestError;
+pub use factory::TestInputFactory;
 pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};
-pub use types::IrisCodePair;
+pub use types::{inputs::*, IrisCodePair};

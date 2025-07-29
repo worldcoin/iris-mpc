@@ -1,5 +1,5 @@
 use crate::utils::{
-    types::inputs::{NetInputs, TestInputs},
+    types::inputs::{NetInputs, NodeProcessInputs, SystemStateInputs, TestInputs},
     TestRunContextInfo,
 };
 use iris_mpc_common::config::Config as NodeConfig;
@@ -10,8 +10,11 @@ pub trait TestInputFactory {
     /// Returns test run inputs.
     fn get_test_inputs(&self, ctx: &TestRunContextInfo) -> TestInputs {
         let net_inputs = self.get_net_inputs(ctx);
-        // TODO: load system state inputs.
-        TestInputs::new(net_inputs, None)
+        let system_state_inputs = self.get_system_state_inputs(ctx);
+        TestInputs {
+            net_inputs,
+            system_state_inputs,
+        }
     }
 
     /// Returns network process inputs for usage during a test run.
@@ -35,8 +38,13 @@ pub trait TestInputFactory {
     }
 
     /// Returns node CLI args.
+    /// Used to construct NodeProcessInputs
     fn get_args(&self) -> NodeArgs;
 
     /// Returns node configuration.
+    /// Used to construct NodeProcessInputs
     fn get_config(&self, ctx: &TestRunContextInfo, party_id: usize) -> NodeConfig;
+
+    /// Returns system state inputs for usage during a test run.
+    fn get_system_state_inputs(&self, ctx: &TestRunContextInfo) -> Option<SystemStateInputs>;
 }

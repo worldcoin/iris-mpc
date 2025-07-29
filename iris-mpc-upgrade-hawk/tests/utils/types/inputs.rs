@@ -5,11 +5,11 @@ use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 #[derive(Debug, Clone)]
 pub struct TestInputs {
     // Data used to launch each node process during a test run.
-    net_inputs: NetInputs,
+    pub net_inputs: NetInputs,
 
     // Data used to initialise system state prior to a test run.
     #[allow(dead_code)]
-    system_state_inputs: Option<SystemStateInputs>,
+    pub system_state_inputs: Option<SystemStateInputs>,
 }
 
 /// Constructor.
@@ -22,7 +22,7 @@ impl TestInputs {
     }
 
     pub fn with_system_state(mut self, sys_inputs: SystemStateInputs) -> Self {
-        self.system_state_inputs = sys_inputs;
+        self.system_state_inputs.replace(sys_inputs);
         self
     }
 }

@@ -1,5 +1,7 @@
-use super::factory;
-use crate::utils::{TestError, TestInputs, TestRun, TestRunContextInfo};
+use crate::{
+    utils::{TestError, TestInputs, TestRun, TestRunContextInfo},
+    workflows::genesis_103::factory,
+};
 use eyre::{Report, Result};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
