@@ -1,3 +1,5 @@
+pub mod inputs;
+
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 
