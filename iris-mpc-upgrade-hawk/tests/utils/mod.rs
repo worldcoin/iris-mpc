@@ -11,4 +11,4 @@ mod types;
 pub use errors::TestError;
 pub use factory::TestInputFactory;
 pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};
-pub use types::{inputs::*, IrisCodePair};
+pub use types::{inputs::*, test::*, IrisCodePair};

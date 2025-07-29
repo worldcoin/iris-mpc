@@ -2,27 +2,15 @@ use crate::{
     utils::{TestError, TestInputs, TestRun, TestRunContextInfo},
     workflows::genesis_103::factory,
 };
-use eyre::{Report, Result};
+use derive_more::{Deref, DerefMut};
+use eyre::{eyre, Report, Result};
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_store::Store;
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
+use std::ops::{Deref, DerefMut};
 
-/// HNSW Genesis test.
-pub struct Test {
-    /// Data encapsulating test inputs.
-    inputs: Option<TestInputs>,
-
-    /// Results of node process execution.
-    node_results: Option<Vec<Result<(), Report>>>,
-}
-
-/// Constructor.
-impl Test {
-    pub fn new() -> Self {
-        Self {
-            inputs: None,
-            node_results: None,
-        }
-    }
-}
+#[derive(Deref, DerefMut, Default)]
+pub struct Test(crate::utils::Test);
 
 /// Trait: TestRun.
 impl TestRun for Test {
@@ -69,6 +57,8 @@ impl TestRun for Test {
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
         self.inputs = Some(factory::get_test_inputs(ctx));
+
+        // todo: self.get_db_contexts?.map(|x| x.init_modifications_from_file(...));
 
         // Write 100 Iris shares -> GPU dB.
         // TODO

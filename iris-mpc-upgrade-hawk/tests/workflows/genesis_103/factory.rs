@@ -27,7 +27,8 @@ impl TestInputFactory for DefaultTestInputFactory {
         resources::read_node_config(ctx, format!("node-{}-genesis-0", party_id)).unwrap()
     }
 
+    // todo: add these
     fn get_system_state_inputs(&self, ctx: &TestRunContextInfo) -> Option<SystemStateInputs> {
-        todo!()
+        None
     }
 }

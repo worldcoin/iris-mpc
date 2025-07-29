@@ -1,0 +1,32 @@
+[
+    {
+        "id": 10,
+        "serial_id": 95,
+        "request_type": "reset_update",
+        "s3_url": "http://example.com/reset_10",
+        "status": "COMPLETED",
+        "persisted": true,
+        "result_message_body": "todo: message body",
+        "graph_mutation": "todo: graph mutation"
+    },
+    {
+        "id": 12,
+        "serial_id": 100,
+        "request_type": "reauth",
+        "s3_url": "http://example.com/reauth_12",
+        "status": "COMPLETED",
+        "persisted": true,
+        "result_message_body": null,
+        "graph_mutation": null
+    },
+    {
+        "id": 15,
+        "serial_id": 100,
+        "request_type": "identity_deletion",
+        "s3_url": null,
+        "status": "COMPLETED",
+        "persisted": true,
+        "result_message_body": null,
+        "graph_mutation": null
+    }
+]
