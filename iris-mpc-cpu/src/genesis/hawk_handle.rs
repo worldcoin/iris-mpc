@@ -2,10 +2,13 @@ use super::{
     hawk_job::{Job, JobRequest, JobResult},
     utils,
 };
-use crate::execution::hawk_main::{
-    insert::insert, scheduler::parallelize, search::search_single_query_no_match_count, BothEyes,
-    HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT, RIGHT,
-    STORE_IDS,
+use crate::{
+    execution::hawk_main::{
+        insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
+        BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT,
+        RIGHT, STORE_IDS,
+    },
+    hawkers::aby3::aby3_store::Aby3Query,
 };
 use eyre::{eyre, OptionExt, Result};
 use iris_mpc_common::helpers::smpc_request;
@@ -231,7 +234,7 @@ impl Handle {
 
                                     // TODO remove any prior versions of this vector id from graph
 
-                                    let query = vector.get_query(&vector_id).await;
+                                    let query = Aby3Query::new(&vector.get_vector_or_empty(&vector_id).await);
                                     let insert_plan = search_single_query_no_match_count(
                                         session.clone(),
                                         query,

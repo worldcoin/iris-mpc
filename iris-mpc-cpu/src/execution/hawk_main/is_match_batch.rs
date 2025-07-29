@@ -2,7 +2,7 @@ use super::{
     rot::VecRots, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
     LEFT, RIGHT,
 };
-use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{hawkers::aby3::aby3_store::Aby3Query, hnsw::VectorStore};
 use eyre::Result;
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 use tokio::task::JoinError;
 
 pub async fn calculate_missing_is_match(
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
+    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
     missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSessionRef>>,
 ) -> Result<BothEyes<VecRequests<MapEdges<bool>>>> {
@@ -30,7 +30,7 @@ pub async fn calculate_missing_is_match(
 }
 
 async fn per_side(
-    queries: &VecRequests<VecRots<QueryRef>>,
+    queries: &VecRequests<VecRots<Aby3Query>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
     sessions: &Vec<HawkSessionRef>,
 ) -> Result<VecRequests<MapEdges<bool>>> {
@@ -86,7 +86,7 @@ async fn per_side(
 }
 
 async fn per_session(
-    tasks: VecRequests<(QueryRef, Arc<VecEdges<VectorId>>)>,
+    tasks: VecRequests<(Aby3Query, Arc<VecEdges<VectorId>>)>,
     session: HawkSessionRef,
 ) -> Result<VecRequests<MapEdges<bool>>> {
     let mut session = session.write().await;
@@ -100,7 +100,7 @@ async fn per_session(
 }
 
 async fn per_query(
-    query: QueryRef,
+    query: Aby3Query,
     vector_ids: &[VectorId],
     session: &mut HawkSession,
 ) -> Result<MapEdges<bool>> {

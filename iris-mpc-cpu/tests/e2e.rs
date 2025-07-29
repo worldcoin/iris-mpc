@@ -2,13 +2,14 @@ use eyre::Result;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
     test::{generate_full_test_db, TestCaseGenerator},
-    vector_id::SerialId,
+    vector_id::VectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, VectorId},
+    execution::hawk_main::{HawkActor, HawkArgs, HawkHandle},
     hawkers::{
-        aby3::aby3_store::{Aby3Store, SharedIrises},
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store},
         plaintext_store::PlaintextStore,
+        shared_irises::SharedIrises,
     },
     hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
@@ -45,29 +46,31 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     params: &HnswParams,
-) -> Result<([GraphMem<Aby3Store>; 2], [SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3Store>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
-    let left_points: HashMap<SerialId, IrisCode> = left_db
+    let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
         .iter()
         .enumerate()
-        .map(|(idx, iris)| (idx as u32 + 1, iris.clone()))
+        .map(|(idx, iris)| (VectorId::from_0_index(idx as u32), Arc::new(iris.clone())))
         .collect();
+    let left_storage = SharedIrises::new(left_points, Default::default());
 
-    let right_points: HashMap<SerialId, IrisCode> = right_db
+    let right_points: HashMap<VectorId, Arc<IrisCode>> = right_db
         .db
         .iter()
         .enumerate()
-        .map(|(idx, iris)| (idx as u32 + 1, iris.clone()))
+        .map(|(idx, iris)| (VectorId::from_0_index(idx as u32), Arc::new(iris.clone())))
         .collect();
+    let right_storage = SharedIrises::new(right_points, Default::default());
+
     let mut left_store = PlaintextStore {
-        points: left_points,
-        next_id: left_db.db.len() as u32 + 1,
+        storage: left_storage,
     };
     let mut right_store = PlaintextStore {
-        points: right_points,
-        next_id: right_db.db.len() as u32 + 1,
+        storage: right_storage,
     };
+
     let searcher = HnswSearcher {
         params: params.clone(),
     };
@@ -85,17 +88,17 @@ async fn create_graph_from_plain_dbs(
     let mut right_shared_irises = HashMap::new();
 
     // sort the points by serial id to ensure consistent ordering
-    let mut left_points_sorted: Vec<_> = left_store.points.keys().cloned().collect();
+    let mut left_points_sorted: Vec<_> = left_store.storage.points.keys().cloned().collect();
     left_points_sorted.sort();
 
-    let mut right_points_sorted: Vec<_> = right_store.points.keys().cloned().collect();
+    let mut right_points_sorted: Vec<_> = right_store.storage.points.keys().cloned().collect();
     right_points_sorted.sort();
 
     for serial_id in left_points_sorted {
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            left_store.points.get(&serial_id).unwrap().clone(),
+            (*left_store.storage.points.get(&serial_id).unwrap().1).clone(),
         );
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
@@ -103,13 +106,13 @@ async fn create_graph_from_plain_dbs(
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            right_store.points.get(&serial_id).unwrap().clone(),
+            (*right_store.storage.points.get(&serial_id).unwrap().1).clone(),
         );
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
-    let left_iris_store = SharedIrises::new(left_shared_irises);
-    let right_iris_store = SharedIrises::new(right_shared_irises);
+    let left_iris_store = Aby3Store::new_storage(Some(left_shared_irises));
+    let right_iris_store = Aby3Store::new_storage(Some(right_shared_irises));
 
     Ok((
         [left_mpc_graph, right_mpc_graph],
