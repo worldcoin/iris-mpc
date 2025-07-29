@@ -8,13 +8,12 @@ use crate::{
 use backon::{ExponentialBuilder, Retryable};
 use eyre::{bail, eyre, Result};
 use futures::future::JoinAll;
-use iris_mpc_common::config::TlsConfig;
 use std::{
     collections::{HashMap, HashSet},
     time::Duration,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-use tonic::transport::{Channel, Server};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Server, Uri};
 
 use super::handle::GrpcHandle;
 use super::{GrpcConfig, InStream, InStreams, OutStream, OutStreams};
@@ -73,7 +72,7 @@ impl GrpcNetworking {
         &mut self,
         party_id: Identity,
         address: &str,
-        tls: Option<TlsConfig>,
+        root_cert: Option<String>,
     ) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             bail!(
@@ -82,15 +81,38 @@ impl GrpcNetworking {
                 party_id
             );
         }
+
+        // hacks to build a PartyNodeClient with backoff, retry, and TLS
+        // adding TLS requires access to the underlying Channel
+        async fn get_party_node(
+            endpoint: Endpoint,
+        ) -> std::result::Result<PartyNodeClient<Channel>, tonic::transport::Error> {
+            let channel = endpoint.connect().await?;
+            Ok(PartyNodeClient::new(channel))
+        }
+
+        // address needs to have a 'static lifetime. must use to_string() for this.
+        let uri = Uri::from_maybe_shared(address.to_string())?; // Use https for TLS
+        let endpoint = match root_cert {
+            Some(cert) => {
+                let server_ca = Certificate::from_pem(cert);
+                let tls_config = ClientTlsConfig::new().ca_certificate(server_ca);
+                let endpoint = Channel::builder(uri).tls_config(tls_config)?;
+                endpoint
+            }
+            None => {
+                let endpoint = Channel::builder(uri);
+                endpoint
+            }
+        };
+
         let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
-                let address = address.to_string();
-                match tls.as_ref() {
-                    Some(config) => {}
-                    None => (move || PartyNodeClient::connect(address.clone()))
-                        .retry(self.backoff())
-                        .sleep(tokio::time::sleep),
-                }
+                // hacks to make the closure be FnMut, as needed for retry()
+                let endpoint = endpoint.clone();
+                (move || get_party_node(endpoint.clone()))
+                    .retry(self.backoff())
+                    .sleep(tokio::time::sleep)
             })
             .map(tokio::spawn)
             .collect::<JoinAll<_>>()
@@ -251,7 +273,7 @@ pub async fn setup_local_grpc_networking(
             if addr != other_addr {
                 let other_addr = format!("http://{}", other_addr);
                 player
-                    .connect_to_party(other_player.party_id(), &other_addr)
+                    .connect_to_party(other_player.party_id(), &other_addr, None)
                     .await
                     .unwrap();
             }

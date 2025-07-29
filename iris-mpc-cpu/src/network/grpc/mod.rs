@@ -4,7 +4,7 @@ use crate::{
 };
 use eyre::Result;
 use itertools::izip;
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, fs, net::SocketAddr, sync::Once, time::Duration};
 use tokio::{
     sync::mpsc::{UnboundedReceiver, UnboundedSender},
     task::JoinSet,
@@ -42,6 +42,16 @@ pub struct GrpcConfig {
 }
 
 pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> Result<GrpcHandle> {
+    static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
+    INSTALL_CRYPTO_PROVIDER.call_once(|| {
+        if tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::error!("failed to install CryptoProvider for rustls");
+        }
+    });
+
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
@@ -62,16 +72,19 @@ pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> R
 
     tracing::info!("Starting Hawk server on {}", my_addr);
     let player = networking.clone();
-    match args.tls {
+    match args.tls.as_ref() {
         Some(config) => {
-            let cert = fs::read_to_string(config.leaf_cert)?;
-            let key = fs::read_to_string(config.private_key)?;
+            // using unwrap here is less than ideal but the config should always have a leaf cert and private key
+            let cert = fs::read_to_string(config.leaf_cert.as_ref().unwrap())?;
+            let key = fs::read_to_string(config.private_key.as_ref().unwrap())?;
             let identity = tonic::transport::Identity::from_pem(cert, key);
             let tls_config = tonic::transport::ServerTlsConfig::new().identity(identity);
 
+            // if this fails, return error instead of panicking from the task
+            let mut builder = Server::builder().tls_config(tls_config)?;
+
             tokio::spawn(async move {
-                Server::builder()
-                    .tls_config(tls_config)?
+                builder
                     .add_service(PartyNodeServer::new(player))
                     .serve(my_addr)
                     .await
@@ -89,15 +102,29 @@ pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> R
         }
     }
 
-    izip!(identities, &args.addresses)
-        .filter(|(_, address)| address != &my_address)
-        .map(|(identity, address)| {
+    // hack to get the index of the correct root certificate
+    let idxs: Vec<_> = (0..identities.len()).collect();
+
+    izip!(identities, &args.addresses, &idxs)
+        .filter(|(_, address, _)| address != &my_address)
+        .map(|(identity, address, &idx)| {
             let player = networking.clone();
             let identity = identity.clone();
-            let url = format!("http://{}", address);
+
+            // need to use https for tls
+            let url = if args.tls.is_some() {
+                format!("https://{}", address)
+            } else {
+                format!("http://{}", address)
+            };
+
+            let root_cert = args
+                .tls
+                .as_ref()
+                .map(|config| config.root_certs[idx].clone());
             async move {
                 tracing::info!("Connecting to {}…", url);
-                player.connect_to_party(identity, &url).await?;
+                player.connect_to_party(identity, &url, root_cert).await?;
                 tracing::info!("_connected to {}!", url);
                 Ok(())
             }

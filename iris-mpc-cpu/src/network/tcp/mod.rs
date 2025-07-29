@@ -15,10 +15,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use itertools::izip;
 use std::sync::Once;
-use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    time::Duration,
-};
+use std::{net::SocketAddr, time::Duration};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 pub mod config;

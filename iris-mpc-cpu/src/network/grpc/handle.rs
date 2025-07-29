@@ -31,7 +31,7 @@ struct StartMessageStreamTask {
 struct ConnectToPartyTask {
     party_id: Identity,
     address: String,
-    root_cert: String,
+    root_cert: Option<String>,
 }
 
 enum GrpcTask {
@@ -87,7 +87,7 @@ impl GrpcHandle {
                     }
                     GrpcTask::ConnectToParty(task) => {
                         let job_result = grpc
-                            .connect_to_party(task.party_id, &task.address, &task.root_cert)
+                            .connect_to_party(task.party_id, &task.address, task.root_cert)
                             .await
                             .map(|_| MessageResult::Empty);
                         let _ = job.return_channel.send(job_result);
@@ -218,7 +218,7 @@ impl GrpcHandle {
         &self,
         party_id: Identity,
         address: &str,
-        root_cert: String,
+        root_cert: Option<String>,
     ) -> Result<()> {
         let task = ConnectToPartyTask {
             party_id,
