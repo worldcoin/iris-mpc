@@ -91,12 +91,25 @@ impl GrpcNetworking {
             Ok(PartyNodeClient::new(channel))
         }
 
-        // address needs to have a 'static lifetime. must use to_string() for this.
-        let uri = Uri::from_maybe_shared(address.to_string())?; // Use https for TLS
+        // Use https for TLS
+        let uri = if root_cert.is_some() {
+            Uri::from_maybe_shared(format!("https://{}", address))?
+        } else {
+            Uri::from_maybe_shared(format!("http://{}", address))?
+        };
+
+        let domain_name = address
+            .split(':')
+            .next()
+            .ok_or(eyre!("failed to get domain_name"))?;
+
         let endpoint = match root_cert {
             Some(cert) => {
+                let cert = std::fs::read_to_string(cert)?;
                 let server_ca = Certificate::from_pem(cert);
-                let tls_config = ClientTlsConfig::new().ca_certificate(server_ca);
+                let tls_config = ClientTlsConfig::new()
+                    .ca_certificate(server_ca)
+                    .domain_name(domain_name);
                 let endpoint = Channel::builder(uri).tls_config(tls_config)?;
                 endpoint
             }

@@ -110,22 +110,18 @@ pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> R
         .map(|(identity, address, &idx)| {
             let player = networking.clone();
             let identity = identity.clone();
-
-            // need to use https for tls
-            let url = if args.tls.is_some() {
-                format!("https://{}", address)
-            } else {
-                format!("http://{}", address)
-            };
+            let address = address.clone();
 
             let root_cert = args
                 .tls
                 .as_ref()
                 .map(|config| config.root_certs[idx].clone());
             async move {
-                tracing::info!("Connecting to {}…", url);
-                player.connect_to_party(identity, &url, root_cert).await?;
-                tracing::info!("_connected to {}!", url);
+                tracing::info!("Connecting to {}…", address);
+                player
+                    .connect_to_party(identity, &address, root_cert)
+                    .await?;
+                tracing::info!("_connected to {}!", address);
                 Ok(())
             }
         })
