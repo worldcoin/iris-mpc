@@ -1,5 +1,3 @@
-use crate::utils::constants::COUNT_OF_PARTIES;
-use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 use crate::{

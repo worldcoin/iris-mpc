@@ -5,6 +5,8 @@ use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 #[macro_export]
 macro_rules! make_node_configs {
     ( $func:expr) => {{
+        use crate::utils::constants::COUNT_OF_PARTIES;
+        use iris_mpc_common::config::Config as NodeConfig;
         let mut arr: [NodeConfig; COUNT_OF_PARTIES] = std::array::from_fn(|i| $func(i));
         arr
     }};
