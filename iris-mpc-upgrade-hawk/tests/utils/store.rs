@@ -1,3 +1,5 @@
+use crate::utils::resources;
+
 use super::{
     constants::COUNT_OF_PARTIES, resources::read_iris_shares_batch, types::GaloisRingSharedIrisPair,
 };
@@ -114,16 +116,13 @@ impl DatabaseContext {
         })
     }
 
-    pub async fn init_modifications_from_file(&mut self, json_file_path: &str) -> Result<()> {
+    pub async fn init_modifications_from_file(&mut self, json_file_name: &str) -> Result<()> {
+        let modifications = resources::read_modifications(json_file_name)?;
+
         // Clear the modifications table.
         let mut tx = self.iris_store.tx().await?;
         self.iris_store.clear_modifications_table(&mut tx).await?;
         tx.commit().await?;
-
-        // Initialize the modifications table from a JSON file
-        let file = File::open(json_file_path)?;
-        let reader = BufReader::new(file);
-        let modifications: Vec<Modification> = from_reader(reader)?;
 
         for m in modifications {
             self.iris_store

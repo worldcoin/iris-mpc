@@ -1,3 +1,5 @@
+use crate::utils::ModificationInput;
+
 use super::{
     constants::COUNT_OF_PARTIES, convertor::to_galois_ring_shares, types::GaloisRingSharedIrisPair,
     IrisCodePair, TestRunContextInfo, TestRunEnvironment,
@@ -162,6 +164,19 @@ pub fn read_node_config(
     let cfg = std::fs::read_to_string(path_to_resource)?;
 
     Ok(toml::from_str(&cfg).unwrap())
+}
+
+pub fn read_modifications(file_name: &str) -> Result<Vec<ModificationInput>, Error> {
+    let path_to_resource = format!(
+        "{}/iris-modifications/{}/",
+        get_path_to_resources(),
+        file_name
+    );
+    // Initialize the modifications table from a JSON file
+    let file = File::open(path_to_resource)?;
+    let reader = BufReader::new(file);
+    let modifications: Vec<ModificationInput> = serde_json::from_reader(reader)?;
+    Ok(modifications)
 }
 
 #[cfg(test)]

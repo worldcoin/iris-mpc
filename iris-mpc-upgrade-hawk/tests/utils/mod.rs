@@ -9,4 +9,4 @@ mod types;
 
 pub use errors::TestError;
 pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};
-pub use types::{inputs::*, test::*, IrisCodePair};
+pub use types::{inputs::*, resources::*, test::*, IrisCodePair};

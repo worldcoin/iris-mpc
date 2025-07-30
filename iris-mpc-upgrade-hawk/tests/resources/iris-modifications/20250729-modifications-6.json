@@ -1,0 +1,17 @@
+[
+    {
+        "serial_id": 1,
+        "request_type": "reset_update",
+        "s3_url": null
+    },
+    {
+        "serial_id": 2,
+        "request_type": "reauth",
+        "s3_url": null
+    },
+    {
+        "serial_id": 3,
+        "request_type": "identity_deletion",
+        "s3_url": null
+    }
+]

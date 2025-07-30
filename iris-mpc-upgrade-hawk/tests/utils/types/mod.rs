@@ -1,4 +1,5 @@
 pub mod inputs;
+pub mod resources;
 pub mod test;
 
 use iris_mpc_common::iris_db::iris::IrisCode;
