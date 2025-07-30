@@ -58,10 +58,10 @@ pub struct ExecutionArgs {
     batch_size_error_rate: usize,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.
-    perform_snapshot: bool,
+    perform_db_snapshot: bool,
 
     // Use backup as source
-    use_backup_as_source: bool,
+    use_db_backup_as_source: bool,
 }
 
 /// Constructor.
@@ -70,15 +70,15 @@ impl ExecutionArgs {
         batch_size: usize,
         batch_size_error_rate: usize,
         max_indexation_id: IrisSerialId,
-        perform_snapshot: bool,
-        use_backup_as_source: bool,
+        perform_db_snapshot: bool,
+        use_db_backup_as_source: bool,
     ) -> Self {
         Self {
             batch_size,
             batch_size_error_rate,
             max_indexation_id,
-            perform_snapshot,
-            use_backup_as_source,
+            perform_db_snapshot,
+            use_db_backup_as_source,
         }
     }
 }
@@ -161,8 +161,8 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         args.max_indexation_id,
         args.batch_size,
         args.batch_size_error_rate,
-        args.perform_snapshot,
-        args.use_backup_as_source,
+        args.perform_db_snapshot,
+        args.use_db_backup_as_source,
     ));
 
     // Phase 1: apply delta.
@@ -196,7 +196,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     exec_database_backup(graph_store.clone()).await?;
 
     // Phase 4: snapshot.
-    if !args.perform_snapshot {
+    if !args.perform_db_snapshot {
         log_info(String::from("Snapshot skipped ... as requested."));
     } else {
         exec_snapshot(&ctx, &aws_rds_client).await?;
@@ -305,7 +305,7 @@ async fn exec_setup(
         max_modification_id,
         max_modification_id_to_persist,
         modifications.clone(),
-        args.use_backup_as_source,
+        args.use_db_backup_as_source,
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
@@ -344,7 +344,7 @@ async fn exec_setup(
     }
 
     // If use_backup_as_source is set, restore graph tables from backup
-    if args.use_backup_as_source && last_indexed_id != 0 {
+    if args.use_db_backup_as_source && last_indexed_id != 0 {
         exec_use_backup_as_source(
             last_indexed_id,
             &graph_store_arc,

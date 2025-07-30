@@ -9,4 +9,4 @@ mod types;
 
 pub use errors::TestError;
 pub use runner::{TestRun, TestRunContextInfo, TestRunEnvironment};
-pub use types::IrisCodePair;
+pub use types::{GaloisRingSharedIrisPair, IrisCodePair};

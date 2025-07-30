@@ -1,4 +1,10 @@
-use super::utils::{self, errors::IndexationError};
+use super::utils::{
+    self,
+    constants::{
+        STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+    },
+    errors::IndexationError,
+};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
@@ -10,15 +16,6 @@ use std::{fmt::Debug, sync::Arc};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "State-Accessor";
-
-/// Domain for persistent state store entry for last indexed id
-const STATE_DOMAIN: &str = "genesis";
-
-/// Key for persistent state store entry for last indexed iris id
-const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
-
-/// Key for persistent state store entry for last indexed modification id
-const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
 /// Fetches serial identifiers marked as deleted.
 ///

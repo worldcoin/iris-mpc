@@ -1,4 +1,4 @@
-use super::{factory, types::TestInputs};
+use super::{factory, inputs::Inputs, params::Params};
 use crate::utils::{TestError, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
@@ -6,18 +6,22 @@ use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 /// HNSW Genesis test.
 pub struct Test {
     /// Data encapsulating test inputs.
-    inputs: Option<TestInputs>,
+    inputs: Option<Inputs>,
 
     /// Results of node process execution.
     node_results: Option<Vec<Result<(), Report>>>,
+
+    /// Results of node process execution.
+    params: Params,
 }
 
 /// Constructor.
 impl Test {
-    pub fn new() -> Self {
+    pub fn new(params: Params) -> Self {
         Self {
             inputs: None,
             node_results: None,
+            params,
         }
     }
 }
@@ -66,7 +70,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::get_test_inputs(ctx));
+        self.inputs = Some(factory::get_test_inputs(ctx, self.params));
 
         // Write 100 Iris shares -> GPU dB.
         // TODO

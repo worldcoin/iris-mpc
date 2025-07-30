@@ -137,7 +137,7 @@ fn parse_args() -> Result<ExecutionArgs> {
     };
 
     // Arg: perform snapshot.
-    let perform_snapshot = if args.perform_snapshot.is_some() {
+    let perform_db_snapshot = if args.perform_snapshot.is_some() {
         let perform_snapshot_arg = args.perform_snapshot.as_ref().unwrap();
         perform_snapshot_arg.parse().map_err(|_| {
             eprintln!(
@@ -154,7 +154,7 @@ fn parse_args() -> Result<ExecutionArgs> {
     };
 
     // Arg: use_backup_as_source (parse as string, convert to bool for ExecutionArgs).
-    let use_backup_as_source = if args.use_backup_as_source.is_some() {
+    let use_db_backup_as_source = if args.use_backup_as_source.is_some() {
         let use_backup_as_source_args = args.use_backup_as_source.as_ref().unwrap();
         use_backup_as_source_args.parse().map_err(|_| {
             eprintln!(
@@ -175,7 +175,7 @@ fn parse_args() -> Result<ExecutionArgs> {
         batch_size,
         batch_size_error_rate,
         max_indexation_id,
-        perform_snapshot,
-        use_backup_as_source,
+        perform_db_snapshot,
+        use_db_backup_as_source,
     ))
 }

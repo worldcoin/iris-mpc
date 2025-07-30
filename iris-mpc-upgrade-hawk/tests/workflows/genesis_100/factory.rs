@@ -1,41 +1,43 @@
-use super::types::{NetInputs, NodeProcessInputs, TestInputs};
+use super::{
+    inputs::{Inputs, NetInputs, NodeProcessInputs, SystemStateInputs},
+    params::Params,
+};
 use crate::utils::{constants, resources, TestRunContextInfo};
-use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns test run inputs.
-pub(super) fn get_test_inputs(ctx: &TestRunContextInfo) -> TestInputs {
-    /// Returns network process inputs for usage during a test run.
-    fn get_net_inputs(ctx: &TestRunContextInfo) -> NetInputs {
-        /// Returns node process inputs for usage during a test run.
-        fn get_node_process_inputs(ctx: &TestRunContextInfo, party_id: usize) -> NodeProcessInputs {
-            /// Returns node CLI args.
-            fn get_args() -> NodeArgs {
-                NodeArgs::new(
-                    constants::DEFAULT_BATCH_SIZE,
-                    constants::DEFAULT_BATCH_SIZE_ERROR_RATE,
-                    100,
-                    constants::DEFAULT_SNAPSHOT_STRATEGY,
-                    constants::DEFAULT_BACKUP_AS_SOURCE_STRATEGY,
-                )
-            }
+pub(super) fn get_test_inputs(ctx: &TestRunContextInfo, params: Params) -> Inputs {
+    Inputs::new(get_net_inputs(ctx, params), get_system_state_inputs(params))
+}
 
-            /// Returns node configuration.
-            fn get_config(ctx: &TestRunContextInfo, party_id: usize) -> NodeConfig {
-                resources::read_node_config(ctx, format!("node-{}-genesis-0", party_id)).unwrap()
-            }
+/// Returns inputs for running network.
+fn get_net_inputs(ctx: &TestRunContextInfo, params: Params) -> NetInputs {
+    NetInputs::new([
+        get_node_process_inputs(ctx, params, constants::PARTY_IDX_0),
+        get_node_process_inputs(ctx, params, constants::PARTY_IDX_1),
+        get_node_process_inputs(ctx, params, constants::PARTY_IDX_2),
+    ])
+}
 
-            NodeProcessInputs::new(get_args(), get_config(ctx, party_id))
-        }
+/// Returns inputs for running a node.
+fn get_node_process_inputs(
+    ctx: &TestRunContextInfo,
+    params: Params,
+    party_id: usize,
+) -> NodeProcessInputs {
+    let args = NodeArgs::new(
+        params.batch_size(),
+        params.batch_size_error_rate(),
+        params.max_indexation_id(),
+        params.perform_db_snapshot(),
+        params.use_db_backup_as_source(),
+    );
+    let config = resources::read_node_config(ctx, format!("node-{}-genesis-0", party_id)).unwrap();
 
-        NetInputs::new([
-            get_node_process_inputs(ctx, 0),
-            get_node_process_inputs(ctx, 1),
-            get_node_process_inputs(ctx, 2),
-        ])
-    }
+    NodeProcessInputs::new(args, config)
+}
 
-    // TODO: load system state inputs.
-
-    TestInputs::new(get_net_inputs(ctx), None)
+/// Returns inputs for initializing system state.
+fn get_system_state_inputs(params: Params) -> SystemStateInputs {
+    SystemStateInputs::new(params, vec![])
 }

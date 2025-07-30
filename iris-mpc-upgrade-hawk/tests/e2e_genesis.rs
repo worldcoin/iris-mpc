@@ -15,10 +15,13 @@ mod workflows;
 #[tokio::test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
-    use workflows::genesis_100::Test;
+    use workflows::genesis_100::{Params, Test};
 
     let ctx = TestRunContextInfo::new(100, 1);
-    Test::new().run(ctx).await?;
+    let params = Params::new(0, 256, 100, false, false);
+    let mut test = Test::new(params);
+
+    test.run(ctx).await?;
 
     Ok(())
 }
