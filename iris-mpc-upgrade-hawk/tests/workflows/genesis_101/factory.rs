@@ -1,3 +1,4 @@
+use crate::utils::constants::COUNT_OF_PARTIES;
 use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
@@ -14,7 +15,7 @@ pub fn get_stage2_inputs(ctx: &TestRunContextInfo) -> TestInputs {
     get_inputs(ctx, 100)
 }
 
-fn get_inputs(ctx: &TestRunContextInfo, max_indexation_id: usize) -> TestInputs {
+fn get_inputs(ctx: &TestRunContextInfo, max_indexation_id: u32) -> TestInputs {
     let args = NodeArgs::new(
         constants::DEFAULT_BATCH_SIZE,
         constants::DEFAULT_BATCH_SIZE_ERROR_RATE,
@@ -23,7 +24,7 @@ fn get_inputs(ctx: &TestRunContextInfo, max_indexation_id: usize) -> TestInputs 
         constants::DEFAULT_BACKUP_AS_SOURCE_STRATEGY,
     );
 
-    let configs = make_node_configs!(constants::COUNT_OF_PARTIES, |party_id| {
+    let configs = make_node_configs!(|party_id| {
         resources::read_node_config(ctx, format!("node-{}-genesis-0", party_id)).unwrap()
     });
 

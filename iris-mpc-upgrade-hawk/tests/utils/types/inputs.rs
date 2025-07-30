@@ -4,8 +4,8 @@ use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 #[macro_export]
 macro_rules! make_node_configs {
-    ($count:expr, $func:expr) => {{
-        let mut arr: [NodeConfig; $count] = std::array::from_fn(|i| $func(i));
+    ( $func:expr) => {{
+        let mut arr: [NodeConfig; COUNT_OF_PARTIES] = std::array::from_fn(|i| $func(i));
         arr
     }};
 }
