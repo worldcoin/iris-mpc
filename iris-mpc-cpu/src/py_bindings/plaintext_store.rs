@@ -1,9 +1,13 @@
 use crate::hawkers::plaintext_store::PlaintextStore;
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodeArray};
+use iris_mpc_common::{
+    iris_db::iris::{IrisCode, IrisCodeArray},
+    IrisVectorId,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Write},
+    sync::Arc,
 };
 
 /// Iris code representation using base64 encoding compatible with Open IRIS
@@ -43,18 +47,19 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
     let mut vector = PlaintextStore::new();
     for (idx, json_pt) in stream.into_iter().enumerate() {
         let json_pt = json_pt?;
-        vector.points.insert(idx as u32 + 1, (&json_pt).into());
+        let iris = (&json_pt).into();
+        let id = IrisVectorId::from_0_index(idx as u32);
+        vector.insert_with_id(id, Arc::new(iris));
     }
-    vector.next_id = (vector.points.len() + 1) as u32;
 
     if let Some(num) = len {
-        if vector.points.len() != num {
+        if vector.len() != num {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "File {} contains too few entries; number read: {}",
                     filename,
-                    vector.points.len()
+                    vector.len()
                 ),
             ));
         }
@@ -68,12 +73,18 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     // Collect and sort keys
-    let mut serial_ids: Vec<_> = vector.points.keys().cloned().collect();
+    let mut serial_ids: Vec<_> = vector.storage.points.keys().cloned().collect();
     serial_ids.sort();
     // to keep all old ndjson files backwards compatible, we write the iris codes only
     for serial_id in serial_ids {
-        let pt = vector.points.get(&serial_id).expect("Key not found");
-        let json_pt: Base64IrisCode = pt.into();
+        let pt = vector
+            .storage
+            .points
+            .get(&serial_id)
+            .expect("Key not found")
+            .1
+            .clone();
+        let json_pt: Base64IrisCode = (&*pt).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }

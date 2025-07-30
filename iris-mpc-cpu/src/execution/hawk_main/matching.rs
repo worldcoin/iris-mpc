@@ -458,7 +458,7 @@ mod tests {
     use iris_mpc_common::ROTATIONS;
 
     use crate::execution::hawk_main::HawkResult;
-    use crate::hawkers::aby3::aby3_store::prepare_query;
+    use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
     use crate::shares::share::DistanceShare;
@@ -700,7 +700,7 @@ mod tests {
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
             let insert_plan = InsertPlan {
-                query: prepare_query(GaloisRingSharedIris::dummy_for_party(0)),
+                query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
                 match_count: match_ids.len(),
                 links: vec![SortedNeighborhood::from_ascending_vec(
                     chain!(match_ids, non_match_ids)

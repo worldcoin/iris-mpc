@@ -1,5 +1,4 @@
 use super::player::Identity;
-pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{
     execution::{
         hawk_main::search::SearchIds,
@@ -7,8 +6,9 @@ use crate::{
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
     },
-    hawkers::aby3::aby3_store::{
-        prepare_query, Aby3Store, Query, SharedIrises, SharedIrisesMut, SharedIrisesRef,
+    hawkers::{
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store},
+        shared_irises::SharedIrises,
     },
     hnsw::{
         graph::{graph_store, neighborhood::SortedNeighborhoodV},
@@ -32,6 +32,7 @@ use iris_mpc_common::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
         statistics::BucketStatistics,
     },
+    vector_id::VectorId,
 };
 use iris_mpc_common::{
     helpers::inmemory_store::InMemoryStore,
@@ -138,7 +139,7 @@ pub struct HawkActor {
     // ---- My state ----
     /// A size used by the startup loader.
     loader_db_size: usize,
-    iris_store: BothEyes<SharedIrisesRef>,
+    iris_store: BothEyes<Aby3SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
     distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
@@ -276,7 +277,7 @@ impl HawkActor {
         Self::from_cli_with_graph_and_store(
             args,
             [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
-            [(); 2].map(|_| SharedIrises::default()),
+            [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
         .await
     }
@@ -284,7 +285,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         graph: BothEyes<GraphMem<Aby3Store>>,
-        iris_store: BothEyes<SharedIrises>,
+        iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         let search_params = HnswParams::new(
             args.hnsw_param_ef_constr,
@@ -341,7 +342,7 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    pub fn iris_store(&self, store_id: StoreId) -> SharedIrisesRef {
+    pub fn iris_store(&self, store_id: StoreId) -> Aby3SharedIrisesRef {
         self.iris_store[store_id as usize].clone()
     }
 
@@ -590,10 +591,12 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
     ChaCha8Rng::seed_from_u64(seed)
 }
 
+pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
+
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
-    irises: BothEyes<SharedIrisesMut<'a>>,
+    irises: BothEyes<Aby3SharedIrisesMut<'a>>,
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -751,17 +754,16 @@ impl From<BatchQuery> for HawkRequest {
                         // Collect the rotations for one request.
                         chunk
                             .map(|(code, mask, code_proc, mask_proc)| {
-                                // Convert to the type of Aby3Store and into Arc.
-                                Query::from_processed(
-                                    GaloisRingSharedIris {
-                                        code: code.clone(),
-                                        mask: mask.clone(),
-                                    },
-                                    GaloisRingSharedIris {
-                                        code: code_proc.clone(),
-                                        mask: mask_proc.clone(),
-                                    },
-                                )
+                                // Convert to the query type of Aby3Store
+                                let iris = Arc::new(GaloisRingSharedIris {
+                                    code: code.clone(),
+                                    mask: mask.clone(),
+                                });
+                                let iris_proc = Arc::new(GaloisRingSharedIris {
+                                    code: code_proc.clone(),
+                                    mask: mask_proc.clone(),
+                                });
+                                Aby3Query { iris, iris_proc }
                             })
                             .collect_vec()
                             .into()
@@ -791,7 +793,7 @@ impl From<BatchQuery> for HawkRequest {
 impl HawkRequest {
     fn request_types(
         &self,
-        iris_store: &SharedIrises,
+        iris_store: &Aby3SharedIrises,
         orient: Orientation,
     ) -> VecRequests<RequestType> {
         use RequestType::*;
@@ -836,7 +838,7 @@ impl HawkRequest {
         }
     }
 
-    fn luc_ids(&self, iris_store: &SharedIrises) -> VecRequests<Vec<VectorId>> {
+    fn luc_ids(&self, iris_store: &Aby3SharedIrises) -> VecRequests<Vec<VectorId>> {
         let luc_lookback_ids = iris_store.last_vector_ids(self.batch.luc_lookback_records);
 
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
@@ -854,7 +856,7 @@ impl HawkRequest {
             .collect_vec()
     }
 
-    fn reset_updates(&self, iris_store: &SharedIrises) -> ResetRequests {
+    fn reset_updates(&self, iris_store: &Aby3SharedIrises) -> ResetRequests {
         let queries = [LEFT, RIGHT].map(|side| {
             self.batch
                 .reset_update_shares
@@ -871,7 +873,7 @@ impl HawkRequest {
                             mask: iris.mask_right.clone(),
                         }
                     };
-                    let query = prepare_query(iris);
+                    let query = Aby3Query::new_from_raw(iris);
                     VecRots::new_center_only(query)
                 })
                 .collect_vec()
@@ -883,7 +885,7 @@ impl HawkRequest {
         }
     }
 
-    fn deletion_ids(&self, iris_store: &SharedIrises) -> Vec<VectorId> {
+    fn deletion_ids(&self, iris_store: &Aby3SharedIrises) -> Vec<VectorId> {
         iris_store.from_0_indices(&self.batch.deletion_requests_indices)
     }
 }
@@ -1817,12 +1819,9 @@ mod tests {
 #[cfg(feature = "db_dependent")]
 mod tests_db {
     use super::*;
-    use crate::{
-        hawkers::aby3::aby3_store::VectorId,
-        hnsw::{
-            graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
-            searcher::ConnectPlanLayerV,
-        },
+    use crate::hnsw::{
+        graph::{graph_store::test_utils::TestGraphPg, neighborhood::SortedEdgeIds},
+        searcher::ConnectPlanLayerV,
     };
     type ConnectPlanLayer = ConnectPlanLayerV<Aby3Store>;
 
@@ -1914,7 +1913,6 @@ mod tests_db {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hawkers::aby3::aby3_store::VectorId;
     use crate::hnsw::{graph::neighborhood::SortedEdgeIds, searcher::ConnectPlanLayerV};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
