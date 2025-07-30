@@ -1,6 +1,6 @@
 use crate::{
     utils::{TestError, TestInputs, TestRun, TestRunContextInfo},
-    workflows::genesis_103::factory,
+    workflows::genesis_101::factory,
 };
 use derive_more::{Deref, DerefMut};
 use eyre::{eyre, Report, Result};
@@ -56,7 +56,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::get_test_inputs(ctx));
+        self.inputs = Some(factory::get_stage1_inputs(ctx));
 
         // todo: self.get_db_contexts?.map(|x| x.init_modifications_from_file(...));
 

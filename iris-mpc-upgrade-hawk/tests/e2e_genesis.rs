@@ -33,8 +33,8 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 ///     graph construction is equivalent for each node;
 #[tokio::test]
 #[ignore = "requires external setup"]
-async fn test_hnsw_genesis_103() -> Result<()> {
-    use workflows::genesis_103::Test;
+async fn test_hnsw_genesis_101() -> Result<()> {
+    use workflows::genesis_101::Test;
 
     let ctx = TestRunContextInfo::new(100, 1);
     Test::default().run(ctx).await?;

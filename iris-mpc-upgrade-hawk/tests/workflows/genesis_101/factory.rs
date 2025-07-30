@@ -1,34 +1,36 @@
 use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
-use crate::utils::{
-    constants, resources, SystemStateInputs, TestInputFactory, TestInputs, TestRunContextInfo,
+use crate::{
+    make_node_configs,
+    utils::{constants, resources, NetInputs, SystemStateInputs, TestInputs, TestRunContextInfo},
 };
 
-pub fn get_test_inputs(ctx: &TestRunContextInfo) -> TestInputs {
-    let f = DefaultTestInputFactory;
-    f.get_test_inputs(ctx)
+pub fn get_stage1_inputs(ctx: &TestRunContextInfo) -> TestInputs {
+    get_inputs(ctx, 50)
 }
-/// Default implementation of TestInputFactory.
-struct DefaultTestInputFactory;
 
-impl TestInputFactory for DefaultTestInputFactory {
-    fn get_args(&self) -> NodeArgs {
-        NodeArgs::new(
-            constants::DEFAULT_BATCH_SIZE,
-            constants::DEFAULT_BATCH_SIZE_ERROR_RATE,
-            100,
-            constants::DEFAULT_SNAPSHOT_STRATEGY,
-            constants::DEFAULT_BACKUP_AS_SOURCE_STRATEGY,
-        )
-    }
+pub fn get_stage2_inputs(ctx: &TestRunContextInfo) -> TestInputs {
+    get_inputs(ctx, 100)
+}
 
-    fn get_config(&self, ctx: &TestRunContextInfo, party_id: usize) -> NodeConfig {
+fn get_inputs(ctx: &TestRunContextInfo, max_indexation_id: usize) -> TestInputs {
+    let args = NodeArgs::new(
+        constants::DEFAULT_BATCH_SIZE,
+        constants::DEFAULT_BATCH_SIZE_ERROR_RATE,
+        max_indexation_id,
+        constants::DEFAULT_SNAPSHOT_STRATEGY,
+        constants::DEFAULT_BACKUP_AS_SOURCE_STRATEGY,
+    );
+
+    let configs = make_node_configs!(constants::COUNT_OF_PARTIES, |party_id| {
         resources::read_node_config(ctx, format!("node-{}-genesis-0", party_id)).unwrap()
-    }
+    });
 
-    // todo: add these
-    fn get_system_state_inputs(&self, ctx: &TestRunContextInfo) -> Option<SystemStateInputs> {
-        None
+    let system_state_inputs = None;
+
+    TestInputs {
+        net_inputs: NetInputs::new(args, configs),
+        system_state_inputs,
     }
 }

@@ -2,6 +2,14 @@ use crate::utils::constants::COUNT_OF_PARTIES;
 use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
+#[macro_export]
+macro_rules! make_node_configs {
+    ($count:expr, $func:expr) => {{
+        let mut arr: [NodeConfig; $count] = std::array::from_fn(|i| $func(i));
+        arr
+    }};
+}
+
 #[derive(Debug, Clone)]
 pub struct TestInputs {
     // Data used to launch each node process during a test run.
@@ -48,7 +56,10 @@ pub struct NetInputs {
 
 /// Constructor.
 impl NetInputs {
-    pub fn new(node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES]) -> Self {
+    // args are always the same for all parties. the configs differ through.
+    pub fn new(args: NodeArgs, configs: [NodeConfig; COUNT_OF_PARTIES]) -> Self {
+        let node_process_inputs =
+            configs.map(|config| NodeProcessInputs::new(args.clone(), config));
         Self {
             node_process_inputs,
         }
