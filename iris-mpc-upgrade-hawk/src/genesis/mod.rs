@@ -48,7 +48,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
 pub struct ExecutionArgs {
-    // Serial idenitifer of maximum indexed Iris.
+    // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
     // Initial batch size for indexing.
@@ -91,7 +91,7 @@ struct ExecutionContextInfo {
     /// Process configuration.
     config: Config,
 
-    // Serial idenitifer of last indexed Iris.
+    // Serial identifier of last indexed Iris.
     last_indexed_id: IrisSerialId,
 
     // Set identifiers of Iris's to be excluded from indexation.

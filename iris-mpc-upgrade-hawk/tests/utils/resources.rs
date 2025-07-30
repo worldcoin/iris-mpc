@@ -1,6 +1,6 @@
 use super::{
     constants::COUNT_OF_PARTIES, convertor::to_galois_ring_shares, types::GaloisRingSharedIrisPair,
-    IrisCodePair, TestRunContextInfo, TestRunEnvironment,
+    IrisCodePair, TestExecutionEnvironment, TestRunContextInfo,
 };
 use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
@@ -9,10 +9,10 @@ use serde_json;
 use std::{fs::File, io::BufReader, io::Error};
 
 /// Returns subdirectory name for current test run environment.
-fn get_subdirectory_of_env(env: &TestRunEnvironment) -> &'static str {
-    match env {
-        TestRunEnvironment::Docker => "docker",
-        TestRunEnvironment::Local => "local",
+fn get_subdirectory_of_exec_env(exec_env: &TestExecutionEnvironment) -> &'static str {
+    match exec_env {
+        TestExecutionEnvironment::Docker => "docker",
+        TestExecutionEnvironment::Local => "local",
     }
 }
 
@@ -139,7 +139,7 @@ pub fn read_iris_shares_batch(
 ///
 /// # Arguments
 ///
-/// * `ctx` - Contextual information associated with a test run.
+/// * `exec_env` - Contextual information associated with a test run.
 /// * `config_fname` - File name of node configuration toml file being read into memory.
 ///
 /// # Returns
@@ -147,14 +147,14 @@ pub fn read_iris_shares_batch(
 /// A node configuration file.
 ///
 pub fn read_node_config(
-    ctx: &TestRunContextInfo,
+    exec_env: &TestExecutionEnvironment,
     config_fname: String,
 ) -> Result<NodeConfig, Error> {
     // Set path.
     let path_to_resource = format!(
         "{}/node-config/{}/{}.toml",
         get_path_to_resources(),
-        get_subdirectory_of_env(ctx.env()),
+        get_subdirectory_of_exec_env(exec_env),
         config_fname
     );
 
@@ -167,9 +167,9 @@ pub fn read_node_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_path_to_resources, get_subdirectory_of_env, read_iris_code_pairs,
+        get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestRunContextInfo, TestRunEnvironment, COUNT_OF_PARTIES,
+        TestExecutionEnvironment, TestRunContextInfo, COUNT_OF_PARTIES,
     };
     use std::path::Path;
 
@@ -182,12 +182,12 @@ mod tests {
     }
 
     #[test]
-    fn test_get_subdirectory_of_env() {
+    fn test_get_subdirectory_of_exec_env() {
         for (subdir, env) in [
-            ("docker", TestRunEnvironment::Docker),
-            ("local", TestRunEnvironment::Local),
+            ("docker", TestExecutionEnvironment::Docker),
+            ("local", TestExecutionEnvironment::Local),
         ] {
-            assert_eq!(subdir, get_subdirectory_of_env(&env));
+            assert_eq!(subdir, get_subdirectory_of_exec_env(&env));
         }
     }
 
@@ -270,7 +270,7 @@ mod tests {
         let ctx = TestRunContextInfo::new_1();
         for party_id in [0, 1, 2] {
             let cfg_fname = format!("node-{}-genesis-0", party_id);
-            let cfg = read_node_config(&ctx, cfg_fname).unwrap();
+            let cfg = read_node_config(ctx.exec_env(), cfg_fname).unwrap();
             assert!(cfg.party_id == party_id);
         }
     }

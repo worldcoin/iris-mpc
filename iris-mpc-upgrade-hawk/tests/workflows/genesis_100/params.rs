@@ -9,7 +9,7 @@ pub struct Params {
     // Error rate to be applied when calculating dynamic batch sizes.
     batch_size_error_rate: usize,
 
-    // Serial idenitifer of maximum indexed Iris.
+    // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
     // Flag indicating whether a snapshot is to be taken when inner process completes.

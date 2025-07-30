@@ -257,6 +257,16 @@ pub struct Config {
     pub batch_sync_polling_timeout_secs: u64,
 }
 
+impl Config {
+    pub fn hnsw_schema_name_suffix(&self) -> &String {
+        &self.hnsw_schema_name_suffix
+    }
+
+    pub fn gpu_schema_name_suffix(&self) -> &String {
+        &self.gpu_schema_name_suffix
+    }
+}
+
 fn default_full_scan_side() -> Eye {
     Eye::Left
 }

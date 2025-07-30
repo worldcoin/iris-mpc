@@ -41,28 +41,30 @@ impl Inputs {
 #[derive(Debug, Clone)]
 pub(super) struct NetInputs {
     /// Node input arguments.
-    node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES],
+    node_inputs: [NodeInputs; COUNT_OF_PARTIES],
 }
 
 /// Constructor.
 impl NetInputs {
-    pub fn new(node_process_inputs: [NodeProcessInputs; COUNT_OF_PARTIES]) -> Self {
-        Self {
-            node_process_inputs,
-        }
+    pub fn new(node_inputs: [NodeInputs; COUNT_OF_PARTIES]) -> Self {
+        Self { node_inputs }
     }
 }
 
 /// Accessors.
 impl NetInputs {
-    pub fn node_process_inputs(&self) -> &[NodeProcessInputs; COUNT_OF_PARTIES] {
-        &self.node_process_inputs
+    pub fn node_inputs(&self) -> &[NodeInputs; COUNT_OF_PARTIES] {
+        &self.node_inputs
+    }
+
+    pub fn get_node_inputs(&self, node_idx: usize) -> &NodeInputs {
+        &self.node_inputs[node_idx]
     }
 }
 
 /// Inputs required to run a node.
 #[derive(Debug, Clone)]
-pub(super) struct NodeProcessInputs {
+pub(super) struct NodeInputs {
     /// Node input arguments.
     args: NodeArgs,
 
@@ -71,20 +73,24 @@ pub(super) struct NodeProcessInputs {
 }
 
 /// Constructor.
-impl NodeProcessInputs {
+impl NodeInputs {
     pub fn new(args: NodeArgs, config: NodeConfig) -> Self {
         Self { args, config }
     }
 }
 
 /// Accessors.
-impl NodeProcessInputs {
+impl NodeInputs {
     pub fn args(&self) -> &NodeArgs {
         &self.args
     }
 
     pub fn config(&self) -> &NodeConfig {
         &self.config
+    }
+
+    pub fn party_idx(&self) -> usize {
+        self.config.party_id
     }
 }
 

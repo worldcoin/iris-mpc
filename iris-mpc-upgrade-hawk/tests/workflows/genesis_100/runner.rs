@@ -35,7 +35,7 @@ impl TestRun for Test {
             .as_ref()
             .unwrap()
             .net_inputs()
-            .node_process_inputs()
+            .node_inputs()
             .iter();
 
         // Set node process futures.
@@ -70,7 +70,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::get_test_inputs(ctx, self.params));
+        self.inputs = Some(factory::get_inputs(ctx, self.params));
 
         // Write 100 Iris shares -> GPU dB.
         // TODO

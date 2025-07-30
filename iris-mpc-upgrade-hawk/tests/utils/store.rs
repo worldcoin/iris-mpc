@@ -1,18 +1,26 @@
 use super::{
-    constants::COUNT_OF_PARTIES, resources::read_iris_shares_batch, types::GaloisRingSharedIrisPair,
+    constants::{COUNT_OF_PARTIES, SECRET_SHARING_PG_TX_SIZE},
+    resources::read_iris_shares_batch,
+    types::GaloisRingSharedIrisPair,
 };
 use eyre::Result;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::{
+    postgres::{AccessMode, PostgresClient},
+    IrisSerialId,
+};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
 };
-use iris_mpc_store::Store as IrisStore;
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::{IntoChunks, Itertools};
 
 /// Encapsulates information required to connect to a database.
 pub struct DatabaseConnectionInfo {
     /// Connection schema.
     access_mode: AccessMode,
+
+    /// Ordinal identifier of MPC party.
+    party_idx: usize,
 
     /// Connection schema.
     schema: String,
@@ -23,20 +31,21 @@ pub struct DatabaseConnectionInfo {
 
 /// Constructors.
 impl DatabaseConnectionInfo {
-    pub fn new(schema: String, url: String, access_mode: AccessMode) -> Self {
+    fn new(party_idx: usize, schema: String, url: String, access_mode: AccessMode) -> Self {
         Self {
             access_mode,
+            party_idx,
             schema,
             url,
         }
     }
 
-    pub fn new_read_only(schema: String, url: String) -> Self {
-        Self::new(schema, url, AccessMode::ReadOnly)
+    pub fn new_read_only(party_idx: usize, schema: String, url: String) -> Self {
+        Self::new(party_idx, schema, url, AccessMode::ReadOnly)
     }
 
-    pub fn new_read_write(schema: String, url: String) -> Self {
-        Self::new(schema, url, AccessMode::ReadWrite)
+    pub fn new_read_write(party_idx: usize, schema: String, url: String) -> Self {
+        Self::new(party_idx, schema, url, AccessMode::ReadWrite)
     }
 }
 
@@ -44,6 +53,10 @@ impl DatabaseConnectionInfo {
 impl DatabaseConnectionInfo {
     pub fn access_mode(&self) -> AccessMode {
         self.access_mode
+    }
+
+    pub fn party_idx(&self) -> usize {
+        self.party_idx
     }
 
     pub fn schema(&self) -> &String {
@@ -62,6 +75,9 @@ pub struct DatabaseContext {
 
     /// Pointer to Iris store API.
     iris_store: IrisStore,
+
+    /// Ordinal identifier of MPC party.
+    party_idx: usize,
 }
 
 /// Accessors.
@@ -72,6 +88,10 @@ impl DatabaseContext {
 
     pub fn iris_store(&self) -> &IrisStore {
         &self.iris_store
+    }
+
+    pub fn party_idx(&self) -> usize {
+        self.party_idx
     }
 }
 
@@ -89,8 +109,51 @@ impl DatabaseContext {
         Self {
             iris_store: IrisStore::new(&client).await.unwrap(),
             graph_store: GraphStore::new(&client).await.unwrap(),
+            party_idx: connection_info.party_idx(),
         }
     }
+}
+
+/// Persists Iris shares to remote databases.
+///
+/// # Arguments
+///
+/// * `store` - Iris PostgreSQL store provider.
+/// * `shares` - State of an RNG being used to inject entropy to share creation.
+/// * `pgres_tx_size` - Constraint over number of Iris shares to persist in a single pgres transaction.
+///
+pub async fn insert_iris_shares(
+    db_ctx: &DatabaseContext,
+    shares: Vec<GaloisRingSharedIrisPair>,
+    pgres_tx_size: usize,
+) -> Result<(IrisSerialId, IrisSerialId)> {
+    let start_serial_id = db_ctx.iris_store().get_max_serial_id().await.unwrap_or(0) + 1;
+    let end_serial_id = start_serial_id + shares.len() - 1;
+
+    let mut tx = db_ctx.iris_store().tx().await?;
+    for batch in &shares.iter().enumerate().chunks(pgres_tx_size) {
+        let iris_refs: Vec<_> = batch
+            .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
+                id: (start_serial_id + idx) as i64,
+                left_code: &iris_l.code.coefs,
+                left_mask: &iris_l.mask.coefs,
+                right_code: &iris_r.code.coefs,
+                right_mask: &iris_r.mask.coefs,
+            })
+            .collect();
+
+        db_ctx
+            .iris_store()
+            .insert_irises(&mut tx, &iris_refs)
+            .await?;
+        tx.commit().await?;
+        tx = db_ctx.iris_store().tx().await?;
+    }
+
+    Ok((
+        start_serial_id as IrisSerialId,
+        end_serial_id as IrisSerialId,
+    ))
 }
 
 /// Persists Iris shares to remote databases.
