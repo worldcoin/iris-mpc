@@ -107,7 +107,7 @@ impl Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(pairs).await;
+        let ds_and_ts = galois_ring_pairwise_distance(pairs);
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
     }
 
