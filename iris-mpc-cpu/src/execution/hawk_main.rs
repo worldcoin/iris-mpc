@@ -214,13 +214,15 @@ type MapEdges<T> = HashMap<VectorId, T>;
 /// If true, a match is `left OR right`, otherwise `left AND right`.
 type UseOrRule = bool;
 
+type Aby3Ref = Arc<RwLock<Aby3Store>>;
+
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 #[derive(Clone)]
 pub struct HawkSession {
-    aby3_store: Arc<RwLock<Aby3Store>>,
+    aby3_store: Aby3Ref,
     graph_store: GraphRef,
     hnsw_prf_key: Arc<[u8; 16]>,
 }
