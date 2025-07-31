@@ -218,14 +218,15 @@ type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
+#[derive(Clone)]
 pub struct HawkSession {
-    aby3_store: Aby3Store,
+    aby3_store: Arc<RwLock<Aby3Store>>,
     graph_store: GraphRef,
     hnsw_prf_key: Arc<[u8; 16]>,
 }
 
 // Thread safe reference to a HakwSession instance.
-pub type HawkSessionRef = Arc<RwLock<HawkSession>>;
+// pub type HawkSession = Arc<RwLock<HawkSessionOriginal>>;
 
 pub type SearchResult = (
     <Aby3Store as VectorStore>::VectorRef,
@@ -389,9 +390,7 @@ impl HawkActor {
         Ok(self.prf_key.as_ref().unwrap().clone())
     }
 
-    pub async fn new_sessions_orient(
-        &mut self,
-    ) -> Result<BothOrient<BothEyes<Vec<HawkSessionRef>>>> {
+    pub async fn new_sessions_orient(&mut self) -> Result<BothOrient<BothEyes<Vec<HawkSession>>>> {
         let [mut left, mut right] = self.new_sessions().await?;
 
         let left_mirror = left.split_off(left.len() / 2);
@@ -399,7 +398,7 @@ impl HawkActor {
         Ok([[left, right], [left_mirror, right_mirror]])
     }
 
-    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
         for tcp_session in self.networking.make_sessions().await? {
             network_sessions.push(NetworkSession {
@@ -444,7 +443,7 @@ impl HawkActor {
         store_id: StoreId,
         mut network_session: NetworkSession,
         hnsw_prf_key: &Arc<[u8; 16]>,
-    ) -> impl Future<Output = Result<HawkSessionRef>> {
+    ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let hnsw_prf_key = hnsw_prf_key.clone();
@@ -452,26 +451,27 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let aby3_store = Aby3Store {
+                session: Session {
+                    network_session,
+                    prf,
+                },
+                storage,
+            };
 
             let hawk_session = HawkSession {
-                aby3_store: Aby3Store {
-                    session: Session {
-                        network_session,
-                        prf,
-                    },
-                    storage,
-                },
+                aby3_store: Arc::new(RwLock::new(aby3_store)),
                 graph_store,
                 hnsw_prf_key,
             };
 
-            Ok(Arc::new(RwLock::new(hawk_session)))
+            Ok(hawk_session)
         }
     }
 
     pub async fn insert(
         &mut self,
-        sessions: &[HawkSessionRef],
+        sessions: &[HawkSession],
         plans: VecRequests<Option<InsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
@@ -489,13 +489,13 @@ impl HawkActor {
 
     async fn update_anon_stats(
         &mut self,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
         search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-            let mut session = sessions[side][0].write().await;
-            self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
+            let session = &mut sessions[side][0].aby3_store.write().await.session;
+            self.fill_anonymized_statistics_buckets(session, side)
                 .await?;
         }
         Ok(())
@@ -1251,7 +1251,7 @@ impl HawkHandle {
 
     async fn handle_job(
         hawk_actor: &mut HawkActor,
-        sessions_orient: &BothOrient<BothEyes<Vec<HawkSessionRef>>>,
+        sessions_orient: &BothOrient<BothEyes<Vec<HawkSession>>>,
         request: HawkRequest,
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
@@ -1356,7 +1356,7 @@ impl HawkHandle {
 
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
         search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
@@ -1477,7 +1477,7 @@ impl HawkHandle {
 
     async fn health_check(
         hawk_actor: &mut HawkActor,
-        sessions: &mut BothOrient<BothEyes<Vec<HawkSessionRef>>>,
+        sessions: &mut BothOrient<BothEyes<Vec<HawkSession>>>,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {

@@ -1,7 +1,7 @@
 use super::{
     rot::VecRots,
     scheduler::{Batch, Schedule, Task},
-    BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
+    BothEyes, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
@@ -19,7 +19,7 @@ pub struct IntraMatch {
 }
 
 pub async fn intra_batch_is_match(
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
     let n_sessions = sessions[LEFT].len();
@@ -36,10 +36,7 @@ pub async fn intra_batch_is_match(
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
         let tx = tx.clone();
-        async move {
-            let mut session = session.write().await;
-            per_session(&search_queries, &mut session, batch, tx).await
-        }
+        async move { per_session(&search_queries, &session, batch, tx).await }
     };
 
     parallelize(batches.into_iter().map(per_session)).await?;
@@ -49,7 +46,7 @@ pub async fn intra_batch_is_match(
 
 async fn per_session(
     search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
-    session: &mut HawkSession,
+    session: &HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,
 ) -> Result<()> {
@@ -80,12 +77,11 @@ async fn per_session(
         })
         .collect_vec();
 
-    let distances = session
-        .aby3_store
-        .eval_pairwise_distances(&query_pairs)
-        .await?;
-    let distances = session.aby3_store.lift_distances(distances).await?;
-    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
+    let mut store = session.aby3_store.write().await;
+
+    let distances = store.eval_pairwise_distances(&query_pairs).await?;
+    let distances = store.lift_distances(distances).await?;
+    let is_matches = store.is_match_batch(&distances).await?;
 
     for (pair, is_match) in izip!(pairs, is_matches) {
         if is_match {
