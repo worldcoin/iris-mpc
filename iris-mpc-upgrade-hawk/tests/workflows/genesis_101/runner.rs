@@ -4,8 +4,6 @@ use crate::{
 };
 use derive_more::{Deref, DerefMut};
 use eyre::{eyre, Report, Result};
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_store::Store;
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 use std::ops::{Deref, DerefMut};
 

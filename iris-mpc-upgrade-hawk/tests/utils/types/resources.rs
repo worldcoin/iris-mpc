@@ -5,5 +5,16 @@ use serde::{Deserialize, Serialize};
 pub struct ModificationInput {
     pub serial_id: Option<i64>,
     pub request_type: String,
-    pub s3_url: Option<String>,
+    #[serde(default = "default_modification_status")]
+    pub status: String,
+    #[serde(default = "default_false")]
+    pub persisted: bool,
+}
+
+fn default_modification_status() -> String {
+    "IN_PROGRESS".into()
+}
+
+fn default_false() -> bool {
+    false
 }

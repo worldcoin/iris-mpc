@@ -116,6 +116,11 @@ impl DatabaseContext {
         })
     }
 
+    // use a three step to initialize the modifications table
+    // 1. clear the table
+    // 2. call insert_modification(), which defaults to IN_PROGRESS and not persisted. This is done because the
+    //    database API doesn't provide a function to insert a Modification struct directly.
+    // 3. call update_modifications() to update the state as specified by the input file.
     pub async fn init_modifications_from_file(&mut self, json_file_name: &str) -> Result<()> {
         let modifications = resources::read_modifications(json_file_name)?;
 
@@ -124,15 +129,24 @@ impl DatabaseContext {
         self.iris_store.clear_modifications_table(&mut tx).await?;
         tx.commit().await?;
 
+        let mut parial_mods = vec![];
         for m in modifications {
-            self.iris_store
-                .insert_modification(
-                    m.serial_id,
-                    &m.request_type,
-                    m.s3_url.as_ref().map(|x| x.as_str()),
-                )
+            let mut r = self
+                .iris_store
+                .insert_modification(m.serial_id, &m.request_type, None)
                 .await?;
+            r.status = m.status;
+            r.persisted = m.persisted;
+            parial_mods.push(r);
         }
+
+        let modifications: Vec<&Modification> = parial_mods.iter().collect();
+
+        let mut tx = self.iris_store.tx().await?;
+        self.iris_store
+            .update_modifications(&mut tx, &modifications)
+            .await?;
+        tx.commit().await?;
 
         Ok(())
     }
