@@ -7,98 +7,45 @@ use itertools::{IntoChunks, Itertools};
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
 pub(super) struct Inputs {
-    // Network configuration.
-    config: NetConfig,
+    // Configuration for each node in network.
+    args: [NodeArgs; COUNT_OF_PARTIES],
 
-    // Data used to launch each node process during a test run.
-    net_inputs: NetInputs,
+    // Configuration for each node in network.
+    config: NetConfig,
 
     // Data used to initialise system state prior to a test run.
     #[allow(dead_code)]
-    system_state_inputs: SystemStateInputs,
+    system_state: SystemStateInputs,
 }
 
 /// Constructor.
 impl Inputs {
     pub fn new(
-        net_config: NetConfig,
-        net_inputs: NetInputs,
+        args: [NodeArgs; COUNT_OF_PARTIES],
+        config: NetConfig,
         system_state_inputs: SystemStateInputs,
     ) -> Self {
         Self {
-            net_config,
-            net_inputs,
-            system_state_inputs,
+            args,
+            config,
+            system_state: system_state_inputs,
         }
     }
 }
 
 /// Accessors.
 impl Inputs {
-    pub fn config(&self) -> &NetConfig {
-        &self.config
+    pub fn args_of_node(&self, node_idx: usize) -> &NodeArgs {
+        &self.args[node_idx]
     }
 
-    pub fn net_inputs(&self) -> &NetInputs {
-        &self.net_inputs
+    pub fn config_of_node(&self, node_idx: usize) -> &NodeConfig {
+        &self.config[node_idx]
     }
 
     #[allow(dead_code)]
     pub fn system_state_inputs(&self) -> &SystemStateInputs {
-        &self.system_state_inputs
-    }
-}
-
-/// Inputs required to run a network.
-#[derive(Debug, Clone)]
-pub(super) struct NetInputs {
-    /// Node input arguments.
-    node_inputs: [NodeInputs; COUNT_OF_PARTIES],
-}
-
-/// Constructor.
-impl NetInputs {
-    pub fn new(node_inputs: [NodeInputs; COUNT_OF_PARTIES]) -> Self {
-        Self { node_inputs }
-    }
-}
-
-/// Accessors.
-impl NetInputs {
-    pub fn node_inputs(&self) -> &[NodeInputs; COUNT_OF_PARTIES] {
-        &self.node_inputs
-    }
-
-    pub fn get_node_inputs(&self, node_idx: usize) -> &NodeInputs {
-        &self.node_inputs[node_idx]
-    }
-}
-
-/// Inputs required to run a node.
-#[derive(Debug, Clone)]
-pub(super) struct NodeInputs {
-    /// Node input arguments.
-    args: NodeArgs,
-
-    /// Node input configuration.
-    config: NodeConfig,
-}
-
-/// Constructor.
-impl NodeInputs {
-    pub fn new(args: NodeArgs, config: NodeConfig) -> Self {
-        Self { args, config }
-    }
-}
-
-/// Accessors.
-impl NodeInputs {
-    pub fn args(&self) -> &NodeArgs {
-        &self.args
-    }
-
-    pub fn config(&self) -> &NodeConfig {
-        &self.config
+        &self.system_state
     }
 }
 

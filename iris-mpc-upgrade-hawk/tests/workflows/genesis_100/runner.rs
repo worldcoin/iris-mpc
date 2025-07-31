@@ -1,7 +1,8 @@
 use super::{factory, inputs::Inputs, params::Params};
-use crate::utils::{TestError, TestRun, TestRunContextInfo};
+use crate::utils::{constants::COUNT_OF_PARTIES, TestError, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
-use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
+use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
 
 /// HNSW Genesis test.
 pub struct Test {
@@ -26,22 +27,26 @@ impl Test {
     }
 }
 
+/// Accessors.
+impl Test {
+    pub fn node_args(&self, node_idx: usize) -> &NodeArgs {
+        self.inputs.as_ref().unwrap().args_of_node(node_idx)
+    }
+
+    pub fn node_config(&self, node_idx: usize) -> &NodeConfig {
+        self.inputs.as_ref().unwrap().config_of_node(node_idx)
+    }
+}
+
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        // Set node process inputs.
-        let node_inputs = self
-            .inputs
-            .as_ref()
-            .unwrap()
-            .net_inputs()
-            .node_inputs()
-            .iter();
-
         // Set node process futures.
-        let node_futures: Vec<_> = node_inputs
-            .map(|node_input| {
-                exec_genesis(node_input.args().to_owned(), node_input.config().to_owned())
+        let node_futures: Vec<_> = (0..COUNT_OF_PARTIES)
+            .map(|node_idx: usize| {
+                let node_config = self.node_config(node_idx);
+                let node_args = self.node_args(node_idx);
+                exec_genesis(node_args.to_owned(), node_config.to_owned())
             })
             .collect();
 
@@ -70,7 +75,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::create_inputs(ctx, self.params));
+        self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
 
         // Set system state.
         // Write Iris shares -> GPU dB.

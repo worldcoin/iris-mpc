@@ -2,7 +2,6 @@ use super::{
     constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
     types::NetConfig,
 };
-use eyre::eyre;
 use iris_mpc_common::{
     config::Config as NodeConfig,
     postgres::{AccessMode, PostgresClient},
@@ -178,30 +177,4 @@ impl NetDbProvider {
     pub fn node(&self, idx: usize) -> &NodeDbProvider {
         &self.nodes[idx]
     }
-}
-
-/// Returns name of a dB schema for connecting to a node's dB.
-fn get_db_schema(config: &NodeConfig, schema_suffix: &String) -> String {
-    let NodeConfig {
-        schema_name,
-        environment,
-        party_id,
-        ..
-    } = config;
-
-    format!(
-        "{}{}_{}_{}",
-        schema_name, schema_suffix, environment, party_id
-    )
-}
-
-/// Returns name of a dB url for connecting to a node's dB.
-fn get_db_url(config: &NodeConfig) -> String {
-    config
-        .database
-        .as_ref()
-        .ok_or(eyre!("Missing database config"))
-        .unwrap()
-        .url
-        .clone()
 }
