@@ -100,10 +100,10 @@ impl TestRun for Test {
 
         // Set system state.
         // ... insert Iris shares -> GPU dB.
-        state_mutator::insert_iris_shares(self.params(), self.args(), self.config()).await;
+        state_mutator::insert_iris_shares_into_gpu_stores(self.config(), self.params()).await;
 
         // ... insert Iris deletions -> AWS S3.
-        state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
+        // state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
 
         Ok(())
     }

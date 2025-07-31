@@ -58,16 +58,16 @@ impl DbConnectionInfo {
 }
 
 /// Encapsulates API pointers to a database.
-pub struct NodeDbStore {
+pub struct NodeDbContext {
     /// Pointer to HNSW Graph store API.
-    graph: GraphStore<PlaintextStore>,
+    graph_store: GraphStore<PlaintextStore>,
 
     /// Pointer to Iris store API.
-    iris: IrisStore,
+    iris_store: IrisStore,
 }
 
 /// Constructor.
-impl NodeDbStore {
+impl NodeDbContext {
     pub async fn new(connection_info: DbConnectionInfo) -> Self {
         let client = PostgresClient::new(
             connection_info.url(),
@@ -78,30 +78,30 @@ impl NodeDbStore {
         .unwrap();
 
         Self {
-            iris: IrisStore::new(&client).await.unwrap(),
-            graph: GraphStore::new(&client).await.unwrap(),
+            iris_store: IrisStore::new(&client).await.unwrap(),
+            graph_store: GraphStore::new(&client).await.unwrap(),
         }
     }
 }
 
 /// Accessors.
-impl NodeDbStore {
-    pub fn graph(&self) -> &GraphStore<PlaintextStore> {
-        &self.graph
+impl NodeDbContext {
+    pub fn graph_store(&self) -> &GraphStore<PlaintextStore> {
+        &self.graph_store
     }
 
-    pub fn iris(&self) -> &IrisStore {
-        &self.iris
+    pub fn iris_store(&self) -> &IrisStore {
+        &self.iris_store
     }
 }
 
 /// Encapsulates API pointers to a database.
 pub struct NodeDbProvider {
     /// Pointer to HNSW Graph store API.
-    cpu_store: NodeDbStore,
+    cpu_store: NodeDbContext,
 
     /// Pointer to Iris store API.
-    gpu_store: NodeDbStore,
+    gpu_store: NodeDbContext,
 
     /// Ordinal index of MPC party.
     party_idx: usize,
@@ -109,7 +109,7 @@ pub struct NodeDbProvider {
 
 /// Constructor.
 impl NodeDbProvider {
-    pub fn new(party_idx: usize, cpu_store: NodeDbStore, gpu_store: NodeDbStore) -> Self {
+    pub fn new(party_idx: usize, cpu_store: NodeDbContext, gpu_store: NodeDbContext) -> Self {
         Self {
             cpu_store,
             gpu_store,
@@ -120,12 +120,12 @@ impl NodeDbProvider {
     pub async fn new_from_config(config: &NodeConfig) -> Self {
         Self::new(
             config.party_id,
-            NodeDbStore::new(DbConnectionInfo::new_read_write(
+            NodeDbContext::new(DbConnectionInfo::new_read_write(
                 config,
                 config.hnsw_schema_name_suffix(),
             ))
             .await,
-            NodeDbStore::new(DbConnectionInfo::new_read_only(
+            NodeDbContext::new(DbConnectionInfo::new_read_only(
                 config,
                 config.gpu_schema_name_suffix(),
             ))
@@ -136,11 +136,11 @@ impl NodeDbProvider {
 
 /// Accessors.
 impl NodeDbProvider {
-    pub fn cpu_store(&self) -> &NodeDbStore {
+    pub fn cpu_store(&self) -> &NodeDbContext {
         &self.cpu_store
     }
 
-    pub fn gpu_store(&self) -> &NodeDbStore {
+    pub fn gpu_store(&self) -> &NodeDbContext {
         &self.gpu_store
     }
 
