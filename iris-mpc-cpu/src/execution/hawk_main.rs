@@ -227,9 +227,6 @@ pub struct HawkSession {
     hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-// Thread safe reference to a HakwSession instance.
-// pub type HawkSession = Arc<RwLock<HawkSessionOriginal>>;
-
 pub type SearchResult = (
     <Aby3Store as VectorStore>::VectorRef,
     <Aby3Store as VectorStore>::DistanceRef,
