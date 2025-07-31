@@ -1,19 +1,26 @@
-use super::{factory, inputs::Inputs, params::Params};
-use crate::utils::{constants::COUNT_OF_PARTIES, TestError, TestRun, TestRunContextInfo};
+use super::{
+    factory,
+    inputs::{Inputs, NetArgs},
+    params::Params,
+    state_mutator,
+};
+use crate::utils::{
+    constants::COUNT_OF_PARTIES, NetConfig, TestError, TestRun, TestRunContextInfo,
+};
 use eyre::{Report, Result};
 use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
 
 /// HNSW Genesis test.
 pub struct Test {
-    /// Data encapsulating test inputs.
+    /// Test run inputs.
     inputs: Option<Inputs>,
 
-    /// Results of node process execution.
-    node_results: Option<Vec<Result<(), Report>>>,
-
-    /// Results of node process execution.
+    /// Test run parameters.
     params: Params,
+
+    /// Node execution results.
+    results: Option<Vec<Result<(), Report>>>,
 }
 
 /// Constructor.
@@ -21,7 +28,7 @@ impl Test {
     pub fn new(params: Params) -> Self {
         Self {
             inputs: None,
-            node_results: None,
+            results: None,
             params,
         }
     }
@@ -29,12 +36,28 @@ impl Test {
 
 /// Accessors.
 impl Test {
-    pub fn node_args(&self, node_idx: usize) -> &NodeArgs {
-        self.inputs.as_ref().unwrap().args_of_node(node_idx)
+    pub fn args(&self) -> &NetArgs {
+        self.inputs.as_ref().unwrap().args()
     }
 
-    pub fn node_config(&self, node_idx: usize) -> &NodeConfig {
-        self.inputs.as_ref().unwrap().config_of_node(node_idx)
+    pub fn args_of_node(&self, node_idx: usize) -> NodeArgs {
+        self.inputs.as_ref().unwrap().args_of_node(node_idx).clone()
+    }
+
+    pub fn config(&self) -> &NetConfig {
+        self.inputs.as_ref().unwrap().config()
+    }
+
+    pub fn config_of_node(&self, node_idx: usize) -> NodeConfig {
+        self.inputs
+            .as_ref()
+            .unwrap()
+            .config_of_node(node_idx)
+            .clone()
+    }
+
+    pub fn params(&self) -> &Params {
+        &self.params
     }
 }
 
@@ -44,22 +67,20 @@ impl TestRun for Test {
         // Set node process futures.
         let node_futures: Vec<_> = (0..COUNT_OF_PARTIES)
             .map(|node_idx: usize| {
-                let node_config = self.node_config(node_idx);
-                let node_args = self.node_args(node_idx);
-                exec_genesis(node_args.to_owned(), node_config.to_owned())
+                exec_genesis(self.args_of_node(node_idx), self.config_of_node(node_idx))
             })
             .collect();
 
         // Await futures to complete.
-        self.node_results = Some(futures::future::join_all(node_futures).await);
+        self.results = Some(futures::future::join_all(node_futures).await);
 
         Ok(())
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        // Assert node process results.
-        for (node_idx, node_result) in self.node_results.as_ref().unwrap().iter().enumerate() {
-            match node_result {
+        // Assert node results.
+        for (node_idx, result) in self.results.as_ref().unwrap().iter().enumerate() {
+            match result {
                 Ok(_) => (),
                 Err(err) => {
                     return Err(TestError::NodeProcessPanicError(node_idx, err.to_string()));
@@ -78,11 +99,11 @@ impl TestRun for Test {
         self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
 
         // Set system state.
-        // Write Iris shares -> GPU dB.
-        // TODO
+        // ... insert Iris shares -> GPU dB.
+        state_mutator::insert_iris_shares(self.params(), self.args(), self.config()).await;
 
-        // Write empty Iris deletions -> localstack.
-        // TODO
+        // ... insert Iris deletions -> AWS S3.
+        state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
 
         Ok(())
     }

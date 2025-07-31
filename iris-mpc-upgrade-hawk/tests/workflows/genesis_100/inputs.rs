@@ -4,11 +4,14 @@ use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 use itertools::{IntoChunks, Itertools};
 
+// Network wide argument set.
+pub type NetArgs = [NodeArgs; COUNT_OF_PARTIES];
+
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
 pub(super) struct Inputs {
     // Configuration for each node in network.
-    args: [NodeArgs; COUNT_OF_PARTIES],
+    args: NetArgs,
 
     // Configuration for each node in network.
     config: NetConfig,
@@ -20,11 +23,7 @@ pub(super) struct Inputs {
 
 /// Constructor.
 impl Inputs {
-    pub fn new(
-        args: [NodeArgs; COUNT_OF_PARTIES],
-        config: NetConfig,
-        system_state_inputs: SystemStateInputs,
-    ) -> Self {
+    pub fn new(args: NetArgs, config: NetConfig, system_state_inputs: SystemStateInputs) -> Self {
         Self {
             args,
             config,
@@ -35,8 +34,16 @@ impl Inputs {
 
 /// Accessors.
 impl Inputs {
+    pub fn args(&self) -> &NetArgs {
+        &self.args
+    }
+
     pub fn args_of_node(&self, node_idx: usize) -> &NodeArgs {
         &self.args[node_idx]
+    }
+
+    pub fn config(&self) -> &NetConfig {
+        &self.config
     }
 
     pub fn config_of_node(&self, node_idx: usize) -> &NodeConfig {

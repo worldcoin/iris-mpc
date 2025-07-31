@@ -163,7 +163,7 @@ impl NetDbProvider {
         }
     }
 
-    pub async fn new_from_config(config: NetConfig) -> Self {
+    pub async fn new_from_config(config: &NetConfig) -> Self {
         Self::new(
             NodeDbProvider::new_from_config(&config[PARTY_IDX_0]).await,
             NodeDbProvider::new_from_config(&config[PARTY_IDX_1]).await,
@@ -174,7 +174,7 @@ impl NetDbProvider {
 
 /// Accessors.
 impl NetDbProvider {
-    pub fn node(&self, idx: usize) -> &NodeDbProvider {
+    pub fn of_node(&self, idx: usize) -> &NodeDbProvider {
         &self.nodes[idx]
     }
 }

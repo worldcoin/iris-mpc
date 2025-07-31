@@ -8,5 +8,5 @@ pub type IrisCodePair = (IrisCode, IrisCode);
 // Pair of Iris shares aassociated with left/right eyes.
 pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
 
-// Network wide configuration.
+// Network wide configuration set.
 pub type NetConfig = [NodeConfig; COUNT_OF_PARTIES];

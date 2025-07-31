@@ -15,6 +15,9 @@ pub struct Params {
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_db_snapshot: bool,
 
+    // Batch size when persisting data to pgres stores.
+    pgres_tx_batch_size: usize,
+
     // Flag indicating whether a db backup will be used as initial data source.
     use_db_backup_as_source: bool,
 }
@@ -26,6 +29,7 @@ impl Params {
         batch_size_error_rate: usize,
         max_indexation_id: IrisSerialId,
         perform_db_snapshot: bool,
+        pgres_tx_batch_size: usize,
         use_db_backup_as_source: bool,
     ) -> Self {
         Self {
@@ -33,6 +37,7 @@ impl Params {
             batch_size_error_rate,
             max_indexation_id,
             perform_db_snapshot,
+            pgres_tx_batch_size,
             use_db_backup_as_source,
         }
     }
@@ -54,6 +59,10 @@ impl Params {
 
     pub fn perform_db_snapshot(&self) -> bool {
         self.perform_db_snapshot
+    }
+
+    pub fn pgres_tx_batch_size(&self) -> usize {
+        self.pgres_tx_batch_size
     }
 
     pub fn use_db_backup_as_source(&self) -> bool {
