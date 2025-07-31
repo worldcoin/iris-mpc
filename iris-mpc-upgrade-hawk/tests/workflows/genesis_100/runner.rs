@@ -70,9 +70,10 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::get_inputs(ctx, self.params));
+        self.inputs = Some(factory::create_inputs(ctx, self.params));
 
-        // Write 100 Iris shares -> GPU dB.
+        // Set system state.
+        // Write Iris shares -> GPU dB.
         // TODO
 
         // Write empty Iris deletions -> localstack.

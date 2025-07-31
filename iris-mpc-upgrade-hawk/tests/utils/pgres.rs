@@ -1,10 +1,16 @@
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use super::{
+    constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
+    types::NetConfig,
+};
+use eyre::eyre;
+use iris_mpc_common::{
+    config::Config as NodeConfig,
+    postgres::{AccessMode, PostgresClient},
+};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
 };
 use iris_mpc_store::Store as IrisStore;
-
-use crate::utils::constants::COUNT_OF_PARTIES;
 
 /// Encapsulates information required to connect to a database.
 pub struct DbConnectionInfo {
@@ -20,20 +26,20 @@ pub struct DbConnectionInfo {
 
 /// Constructors.
 impl DbConnectionInfo {
-    fn new(schema: String, url: String, access_mode: AccessMode) -> Self {
+    fn new(config: &NodeConfig, schema_suffix: &String, access_mode: AccessMode) -> Self {
         Self {
             access_mode,
-            schema,
-            url,
+            schema: config.get_db_schema(schema_suffix),
+            url: config.get_db_url(),
         }
     }
 
-    pub fn new_read_only(schema: String, url: String) -> Self {
-        Self::new(schema, url, AccessMode::ReadOnly)
+    pub fn new_read_only(config: &NodeConfig, schema_suffix: &String) -> Self {
+        Self::new(config, schema_suffix, AccessMode::ReadOnly)
     }
 
-    pub fn new_read_write(schema: String, url: String) -> Self {
-        Self::new(schema, url, AccessMode::ReadWrite)
+    pub fn new_read_write(config: &NodeConfig, schema_suffix: &String) -> Self {
+        Self::new(config, schema_suffix, AccessMode::ReadWrite)
     }
 }
 
@@ -111,6 +117,22 @@ impl NodeDbProvider {
             party_idx,
         }
     }
+
+    pub async fn new_from_config(config: &NodeConfig) -> Self {
+        Self::new(
+            config.party_id,
+            NodeDbStore::new(DbConnectionInfo::new_read_write(
+                config,
+                config.hnsw_schema_name_suffix(),
+            ))
+            .await,
+            NodeDbStore::new(DbConnectionInfo::new_read_only(
+                config,
+                config.gpu_schema_name_suffix(),
+            ))
+            .await,
+        )
+    }
 }
 
 /// Accessors.
@@ -141,6 +163,14 @@ impl NetDbProvider {
             nodes: [node_0, node_1, node_2],
         }
     }
+
+    pub async fn new_from_config(config: NetConfig) -> Self {
+        Self::new(
+            NodeDbProvider::new_from_config(&config[PARTY_IDX_0]).await,
+            NodeDbProvider::new_from_config(&config[PARTY_IDX_1]).await,
+            NodeDbProvider::new_from_config(&config[PARTY_IDX_2]).await,
+        )
+    }
 }
 
 /// Accessors.
@@ -148,4 +178,30 @@ impl NetDbProvider {
     pub fn node(&self, idx: usize) -> &NodeDbProvider {
         &self.nodes[idx]
     }
+}
+
+/// Returns name of a dB schema for connecting to a node's dB.
+fn get_db_schema(config: &NodeConfig, schema_suffix: &String) -> String {
+    let NodeConfig {
+        schema_name,
+        environment,
+        party_id,
+        ..
+    } = config;
+
+    format!(
+        "{}{}_{}_{}",
+        schema_name, schema_suffix, environment, party_id
+    )
+}
+
+/// Returns name of a dB url for connecting to a node's dB.
+fn get_db_url(config: &NodeConfig) -> String {
+    config
+        .database
+        .as_ref()
+        .ok_or(eyre!("Missing database config"))
+        .unwrap()
+        .url
+        .clone()
 }

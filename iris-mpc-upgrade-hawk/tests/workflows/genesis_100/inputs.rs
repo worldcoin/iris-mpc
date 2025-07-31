@@ -1,5 +1,5 @@
 use super::params::Params;
-use crate::utils::{constants::COUNT_OF_PARTIES, GaloisRingSharedIrisPair};
+use crate::utils::{constants::COUNT_OF_PARTIES, GaloisRingSharedIrisPair, NetConfig};
 use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 use itertools::{IntoChunks, Itertools};
@@ -7,6 +7,9 @@ use itertools::{IntoChunks, Itertools};
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
 pub(super) struct Inputs {
+    // Network configuration.
+    config: NetConfig,
+
     // Data used to launch each node process during a test run.
     net_inputs: NetInputs,
 
@@ -17,8 +20,13 @@ pub(super) struct Inputs {
 
 /// Constructor.
 impl Inputs {
-    pub fn new(net_inputs: NetInputs, system_state_inputs: SystemStateInputs) -> Self {
+    pub fn new(
+        net_config: NetConfig,
+        net_inputs: NetInputs,
+        system_state_inputs: SystemStateInputs,
+    ) -> Self {
         Self {
+            net_config,
             net_inputs,
             system_state_inputs,
         }
@@ -27,6 +35,10 @@ impl Inputs {
 
 /// Accessors.
 impl Inputs {
+    pub fn config(&self) -> &NetConfig {
+        &self.config
+    }
+
     pub fn net_inputs(&self) -> &NetInputs {
         &self.net_inputs
     }
@@ -87,10 +99,6 @@ impl NodeInputs {
 
     pub fn config(&self) -> &NodeConfig {
         &self.config
-    }
-
-    pub fn party_idx(&self) -> usize {
-        self.config.party_id
     }
 }
 

@@ -49,7 +49,7 @@ pub trait TestRun {
     async fn teardown_assert(&mut self) -> Result<(), TestError>;
 }
 
-/// Metadata associated with a test run.
+/// Contextual information & utils associated with a test run.
 #[derive(Debug, Clone, Copy)]
 pub struct TestRunContextInfo {
     /// Test run execution environment.
