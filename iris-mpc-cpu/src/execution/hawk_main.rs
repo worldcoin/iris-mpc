@@ -1,7 +1,7 @@
 use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::search::SearchIds,
+        hawk_main::{insert::InsertPlanV, search::SearchIds},
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -11,9 +11,7 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, neighborhood::SortedNeighborhoodV},
-        searcher::ConnectPlanV,
-        GraphMem, HnswParams, HnswSearcher, VectorStore,
+        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle},
     protocol::{
@@ -232,31 +230,10 @@ pub type SearchResult = (
     <Aby3Store as VectorStore>::DistanceRef,
 );
 
-/// InsertPlan specifies where a query may be inserted into the HNSW graph.
-/// That is lists of neighbors for each layer.
-#[derive(Debug)]
-pub struct InsertPlanV<V: VectorStore> {
-    query: V::QueryRef,
-    links: Vec<SortedNeighborhoodV<V>>,
-    set_ep: bool,
-}
-
-// Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
-// propagate the nested Clone bounds on V::QueryRef via TransientRef.
-impl<V: VectorStore> Clone for InsertPlanV<V> {
-    fn clone(&self) -> Self {
-        Self {
-            query: self.query.clone(),
-            links: self.links.clone(),
-            set_ep: self.set_ep,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
-    plan: InsertPlanV<Aby3Store>,
-    match_count: usize,
+    pub plan: InsertPlanV<Aby3Store>,
+    pub match_count: usize,
 }
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.

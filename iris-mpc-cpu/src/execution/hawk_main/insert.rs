@@ -1,15 +1,33 @@
-use crate::{
-    execution::hawk_main::InsertPlanV,
-    hnsw::{
-        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV,
-        vector_store::VectorStoreMut, GraphMem, HnswSearcher, VectorStore,
-    },
+use crate::hnsw::{
+    graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, vector_store::VectorStoreMut,
+    GraphMem, HnswSearcher, VectorStore,
 };
 
 use super::VecRequests;
 
 use eyre::Result;
 use itertools::{izip, Itertools};
+
+/// InsertPlan specifies where a query may be inserted into the HNSW graph.
+/// That is lists of neighbors for each layer.
+#[derive(Debug)]
+pub struct InsertPlanV<V: VectorStore> {
+    pub query: V::QueryRef,
+    pub links: Vec<SortedNeighborhoodV<V>>,
+    pub set_ep: bool,
+}
+
+// Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
+// propagate the nested Clone bounds on V::QueryRef via TransientRef.
+impl<V: VectorStore> Clone for InsertPlanV<V> {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            links: self.links.clone(),
+            set_ep: self.set_ep,
+        }
+    }
+}
 
 /// Insert a collection `plans` of `InsertPlan` structs into the graph and vector store
 /// represented by `session`, adjusting the insertion plans as needed to repair any conflict
