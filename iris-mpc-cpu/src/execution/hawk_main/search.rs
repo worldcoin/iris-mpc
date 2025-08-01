@@ -147,7 +147,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     query: Aby3Query,
     searcher: &HnswSearcher,
     identifier: &H,
-) -> Result<HawkInsertPlan> {
+) -> Result<InsertPlanV<Aby3Store>> {
     let mut store = session.aby3_store.write().await;
     let graph = session.graph_store.clone().read_owned().await;
 
@@ -157,14 +157,10 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
 
-    // TODO replace with InsertPlanV
-    Ok(HawkInsertPlan {
-        plan: InsertPlanV {
-            query,
-            links,
-            set_ep,
-        },
-        match_count: 0,
+    Ok(InsertPlanV {
+        query,
+        links,
+        set_ep,
     })
 }
 

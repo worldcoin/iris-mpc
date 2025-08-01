@@ -222,9 +222,9 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 #[derive(Clone)]
 pub struct HawkSession {
-    aby3_store: Aby3Ref,
-    graph_store: GraphRef,
-    hnsw_prf_key: Arc<[u8; 16]>,
+    pub aby3_store: Aby3Ref,
+    pub graph_store: GraphRef,
+    pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
 pub type SearchResult = (
@@ -479,6 +479,9 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        // Map insertion plans to inner InsertionPlanV
+        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
+
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -487,8 +490,17 @@ impl HawkActor {
 
         // Parallel insertions are not supported, so only one session is needed.
         let session = &sessions[0];
+        let mut store = session.aby3_store.write().await;
+        let mut graph = session.graph_store.write().await;
 
-        insert::insert(session, &self.searcher, plans, &insertion_ids).await
+        insert::insert(
+            &mut *store,
+            &mut *graph,
+            &self.searcher,
+            plans,
+            &insertion_ids,
+        )
+        .await
     }
 
     async fn update_anon_stats(
