@@ -184,7 +184,120 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             let irises = state.src_db.irises.get(&cur_id).unwrap().clone();
             state.dst_db.irises.insert(cur_id, irises);
         }
+
+        // 4. Update last_indexed_iris_id in destination db
+        state.dst_db.persistent_state.last_indexed_iris_id = Some(id);
     }
 
     Ok(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use aes_prng::AesRng;
+    use iris_mpc_common::iris_db::db::IrisDB;
+    use rand::SeedableRng;
+
+    use super::*;
+
+    fn gen_base_state(n_src_enrollments: usize) -> GenesisState {
+        let mut rng = AesRng::seed_from_u64(0);
+        let irises_left = IrisDB::new_random_rng(n_src_enrollments, &mut rng).db;
+        let irises_right = IrisDB::new_random_rng(n_src_enrollments, &mut rng).db;
+        let src_db_irises: HashMap<_, _> = izip!(irises_left, irises_right)
+            .enumerate()
+            .map(|(id, (left, right))| (id as IrisSerialId, (0, left, right)))
+            .collect();
+
+        GenesisState {
+            src_db: GenesisSrcDbState {
+                irises: src_db_irises,
+                modifications: (),
+            },
+            dst_db: GenesisDstDbState {
+                irises: HashMap::new(),
+                graphs: [GraphMem::new(), GraphMem::new()],
+                persistent_state: PersistentState {
+                    last_indexed_iris_id: None,
+                    last_indexed_modification_id: None,
+                },
+            },
+            config: GenesisConfig {
+                hnsw_M: 256,
+                hnsw_ef_constr: 320,
+                hnsw_ef_search: 320,
+                hawk_prf_key: Some(0),
+            },
+            args: GenesisArgs {
+                max_indexation_id: 100,
+                batch_size: 0,
+                batch_size_error_rate: 128,
+            },
+            s3_deletions: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_genesis() -> Result<()> {
+        let init_state = gen_base_state(200);
+
+        let new_state = run_plaintext_genesis(init_state).await?;
+
+        assert_eq!(new_state.dst_db.irises.len(), 100);
+        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 100);
+        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 100);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_genesis_with_deletions() -> Result<()> {
+        let mut init_state = gen_base_state(200);
+        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
+
+        let new_state = run_plaintext_genesis(init_state).await?;
+
+        assert_eq!(new_state.dst_db.irises.len(), 100);
+        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 95);
+        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 95);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_genesis_repeated() -> Result<()> {
+        let mut init_state = gen_base_state(200);
+        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
+        init_state.args.max_indexation_id = 50;
+
+        let mut state_1 = run_plaintext_genesis(init_state).await?;
+
+        assert_eq!(state_1.dst_db.irises.len(), 50);
+        assert_eq!(state_1.dst_db.graphs[0].layers[0].links.len(), 47);
+        assert_eq!(state_1.dst_db.graphs[1].layers[0].links.len(), 47);
+
+        state_1.args.max_indexation_id = 100;
+        let state_2 = run_plaintext_genesis(state_1).await?;
+
+        assert_eq!(state_2.dst_db.irises.len(), 100);
+        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 95);
+        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 95);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_genesis_batched() -> Result<()> {
+        let mut init_state = gen_base_state(200);
+        init_state.s3_deletions = vec![25, 40, 50, 60, 90];
+        init_state.args.batch_size = 10;
+
+        let new_state = run_plaintext_genesis(init_state).await?;
+
+        assert_eq!(new_state.dst_db.irises.len(), 100);
+        assert_eq!(new_state.dst_db.graphs[0].layers[0].links.len(), 95);
+        assert_eq!(new_state.dst_db.graphs[1].layers[0].links.len(), 95);
+
+        Ok(())
+    }
 }
