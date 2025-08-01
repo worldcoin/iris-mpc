@@ -1,5 +1,5 @@
 use crate::{
-    utils::{resources, TestExecutionEnvironment},
+    utils::resources,
     workflows::genesis_shared::{
         inputs::{SystemStateInputs, TestInputs},
         params::TestParams,
@@ -12,7 +12,7 @@ use iris_mpc_common::{
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns inputs for running a test.
-pub(super) fn create_inputs(params: TestParams) -> TestInputs {
+pub fn create_test_inputs(params: TestParams) -> TestInputs {
     TestInputs::new(
         create_net_args(params),
         create_net_config(params),

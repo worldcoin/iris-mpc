@@ -1,7 +1,8 @@
-use super::{factory, state_mutator};
+use super::state_mutator;
 use crate::{
     utils::{TestError, TestRun, TestRunContextInfo},
     workflows::genesis_shared::{
+        factory::create_test_inputs,
         inputs::TestInputs,
         net::{NetArgs, NetExecutionResult},
         params::TestParams,
@@ -96,7 +97,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::create_inputs(self.params));
+        self.inputs = Some(create_test_inputs(self.params));
 
         // Set system state.
         // ... insert Iris shares -> GPU dB.
