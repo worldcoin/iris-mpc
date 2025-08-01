@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use crate::hnsw::{HnswSearcher, VectorStore};
 
-use super::{ConnectPlan, HawkSession, HawkSessionRef, InsertPlan, VecRequests};
+use super::{ConnectPlan, HawkSession, InsertPlan, VecRequests};
 
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
@@ -16,8 +16,10 @@ use itertools::{izip, Itertools};
 /// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
 /// which need to parallel an existing iris code database), and `None` if the associated plan
 /// is to be inserted at the next available serial ID, with version 0.
+///
+/// Parallel insertions are not supported, so only one session is needed.
 pub async fn insert(
-    session: &HawkSessionRef,
+    session: &HawkSession,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlan>>,
     ids: &VecRequests<Option<VectorId>>,
@@ -27,14 +29,11 @@ pub async fn insert(
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
-    // Parallel insertions are not supported, so only one session is needed.
-    let mut session = session.write().await;
-
     for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
         if let Some(plan) = plan {
-            let plan = add_batch_neighbors(&mut session, plan, &inserted_ids, m).await?;
+            let plan = add_batch_neighbors(session, plan, &inserted_ids, m).await?;
 
-            *cp = Some(insert_one(&mut session, searcher, plan, *update_id).await?);
+            *cp = Some(insert_one(session, searcher, plan, *update_id).await?);
 
             inserted_ids.push(cp.as_ref().unwrap().inserted_vector);
         }
@@ -44,12 +43,12 @@ pub async fn insert(
 }
 
 async fn add_batch_neighbors(
-    session: &mut HawkSession,
+    session: &HawkSession,
     mut insert_plan: InsertPlan,
     extra_ids: &[VectorId],
     target_n_neighbors: usize,
 ) -> Result<InsertPlan> {
-    let store = &mut session.aby3_store;
+    let mut store = session.aby3_store.write().await;
     let query = insert_plan.query.clone();
 
     if let Some(bottom_layer) = insert_plan.links.first_mut() {
@@ -60,7 +59,7 @@ async fn add_batch_neighbors(
                 .map(|(&id, dist)| (id, dist))
                 .collect_vec();
 
-            bottom_layer.insert_batch(store, &ids_dists).await?;
+            bottom_layer.insert_batch(&mut *store, &ids_dists).await?;
         }
     }
 
@@ -71,17 +70,17 @@ async fn add_batch_neighbors(
 /// `insert_id` is `Some(id)`, then `id` is used as the identifier for the inserted
 /// query.  Otherwise, the query is inserted at the next unused serial id, as version 0.
 async fn insert_one(
-    session: &mut HawkSession,
+    session: &HawkSession,
     searcher: &HnswSearcher,
     insert_plan: InsertPlan,
     insert_id: Option<VectorId>,
 ) -> Result<ConnectPlan> {
-    let inserted = {
-        let storage = &mut session.aby3_store.storage;
+    let mut store = session.aby3_store.write().await;
 
+    let inserted = {
         match insert_id {
-            None => storage.append(&insert_plan.query.iris).await,
-            Some(id) => storage.insert(id, &insert_plan.query.iris).await,
+            None => store.storage.append(&insert_plan.query.iris).await,
+            Some(id) => store.storage.insert(id, &insert_plan.query.iris).await,
         }
     };
 
@@ -89,7 +88,7 @@ async fn insert_one(
 
     let connect_plan = searcher
         .insert_prepare(
-            &mut session.aby3_store,
+            &mut *store,
             graph_store.deref(),
             inserted,
             insert_plan.links,

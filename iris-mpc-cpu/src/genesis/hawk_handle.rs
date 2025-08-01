@@ -5,8 +5,7 @@ use super::{
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT,
-        RIGHT, STORE_IDS,
+        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -34,7 +33,7 @@ impl Handle {
         /// - ensures system state is in sync.
         async fn do_health_check(
             actor: &mut HawkActor,
-            sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+            sessions: &mut BothEyes<Vec<HawkSession>>,
             job_failed: bool,
         ) -> Result<()> {
             // Reset sessions upon an error.
@@ -101,7 +100,7 @@ impl Handle {
     ///
     pub async fn handle_job(
         actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
         request: JobRequest,
     ) -> Result<JobResult> {
         let now = Instant::now();
