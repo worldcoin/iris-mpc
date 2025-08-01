@@ -1,4 +1,4 @@
-use super::{convertor::to_galois_ring_shares, TestExecutionEnvironment, TestRunContextInfo};
+use super::{convertor::to_galois_ring_shares, TestRunContextInfo, TestRunExecutionEnvironment};
 use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodePair},
@@ -11,9 +11,9 @@ use std::{fs::File, io::BufReader, io::Error};
 
 /// Returns subdirectory name for current test run environment.
 fn get_subdirectory_of_exec_env() -> &'static str {
-    match TestExecutionEnvironment::new() {
-        TestExecutionEnvironment::Docker => "docker",
-        TestExecutionEnvironment::Local => "local",
+    match TestRunExecutionEnvironment::new() {
+        TestRunExecutionEnvironment::Docker => "docker",
+        TestRunExecutionEnvironment::Local => "local",
     }
 }
 
@@ -163,7 +163,7 @@ mod tests {
     use super::{
         get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestExecutionEnvironment,
+        TestRunExecutionEnvironment,
     };
     use iris_mpc_common::{PARTY_COUNT, PARTY_IDX_SET};
     use std::path::Path;
@@ -172,11 +172,11 @@ mod tests {
 
     #[test]
     fn test_get_subdirectory_of_exec_env() {
-        match TestExecutionEnvironment::new() {
-            TestExecutionEnvironment::Docker => {
+        match TestRunExecutionEnvironment::new() {
+            TestRunExecutionEnvironment::Docker => {
                 assert_eq!(get_subdirectory_of_exec_env(), "docker");
             }
-            TestExecutionEnvironment::Local => {
+            TestRunExecutionEnvironment::Local => {
                 assert_eq!(get_subdirectory_of_exec_env(), "local");
             }
         };

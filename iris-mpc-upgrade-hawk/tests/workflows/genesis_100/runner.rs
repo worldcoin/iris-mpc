@@ -1,6 +1,6 @@
 use super::state_mutator;
 use crate::{
-    utils::{TestError, TestRun, TestRunContextInfo},
+    utils::{TestError, TestRun},
     workflows::genesis_shared::{
         factory::create_test_inputs,
         inputs::TestInputs,
@@ -95,7 +95,7 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
+    async fn setup(&mut self) -> Result<(), TestError> {
         // Set inputs.
         self.inputs = Some(create_test_inputs(self.params));
 

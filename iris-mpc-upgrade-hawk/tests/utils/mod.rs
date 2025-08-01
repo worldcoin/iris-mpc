@@ -7,4 +7,4 @@ pub mod resources;
 pub mod runner;
 
 pub use errors::TestError;
-pub use runner::{TestExecutionEnvironment, TestRun, TestRunContextInfo};
+pub use runner::{TestRun, TestRunContextInfo, TestRunExecutionEnvironment};
