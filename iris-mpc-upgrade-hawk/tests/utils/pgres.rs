@@ -50,9 +50,25 @@ impl NodeDbProvider {
     }
 
     pub async fn clear_all_tables(&self) -> Result<()> {
+        // only the cpu database uses the graph store.
         self.graph_store.clear_hawk_graph_tables().await?;
+
+        // delete irises
         self.gpu_iris_store.rollback(0).await?;
         self.cpu_iris_store.rollback(0).await?;
+
+        // clear modifications tables
+        let mut tx = self.cpu_iris_store.tx().await?;
+        self.cpu_iris_store
+            .clear_modifications_table(&mut tx)
+            .await?;
+        tx.commit().await?;
+
+        let mut tx = self.gpu_iris_store.tx().await?;
+        self.gpu_iris_store
+            .clear_modifications_table(&mut tx)
+            .await?;
+        tx.commit().await?;
         Ok(())
     }
 

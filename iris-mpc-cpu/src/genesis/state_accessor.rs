@@ -17,6 +17,19 @@ use std::{fmt::Debug, sync::Arc};
 // Component name for logging purposes.
 const COMPONENT: &str = "State-Accessor";
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct S3IrisDeletions {
+    pub deleted_serial_ids: Vec<IrisSerialId>,
+}
+
+pub fn get_s3_sync_protocol_bucket(config: &Config) -> String {
+    format!("wf-smpcv2-{}-sync-protocol", config.environment)
+}
+
+pub fn get_s3_iris_deletions_key(config: &Config) -> String {
+    format!("{}_deleted_serial_ids.json", config.environment)
+}
+
 /// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
@@ -35,14 +48,10 @@ pub async fn get_iris_deletions(
     max_indexation_id: IrisSerialId,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    struct S3Object {
-        deleted_serial_ids: Vec<IrisSerialId>,
-    }
 
     // Set bucket and key based on environment
-    let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
-    let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
+    let s3_bucket = get_s3_sync_protocol_bucket(config);
+    let s3_key = get_s3_iris_deletions_key(config);
     utils::log_info(
         COMPONENT,
         format!(
@@ -74,7 +83,7 @@ pub async fn get_iris_deletions(
 
     // Decode S3 object bytes.
     let s3_object_bytes = s3_object_body.into_bytes();
-    let S3Object { deleted_serial_ids } =
+    let S3IrisDeletions { deleted_serial_ids } =
         serde_json::from_slice(&s3_object_bytes).map_err(|err| {
             utils::log_error(
                 COMPONENT,

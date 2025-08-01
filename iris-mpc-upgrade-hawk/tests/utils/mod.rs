@@ -10,6 +10,6 @@ pub mod store;
 mod types;
 
 pub use errors::TestError;
-pub use pgres::{NetDbProvider, NodeDbProvider};
+pub use pgres::NetDbProvider;
 pub use runner::{TestExecutionEnvironment, TestRun, TestRunContextInfo};
 pub use types::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};

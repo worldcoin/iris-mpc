@@ -1,17 +1,12 @@
-use super::{
-    factory,
-    inputs::{GenesisArgs, Inputs},
-    params::Params,
-};
+use super::params::Params;
 use crate::utils::{
     constants::COUNT_OF_PARTIES, resources, s3_client, HawkConfigs, NetDbProvider, TestError,
-    TestRun, TestRunContextInfo,
+    TestExecutionEnvironment, TestRun, TestRunContextInfo,
 };
-use eyre::{Report, Result};
+use eyre::Result;
 use futures::future::join_all;
-use iris_mpc_common::config::Config as NodeConfig;
 use iris_mpc_cpu::genesis::get_iris_deletions;
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
+use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 
 macro_rules! join_all_and_report_errors {
     ($futures:expr, $err_msg:expr) => {{
@@ -27,47 +22,34 @@ macro_rules! join_all_and_report_errors {
 
 /// HNSW Genesis test.
 pub struct Test {
-    /// Test run inputs.
-    inputs: Option<Inputs>,
+    configs: HawkConfigs,
 
     /// Test run parameters.
     params: Params,
+
+    genesis_args: ExecutionArgs,
 }
 
 /// Constructor.
 impl Test {
     pub fn new(params: Params) -> Self {
+        let exec_env = TestExecutionEnvironment::new();
+
+        let configs = (0..COUNT_OF_PARTIES)
+            .map(|idx| {
+                resources::read_node_config(&exec_env, format!("node-{idx}-genesis-0")).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        let genesis_args = params.to_genesis_execution_args();
+
         Self {
-            inputs: None,
+            configs,
             params,
+            genesis_args,
         }
-    }
-}
-
-/// Accessors.
-impl Test {
-    pub fn args(&self) -> &GenesisArgs {
-        self.inputs.as_ref().unwrap().args()
-    }
-
-    pub fn args_of_node(&self, node_idx: usize) -> NodeArgs {
-        self.inputs.as_ref().unwrap().args_of_node(node_idx).clone()
-    }
-
-    pub fn config(&self) -> &HawkConfigs {
-        self.inputs.as_ref().unwrap().configs()
-    }
-
-    pub fn config_of_node(&self, node_idx: usize) -> NodeConfig {
-        self.inputs
-            .as_ref()
-            .unwrap()
-            .config_of_node(node_idx)
-            .clone()
-    }
-
-    pub fn params(&self) -> &Params {
-        &self.params
     }
 }
 
@@ -75,10 +57,11 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // Set node process futures.
-        let node_futures: Vec<_> = (0..COUNT_OF_PARTIES)
-            .map(|node_idx: usize| {
-                exec_genesis(self.args_of_node(node_idx), self.config_of_node(node_idx))
-            })
+        let node_futures: Vec<_> = self
+            .configs
+            .iter()
+            .cloned()
+            .map(|config| exec_genesis(self.genesis_args.clone(), config))
             .collect();
 
         join_all_and_report_errors!(node_futures, "failed to exec genesis");
@@ -87,11 +70,10 @@ impl TestRun for Test {
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        let configs = self.config();
-        let db_provider = NetDbProvider::new_from_config(configs).await;
+        let db_provider = NetDbProvider::new_from_config(&self.configs).await;
         for db in db_provider.iter() {
             let num_irises = db.cpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, self.params().max_indexation_id() as usize);
+            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
         }
 
         // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state
@@ -100,18 +82,15 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        // Set inputs.
-        self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
-        let configs = self.config();
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
         let shares = resources::read_iris_shares(
             self.params.rng_state(),
             0,
-            self.params().max_indexation_id() as usize,
+            self.params.max_indexation_id() as usize,
         )
         .unwrap();
 
-        let db_provider = NetDbProvider::new_from_config(configs).await;
+        let db_provider = NetDbProvider::new_from_config(&self.configs).await;
 
         // initialize iris and graph stores
         let futs: Vec<_> = itertools::izip!(db_provider.iter(), &shares)
@@ -120,7 +99,7 @@ impl TestRun for Test {
         join_all_and_report_errors!(futs, "failed to init stores");
 
         // clear Iris deletions -> AWS S3.
-        for config in configs.iter() {
+        for config in self.configs.iter() {
             let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config)
                 .await
                 .expect("failed to create aws clients");
@@ -133,15 +112,11 @@ impl TestRun for Test {
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
-        // Assert inputs.
-        assert!(&self.inputs.is_some());
-        let configs = self.config();
-
-        let db_provider = NetDbProvider::new_from_config(configs).await;
+        let db_provider = NetDbProvider::new_from_config(&self.configs).await;
 
         for db in db_provider.iter() {
             let num_irises = db.gpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, self.params().max_indexation_id() as usize);
+            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
 
             let num_irises = db.cpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, 0);
@@ -150,12 +125,12 @@ impl TestRun for Test {
         }
 
         // Assert localstack.
-        for config in configs.iter() {
+        for config in self.configs.iter() {
             let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
             let deletions = get_iris_deletions(
                 config,
                 &aws_clients.s3_client,
-                self.params().max_indexation_id(),
+                self.params.max_indexation_id(),
             )
             .await?;
             assert_eq!(deletions.len(), 0);

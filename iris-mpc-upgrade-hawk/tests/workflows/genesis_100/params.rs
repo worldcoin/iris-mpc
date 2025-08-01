@@ -1,4 +1,5 @@
 use iris_mpc_common::IrisSerialId;
+use iris_mpc_upgrade_hawk::genesis::ExecutionArgs;
 
 /// Excapsulates data used to initialise test inputs.
 #[derive(Debug, Clone, Copy)]
@@ -25,7 +26,6 @@ pub struct Params {
     rng_state: u64,
 }
 
-/// Constructor.
 impl Params {
     pub fn new(
         batch_size: usize,
@@ -46,10 +46,7 @@ impl Params {
             rng_state,
         }
     }
-}
 
-/// Accessors.
-impl Params {
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
@@ -76,5 +73,15 @@ impl Params {
 
     pub fn rng_state(&self) -> u64 {
         self.rng_state
+    }
+
+    pub fn to_genesis_execution_args(&self) -> ExecutionArgs {
+        ExecutionArgs::new(
+            self.batch_size(),
+            self.batch_size_error_rate(),
+            self.max_indexation_id(),
+            self.perform_db_snapshot(),
+            self.use_db_backup_as_source(),
+        )
     }
 }
