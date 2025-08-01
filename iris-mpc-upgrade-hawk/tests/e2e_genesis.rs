@@ -16,13 +16,38 @@ mod workflows;
 #[tokio::test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
+    use utils::defaults;
     use workflows::genesis_100::{Test, TestParams};
 
-    let ctx = TestRunContextInfo::new(100, 1);
-    let params = TestParams::new(10, 256, 100, false, 100, None, None, false);
-    let mut test = Test::new(params);
+    fn get_params() -> TestParams {
+        // Node arguments ... common across all nodes.
+        // TODO: move to static resources (JSON | TOML).
+        let batch_size = 0;
+        let batch_size_error_rate = 256;
+        let max_indexation_id = 100;
+        let perform_db_snapshot = false;
+        let use_db_backup_as_source = false;
 
-    test.run(ctx).await?;
+        // Test setup parameters.
+        // TODO: decide if these are constants, if not then move to resources.
+        let shares_generator_batch_size = defaults::SHARES_GENERATOR_BATCH_SIZE;
+        let shares_generator_rng_state = defaults::SHARES_GENERATOR_RNG_STATE;
+        let shares_pgres_tx_batch_size = defaults::SHARES_GENERATOR_PGRES_TX_BATCH_SIZE;
+
+        TestParams::new(
+            batch_size,
+            batch_size_error_rate,
+            max_indexation_id,
+            perform_db_snapshot,
+            use_db_backup_as_source,
+            shares_generator_batch_size,
+            shares_generator_rng_state,
+            shares_pgres_tx_batch_size,
+        )
+    }
+
+    let ctx = TestRunContextInfo::new(100, 1);
+    Test::new(get_params()).run(ctx).await?;
 
     Ok(())
 }

@@ -94,6 +94,6 @@ impl SystemStateInputs {
     pub fn iris_shares_stream(
         &self,
     ) -> IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>> {
-        std::iter::empty().chunks(self.params.batch_size())
+        std::iter::empty().chunks(self.params.arg_batch_size())
     }
 }

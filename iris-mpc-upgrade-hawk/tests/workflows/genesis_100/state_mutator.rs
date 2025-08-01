@@ -34,7 +34,7 @@ pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &Tes
     let skip_offset = None;
     let shares_batch_generator = read_iris_shares_batch(
         params.shares_generator_batch_size(),
-        params.max_indexation_id() as usize,
+        params.arg_max_indexation_id() as usize,
         params.shares_generator_rng_state(),
         skip_offset,
     )
@@ -49,7 +49,7 @@ pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &Tes
         for party_idx in PARTY_IDX_SET {
             let (_start_serial_id, _end_serial_id) = system_state::insert_iris_shares(
                 db_provider.of_node(party_idx).gpu_store().iris_store(),
-                params.pgres_tx_batch_size(),
+                params.shares_pgres_tx_batch_size(),
                 shares.iter().map(|i| i[party_idx].to_owned()).collect_vec(),
             )
             .await
