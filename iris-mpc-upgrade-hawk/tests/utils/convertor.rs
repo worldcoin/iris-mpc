@@ -1,6 +1,5 @@
-use iris_mpc_common::{iris_db::iris::IrisCodePair, IrisSerialId, PARTY_COUNT};
-use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair};
-use iris_mpc_store::StoredIrisRef;
+use iris_mpc_common::iris_db::iris::IrisCodePair;
+use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPairSet};
 use rand::{prelude::StdRng, SeedableRng};
 
 /// Converts an RNG state plus a plaintext format Iris code pair to a 3 element vector of Galois Ring Iris shares.
@@ -17,7 +16,7 @@ use rand::{prelude::StdRng, SeedableRng};
 pub fn to_galois_ring_shares(
     rng_state: u64,
     code_pair: &IrisCodePair,
-) -> Box<[GaloisRingSharedIrisPair; PARTY_COUNT]> {
+) -> GaloisRingSharedIrisPairSet {
     // Set RNG for each pair to match shares_encoding.rs behavior
     let mut shares_seed = StdRng::seed_from_u64(rng_state);
 
@@ -28,27 +27,11 @@ pub fn to_galois_ring_shares(
     let shares_r =
         GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_r.to_owned());
 
-    Box::new([
+    [
         (shares_l[0].to_owned(), shares_r[0].to_owned()),
         (shares_l[1].to_owned(), shares_r[1].to_owned()),
         (shares_l[2].to_owned(), shares_r[2].to_owned()),
-    ])
-}
-
-pub fn to_stored_iris_ref<'a>(
-    idx: u32,
-    serial_id_offset: IrisSerialId,
-    share: GaloisRingSharedIrisPair,
-) -> StoredIrisRef<'a> {
-    let (iris_l, iris_r) = share;
-
-    StoredIrisRef {
-        id: (serial_id_offset + idx) as i64,
-        left_code: &iris_l.code.coefs,
-        left_mask: &iris_l.mask.coefs,
-        right_code: &iris_r.code.coefs,
-        right_mask: &iris_r.mask.coefs,
-    }
+    ]
 }
 
 #[cfg(test)]

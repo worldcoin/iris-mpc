@@ -2,7 +2,7 @@ use iris_mpc_common::IrisSerialId;
 
 /// Excapsulates data used to initialise test inputs.
 #[derive(Debug, Clone, Copy)]
-pub struct Params {
+pub struct TestParams {
     // Initial batch size for indexing.
     batch_size: usize,
 
@@ -23,7 +23,7 @@ pub struct Params {
 }
 
 /// Constructor.
-impl Params {
+impl TestParams {
     pub fn new(
         batch_size: usize,
         batch_size_error_rate: usize,
@@ -44,7 +44,7 @@ impl Params {
 }
 
 /// Accessors.
-impl Params {
+impl TestParams {
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }

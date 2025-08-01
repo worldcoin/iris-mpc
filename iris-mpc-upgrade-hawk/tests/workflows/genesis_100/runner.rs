@@ -1,7 +1,7 @@
 use super::{
     factory,
-    inputs::{Inputs, NetArgs},
-    params::Params,
+    inputs::{NetArgs, TestInputs},
+    params::TestParams,
     state_mutator,
 };
 use crate::utils::{TestError, TestRun, TestRunContextInfo};
@@ -15,10 +15,10 @@ use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as Node
 /// HNSW Genesis test.
 pub struct Test {
     /// Test run inputs.
-    inputs: Option<Inputs>,
+    inputs: Option<TestInputs>,
 
     /// Test run parameters.
-    params: Params,
+    params: TestParams,
 
     /// Node execution results.
     results: Option<Vec<Result<(), Report>>>,
@@ -26,7 +26,7 @@ pub struct Test {
 
 /// Constructor.
 impl Test {
-    pub fn new(params: Params) -> Self {
+    pub fn new(params: TestParams) -> Self {
         Self {
             inputs: None,
             results: None,
@@ -57,7 +57,7 @@ impl Test {
             .clone()
     }
 
-    pub fn params(&self) -> &Params {
+    pub fn params(&self) -> &TestParams {
         &self.params
     }
 }
@@ -85,7 +85,7 @@ impl TestRun for Test {
             match result {
                 Ok(_) => (),
                 Err(err) => {
-                    return Err(TestError::NodeProcessPanicError(node_idx, err.to_string()));
+                    return Err(TestError::NodePanicError(node_idx, err.to_string()));
                 }
             }
         }

@@ -1,6 +1,6 @@
 use super::{
-    inputs::{Inputs, SystemStateInputs},
-    params::Params,
+    inputs::{SystemStateInputs, TestInputs},
+    params::TestParams,
 };
 use crate::utils::{resources, TestExecutionEnvironment};
 use iris_mpc_common::{
@@ -10,8 +10,8 @@ use iris_mpc_common::{
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns inputs for running a test.
-pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: Params) -> Inputs {
-    Inputs::new(
+pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: TestParams) -> TestInputs {
+    TestInputs::new(
         create_net_args(params),
         create_net_config(env),
         create_system_state_inputs(params),
@@ -19,7 +19,7 @@ pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: Params) -> I
 }
 
 /// Returns inputs for launching a node.
-fn create_net_args(params: Params) -> [NodeArgs; PARTY_COUNT] {
+fn create_net_args(params: TestParams) -> [NodeArgs; PARTY_COUNT] {
     let args = NodeArgs::new(
         params.batch_size(),
         params.batch_size_error_rate(),
@@ -54,6 +54,6 @@ fn create_node_config(env: &TestExecutionEnvironment, party_idx: &PartyIdx) -> N
 }
 
 /// Returns inputs for initializing system state.
-fn create_system_state_inputs(params: Params) -> SystemStateInputs {
+fn create_system_state_inputs(params: TestParams) -> SystemStateInputs {
     SystemStateInputs::new(params, vec![])
 }

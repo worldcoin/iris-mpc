@@ -2,9 +2,8 @@ use super::{convertor::to_galois_ring_shares, TestExecutionEnvironment, TestRunC
 use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodePair},
-    PARTY_COUNT,
 };
-use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPair;
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
 use serde_json;
@@ -100,10 +99,10 @@ pub fn read_iris_shares(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>, Error> {
+) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
     let stream = read_iris_code_pairs(skip_offset, max_items)
         .unwrap()
-        .map(move |code_pair| to_galois_ring_shares(rng_state, &code_pair));
+        .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair)));
 
     Ok(stream)
 }
@@ -126,7 +125,7 @@ pub fn read_iris_shares_batch(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>>, Error> {
+) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
     let stream = read_iris_shares(rng_state, skip_offset, max_items)
         .unwrap()
         .chunks(batch_size);
@@ -168,8 +167,9 @@ mod tests {
     use super::{
         get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestExecutionEnvironment, TestRunContextInfo, PARTY_COUNT,
+        TestExecutionEnvironment, TestRunContextInfo,
     };
+    use iris_mpc_common::PARTY_COUNT;
     use std::path::Path;
 
     const DEFAULT_RNG_STATE: u64 = 93;

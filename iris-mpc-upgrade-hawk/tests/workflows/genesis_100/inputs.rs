@@ -1,9 +1,9 @@
-use super::params::Params;
+use super::params::TestParams;
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     IrisSerialId, PartyIdx, PARTY_COUNT,
 };
-use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPair;
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 use itertools::{IntoChunks, Itertools};
 
@@ -12,7 +12,7 @@ pub type NetArgs = [NodeArgs; PARTY_COUNT];
 
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
-pub(super) struct Inputs {
+pub(super) struct TestInputs {
     // Arguments for each node in network.
     args: NetArgs,
 
@@ -25,7 +25,7 @@ pub(super) struct Inputs {
 }
 
 /// Constructor.
-impl Inputs {
+impl TestInputs {
     pub fn new(args: NetArgs, config: NetConfig, system_state_inputs: SystemStateInputs) -> Self {
         Self {
             args,
@@ -36,7 +36,7 @@ impl Inputs {
 }
 
 /// Accessors.
-impl Inputs {
+impl TestInputs {
     pub fn args(&self) -> &NetArgs {
         &self.args
     }
@@ -67,13 +67,13 @@ pub(super) struct SystemStateInputs {
     iris_deletions: Vec<IrisSerialId>,
 
     // Test parameters.
-    params: Params,
+    params: TestParams,
 }
 
 /// Constructor.
 impl SystemStateInputs {
     #[allow(dead_code)]
-    pub fn new(params: Params, iris_deletions: Vec<IrisSerialId>) -> Self {
+    pub fn new(params: TestParams, iris_deletions: Vec<IrisSerialId>) -> Self {
         Self {
             iris_deletions,
             params,
@@ -93,7 +93,7 @@ impl SystemStateInputs {
 impl SystemStateInputs {
     pub fn iris_shares_stream(
         &self,
-    ) -> IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>> {
+    ) -> IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>> {
         std::iter::empty().chunks(self.params.batch_size())
     }
 }

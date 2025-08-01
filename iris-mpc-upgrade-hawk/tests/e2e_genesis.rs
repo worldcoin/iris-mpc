@@ -1,6 +1,7 @@
 use eyre::Result;
 use utils::{TestRun, TestRunContextInfo};
 
+mod system_state;
 mod utils;
 mod workflows;
 
@@ -15,10 +16,10 @@ mod workflows;
 #[tokio::test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
-    use workflows::genesis_100::{Params, Test};
+    use workflows::genesis_100::{Test, TestParams};
 
     let ctx = TestRunContextInfo::new(100, 1);
-    let params = Params::new(10, 256, 100, false, 100, false);
+    let params = TestParams::new(10, 256, 100, false, 100, false);
     let mut test = Test::new(params);
 
     test.run(ctx).await?;
