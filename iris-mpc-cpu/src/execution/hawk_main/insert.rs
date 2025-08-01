@@ -29,9 +29,8 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
     }
 }
 
-/// Insert a collection `plans` of `InsertPlan` structs into the graph and vector store
-/// represented by `session`, adjusting the insertion plans as needed to repair any conflict
-/// from parallel searches.
+/// Insert a collection `plans` of `InsertPlanV` structs into the graph and vector store,
+/// adjusting the insertion plans as needed to repair any conflict from parallel searches.
 ///
 /// The `ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the associated
 /// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
@@ -83,8 +82,7 @@ pub async fn insert<V: VectorStoreMut>(
     Ok(connect_plans)
 }
 
-/// Extends the bottom layer of links with additional vectors in `extra_ids` if there
-/// is room.
+/// Extends the bottom layer of links with additional vectors in `extra_ids` if there is room.
 async fn add_batch_neighbors<V: VectorStore>(
     store: &mut V,
     query: &V::QueryRef,
