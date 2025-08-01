@@ -142,8 +142,12 @@ impl TestRun for Test {
 
         // clear Iris deletions -> AWS S3.
         for config in configs.iter() {
-            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
-            s3_client::clear_s3_iris_deletions(config, &aws_clients.s3_client).await?;
+            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config)
+                .await
+                .expect("failed to create aws clients");
+            s3_client::clear_s3_iris_deletions(config, &aws_clients.s3_client)
+                .await
+                .expect("failed to clear iris deletions");
         }
 
         Ok(())

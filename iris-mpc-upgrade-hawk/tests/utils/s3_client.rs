@@ -8,6 +8,14 @@ pub async fn clear_s3_iris_deletions(config: &Config, s3_client: &S3_Client) -> 
 
     let body = ByteStream::from(Vec::new());
 
+    println!(
+        "{}",
+        format!(
+            "Fetching deleted serial ids from S3 bucket: {}, key: {}",
+            s3_bucket, s3_key
+        ),
+    );
+
     s3_client
         .put_object()
         .bucket(&s3_bucket)
