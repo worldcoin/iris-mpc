@@ -108,6 +108,13 @@ impl TestRun for Test {
             }
         }
 
+        let configs = self.config();
+        let db_provider = NetDbProvider::new_from_config(configs).await;
+        for db in db_provider.iter() {
+            let num_irises = db.cpu_iris_store.count_irises().await?;
+            assert_eq!(num_irises, self.params().max_indexation_id() as usize);
+        }
+
         // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state
         // TODO
 
@@ -118,7 +125,12 @@ impl TestRun for Test {
         // Set inputs.
         self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
         let configs = self.config();
-        let shares = resources::read_iris_shares(self.params.rng_state(), 0, 100).unwrap();
+        let shares = resources::read_iris_shares(
+            self.params.rng_state(),
+            0,
+            self.params().max_indexation_id() as usize,
+        )
+        .unwrap();
 
         let db_provider = NetDbProvider::new_from_config(configs).await;
 
@@ -146,7 +158,7 @@ impl TestRun for Test {
 
         for db in db_provider.iter() {
             let num_irises = db.gpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, 100);
+            assert_eq!(num_irises, self.params().max_indexation_id() as usize);
 
             let num_irises = db.cpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, 0);
@@ -157,7 +169,12 @@ impl TestRun for Test {
         // Assert localstack.
         for config in configs.iter() {
             let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
-            let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100).await?;
+            let deletions = get_iris_deletions(
+                config,
+                &aws_clients.s3_client,
+                self.params().max_indexation_id(),
+            )
+            .await?;
             assert_eq!(deletions.len(), 0);
         }
 
