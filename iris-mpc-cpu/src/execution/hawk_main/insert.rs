@@ -16,6 +16,8 @@ use itertools::{izip, Itertools};
 /// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
 /// which need to parallel an existing iris code database), and `None` if the associated plan
 /// is to be inserted at the next available serial ID, with version 0.
+///
+/// Parallel insertions are not supported, so only one session is needed.
 pub async fn insert(
     session: &HawkSession,
     searcher: &HnswSearcher,
@@ -26,9 +28,6 @@ pub async fn insert(
     let mut connect_plans = vec![None; insert_plans.len()];
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
-
-    // Parallel insertions are not supported, so only one session is needed.
-    // let mut session = session.write().await;
 
     for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
         if let Some(plan) = plan {
@@ -79,8 +78,6 @@ async fn insert_one(
     let mut store = session.aby3_store.write().await;
 
     let inserted = {
-        // let storage = &mut store.storage;
-
         match insert_id {
             None => store.storage.append(&insert_plan.query.iris).await,
             Some(id) => store.storage.insert(id, &insert_plan.query.iris).await,

@@ -50,7 +50,6 @@ impl HawkSession {
     }
 
     async fn state_check_side(session: &HawkSession) -> Result<StateChecksum> {
-        // let mut session = session.write().await;
         let my_state = session.checksum().await;
         let net = &mut session.aby3_store.write().await.session.network_session;
 
