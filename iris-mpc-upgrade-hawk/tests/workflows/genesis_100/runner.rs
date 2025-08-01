@@ -96,7 +96,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
+        self.inputs = Some(factory::create_inputs(self.params));
 
         // Set system state.
         // ... insert Iris shares -> GPU dB.

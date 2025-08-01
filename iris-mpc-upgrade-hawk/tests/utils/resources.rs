@@ -10,8 +10,8 @@ use serde_json;
 use std::{fs::File, io::BufReader, io::Error};
 
 /// Returns subdirectory name for current test run environment.
-fn get_subdirectory_of_exec_env(exec_env: &TestExecutionEnvironment) -> &'static str {
-    match exec_env {
+fn get_subdirectory_of_exec_env() -> &'static str {
+    match TestExecutionEnvironment::new() {
         TestExecutionEnvironment::Docker => "docker",
         TestExecutionEnvironment::Local => "local",
     }
@@ -137,22 +137,18 @@ pub fn read_iris_shares_batch(
 ///
 /// # Arguments
 ///
-/// * `exec_env` - Contextual information associated with a test run.
 /// * `config_fname` - File name of node configuration toml file being read into memory.
 ///
 /// # Returns
 ///
 /// A node configuration file.
 ///
-pub fn read_node_config(
-    exec_env: &TestExecutionEnvironment,
-    config_fname: String,
-) -> Result<NodeConfig, Error> {
+pub fn read_node_config(config_fname: String) -> Result<NodeConfig, Error> {
     // Set path.
     let path_to_resource = format!(
         "{}/node-config/{}/{}.toml",
         get_path_to_resources(),
-        get_subdirectory_of_exec_env(exec_env),
+        get_subdirectory_of_exec_env(),
         config_fname
     );
 
@@ -167,27 +163,23 @@ mod tests {
     use super::{
         get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestExecutionEnvironment, TestRunContextInfo,
+        TestExecutionEnvironment,
     };
-    use iris_mpc_common::PARTY_COUNT;
+    use iris_mpc_common::{PARTY_COUNT, PARTY_IDX_SET};
     use std::path::Path;
 
     const DEFAULT_RNG_STATE: u64 = 93;
 
-    impl TestRunContextInfo {
-        fn new_1() -> Self {
-            Self::new(100, 1)
-        }
-    }
-
     #[test]
     fn test_get_subdirectory_of_exec_env() {
-        for (subdir, env) in [
-            ("docker", TestExecutionEnvironment::Docker),
-            ("local", TestExecutionEnvironment::Local),
-        ] {
-            assert_eq!(subdir, get_subdirectory_of_exec_env(&env));
-        }
+        match TestExecutionEnvironment::new() {
+            TestExecutionEnvironment::Docker => {
+                assert_eq!(get_subdirectory_of_exec_env(), "docker");
+            }
+            TestExecutionEnvironment::Local => {
+                assert_eq!(get_subdirectory_of_exec_env(), "local");
+            }
+        };
     }
 
     #[test]
@@ -272,11 +264,10 @@ mod tests {
 
     #[test]
     fn test_read_node_config() {
-        let ctx = TestRunContextInfo::new_1();
-        for party_id in [0, 1, 2] {
-            let cfg_fname = format!("node-{}-genesis-0", party_id);
-            let cfg = read_node_config(ctx.exec_env(), cfg_fname).unwrap();
-            assert!(cfg.party_id == party_id);
+        for party_idx in PARTY_IDX_SET {
+            let cfg_fname = format!("node-{}-genesis-0", party_idx);
+            let cfg = read_node_config(cfg_fname).unwrap();
+            assert!(cfg.party_id == party_idx);
         }
     }
 }

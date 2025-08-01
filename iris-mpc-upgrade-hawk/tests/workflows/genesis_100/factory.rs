@@ -12,10 +12,10 @@ use iris_mpc_common::{
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns inputs for running a test.
-pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: TestParams) -> TestInputs {
+pub(super) fn create_inputs(params: TestParams) -> TestInputs {
     TestInputs::new(
         create_net_args(params),
-        create_net_config(env),
+        create_net_config(params),
         create_system_state_inputs(params),
     )
 }
@@ -40,20 +40,20 @@ fn create_net_args(params: TestParams) -> [NodeArgs; PARTY_COUNT] {
 }
 
 /// Returns network wide configuration.
-fn create_net_config(env: &TestExecutionEnvironment) -> NetConfig {
+fn create_net_config(params: TestParams) -> NetConfig {
     PARTY_IDX_SET
         .iter()
-        .map(|party_idx| create_node_config(env, party_idx))
+        .map(|party_idx| create_node_config(party_idx, params.node_config_idx()))
         .collect::<Vec<_>>()
         .try_into()
         .unwrap()
 }
 
 /// Returns node specific configuration.
-fn create_node_config(env: &TestExecutionEnvironment, party_idx: &PartyIdx) -> NodeConfig {
-    let fname = format!("node-{}-genesis-0", party_idx);
+fn create_node_config(party_idx: &PartyIdx, config_idx: usize) -> NodeConfig {
+    let fname = format!("node-{}-genesis-{}", party_idx, config_idx);
 
-    resources::read_node_config(env, fname).unwrap()
+    resources::read_node_config(fname).unwrap()
 }
 
 /// Returns inputs for initializing system state.

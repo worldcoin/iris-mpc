@@ -12,6 +12,9 @@ pub struct TestParams {
     // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
+    // Ordinal identifier of node config file to read from test resources.
+    node_config_idx: usize,
+
     // Flag indicating whether a snapshot is to be taken when inner process completes.
     perform_db_snapshot: bool,
 
@@ -40,10 +43,13 @@ impl TestParams {
         shares_generator_rng_state: u64,
         shares_pgres_tx_batch_size: usize,
     ) -> Self {
+        let node_config_idx = 0;
+
         Self {
             batch_size,
             batch_size_error_rate,
             max_indexation_id,
+            node_config_idx,
             perform_db_snapshot,
             use_db_backup_as_source,
             shares_generator_batch_size,
@@ -65,6 +71,10 @@ impl TestParams {
 
     pub fn max_indexation_id(&self) -> IrisSerialId {
         self.max_indexation_id
+    }
+
+    pub fn node_config_idx(&self) -> usize {
+        self.node_config_idx
     }
 
     pub fn perform_db_snapshot(&self) -> bool {
