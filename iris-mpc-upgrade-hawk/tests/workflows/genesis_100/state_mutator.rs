@@ -1,6 +1,6 @@
 use super::{inputs::NetArgs, params::Params};
 use crate::utils::{pgres::NetDbProvider, resources::read_iris_shares_batch, sys_state};
-use iris_mpc_common::{config::NetConfig, PARTY_COUNT};
+use iris_mpc_common::{config::NetConfig, PartyIdx, PARTY_COUNT};
 use iris_mpc_cpu::genesis::state_mutator::insert_iris_deletions;
 use itertools::Itertools;
 

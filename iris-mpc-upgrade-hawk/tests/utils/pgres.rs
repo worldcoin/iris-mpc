@@ -1,7 +1,7 @@
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     postgres::{AccessMode, PostgresClient},
-    PARTY_COUNT, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2,
+    PartyIdx, PARTY_COUNT, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2,
 };
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
@@ -99,24 +99,19 @@ pub struct NodeDbProvider {
 
     /// Pointer to Iris store API.
     gpu_store: NodeDbContext,
-
-    /// Ordinal index of MPC party.
-    party_idx: usize,
 }
 
 /// Constructor.
 impl NodeDbProvider {
-    pub fn new(party_idx: usize, cpu_store: NodeDbContext, gpu_store: NodeDbContext) -> Self {
+    pub fn new(cpu_store: NodeDbContext, gpu_store: NodeDbContext) -> Self {
         Self {
             cpu_store,
             gpu_store,
-            party_idx,
         }
     }
 
     pub async fn new_from_config(config: &NodeConfig) -> Self {
         Self::new(
-            config.party_id,
             NodeDbContext::new(DbConnectionInfo::new_read_write(
                 config,
                 config.hnsw_schema_name_suffix(),
@@ -139,10 +134,6 @@ impl NodeDbProvider {
 
     pub fn gpu_store(&self) -> &NodeDbContext {
         &self.gpu_store
-    }
-
-    pub fn party_idx(&self) -> usize {
-        self.party_idx
     }
 }
 
@@ -171,7 +162,7 @@ impl NetDbProvider {
 
 /// Accessors.
 impl NetDbProvider {
-    pub fn of_node(&self, idx: usize) -> &NodeDbProvider {
+    pub fn of_node(&self, idx: PartyIdx) -> &NodeDbProvider {
         &self.nodes[idx]
     }
 }

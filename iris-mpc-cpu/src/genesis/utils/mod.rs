@@ -6,6 +6,3 @@ pub mod logger;
 pub use logger::log_error;
 pub use logger::log_info;
 pub use logger::log_warn;
-
-/// Type alias: Ordinal identifier of an MPC participant.
-pub type PartyIdx = usize;

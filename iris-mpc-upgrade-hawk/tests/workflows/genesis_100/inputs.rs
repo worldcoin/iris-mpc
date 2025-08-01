@@ -1,7 +1,7 @@
 use super::params::Params;
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
-    IrisSerialId, PARTY_COUNT,
+    IrisSerialId, PartyIdx, PARTY_COUNT,
 };
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPair;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
@@ -41,7 +41,7 @@ impl Inputs {
         &self.args
     }
 
-    pub fn args_of_node(&self, node_idx: usize) -> &NodeArgs {
+    pub fn args_of_node(&self, node_idx: PartyIdx) -> &NodeArgs {
         &self.args[node_idx]
     }
 
@@ -49,7 +49,7 @@ impl Inputs {
         &self.config
     }
 
-    pub fn config_of_node(&self, node_idx: usize) -> &NodeConfig {
+    pub fn config_of_node(&self, node_idx: PartyIdx) -> &NodeConfig {
         &self.config[node_idx]
     }
 

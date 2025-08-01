@@ -8,7 +8,7 @@ use crate::utils::{TestError, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
-    PARTY_COUNT,
+    PartyIdx, PARTY_COUNT,
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
 
@@ -41,7 +41,7 @@ impl Test {
         self.inputs.as_ref().unwrap().args()
     }
 
-    pub fn args_of_node(&self, node_idx: usize) -> NodeArgs {
+    pub fn args_of_node(&self, node_idx: PartyIdx) -> NodeArgs {
         self.inputs.as_ref().unwrap().args_of_node(node_idx).clone()
     }
 
@@ -49,7 +49,7 @@ impl Test {
         self.inputs.as_ref().unwrap().config()
     }
 
-    pub fn config_of_node(&self, node_idx: usize) -> NodeConfig {
+    pub fn config_of_node(&self, node_idx: PartyIdx) -> NodeConfig {
         self.inputs
             .as_ref()
             .unwrap()
@@ -67,7 +67,7 @@ impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // Set node process futures.
         let node_futures: Vec<_> = (0..PARTY_COUNT)
-            .map(|node_idx: usize| {
+            .map(|node_idx: PartyIdx| {
                 exec_genesis(self.args_of_node(node_idx), self.config_of_node(node_idx))
             })
             .collect();
