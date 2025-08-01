@@ -52,6 +52,7 @@ thiserror = "1"
 tokio = { version = "1.40", features = ["full", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
+tracing-test = "0.2.5"
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.

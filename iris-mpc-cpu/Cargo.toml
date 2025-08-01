@@ -54,7 +54,7 @@ tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", 
     "env-filter",
 ] }
 tracing-subscriber.workspace = true
-tracing-test = "0.2.5"
+tracing-test.workspace = true
 uuid.workspace = true
 backon = { version = "1.4.0", default-features = false, features = [
     "tokio-sleep",

@@ -1,6 +1,7 @@
 use eyre::Result;
 use serial_test::serial;
 use utils::{constants::SECRET_SHARING_PG_TX_SIZE, TestRun, TestRunContextInfo};
+use tracing_test::traced_test;
 
 mod utils;
 mod workflows;
@@ -14,6 +15,7 @@ mod workflows;
 ///     node processes exit normally;
 ///     graph construction is equivalent for each node;
 #[tokio::test]
+#[traced_test]
 #[serial]
 async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::{Params, Test};
