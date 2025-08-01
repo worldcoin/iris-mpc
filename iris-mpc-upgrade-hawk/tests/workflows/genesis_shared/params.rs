@@ -1,3 +1,4 @@
+use crate::utils::resources::NODE_CONFIG_KIND_GENESIS;
 use iris_mpc_common::IrisSerialId;
 
 /// Excapsulates data used to initialise test inputs.
@@ -39,12 +40,11 @@ impl TestParams {
         max_indexation_id: IrisSerialId,
         perform_db_snapshot: bool,
         use_db_backup_as_source: bool,
+        node_config_idx: usize,
         shares_generator_batch_size: usize,
         shares_generator_rng_state: u64,
         shares_pgres_tx_batch_size: usize,
     ) -> Self {
-        let node_config_idx = 0;
-
         Self {
             batch_size,
             batch_size_error_rate,
@@ -75,6 +75,10 @@ impl TestParams {
 
     pub fn node_config_idx(&self) -> usize {
         self.node_config_idx
+    }
+
+    pub fn node_config_kind(&self) -> &str {
+        NODE_CONFIG_KIND_GENESIS
     }
 
     pub fn perform_db_snapshot(&self) -> bool {

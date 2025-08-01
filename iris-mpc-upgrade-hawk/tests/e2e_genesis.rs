@@ -29,6 +29,9 @@ async fn test_hnsw_genesis_100() -> Result<()> {
         let perform_db_snapshot = false;
         let use_db_backup_as_source = false;
 
+        // Node config files.
+        let node_config_idx = 0;
+
         // Test setup parameters.
         // TODO: decide if these are constants, if not then move to resources.
         let shares_generator_batch_size = defaults::SHARES_GENERATOR_BATCH_SIZE;
@@ -41,6 +44,7 @@ async fn test_hnsw_genesis_100() -> Result<()> {
             max_indexation_id,
             perform_db_snapshot,
             use_db_backup_as_source,
+            node_config_idx,
             shares_generator_batch_size,
             shares_generator_rng_state,
             shares_pgres_tx_batch_size,

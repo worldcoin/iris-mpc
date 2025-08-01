@@ -1,12 +1,7 @@
 use super::state_mutator;
 use crate::{
     utils::{TestError, TestRun},
-    workflows::genesis_shared::{
-        factory::create_test_inputs,
-        inputs::TestInputs,
-        net::{NetArgs, NetExecutionResult},
-        params::TestParams,
-    },
+    workflows::genesis_shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams},
 };
 use eyre::Result;
 use iris_mpc_common::{
@@ -40,10 +35,6 @@ impl Test {
 
 /// Accessors.
 impl Test {
-    pub fn net_args(&self) -> &NetArgs {
-        self.inputs.as_ref().unwrap().net_args()
-    }
-
     pub fn net_config(&self) -> &NetConfig {
         self.inputs.as_ref().unwrap().net_config()
     }
@@ -97,7 +88,7 @@ impl TestRun for Test {
 
     async fn setup(&mut self) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(create_test_inputs(self.params));
+        self.inputs = Some(TestInputs::from(self.params));
 
         // Set system state.
         // ... insert Iris shares -> GPU dB.

@@ -1,13 +1,17 @@
-use super::{convertor::to_galois_ring_shares, TestRunContextInfo, TestRunExecutionEnvironment};
+use super::{convertor::to_galois_ring_shares, TestRunExecutionEnvironment};
 use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodePair},
+    PartyIdx,
 };
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
 use serde_json;
 use std::{fs::File, io::BufReader, io::Error};
+
+/// Node config kind: genesis.
+pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
 
 /// Returns subdirectory name for current test run environment.
 fn get_subdirectory_of_exec_env() -> &'static str {
@@ -137,19 +141,42 @@ pub fn read_iris_shares_batch(
 ///
 /// # Arguments
 ///
-/// * `config_fname` - File name of node configuration toml file being read into memory.
+/// * `party_idx` - Ordinal identifier of MPC participant.
+/// * `config_kind` - Kind of node configuration toml file to be read into memory.
+/// * `config_idx` - Ordinal identifier of node configuration toml file to be read into memory.
 ///
 /// # Returns
 ///
 /// A node configuration file.
 ///
-pub fn read_node_config(config_fname: String) -> Result<NodeConfig, Error> {
+pub fn read_node_config(
+    party_idx: &PartyIdx,
+    config_kind: &str,
+    config_idx: usize,
+) -> Result<NodeConfig, Error> {
+    let fname = format!("node-{}-{}-{}", party_idx, config_kind, config_idx);
+    let cfg = read_node_config_by_name(fname).unwrap();
+
+    Ok(cfg)
+}
+
+/// Returns node configuration deserialized from a toml file.
+///
+/// # Arguments
+///
+/// * `fname` - Node configuration file name.
+///
+/// # Returns
+///
+/// A node configuration file.
+///
+pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
     // Set path.
     let path_to_resource = format!(
         "{}/node-config/{}/{}.toml",
         get_path_to_resources(),
         get_subdirectory_of_exec_env(),
-        config_fname
+        fname
     );
 
     // Set raw config file content.
@@ -163,7 +190,7 @@ mod tests {
     use super::{
         get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestRunExecutionEnvironment,
+        read_node_config_by_name, TestRunExecutionEnvironment,
     };
     use iris_mpc_common::{PARTY_COUNT, PARTY_IDX_SET};
     use std::path::Path;
@@ -265,8 +292,18 @@ mod tests {
     #[test]
     fn test_read_node_config() {
         for party_idx in PARTY_IDX_SET {
-            let cfg_fname = format!("node-{}-genesis-0", party_idx);
-            let cfg = read_node_config(cfg_fname).unwrap();
+            for config_idx in [0] {
+                let cfg = read_node_config(&party_idx, "genesis", config_idx).unwrap();
+                assert!(cfg.party_id == party_idx);
+            }
+        }
+    }
+
+    #[test]
+    fn test_read_node_config_by_name() {
+        for party_idx in PARTY_IDX_SET {
+            let fname = format!("node-{}-genesis-0", party_idx);
+            let cfg = read_node_config_by_name(fname).unwrap();
             assert!(cfg.party_id == party_idx);
         }
     }
