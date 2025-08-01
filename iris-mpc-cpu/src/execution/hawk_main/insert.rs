@@ -108,7 +108,7 @@ async fn add_batch_neighbors<V: VectorStore>(
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
-pub fn join_plans<V: VectorStore>(
+fn join_plans<V: VectorStore>(
     mut plans: Vec<Option<InsertPlanV<V>>>,
 ) -> Vec<Option<InsertPlanV<V>>> {
     let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
