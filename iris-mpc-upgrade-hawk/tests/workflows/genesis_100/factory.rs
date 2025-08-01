@@ -1,8 +1,10 @@
-use super::{
-    inputs::{SystemStateInputs, TestInputs},
-    params::TestParams,
+use crate::{
+    utils::{resources, TestExecutionEnvironment},
+    workflows::genesis_shared::{
+        inputs::{SystemStateInputs, TestInputs},
+        params::TestParams,
+    },
 };
-use crate::utils::{resources, TestExecutionEnvironment};
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     PartyIdx, PARTY_COUNT, PARTY_IDX_SET,
@@ -22,11 +24,11 @@ pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: TestParams) 
 fn create_net_args(params: TestParams) -> [NodeArgs; PARTY_COUNT] {
     // TODO: move to static resources (JSON | TOML).
     let args = NodeArgs::new(
-        params.arg_batch_size(),
-        params.arg_batch_size_error_rate(),
-        params.arg_max_indexation_id(),
-        params.arg_perform_db_snapshot(),
-        params.arg_use_db_backup_as_source(),
+        params.batch_size(),
+        params.batch_size_error_rate(),
+        params.max_indexation_id(),
+        params.perform_db_snapshot(),
+        params.use_db_backup_as_source(),
     );
 
     PARTY_IDX_SET

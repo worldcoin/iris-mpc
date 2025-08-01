@@ -131,6 +131,9 @@ impl ExecutionContextInfo {
     }
 }
 
+/// Type of result returned from execution.  Convenience type for e2e tests.
+pub type ExecutionResult = ();
+
 /// Main logic for initialization and execution of server nodes for genesis
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
@@ -142,7 +145,7 @@ impl ExecutionContextInfo {
 /// * `args` - Process arguments.
 /// * `config` - Process configuration instance.
 ///
-pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
+pub async fn exec(args: ExecutionArgs, config: Config) -> Result<ExecutionResult> {
     // Phase 0: setup.
     let (
         ctx,

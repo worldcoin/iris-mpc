@@ -17,7 +17,8 @@ mod workflows;
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
     use utils::defaults;
-    use workflows::genesis_100::{Test, TestParams};
+    use workflows::genesis_100::Test;
+    use workflows::genesis_shared::params::TestParams;
 
     fn get_params() -> TestParams {
         // Node arguments ... common across all nodes.

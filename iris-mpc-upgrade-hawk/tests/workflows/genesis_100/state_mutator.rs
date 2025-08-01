@@ -1,6 +1,8 @@
-use super::{inputs::NetArgs, params::TestParams};
 use crate::system_state;
-use crate::utils::{pgres::NetDbProvider, resources::read_iris_shares_batch};
+use crate::{
+    utils::{pgres::NetDbProvider, resources::read_iris_shares_batch},
+    workflows::genesis_shared::{net::NetArgs, params::TestParams},
+};
 use iris_mpc_common::{config::NetConfig, PARTY_IDX_SET};
 use iris_mpc_cpu::genesis::state_mutator::insert_iris_deletions;
 use itertools::Itertools;
@@ -34,7 +36,7 @@ pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &Tes
     let skip_offset = None;
     let shares_batch_generator = read_iris_shares_batch(
         params.shares_generator_batch_size(),
-        params.arg_max_indexation_id() as usize,
+        params.max_indexation_id() as usize,
         params.shares_generator_rng_state(),
         skip_offset,
     )

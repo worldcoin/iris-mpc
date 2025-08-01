@@ -1,11 +1,13 @@
-use super::{
-    factory,
-    inputs::{NetArgs, TestInputs},
-    params::TestParams,
-    state_mutator,
+use super::{factory, state_mutator};
+use crate::{
+    utils::{TestError, TestRun, TestRunContextInfo},
+    workflows::genesis_shared::{
+        inputs::TestInputs,
+        net::{NetArgs, NetExecutionResult},
+        params::TestParams,
+    },
 };
-use crate::utils::{TestError, TestRun, TestRunContextInfo};
-use eyre::{Report, Result};
+use eyre::Result;
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     PartyIdx, PARTY_IDX_SET,
@@ -21,7 +23,7 @@ pub struct Test {
     params: TestParams,
 
     /// Node execution results.
-    results: Option<Vec<Result<(), Report>>>,
+    results: Option<NetExecutionResult>,
 }
 
 /// Constructor.
@@ -37,24 +39,20 @@ impl Test {
 
 /// Accessors.
 impl Test {
-    pub fn args(&self) -> &NetArgs {
-        self.inputs.as_ref().unwrap().args()
+    pub fn net_args(&self) -> &NetArgs {
+        self.inputs.as_ref().unwrap().net_args()
     }
 
-    pub fn args_of_node(&self, node_idx: PartyIdx) -> NodeArgs {
-        self.inputs.as_ref().unwrap().args_of_node(node_idx).clone()
+    pub fn net_config(&self) -> &NetConfig {
+        self.inputs.as_ref().unwrap().net_config()
     }
 
-    pub fn config(&self) -> &NetConfig {
-        self.inputs.as_ref().unwrap().config()
+    pub fn node_args(&self, node_idx: PartyIdx) -> NodeArgs {
+        self.inputs.as_ref().unwrap().node_args(node_idx).clone()
     }
 
-    pub fn config_of_node(&self, node_idx: PartyIdx) -> NodeConfig {
-        self.inputs
-            .as_ref()
-            .unwrap()
-            .config_of_node(node_idx)
-            .clone()
+    pub fn node_config(&self, node_idx: PartyIdx) -> NodeConfig {
+        self.inputs.as_ref().unwrap().node_config(node_idx).clone()
     }
 
     pub fn params(&self) -> &TestParams {
@@ -69,7 +67,7 @@ impl TestRun for Test {
         let node_futures: Vec<_> = PARTY_IDX_SET
             .into_iter()
             .map(|node_idx: PartyIdx| {
-                exec_genesis(self.args_of_node(node_idx), self.config_of_node(node_idx))
+                exec_genesis(self.node_args(node_idx), self.node_config(node_idx))
             })
             .collect();
 
@@ -102,7 +100,7 @@ impl TestRun for Test {
 
         // Set system state.
         // ... insert Iris shares -> GPU dB.
-        state_mutator::insert_iris_shares_into_gpu_stores(self.config(), self.params()).await;
+        state_mutator::insert_iris_shares_into_gpu_stores(self.net_config(), self.params()).await;
 
         // ... insert Iris deletions -> AWS S3.
         // state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
