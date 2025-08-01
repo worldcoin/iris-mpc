@@ -15,49 +15,16 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher},
 };
 
-pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextStore>>;
+/// Represents irises db table, mapping serial ids to version, and left and right iris codes.
 pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>;
-pub struct PersistentState {
-    pub last_indexed_iris_id: Option<IrisSerialId>,
 
-    pub last_indexed_modification_id: Option<i64>,
-}
+/// Represents a left/right pair of plaintext in-memory HNSW graphs.
+pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextStore>>;
 
-pub struct GenesisSrcDbState {
-    pub irises: IrisesTable,
-
-    pub modifications: (),
-}
-
-pub struct GenesisDstDbState {
-    pub irises: IrisesTable,
-
-    pub graphs: PlaintextGraphs,
-
-    pub persistent_state: PersistentState,
-}
-
-#[allow(non_snake_case)]
-pub struct GenesisConfig {
-    pub hnsw_M: usize,
-
-    pub hnsw_ef_constr: usize,
-
-    pub hnsw_ef_search: usize,
-
-    pub hawk_prf_key: Option<u64>,
-}
-
-pub struct GenesisArgs {
-    pub max_indexation_id: IrisSerialId,
-
-    pub batch_size: usize,
-
-    pub batch_size_error_rate: usize,
-}
-
+/// List of serial ids to treat as deleted enrollments in the source iris database.
 pub type GenesisDeletions = Vec<IrisSerialId>;
 
+/// Plaintext representation of global state of genesis indexer.
 pub struct GenesisState {
     pub src_db: GenesisSrcDbState,
 
@@ -70,6 +37,52 @@ pub struct GenesisState {
     pub s3_deletions: GenesisDeletions,
 }
 
+/// State of the source database from the GPU server.
+pub struct GenesisSrcDbState {
+    pub irises: IrisesTable,
+
+    pub modifications: (),
+}
+
+/// State of the destination database for the CPU server.
+pub struct GenesisDstDbState {
+    pub irises: IrisesTable,
+
+    pub graphs: PlaintextGraphs,
+
+    pub persistent_state: PersistentState,
+}
+
+/// Database entries for the PersistentState table.
+pub struct PersistentState {
+    pub last_indexed_iris_id: Option<IrisSerialId>,
+
+    pub last_indexed_modification_id: Option<i64>,
+}
+
+/// Logical configuration parameters of genesis `Config` struct.
+#[allow(non_snake_case)]
+pub struct GenesisConfig {
+    pub hnsw_M: usize,
+
+    pub hnsw_ef_constr: usize,
+
+    pub hnsw_ef_search: usize,
+
+    pub hawk_prf_key: Option<u64>,
+}
+
+/// Logical CLI arguments for genesis process.
+pub struct GenesisArgs {
+    pub max_indexation_id: IrisSerialId,
+
+    pub batch_size: usize,
+
+    pub batch_size_error_rate: usize,
+}
+
+/// Execute the genesis indexer over a plaintext state representation, and
+/// return the resulting state.
 pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisState> {
     // Id currently being inspected
     let mut id = state
