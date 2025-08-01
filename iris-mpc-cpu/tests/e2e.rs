@@ -146,7 +146,7 @@ async fn start_hawk_node(
 async fn e2e_test() -> Result<()> {
     install_tracing();
 
-    let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED);
+    let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
 
