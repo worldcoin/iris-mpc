@@ -31,7 +31,7 @@ pub async fn upload_iris_deletions_into_s3(
 pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &TestParams) {
     // Set shares batch generator.
     // TODO: move these vars to test params.
-    let skip_offset = 0;
+    let skip_offset = None;
     let shares_batch_generator = read_iris_shares_batch(
         params.shares_generator_batch_size(),
         params.max_indexation_id() as usize,

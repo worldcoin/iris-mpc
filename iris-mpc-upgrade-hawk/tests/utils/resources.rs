@@ -37,7 +37,7 @@ fn get_path_to_resources() -> String {
 ///
 pub fn read_iris_code_pairs(
     max_indexation_id: usize,
-    skip_offset: usize,
+    skip_offset: Option<usize>,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
     // TODO: use strong names for ndjson file.
@@ -51,7 +51,7 @@ pub fn read_iris_code_pairs(
     let reader = BufReader::new(file);
     let stream = serde_json::Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
-        .skip(skip_offset)
+        .skip(skip_offset.ok_or(0).unwrap())
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples()
         .take(max_indexation_id);
@@ -74,7 +74,7 @@ pub fn read_iris_code_pairs(
 pub fn read_iris_code_pairs_batch(
     batch_size: usize,
     max_indexation_id: usize,
-    skip_offset: usize,
+    skip_offset: Option<usize>,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
     let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
         .unwrap()
@@ -98,7 +98,7 @@ pub fn read_iris_code_pairs_batch(
 pub fn read_iris_shares(
     max_indexation_id: usize,
     rng_state: u64,
-    skip_offset: usize,
+    skip_offset: Option<usize>,
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
     let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
         .unwrap()
@@ -124,7 +124,7 @@ pub fn read_iris_shares_batch(
     batch_size: usize,
     max_indexation_id: usize,
     rng_state: u64,
-    skip_offset: usize,
+    skip_offset: Option<usize>,
 ) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
     let stream = read_iris_shares(max_indexation_id, rng_state, skip_offset)
         .unwrap()
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_read_iris_code_pairs() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (max_indexation_id, skip_offset) in [(100, 0), (81, 838)] {
+        for (max_indexation_id, skip_offset) in [(100, Some(0)), (81, Some(838))] {
             let mut n_read = 0;
             for _ in read_iris_code_pairs(max_indexation_id, skip_offset).unwrap() {
                 n_read += 1;
@@ -211,7 +211,7 @@ mod tests {
     fn test_read_iris_code_pairs_batch() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
         for (batch_size, max_indexation_id, skip_offset, expected_batches) in
-            [(10, 100, 0, 10), (9, 81, 838, 9)]
+            [(10, 100, Some(0), 10), (9, 81, Some(838), 9)]
         {
             let mut n_chunks = 0;
             for chunk in read_iris_code_pairs_batch(batch_size, max_indexation_id, skip_offset)
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_read_iris_shares() {
-        for (max_indexation_id, skip_offset) in [(100, 0), (81, 838)] {
+        for (max_indexation_id, skip_offset) in [(100, Some(0)), (81, Some(838))] {
             let mut n_read = 0;
             for shares in
                 read_iris_shares(max_indexation_id, DEFAULT_RNG_STATE, skip_offset).unwrap()
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_read_iris_shares_batch() {
         for (batch_size, max_indexation_id, skip_offset, expected_batches) in
-            [(10, 100, 0, 10), (9, 81, 838, 9)]
+            [(10, 100, Some(0), 10), (9, 81, Some(838), 9)]
         {
             let mut n_chunks = 0;
             for chunk in read_iris_shares_batch(
