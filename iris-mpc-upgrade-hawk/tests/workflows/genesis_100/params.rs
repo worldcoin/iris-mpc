@@ -20,6 +20,9 @@ pub struct Params {
 
     // Flag indicating whether a db backup will be used as initial data source.
     use_db_backup_as_source: bool,
+
+    // used for construction of HNSW graphs
+    rng_state: u64,
 }
 
 /// Constructor.
@@ -31,6 +34,7 @@ impl Params {
         perform_db_snapshot: bool,
         pgres_tx_batch_size: usize,
         use_db_backup_as_source: bool,
+        rng_state: u64,
     ) -> Self {
         Self {
             batch_size,
@@ -39,6 +43,7 @@ impl Params {
             perform_db_snapshot,
             pgres_tx_batch_size,
             use_db_backup_as_source,
+            rng_state,
         }
     }
 }
@@ -67,5 +72,9 @@ impl Params {
 
     pub fn use_db_backup_as_source(&self) -> bool {
         self.use_db_backup_as_source
+    }
+
+    pub fn rng_state(&self) -> u64 {
+        self.rng_state
     }
 }

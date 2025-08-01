@@ -2,6 +2,8 @@ use super::{
     constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
     types::NetConfig,
 };
+use crate::utils::GaloisRingSharedIrisPair;
+use eyre::Result;
 use iris_mpc_common::{
     config::Config as NodeConfig,
     postgres::{AccessMode, PostgresClient},
@@ -9,7 +11,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
 };
-use iris_mpc_store::Store as IrisStore;
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 
 /// Encapsulates information required to connect to a database.
 pub struct DbConnectionInfo {
@@ -66,7 +68,6 @@ pub struct NodeDbContext {
     iris_store: IrisStore,
 }
 
-/// Constructor.
 impl NodeDbContext {
     pub async fn new(connection_info: DbConnectionInfo) -> Self {
         let client = PostgresClient::new(
@@ -82,10 +83,7 @@ impl NodeDbContext {
             graph_store: GraphStore::new(&client).await.unwrap(),
         }
     }
-}
 
-/// Accessors.
-impl NodeDbContext {
     pub fn graph_store(&self) -> &GraphStore<PlaintextStore> {
         &self.graph_store
     }
@@ -93,33 +91,66 @@ impl NodeDbContext {
     pub fn iris_store(&self) -> &IrisStore {
         &self.iris_store
     }
+
+    /// Initializes the iris database with the given slice of pairs.
+    pub async fn init_iris_db(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
+        self.clear_all_tables().await?;
+        self.insert_irises(shares).await?;
+        Ok(())
+    }
+
+    /// Adds arbitrary irises to the database. The iris ID will be the new
+    /// number of entries after the insertion
+    pub async fn insert_irises(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
+        let starting_len = self.iris_store.count_irises().await?;
+
+        let mut tx = self.iris_store.tx().await?;
+        // use the idx as the id field
+        let mut to_insert = vec![];
+        for (idx, shares) in shares.iter().enumerate() {
+            to_insert.push(StoredIrisRef {
+                // warning: id should be >= 1
+                id: (starting_len + idx + 1) as _,
+                left_code: &shares.0.code.coefs,
+                left_mask: &shares.0.mask.coefs,
+                right_code: &shares.1.code.coefs,
+                right_mask: &shares.1.mask.coefs,
+            })
+        }
+
+        self.iris_store.insert_irises(&mut tx, &to_insert).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn clear_all_tables(&self) -> Result<()> {
+        self.graph_store.clear_hawk_graph_tables().await?;
+        self.iris_store.rollback(0).await?;
+        Ok(())
+    }
 }
 
 /// Encapsulates API pointers to a database.
 pub struct NodeDbProvider {
     /// Pointer to HNSW Graph store API.
-    cpu_store: NodeDbContext,
+    pub cpu_store: NodeDbContext,
 
     /// Pointer to Iris store API.
-    gpu_store: NodeDbContext,
-
-    /// Ordinal index of MPC party.
-    party_idx: usize,
+    /// Note that the gpu_store doesn't use its graph_store
+    pub gpu_store: NodeDbContext,
 }
 
 /// Constructor.
 impl NodeDbProvider {
-    pub fn new(party_idx: usize, cpu_store: NodeDbContext, gpu_store: NodeDbContext) -> Self {
+    pub fn new(cpu_store: NodeDbContext, gpu_store: NodeDbContext) -> Self {
         Self {
             cpu_store,
             gpu_store,
-            party_idx,
         }
     }
 
     pub async fn new_from_config(config: &NodeConfig) -> Self {
         Self::new(
-            config.party_id,
             NodeDbContext::new(DbConnectionInfo::new_read_write(
                 config,
                 config.hnsw_schema_name_suffix(),
@@ -131,21 +162,6 @@ impl NodeDbProvider {
             ))
             .await,
         )
-    }
-}
-
-/// Accessors.
-impl NodeDbProvider {
-    pub fn cpu_store(&self) -> &NodeDbContext {
-        &self.cpu_store
-    }
-
-    pub fn gpu_store(&self) -> &NodeDbContext {
-        &self.gpu_store
-    }
-
-    pub fn party_idx(&self) -> usize {
-        self.party_idx
     }
 }
 
@@ -170,11 +186,9 @@ impl NetDbProvider {
             NodeDbProvider::new_from_config(&config[PARTY_IDX_2]).await,
         )
     }
-}
 
-/// Accessors.
-impl NetDbProvider {
-    pub fn of_node(&self, idx: usize) -> &NodeDbProvider {
-        &self.nodes[idx]
+    /// Returns an iterator over references to the node database providers.
+    pub fn iter(&self) -> impl Iterator<Item = &NodeDbProvider> {
+        self.nodes.iter()
     }
 }

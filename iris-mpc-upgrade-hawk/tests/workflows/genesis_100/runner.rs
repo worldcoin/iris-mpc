@@ -2,14 +2,34 @@ use super::{
     factory,
     inputs::{Inputs, NetArgs},
     params::Params,
-    state_mutator,
 };
 use crate::utils::{
-    constants::COUNT_OF_PARTIES, NetConfig, TestError, TestRun, TestRunContextInfo,
+    constants::COUNT_OF_PARTIES, resources, s3_client, NetConfig, NetDbProvider, TestError,
+    TestRun, TestRunContextInfo,
 };
 use eyre::{Report, Result};
+use futures::future::join_all;
 use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_cpu::genesis::get_iris_deletions;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
+
+macro_rules! join_all_and_report_errors {
+    ($futures:expr, $err_msg:expr) => {{
+        let results = join_all($futures).await;
+        for (idx, result) in results.iter().enumerate() {
+            if let Err(e) = result {
+                panic!(
+                    "{}: Error at index {} (line {}): {:?}",
+                    $err_msg,
+                    idx,
+                    line!(),
+                    e
+                );
+            }
+        }
+        results
+    }};
+}
 
 /// HNSW Genesis test.
 pub struct Test {
@@ -97,13 +117,29 @@ impl TestRun for Test {
     async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
         // Set inputs.
         self.inputs = Some(factory::create_inputs(ctx.exec_env(), self.params));
+        let configs = self.config();
+        let shares = resources::read_iris_shares(self.params.rng_state(), 0, 100).unwrap();
 
-        // Set system state.
-        // ... insert Iris shares -> GPU dB.
-        state_mutator::insert_iris_shares_into_gpu_stores(self.config(), self.params()).await;
+        let db_provider = NetDbProvider::new_from_config(configs).await;
 
-        // ... insert Iris deletions -> AWS S3.
-        // state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
+        // configure gpu database
+        let futs: Vec<_> = itertools::izip!(db_provider.iter(), &shares)
+            .map(|(db, shares)| db.gpu_store.init_iris_db(shares.as_slice()))
+            .collect();
+        join_all_and_report_errors!(futs, "failed to init GPU dbs");
+
+        // configure cpu database
+        let futs: Vec<_> = db_provider
+            .iter()
+            .map(|db| db.cpu_store.clear_all_tables())
+            .collect();
+        join_all_and_report_errors!(futs, "failed to init CPU dbs");
+
+        // clear Iris deletions -> AWS S3.
+        for config in configs.iter() {
+            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
+            s3_client::clear_s3_iris_deletions(config, &aws_clients.s3_client).await?;
+        }
 
         Ok(())
     }
@@ -111,12 +147,26 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         // Assert inputs.
         assert!(&self.inputs.is_some());
+        let configs = self.config();
 
-        // Assert dBs.
-        // TODO
+        let db_provider = NetDbProvider::new_from_config(configs).await;
+
+        for db in db_provider.iter() {
+            let num_irises = db.gpu_store.iris_store().count_irises().await?;
+            assert_eq!(num_irises, 100);
+
+            let num_irises = db.cpu_store.iris_store().count_irises().await?;
+            assert_eq!(num_irises, 0);
+
+            // todo: make assertion about the graph table?
+        }
 
         // Assert localstack.
-        // TODO
+        for config in configs.iter() {
+            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
+            let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100).await?;
+            assert_eq!(deletions.len(), 0);
+        }
 
         Ok(())
     }

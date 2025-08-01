@@ -215,6 +215,22 @@ impl<V: VectorStore> GraphPg<V> {
 
         Ok(())
     }
+
+    /// Ensures that graph_entry and graph_links table are empty. For testing only
+    pub async fn clear_hawk_graph_tables(&self) -> Result<()> {
+        let schema = &self.schema_name;
+        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
+        let links_table = format!("\"{}\".hawk_graph_links", schema);
+
+        sqlx::query(&format!("DELETE * FROM {entry_table}"))
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(&format!("DELETE * FROM {links_table}"))
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
 }
 
 pub struct GraphTx<'a, V> {

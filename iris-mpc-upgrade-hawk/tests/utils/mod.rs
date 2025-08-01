@@ -5,6 +5,7 @@ mod logger;
 mod pgres;
 pub mod resources;
 pub mod runner;
+pub mod s3_client;
 pub mod store;
 mod types;
 
