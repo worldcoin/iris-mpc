@@ -32,7 +32,7 @@ fn get_path_to_resources() -> String {
 ///
 /// # Arguments
 ///
-/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
+/// * `read_maximum` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
 /// # Returns
@@ -40,8 +40,8 @@ fn get_path_to_resources() -> String {
 /// An iterator over Iris code pairs.
 ///
 pub fn read_iris_code_pairs(
-    max_indexation_id: usize,
-    skip_offset: Option<usize>,
+    read_maximum: usize,
+    skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
     // TODO: use strong names for ndjson file.
@@ -55,10 +55,10 @@ pub fn read_iris_code_pairs(
     let reader = BufReader::new(file);
     let stream = serde_json::Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
-        .skip(skip_offset.ok_or(0).unwrap())
+        .skip(skip_offset)
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples()
-        .take(max_indexation_id);
+        .take(read_maximum);
 
     Ok(stream)
 }
@@ -68,7 +68,7 @@ pub fn read_iris_code_pairs(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
+/// * `read_maximum` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
 /// # Returns
@@ -77,10 +77,10 @@ pub fn read_iris_code_pairs(
 ///
 pub fn read_iris_code_pairs_batch(
     batch_size: usize,
-    max_indexation_id: usize,
-    skip_offset: Option<usize>,
+    read_maximum: usize,
+    skip_offset: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
-    let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
+    let stream = read_iris_code_pairs(read_maximum, skip_offset)
         .unwrap()
         .chunks(batch_size);
 
@@ -91,7 +91,7 @@ pub fn read_iris_code_pairs_batch(
 ///
 /// # Arguments
 ///
-/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
+/// * `read_maximum` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
@@ -100,11 +100,11 @@ pub fn read_iris_code_pairs_batch(
 /// An iterator over Iris shares.
 ///
 pub fn read_iris_shares(
-    max_indexation_id: usize,
+    read_maximum: usize,
     rng_state: u64,
-    skip_offset: Option<usize>,
+    skip_offset: usize,
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
-    let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
+    let stream = read_iris_code_pairs(read_maximum, skip_offset)
         .unwrap()
         .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair)));
 
@@ -116,7 +116,7 @@ pub fn read_iris_shares(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
+/// * `read_maximum` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
@@ -126,11 +126,11 @@ pub fn read_iris_shares(
 ///
 pub fn read_iris_shares_batch(
     batch_size: usize,
-    max_indexation_id: usize,
+    read_maximum: usize,
     rng_state: u64,
-    skip_offset: Option<usize>,
+    skip_offset: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
-    let stream = read_iris_shares(max_indexation_id, rng_state, skip_offset)
+    let stream = read_iris_shares(read_maximum, rng_state, skip_offset)
         .unwrap()
         .chunks(batch_size);
 
@@ -155,9 +155,8 @@ pub fn read_node_config(
     config_idx: usize,
 ) -> Result<NodeConfig, Error> {
     let fname = format!("node-{}-{}-{}", party_idx, config_kind, config_idx);
-    let cfg = read_node_config_by_name(fname).unwrap();
 
-    Ok(cfg)
+    read_node_config_by_name(fname)
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -217,23 +216,23 @@ mod tests {
     #[test]
     fn test_read_iris_code_pairs() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (max_indexation_id, skip_offset) in [(100, Some(0)), (81, Some(838))] {
+        for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for _ in read_iris_code_pairs(max_indexation_id, skip_offset).unwrap() {
+            for _ in read_iris_code_pairs(read_maximum, skip_offset).unwrap() {
                 n_read += 1;
             }
-            assert_eq!(max_indexation_id, n_read);
+            assert_eq!(read_maximum, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_code_pairs_batch() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (batch_size, max_indexation_id, skip_offset, expected_batches) in
-            [(10, 100, Some(0), 10), (9, 81, Some(838), 9)]
+        for (batch_size, read_maximum, skip_offset, expected_batches) in
+            [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in read_iris_code_pairs_batch(batch_size, max_indexation_id, skip_offset)
+            for chunk in read_iris_code_pairs_batch(batch_size, read_maximum, skip_offset)
                 .unwrap()
                 .into_iter()
             {
@@ -250,32 +249,26 @@ mod tests {
 
     #[test]
     fn test_read_iris_shares() {
-        for (max_indexation_id, skip_offset) in [(100, Some(0)), (81, Some(838))] {
+        for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for shares in
-                read_iris_shares(max_indexation_id, DEFAULT_RNG_STATE, skip_offset).unwrap()
-            {
+            for shares in read_iris_shares(read_maximum, DEFAULT_RNG_STATE, skip_offset).unwrap() {
                 n_read += 1;
                 assert_eq!(shares.len(), PARTY_COUNT);
             }
-            assert_eq!(max_indexation_id, n_read);
+            assert_eq!(read_maximum, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_shares_batch() {
-        for (batch_size, max_indexation_id, skip_offset, expected_batches) in
-            [(10, 100, Some(0), 10), (9, 81, Some(838), 9)]
+        for (batch_size, read_maximum, skip_offset, expected_batches) in
+            [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in read_iris_shares_batch(
-                batch_size,
-                max_indexation_id,
-                DEFAULT_RNG_STATE,
-                skip_offset,
-            )
-            .unwrap()
-            .into_iter()
+            for chunk in
+                read_iris_shares_batch(batch_size, read_maximum, DEFAULT_RNG_STATE, skip_offset)
+                    .unwrap()
+                    .into_iter()
             {
                 n_chunks += 1;
                 let mut n_items = 0;
