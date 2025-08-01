@@ -1,6 +1,9 @@
 use std::ops::Deref;
 
-use crate::hnsw::{HnswSearcher, VectorStore};
+use crate::hnsw::{
+    graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
+    VectorStore,
+};
 
 use super::{ConnectPlan, HawkSession, InsertPlan, VecRequests};
 
@@ -30,10 +33,39 @@ pub async fn insert(
     let m = searcher.params.get_M(0);
 
     for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
-        if let Some(plan) = plan {
-            let plan = add_batch_neighbors(session, plan, &inserted_ids, m).await?;
+        if let Some(InsertPlan {
+            query,
+            links,
+            set_ep,
+            ..
+        }) = plan
+        {
+            let mut store = session.aby3_store.write().await;
 
-            *cp = Some(insert_one(session, searcher, plan, *update_id).await?);
+            let extended_links =
+                add_batch_neighbors(&mut *store, &query, links, &inserted_ids, m).await?;
+
+            let inserted = {
+                let storage = &mut store.storage;
+
+                match update_id {
+                    None => storage.append(&query.iris).await,
+                    Some(id) => storage.insert(*id, &query.iris).await,
+                }
+            };
+
+            let graph = &mut session.graph_store.write().await;
+            *cp = Some(
+                insert_one(
+                    &mut *store,
+                    graph,
+                    searcher,
+                    inserted,
+                    extended_links,
+                    set_ep,
+                )
+                .await?,
+            );
 
             inserted_ids.push(cp.as_ref().unwrap().inserted_vector);
         }
@@ -42,61 +74,49 @@ pub async fn insert(
     Ok(connect_plans)
 }
 
-async fn add_batch_neighbors(
-    session: &HawkSession,
-    mut insert_plan: InsertPlan,
-    extra_ids: &[VectorId],
+/// Extends the bottom layer of links with additional vectors in `extra_ids` if there
+/// is room.
+async fn add_batch_neighbors<V: VectorStore>(
+    store: &mut V,
+    query: &V::QueryRef,
+    mut links: Vec<SortedNeighborhoodV<V>>,
+    extra_ids: &[V::VectorRef],
     target_n_neighbors: usize,
-) -> Result<InsertPlan> {
-    let mut store = session.aby3_store.write().await;
-    let query = insert_plan.query.clone();
-
-    if let Some(bottom_layer) = insert_plan.links.first_mut() {
+) -> Result<Vec<SortedNeighborhoodV<V>>> {
+    if let Some(bottom_layer) = links.first_mut() {
         if bottom_layer.len() < target_n_neighbors {
-            let distances = store.eval_distance_batch(&[query], extra_ids).await?;
+            let distances = store
+                .eval_distance_batch(&[query.clone()], extra_ids)
+                .await?;
 
-            let ids_dists = izip!(extra_ids, distances)
-                .map(|(&id, dist)| (id, dist))
+            let ids_dists = izip!(extra_ids.iter().cloned(), distances)
+                .map(|(id, dist)| (id, dist))
                 .collect_vec();
 
             bottom_layer.insert_batch(&mut *store, &ids_dists).await?;
         }
     }
 
-    Ok(insert_plan)
+    Ok(links)
 }
 
 /// Insert a single `InsertPlan` into the vector store and graph of `session`.  If
 /// `insert_id` is `Some(id)`, then `id` is used as the identifier for the inserted
 /// query.  Otherwise, the query is inserted at the next unused serial id, as version 0.
-async fn insert_one(
-    session: &HawkSession,
+async fn insert_one<V: VectorStore>(
+    // session: &mut HawkSession,
+    store: &mut V,
+    graph: &mut GraphMem<V>,
     searcher: &HnswSearcher,
-    insert_plan: InsertPlan,
-    insert_id: Option<VectorId>,
-) -> Result<ConnectPlan> {
-    let mut store = session.aby3_store.write().await;
-
-    let inserted = {
-        match insert_id {
-            None => store.storage.append(&insert_plan.query.iris).await,
-            Some(id) => store.storage.insert(id, &insert_plan.query.iris).await,
-        }
-    };
-
-    let mut graph_store = session.graph_store.write().await;
-
+    inserted: V::VectorRef,
+    links: Vec<SortedNeighborhoodV<V>>,
+    set_ep: bool,
+) -> Result<ConnectPlanV<V>> {
     let connect_plan = searcher
-        .insert_prepare(
-            &mut *store,
-            graph_store.deref(),
-            inserted,
-            insert_plan.links,
-            insert_plan.set_ep,
-        )
+        .insert_prepare(store, graph.deref(), inserted, links, set_ep)
         .await?;
 
-    graph_store.insert_apply(connect_plan.clone()).await;
+    graph.insert_apply(connect_plan.clone()).await;
 
     Ok(connect_plan)
 }
@@ -105,8 +125,8 @@ async fn insert_one(
 pub fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>> {
     let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
     if set_ep {
-        // There can be at most one new entry point.
-        let highest = plans
+        // Find a unique instance of the max insertion layer.
+        let set_ep_idx = plans
             .iter()
             .map(|plan| match plan {
                 Some(plan) => plan.links.len(),
@@ -118,7 +138,7 @@ pub fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>>
         // Set the entry point to false for all but the highest.
         for (i, plan) in plans.iter_mut().enumerate() {
             if let Some(plan) = plan {
-                plan.set_ep = i == highest;
+                plan.set_ep = i == set_ep_idx;
             }
         }
     }
