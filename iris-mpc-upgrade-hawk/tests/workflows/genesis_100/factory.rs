@@ -2,8 +2,8 @@ use super::{
     inputs::{Inputs, SystemStateInputs},
     params::Params,
 };
-use crate::utils::{constants::COUNT_OF_PARTIES, resources, TestExecutionEnvironment};
-use iris_mpc_common::config::Config as NodeConfig;
+use crate::utils::{resources, TestExecutionEnvironment};
+use iris_mpc_common::{config::Config as NodeConfig, PARTY_COUNT};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns inputs for running a test.
@@ -16,7 +16,7 @@ pub(super) fn create_inputs(env: &TestExecutionEnvironment, params: Params) -> I
 }
 
 /// Returns inputs for launching a node.
-fn create_net_args(params: Params) -> [NodeArgs; COUNT_OF_PARTIES] {
+fn create_net_args(params: Params) -> [NodeArgs; PARTY_COUNT] {
     let args = NodeArgs::new(
         params.batch_size(),
         params.batch_size_error_rate(),
@@ -25,7 +25,7 @@ fn create_net_args(params: Params) -> [NodeArgs; COUNT_OF_PARTIES] {
         params.use_db_backup_as_source(),
     );
 
-    (0..COUNT_OF_PARTIES)
+    (0..PARTY_COUNT)
         .map(|_| args.clone())
         .collect::<Vec<_>>()
         .try_into()
@@ -33,8 +33,8 @@ fn create_net_args(params: Params) -> [NodeArgs; COUNT_OF_PARTIES] {
 }
 
 /// Returns network wide configuration.
-fn create_net_config(env: &TestExecutionEnvironment) -> [NodeConfig; COUNT_OF_PARTIES] {
-    (0..COUNT_OF_PARTIES)
+fn create_net_config(env: &TestExecutionEnvironment) -> [NodeConfig; PARTY_COUNT] {
+    (0..PARTY_COUNT)
         .map(|party_idx| create_node_config(env, party_idx))
         .collect::<Vec<_>>()
         .try_into()

@@ -1,8 +1,10 @@
-use super::{
-    constants::COUNT_OF_PARTIES, convertor::to_galois_ring_shares, types::GaloisRingSharedIrisPair,
-    IrisCodePair, TestExecutionEnvironment, TestRunContextInfo,
+use super::{convertor::to_galois_ring_shares, TestExecutionEnvironment, TestRunContextInfo};
+use iris_mpc_common::{
+    config::Config as NodeConfig,
+    iris_db::iris::{IrisCode, IrisCodePair},
+    PARTY_COUNT,
 };
-use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPair;
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
 use serde_json;
@@ -98,7 +100,7 @@ pub fn read_iris_shares(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>, Error> {
+) -> Result<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>, Error> {
     let stream = read_iris_code_pairs(skip_offset, max_items)
         .unwrap()
         .map(move |code_pair| to_galois_ring_shares(rng_state, &code_pair));
@@ -124,10 +126,7 @@ pub fn read_iris_shares_batch(
     rng_state: u64,
     skip_offset: usize,
     max_items: usize,
-) -> Result<
-    IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>>,
-    Error,
-> {
+) -> Result<IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>>, Error> {
     let stream = read_iris_shares(rng_state, skip_offset, max_items)
         .unwrap()
         .chunks(batch_size);
@@ -169,7 +168,7 @@ mod tests {
     use super::{
         get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
         read_iris_code_pairs_batch, read_iris_shares, read_iris_shares_batch, read_node_config,
-        TestExecutionEnvironment, TestRunContextInfo, COUNT_OF_PARTIES,
+        TestExecutionEnvironment, TestRunContextInfo, PARTY_COUNT,
     };
     use std::path::Path;
 
@@ -236,7 +235,7 @@ mod tests {
             let mut n_read = 0;
             for shares in read_iris_shares(DEFAULT_RNG_STATE, skip_offset, max_items).unwrap() {
                 n_read += 1;
-                assert_eq!(shares.len(), COUNT_OF_PARTIES);
+                assert_eq!(shares.len(), PARTY_COUNT);
             }
             assert_eq!(n_read, max_items);
         }
@@ -256,7 +255,7 @@ mod tests {
                 n_chunks += 1;
                 let mut n_items = 0;
                 for item in chunk.into_iter() {
-                    assert_eq!(item.len(), COUNT_OF_PARTIES);
+                    assert_eq!(item.len(), PARTY_COUNT);
                     n_items += 1;
                 }
                 assert_eq!(n_items, batch_size);

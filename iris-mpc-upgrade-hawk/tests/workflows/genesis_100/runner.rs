@@ -4,11 +4,12 @@ use super::{
     params::Params,
     state_mutator,
 };
-use crate::utils::{
-    constants::COUNT_OF_PARTIES, NetConfig, TestError, TestRun, TestRunContextInfo,
-};
+use crate::utils::{TestError, TestRun, TestRunContextInfo};
 use eyre::{Report, Result};
-use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_common::{
+    config::{Config as NodeConfig, NetConfig},
+    PARTY_COUNT,
+};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
 
 /// HNSW Genesis test.
@@ -65,7 +66,7 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // Set node process futures.
-        let node_futures: Vec<_> = (0..COUNT_OF_PARTIES)
+        let node_futures: Vec<_> = (0..PARTY_COUNT)
             .map(|node_idx: usize| {
                 exec_genesis(self.args_of_node(node_idx), self.config_of_node(node_idx))
             })

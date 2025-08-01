@@ -1,16 +1,19 @@
 use super::params::Params;
-use crate::utils::{constants::COUNT_OF_PARTIES, GaloisRingSharedIrisPair, NetConfig};
-use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
+use iris_mpc_common::{
+    config::{Config as NodeConfig, NetConfig},
+    IrisSerialId, PARTY_COUNT,
+};
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPair;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 use itertools::{IntoChunks, Itertools};
 
 // Network wide argument set.
-pub type NetArgs = [NodeArgs; COUNT_OF_PARTIES];
+pub type NetArgs = [NodeArgs; PARTY_COUNT];
 
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
 pub(super) struct Inputs {
-    // Configuration for each node in network.
+    // Arguments for each node in network.
     args: NetArgs,
 
     // Configuration for each node in network.
@@ -90,7 +93,7 @@ impl SystemStateInputs {
 impl SystemStateInputs {
     pub fn iris_shares_stream(
         &self,
-    ) -> IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]>>> {
+    ) -> IntoChunks<impl Iterator<Item = Box<[GaloisRingSharedIrisPair; PARTY_COUNT]>>> {
         std::iter::empty().chunks(self.params.batch_size())
     }
 }

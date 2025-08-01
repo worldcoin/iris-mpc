@@ -1,4 +1,4 @@
-use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
+use crate::{config::json_wrapper::JsonStrWrapper, job::Eye, PARTY_COUNT};
 use clap::Parser;
 use eyre::{eyre, Result};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -256,6 +256,9 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 }
+
+// Network wide configuration set.
+pub type NetConfig = [Config; PARTY_COUNT];
 
 impl Config {
     pub fn hnsw_schema_name_suffix(&self) -> &String {

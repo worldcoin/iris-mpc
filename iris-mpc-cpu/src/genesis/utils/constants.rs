@@ -1,6 +1,3 @@
-// Count of MPC protocol parties.
-pub const COUNT_OF_MPC_PARTIES: usize = 3;
-
 /// Domain for persistent state store entry for last indexed id
 pub const STATE_DOMAIN: &str = "genesis";
 

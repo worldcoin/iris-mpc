@@ -1,8 +1,5 @@
-use super::{
-    constants::COUNT_OF_PARTIES,
-    types::{GaloisRingSharedIrisPair, IrisCodePair},
-};
-use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
+use iris_mpc_common::{iris_db::iris::IrisCodePair, PARTY_COUNT};
+use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair};
 use rand::{prelude::StdRng, SeedableRng};
 
 /// Converts an RNG state plus a plaintext format Iris code pair to a 3 element vector of Galois Ring Iris shares.
@@ -19,7 +16,7 @@ use rand::{prelude::StdRng, SeedableRng};
 pub fn to_galois_ring_shares(
     rng_state: u64,
     code_pair: &IrisCodePair,
-) -> Box<[GaloisRingSharedIrisPair; COUNT_OF_PARTIES]> {
+) -> Box<[GaloisRingSharedIrisPair; PARTY_COUNT]> {
     // Set RNG for each pair to match shares_encoding.rs behavior
     let mut shares_seed = StdRng::seed_from_u64(rng_state);
 
@@ -40,13 +37,13 @@ pub fn to_galois_ring_shares(
 #[cfg(test)]
 mod tests {
     use super::{to_galois_ring_shares, IrisCodePair};
-    use crate::utils::constants::COUNT_OF_PARTIES;
+    use iris_mpc_common::PARTY_COUNT;
 
     const DEFAULT_RNG_STATE: u64 = 93;
 
     #[test]
     fn test_to_galois_ring_shares() {
         let converted = to_galois_ring_shares(DEFAULT_RNG_STATE, &IrisCodePair::default());
-        assert!(converted.len() == COUNT_OF_PARTIES)
+        assert!(converted.len() == PARTY_COUNT)
     }
 }

@@ -1,10 +1,7 @@
-use super::{
-    constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
-    types::NetConfig,
-};
 use iris_mpc_common::{
-    config::Config as NodeConfig,
+    config::{Config as NodeConfig, NetConfig},
     postgres::{AccessMode, PostgresClient},
+    PARTY_COUNT, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2,
 };
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
@@ -152,7 +149,7 @@ impl NodeDbProvider {
 /// Encapsulates API pointers to set of network databases.
 pub struct NetDbProvider {
     /// Pointer to set of network node db providers.
-    nodes: [NodeDbProvider; COUNT_OF_PARTIES],
+    nodes: [NodeDbProvider; PARTY_COUNT],
 }
 
 /// Constructor.

@@ -22,6 +22,9 @@ pub enum IndexationError {
     #[error("Failed to deserialize AWS S3 object")]
     AwsS3ObjectDeserialize,
 
+    #[error("Failed to upload AWS S3 object")]
+    AwsS3ObjectUpload,
+
     #[error("Missing CPU db configuration")]
     DbConfigError,
 
