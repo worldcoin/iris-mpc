@@ -1,6 +1,6 @@
 use super::{inputs::NetArgs, params::Params};
 use crate::utils::{pgres::NetDbProvider, resources::read_iris_shares_batch, sys_state};
-use iris_mpc_common::{config::NetConfig, PartyIdx, PARTY_COUNT};
+use iris_mpc_common::{config::NetConfig, PARTY_IDX_SET};
 use iris_mpc_cpu::genesis::state_mutator::insert_iris_deletions;
 use itertools::Itertools;
 
@@ -38,7 +38,7 @@ pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &Par
     // Iterate over batches by party and insert into GPU store.
     for chunk in shares_batch_generator.into_iter() {
         let shares = chunk.into_iter().map(|x| x.to_vec()).collect_vec();
-        for party_idx in 0..PARTY_COUNT {
+        for party_idx in PARTY_IDX_SET {
             let (_start_serial_id, _end_serial_id) = sys_state::insert_iris_shares(
                 db_provider.of_node(party_idx).gpu_store().iris_store(),
                 params.pgres_tx_batch_size(),

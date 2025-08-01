@@ -3,7 +3,10 @@ use super::{
     params::Params,
 };
 use crate::utils::{resources, TestExecutionEnvironment};
-use iris_mpc_common::{config::Config as NodeConfig, PartyIdx, PARTY_COUNT};
+use iris_mpc_common::{
+    config::{Config as NodeConfig, NetConfig},
+    PartyIdx, PARTY_COUNT, PARTY_IDX_SET,
+};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Returns inputs for running a test.
@@ -25,7 +28,8 @@ fn create_net_args(params: Params) -> [NodeArgs; PARTY_COUNT] {
         params.use_db_backup_as_source(),
     );
 
-    (0..PARTY_COUNT)
+    PARTY_IDX_SET
+        .iter()
         .map(|_| args.clone())
         .collect::<Vec<_>>()
         .try_into()
@@ -33,8 +37,9 @@ fn create_net_args(params: Params) -> [NodeArgs; PARTY_COUNT] {
 }
 
 /// Returns network wide configuration.
-fn create_net_config(env: &TestExecutionEnvironment) -> [NodeConfig; PARTY_COUNT] {
-    (0..PARTY_COUNT)
+fn create_net_config(env: &TestExecutionEnvironment) -> NetConfig {
+    PARTY_IDX_SET
+        .iter()
         .map(|party_idx| create_node_config(env, party_idx))
         .collect::<Vec<_>>()
         .try_into()
@@ -42,7 +47,7 @@ fn create_net_config(env: &TestExecutionEnvironment) -> [NodeConfig; PARTY_COUNT
 }
 
 /// Returns node specific configuration.
-fn create_node_config(env: &TestExecutionEnvironment, party_idx: PartyIdx) -> NodeConfig {
+fn create_node_config(env: &TestExecutionEnvironment, party_idx: &PartyIdx) -> NodeConfig {
     let fname = format!("node-{}-genesis-0", party_idx);
 
     resources::read_node_config(env, fname).unwrap()
