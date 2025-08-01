@@ -1,11 +1,14 @@
 use std::ops::Deref;
 
-use crate::hnsw::{
-    graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
-    VectorStore,
+use crate::{
+    execution::hawk_main::InsertPlanV,
+    hnsw::{
+        graph::neighborhood::SortedNeighborhoodV, searcher::ConnectPlanV, GraphMem, HnswSearcher,
+        VectorStore,
+    },
 };
 
-use super::{ConnectPlan, HawkSession, InsertPlan, VecRequests};
+use super::{ConnectPlan, HawkInsertPlan, HawkSession, VecRequests};
 
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
@@ -24,7 +27,7 @@ use itertools::{izip, Itertools};
 pub async fn insert(
     session: &HawkSession,
     searcher: &HnswSearcher,
-    plans: VecRequests<Option<InsertPlan>>,
+    plans: VecRequests<Option<HawkInsertPlan>>,
     ids: &VecRequests<Option<VectorId>>,
 ) -> Result<VecRequests<Option<ConnectPlan>>> {
     let insert_plans = join_plans(plans);
@@ -33,10 +36,13 @@ pub async fn insert(
     let m = searcher.params.get_M(0);
 
     for (plan, update_id, cp) in izip!(insert_plans, ids, &mut connect_plans) {
-        if let Some(InsertPlan {
-            query,
-            links,
-            set_ep,
+        if let Some(HawkInsertPlan {
+            plan:
+                InsertPlanV {
+                    query,
+                    links,
+                    set_ep,
+                },
             ..
         }) = plan
         {
@@ -122,14 +128,14 @@ async fn insert_one<V: VectorStore>(
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
-pub fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>> {
-    let set_ep = plans.iter().flatten().any(|plan| plan.set_ep);
+pub fn join_plans(mut plans: Vec<Option<HawkInsertPlan>>) -> Vec<Option<HawkInsertPlan>> {
+    let set_ep = plans.iter().flatten().any(|plan| plan.plan.set_ep);
     if set_ep {
         // Find a unique instance of the max insertion layer.
         let set_ep_idx = plans
             .iter()
             .map(|plan| match plan {
-                Some(plan) => plan.links.len(),
+                Some(plan) => plan.plan.links.len(),
                 None => 0,
             })
             .position_max()
@@ -138,7 +144,7 @@ pub fn join_plans(mut plans: Vec<Option<InsertPlan>>) -> Vec<Option<InsertPlan>>
         // Set the entry point to false for all but the highest.
         for (i, plan) in plans.iter_mut().enumerate() {
             if let Some(plan) = plan {
-                plan.set_ep = i == set_ep_idx;
+                plan.plan.set_ep = i == set_ep_idx;
             }
         }
     }

@@ -234,40 +234,45 @@ pub type SearchResult = (
 
 /// InsertPlan specifies where a query may be inserted into the HNSW graph.
 /// That is lists of neighbors for each layer.
-pub type InsertPlan = InsertPlanV<Aby3Store>;
+#[derive(Debug)]
+pub struct InsertPlanV<V: VectorStore> {
+    query: V::QueryRef,
+    links: Vec<SortedNeighborhoodV<V>>,
+    set_ep: bool,
+}
+
+// Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
+// propagate the nested Clone bounds on V::QueryRef via TransientRef.
+impl<V: VectorStore> Clone for InsertPlanV<V> {
+    fn clone(&self) -> Self {
+        Self {
+            query: self.query.clone(),
+            links: self.links.clone(),
+            set_ep: self.set_ep,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct HawkInsertPlan {
+    plan: InsertPlanV<Aby3Store>,
+    match_count: usize,
+}
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.
 /// This includes the updates to the neighbors' own neighbor lists, including
 /// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
-#[derive(Debug)]
-pub struct InsertPlanV<V: VectorStore> {
-    query: V::QueryRef,
-    links: Vec<SortedNeighborhoodV<V>>,
-    match_count: usize,
-    set_ep: bool,
-}
-// Manual implementation of Clone for InsertPlan, since derive(Clone) does not propagate the nested Clone bounds on V::QueryRef via TransientRef.
-impl Clone for InsertPlan {
-    fn clone(&self) -> Self {
-        Self {
-            query: self.query.clone(),
-            links: self.links.clone(),
-            match_count: self.match_count,
-            set_ep: self.set_ep,
-        }
-    }
-}
-
-impl<V: VectorStore> InsertPlanV<V> {
-    pub fn match_ids(&self) -> Vec<V::VectorRef> {
-        self.links
+impl HawkInsertPlan {
+    pub fn match_ids(&self) -> Vec<VectorId> {
+        self.plan
+            .links
             .iter()
             .take(1)
             .flat_map(|bottom_layer| bottom_layer.iter())
             .take(self.match_count)
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| *id)
             .collect_vec()
     }
 }
@@ -471,7 +476,7 @@ impl HawkActor {
     pub async fn insert(
         &mut self,
         sessions: &[HawkSession],
-        plans: VecRequests<Option<InsertPlan>>,
+        plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
@@ -489,7 +494,7 @@ impl HawkActor {
     async fn update_anon_stats(
         &mut self,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
@@ -508,17 +513,21 @@ impl HawkActor {
             .collect_vec()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
         let distances = search_results
             .iter() // All requests.
             .flat_map(|rots| rots.iter()) // All rotations.
             .flat_map(|plan| {
-                plan.links.first().into_iter().flat_map(move |neighbors| {
-                    neighbors
-                        .iter()
-                        .take(plan.match_count)
-                        .map(|(_, distance)| distance.clone())
-                })
+                plan.plan
+                    .links
+                    .first()
+                    .into_iter()
+                    .flat_map(move |neighbors| {
+                        neighbors
+                            .iter()
+                            .take(plan.match_count)
+                            .map(|(_, distance)| distance.clone())
+                    })
             });
         tracing::info!(
             "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
@@ -1356,7 +1365,7 @@ impl HawkHandle {
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
-        search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        search_results: BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
         request: &HawkRequest,
