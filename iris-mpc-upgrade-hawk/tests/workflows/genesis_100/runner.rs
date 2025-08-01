@@ -18,13 +18,7 @@ macro_rules! join_all_and_report_errors {
         let results = join_all($futures).await;
         for (idx, result) in results.iter().enumerate() {
             if let Err(e) = result {
-                panic!(
-                    "{}: Error at index {} (line {}): {:?}",
-                    $err_msg,
-                    idx,
-                    line!(),
-                    e
-                );
+                panic!("{}: Error from Node {}: {:?}", $err_msg, idx, e);
             }
         }
         results
@@ -38,9 +32,6 @@ pub struct Test {
 
     /// Test run parameters.
     params: Params,
-
-    /// Node execution results.
-    results: Option<Vec<Result<(), Report>>>,
 }
 
 /// Constructor.
@@ -48,7 +39,6 @@ impl Test {
     pub fn new(params: Params) -> Self {
         Self {
             inputs: None,
-            results: None,
             params,
         }
     }
@@ -91,23 +81,12 @@ impl TestRun for Test {
             })
             .collect();
 
-        // Await futures to complete.
-        self.results = Some(futures::future::join_all(node_futures).await);
+        join_all_and_report_errors!(node_futures, "failed to exec genesis");
 
         Ok(())
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        // Assert node results.
-        for (node_idx, result) in self.results.as_ref().unwrap().iter().enumerate() {
-            match result {
-                Ok(_) => (),
-                Err(err) => {
-                    return Err(TestError::NodeProcessPanicError(node_idx, err.to_string()));
-                }
-            }
-        }
-
         let configs = self.config();
         let db_provider = NetDbProvider::new_from_config(configs).await;
         for db in db_provider.iter() {
