@@ -1,5 +1,5 @@
 use eyre::Result;
-use utils::{constants::SECRET_SHARING_PG_TX_SIZE, TestRun, TestRunContextInfo};
+use utils::{TestRun, TestRunContextInfo};
 
 mod utils;
 mod workflows;
@@ -18,7 +18,7 @@ async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::{Params, Test};
 
     let ctx = TestRunContextInfo::new(100, 1);
-    let params = Params::new(10, 256, 100, false, SECRET_SHARING_PG_TX_SIZE, false);
+    let params = Params::new(10, 256, 100, false, 100, false);
     let mut test = Test::new(params);
 
     test.run(ctx).await?;
