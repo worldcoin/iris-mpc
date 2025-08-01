@@ -1,4 +1,5 @@
 pub mod convertor;
+pub mod defaults;
 pub mod errors;
 pub mod logger;
 pub mod pgres;

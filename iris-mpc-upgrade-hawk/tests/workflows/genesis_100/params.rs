@@ -1,3 +1,4 @@
+use crate::utils::defaults;
 use iris_mpc_common::IrisSerialId;
 
 /// Excapsulates data used to initialise test inputs.
@@ -18,6 +19,12 @@ pub struct TestParams {
     // Batch size when persisting data to pgres stores.
     pgres_tx_batch_size: usize,
 
+    // State of an RNG being used to inject entropy to share creation.
+    shares_generator_rng_state: u64,
+
+    // Size of batches when generating Iris shares for testing purposes.
+    shares_generator_batch_size: usize,
+
     // Flag indicating whether a db backup will be used as initial data source.
     use_db_backup_as_source: bool,
 }
@@ -30,6 +37,8 @@ impl TestParams {
         max_indexation_id: IrisSerialId,
         perform_db_snapshot: bool,
         pgres_tx_batch_size: usize,
+        shares_generator_batch_size: Option<usize>,
+        shares_generator_rng_state: Option<u64>,
         use_db_backup_as_source: bool,
     ) -> Self {
         Self {
@@ -38,6 +47,12 @@ impl TestParams {
             max_indexation_id,
             perform_db_snapshot,
             pgres_tx_batch_size,
+            shares_generator_batch_size: shares_generator_batch_size
+                .ok_or(defaults::SHARES_GENERATOR_BATCH_SIZE)
+                .unwrap(),
+            shares_generator_rng_state: shares_generator_rng_state
+                .ok_or(defaults::SHARES_GENERATOR_RNG_STATE)
+                .unwrap(),
             use_db_backup_as_source,
         }
     }
@@ -63,6 +78,14 @@ impl TestParams {
 
     pub fn pgres_tx_batch_size(&self) -> usize {
         self.pgres_tx_batch_size
+    }
+
+    pub fn shares_generator_batch_size(&self) -> usize {
+        self.shares_generator_batch_size
+    }
+
+    pub fn shares_generator_rng_state(&self) -> u64 {
+        self.shares_generator_rng_state
     }
 
     pub fn use_db_backup_as_source(&self) -> bool {

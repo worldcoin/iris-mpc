@@ -19,7 +19,7 @@ async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::{Test, TestParams};
 
     let ctx = TestRunContextInfo::new(100, 1);
-    let params = TestParams::new(10, 256, 100, false, 100, false);
+    let params = TestParams::new(10, 256, 100, false, 100, None, None, false);
     let mut test = Test::new(params);
 
     test.run(ctx).await?;

@@ -28,16 +28,16 @@ fn get_path_to_resources() -> String {
 ///
 /// # Arguments
 ///
+/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
 ///
 /// # Returns
 ///
 /// An iterator over Iris code pairs.
 ///
 pub fn read_iris_code_pairs(
+    max_indexation_id: usize,
     skip_offset: usize,
-    max_items: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
     // TODO: use strong names for ndjson file.
@@ -54,7 +54,7 @@ pub fn read_iris_code_pairs(
         .skip(skip_offset)
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples()
-        .take(max_items);
+        .take(max_indexation_id);
 
     Ok(stream)
 }
@@ -64,8 +64,8 @@ pub fn read_iris_code_pairs(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
+/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
 ///
 /// # Returns
 ///
@@ -73,10 +73,10 @@ pub fn read_iris_code_pairs(
 ///
 pub fn read_iris_code_pairs_batch(
     batch_size: usize,
+    max_indexation_id: usize,
     skip_offset: usize,
-    max_items: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
-    let stream = read_iris_code_pairs(skip_offset, max_items)
+    let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
         .unwrap()
         .chunks(batch_size);
 
@@ -87,20 +87,20 @@ pub fn read_iris_code_pairs_batch(
 ///
 /// # Arguments
 ///
+/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
 ///
 /// # Returns
 ///
 /// An iterator over Iris shares.
 ///
 pub fn read_iris_shares(
+    max_indexation_id: usize,
     rng_state: u64,
     skip_offset: usize,
-    max_items: usize,
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
-    let stream = read_iris_code_pairs(skip_offset, max_items)
+    let stream = read_iris_code_pairs(max_indexation_id, skip_offset)
         .unwrap()
         .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair)));
 
@@ -112,9 +112,9 @@ pub fn read_iris_shares(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
+/// * `max_indexation_id` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
 ///
 /// # Returns
 ///
@@ -122,11 +122,11 @@ pub fn read_iris_shares(
 ///
 pub fn read_iris_shares_batch(
     batch_size: usize,
+    max_indexation_id: usize,
     rng_state: u64,
     skip_offset: usize,
-    max_items: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
-    let stream = read_iris_shares(rng_state, skip_offset, max_items)
+    let stream = read_iris_shares(max_indexation_id, rng_state, skip_offset)
         .unwrap()
         .chunks(batch_size);
 
@@ -198,23 +198,23 @@ mod tests {
     #[test]
     fn test_read_iris_code_pairs() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (skip_offset, max_items) in [(0, 100), (838, 81)] {
+        for (max_indexation_id, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for _ in read_iris_code_pairs(skip_offset, max_items).unwrap() {
+            for _ in read_iris_code_pairs(max_indexation_id, skip_offset).unwrap() {
                 n_read += 1;
             }
-            assert_eq!(n_read, max_items);
+            assert_eq!(max_indexation_id, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_code_pairs_batch() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (skip_offset, max_items, batch_size, expected_batches) in
-            [(0, 100, 10, 10), (838, 81, 9, 9)]
+        for (batch_size, max_indexation_id, skip_offset, expected_batches) in
+            [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in read_iris_code_pairs_batch(batch_size, skip_offset, max_items)
+            for chunk in read_iris_code_pairs_batch(batch_size, max_indexation_id, skip_offset)
                 .unwrap()
                 .into_iter()
             {
@@ -223,34 +223,40 @@ mod tests {
                 for _ in chunk.into_iter() {
                     n_items += 1;
                 }
-                assert_eq!(n_items, batch_size);
+                assert_eq!(batch_size, n_items);
             }
-            assert_eq!(n_chunks, expected_batches);
+            assert_eq!(expected_batches, n_chunks);
         }
     }
 
     #[test]
     fn test_read_iris_shares() {
-        for (skip_offset, max_items) in [(0, 100), (838, 81)] {
+        for (max_indexation_id, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for shares in read_iris_shares(DEFAULT_RNG_STATE, skip_offset, max_items).unwrap() {
+            for shares in
+                read_iris_shares(max_indexation_id, DEFAULT_RNG_STATE, skip_offset).unwrap()
+            {
                 n_read += 1;
                 assert_eq!(shares.len(), PARTY_COUNT);
             }
-            assert_eq!(n_read, max_items);
+            assert_eq!(max_indexation_id, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_shares_batch() {
-        for (skip_offset, max_items, batch_size, expected_batches) in
-            [(0, 100, 10, 10), (838, 81, 9, 9)]
+        for (batch_size, max_indexation_id, skip_offset, expected_batches) in
+            [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in
-                read_iris_shares_batch(batch_size, DEFAULT_RNG_STATE, skip_offset, max_items)
-                    .unwrap()
-                    .into_iter()
+            for chunk in read_iris_shares_batch(
+                batch_size,
+                max_indexation_id,
+                DEFAULT_RNG_STATE,
+                skip_offset,
+            )
+            .unwrap()
+            .into_iter()
             {
                 n_chunks += 1;
                 let mut n_items = 0;
@@ -258,9 +264,9 @@ mod tests {
                     assert_eq!(item.len(), PARTY_COUNT);
                     n_items += 1;
                 }
-                assert_eq!(n_items, batch_size);
+                assert_eq!(batch_size, n_items);
             }
-            assert_eq!(n_chunks, expected_batches);
+            assert_eq!(expected_batches, n_chunks);
         }
     }
 

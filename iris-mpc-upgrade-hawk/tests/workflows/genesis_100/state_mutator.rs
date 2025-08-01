@@ -13,7 +13,11 @@ use itertools::Itertools;
 /// * `args` - Net args.
 /// * `config` - Net configuration.
 ///
-pub async fn upload_iris_deletions_into_s3(_params: &TestParams, _args: &NetArgs, _config: &NetConfig) {
+pub async fn upload_iris_deletions_into_s3(
+    _params: &TestParams,
+    _args: &NetArgs,
+    _config: &NetConfig,
+) {
     println!("TODO: insert_iris_deletions");
 }
 
@@ -27,11 +31,14 @@ pub async fn upload_iris_deletions_into_s3(_params: &TestParams, _args: &NetArgs
 pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &TestParams) {
     // Set shares batch generator.
     // TODO: move these vars to test params.
-    let max_items = 100;
-    let rng_state = 93;
     let skip_offset = 0;
-    let shares_batch_generator =
-        read_iris_shares_batch(params.batch_size(), rng_state, skip_offset, max_items).unwrap();
+    let shares_batch_generator = read_iris_shares_batch(
+        params.shares_generator_batch_size(),
+        params.max_indexation_id() as usize,
+        params.shares_generator_rng_state(),
+        skip_offset,
+    )
+    .unwrap();
 
     // Set db provider.
     let db_provider = NetDbProvider::new_from_config(config).await;
