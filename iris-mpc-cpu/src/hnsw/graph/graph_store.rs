@@ -222,10 +222,10 @@ impl<V: VectorStore> GraphPg<V> {
         let entry_table = format!("\"{}\".hawk_graph_entry", schema);
         let links_table = format!("\"{}\".hawk_graph_links", schema);
 
-        sqlx::query(&format!("DELETE * FROM {entry_table}"))
+        sqlx::query(&format!("DELETE FROM {entry_table}"))
             .execute(&self.pool)
             .await?;
-        sqlx::query(&format!("DELETE * FROM {links_table}"))
+        sqlx::query(&format!("DELETE FROM {links_table}"))
             .execute(&self.pool)
             .await?;
 

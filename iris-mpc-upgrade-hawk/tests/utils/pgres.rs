@@ -34,10 +34,13 @@ impl NodeDbProvider {
         let gpu_client = PostgresClient::new(
             &config.get_db_url(),
             &config.get_db_schema(config.gpu_schema_name_suffix()),
-            AccessMode::ReadOnly,
+            AccessMode::ReadWrite,
         )
         .await
         .unwrap();
+
+        cpu_client.migrate().await;
+        gpu_client.migrate().await;
 
         Self {
             gpu_iris_store: IrisStore::new(&gpu_client).await.unwrap(),
