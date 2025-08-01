@@ -1,6 +1,6 @@
 use super::{
     constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
-    types::NetConfig,
+    types::HawkConfigs,
 };
 use crate::utils::GaloisRingSharedIrisPair;
 use eyre::Result;
@@ -101,7 +101,7 @@ impl NetDbProvider {
         }
     }
 
-    pub async fn new_from_config(config: &NetConfig) -> Self {
+    pub async fn new_from_config(config: &HawkConfigs) -> Self {
         Self::new(
             NodeDbProvider::new_from_config(&config[PARTY_IDX_0]).await,
             NodeDbProvider::new_from_config(&config[PARTY_IDX_1]).await,

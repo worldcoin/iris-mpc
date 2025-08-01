@@ -1,10 +1,10 @@
 use super::{
     factory,
-    inputs::{Inputs, NetArgs},
+    inputs::{GenesisArgs, Inputs},
     params::Params,
 };
 use crate::utils::{
-    constants::COUNT_OF_PARTIES, resources, s3_client, NetConfig, NetDbProvider, TestError,
+    constants::COUNT_OF_PARTIES, resources, s3_client, HawkConfigs, NetDbProvider, TestError,
     TestRun, TestRunContextInfo,
 };
 use eyre::{Report, Result};
@@ -56,7 +56,7 @@ impl Test {
 
 /// Accessors.
 impl Test {
-    pub fn args(&self) -> &NetArgs {
+    pub fn args(&self) -> &GenesisArgs {
         self.inputs.as_ref().unwrap().args()
     }
 
@@ -64,8 +64,8 @@ impl Test {
         self.inputs.as_ref().unwrap().args_of_node(node_idx).clone()
     }
 
-    pub fn config(&self) -> &NetConfig {
-        self.inputs.as_ref().unwrap().config()
+    pub fn config(&self) -> &HawkConfigs {
+        self.inputs.as_ref().unwrap().configs()
     }
 
     pub fn config_of_node(&self, node_idx: usize) -> NodeConfig {

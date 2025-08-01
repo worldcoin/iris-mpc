@@ -1,20 +1,20 @@
 use super::params::Params;
-use crate::utils::{constants::COUNT_OF_PARTIES, GaloisRingSharedIrisPair, NetConfig};
-use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
-use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
+use crate::utils::{constants::COUNT_OF_PARTIES, GaloisRingSharedIrisPair, HawkConfigs};
+use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_upgrade_hawk::genesis::ExecutionArgs;
 use itertools::{IntoChunks, Itertools};
 
 // Network wide argument set.
-pub type NetArgs = [NodeArgs; COUNT_OF_PARTIES];
+pub type GenesisArgs = [ExecutionArgs; COUNT_OF_PARTIES];
 
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
 pub(super) struct Inputs {
     // Configuration for each node in network.
-    args: NetArgs,
+    args: GenesisArgs,
 
     // Configuration for each node in network.
-    config: NetConfig,
+    configs: HawkConfigs,
 
     // Data used to initialise system state prior to a test run.
     #[allow(dead_code)]
@@ -23,10 +23,14 @@ pub(super) struct Inputs {
 
 /// Constructor.
 impl Inputs {
-    pub fn new(args: NetArgs, config: NetConfig, system_state_inputs: SystemStateInputs) -> Self {
+    pub fn new(
+        args: GenesisArgs,
+        configs: HawkConfigs,
+        system_state_inputs: SystemStateInputs,
+    ) -> Self {
         Self {
             args,
-            config,
+            configs,
             system_state: system_state_inputs,
         }
     }
@@ -34,20 +38,20 @@ impl Inputs {
 
 /// Accessors.
 impl Inputs {
-    pub fn args(&self) -> &NetArgs {
+    pub fn args(&self) -> &GenesisArgs {
         &self.args
     }
 
-    pub fn args_of_node(&self, node_idx: usize) -> &NodeArgs {
+    pub fn args_of_node(&self, node_idx: usize) -> &ExecutionArgs {
         &self.args[node_idx]
     }
 
-    pub fn config(&self) -> &NetConfig {
-        &self.config
+    pub fn configs(&self) -> &HawkConfigs {
+        &self.configs
     }
 
-    pub fn config_of_node(&self, node_idx: usize) -> &NodeConfig {
-        &self.config[node_idx]
+    pub fn config_of_node(&self, node_idx: usize) -> &Config {
+        &self.configs[node_idx]
     }
 
     #[allow(dead_code)]

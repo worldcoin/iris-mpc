@@ -12,4 +12,4 @@ mod types;
 pub use errors::TestError;
 pub use pgres::{NetDbProvider, NodeDbProvider};
 pub use runner::{TestExecutionEnvironment, TestRun, TestRunContextInfo};
-pub use types::{GaloisRingSharedIrisPair, IrisCodePair, NetConfig};
+pub use types::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
