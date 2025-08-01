@@ -122,18 +122,11 @@ impl TestRun for Test {
 
         let db_provider = NetDbProvider::new_from_config(configs).await;
 
-        // configure gpu database
+        // initialize iris and graph stores
         let futs: Vec<_> = itertools::izip!(db_provider.iter(), &shares)
-            .map(|(db, shares)| db.gpu_store.init_iris_db(shares.as_slice()))
+            .map(|(db, shares)| db.init_iris_stores(shares.as_slice()))
             .collect();
-        join_all_and_report_errors!(futs, "failed to init GPU dbs");
-
-        // configure cpu database
-        let futs: Vec<_> = db_provider
-            .iter()
-            .map(|db| db.cpu_store.clear_all_tables())
-            .collect();
-        join_all_and_report_errors!(futs, "failed to init CPU dbs");
+        join_all_and_report_errors!(futs, "failed to init stores");
 
         // clear Iris deletions -> AWS S3.
         for config in configs.iter() {
@@ -152,10 +145,10 @@ impl TestRun for Test {
         let db_provider = NetDbProvider::new_from_config(configs).await;
 
         for db in db_provider.iter() {
-            let num_irises = db.gpu_store.iris_store().count_irises().await?;
+            let num_irises = db.gpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, 100);
 
-            let num_irises = db.cpu_store.iris_store().count_irises().await?;
+            let num_irises = db.cpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, 0);
 
             // todo: make assertion about the graph table?
