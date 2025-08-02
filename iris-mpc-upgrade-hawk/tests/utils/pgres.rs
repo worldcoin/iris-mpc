@@ -115,6 +115,19 @@ impl NodeDbProvider {
         genesis_config: GenesisConfig,
         genesis_args: GenesisArgs,
     ) -> Result<GenesisState> {
+        fn u8_to_mask(input: &[u16]) -> IrisCodeArray {
+            assert_eq!(input.len(), 6400, "invalid length");
+
+            let input_u8: &[u8] =
+                unsafe { std::slice::from_raw_parts(input.as_ptr() as *const u8, input.len() * 2) };
+
+            let mut arr = [0u64; 200];
+            for (i, chunk) in input_u8.chunks_exact(8).enumerate() {
+                arr[i] = u64::from_le_bytes(chunk.try_into().unwrap());
+            }
+            IrisCodeArray(arr)
+        }
+
         fn u8_to_iris(input: &[u16]) -> IrisCodeArray {
             assert_eq!(input.len(), 6400, "invalid length");
 
@@ -179,5 +192,9 @@ impl NetDbProvider {
     /// Returns an iterator over references to the node database providers.
     pub fn iter(&self) -> impl Iterator<Item = &NodeDbProvider> {
         self.nodes.iter()
+    }
+
+    pub fn into_iter(self) -> impl Iterator<Item = NodeDbProvider> {
+        self.nodes.into_iter()
     }
 }

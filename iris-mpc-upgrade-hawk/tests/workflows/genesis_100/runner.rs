@@ -140,20 +140,27 @@ impl TestRun for Test {
     }
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        let shares = resources::read_iris_shares(
-            self.params.rng_state(),
-            0,
-            self.params.max_indexation_id() as usize,
-        )
-        .unwrap();
+        let mut join_set = JoinSet::new();
+        for (db, shares) in itertools::izip!(
+            NetDbProvider::new_from_config(&self.configs)
+                .await
+                .into_iter(),
+            resources::read_iris_shares(
+                self.params.rng_state(),
+                0,
+                self.params.max_indexation_id() as usize,
+            )
+            .unwrap()
+            .into_iter()
+        ) {
+            join_set.spawn(async move {
+                db.init_iris_stores(shares.as_slice()).await.unwrap();
+            });
+        }
 
-        let db_provider = NetDbProvider::new_from_config(&self.configs).await;
-
-        // initialize iris and graph stores
-        let futs: Vec<_> = itertools::izip!(db_provider.iter(), &shares)
-            .map(|(db, shares)| db.init_iris_stores(shares.as_slice()))
-            .collect();
-        join_all_and_report_errors!(futs, "failed to init stores");
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
 
         // clear Iris deletions -> AWS S3.
         for config in self.configs.iter() {
@@ -165,35 +172,71 @@ impl TestRun for Test {
                 .expect("failed to clear iris deletions");
         }
 
+        let mut join_set = JoinSet::new();
+        for config in self.configs.iter().cloned() {
+            join_set.spawn(async move {
+                let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(&config)
+                    .await
+                    .expect("failed to create aws clients");
+                s3_client::clear_s3_iris_deletions(&config, &aws_clients.s3_client)
+                    .await
+                    .expect("failed to clear iris deletions");
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
+
         Ok(())
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
-        let db_provider = NetDbProvider::new_from_config(&self.configs).await;
-        for db in db_provider.iter() {
-            let num_irises = db.gpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
+        let mut join_set = JoinSet::new();
+        for db in NetDbProvider::new_from_config(&self.configs)
+            .await
+            .into_iter()
+        {
+            let max_indexation_id = self.params.max_indexation_id() as usize;
+            join_set.spawn(async move {
+                let num_irises = db.gpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
 
-            let num_irises = db.cpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, 0);
+                let num_irises = db.cpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, 0);
 
-            let num_modifications = db.gpu_iris_store.last_modifications(1).await?;
-            assert_eq!(num_modifications.len(), 0);
+                let num_modifications = db.gpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
 
-            let num_modifications = db.cpu_iris_store.last_modifications(1).await?;
-            assert_eq!(num_modifications.len(), 0);
+                let num_modifications = db.cpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
         }
 
         // Assert localstack.
-        for config in self.configs.iter() {
-            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config).await?;
-            let deletions = get_iris_deletions(
-                config,
-                &aws_clients.s3_client,
-                self.params.max_indexation_id(),
-            )
-            .await?;
-            assert_eq!(deletions.len(), 0);
+
+        let max_indexation_id = self.params.max_indexation_id();
+        let mut join_set = JoinSet::new();
+        for config in self.configs.iter().cloned() {
+            let max_indexation_id = self.params.max_indexation_id();
+            join_set.spawn(async move {
+                let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(&config)
+                    .await
+                    .unwrap();
+                let deletions =
+                    get_iris_deletions(&config, &aws_clients.s3_client, max_indexation_id)
+                        .await
+                        .unwrap();
+                assert_eq!(deletions.len(), 0);
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
         }
 
         Ok(())
