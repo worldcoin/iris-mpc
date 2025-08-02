@@ -1,24 +1,22 @@
-use super::utils::{self, errors::IndexationError};
+use super::utils::{
+    self,
+    aws::{get_s3_bucket_for_iris_deletions, get_s3_key_for_iris_deletions, IrisDeletionsForS3},
+    constants::{
+        STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+    },
+    errors::IndexationError,
+};
 use crate::{hawkers::aby3::aby3_store::Aby3Store, hnsw::graph::graph_store::GraphPg};
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
 use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
 use iris_mpc_store::Store;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt::Debug, sync::Arc};
 
 // Component name for logging purposes.
 const COMPONENT: &str = "State-Accessor";
-
-/// Domain for persistent state store entry for last indexed id
-const STATE_DOMAIN: &str = "genesis";
-
-/// Key for persistent state store entry for last indexed iris id
-const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
-
-/// Key for persistent state store entry for last indexed modification id
-const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
 /// Fetches serial identifiers marked as deleted.
 ///
@@ -37,15 +35,9 @@ pub async fn get_iris_deletions(
     s3_client: &S3_Client,
     max_indexation_id: IrisSerialId,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // Struct for deserialization.
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    struct S3Object {
-        deleted_serial_ids: Vec<IrisSerialId>,
-    }
-
-    // Set bucket and key based on environment
-    let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
-    let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
+    // Set bucket and key based on environment.
+    let s3_bucket = get_s3_bucket_for_iris_deletions(config);
+    let s3_key = get_s3_key_for_iris_deletions(config);
     utils::log_info(
         COMPONENT,
         format!(
@@ -77,8 +69,8 @@ pub async fn get_iris_deletions(
 
     // Decode S3 object bytes.
     let s3_object_bytes = s3_object_body.into_bytes();
-    let S3Object { deleted_serial_ids } =
-        serde_json::from_slice(&s3_object_bytes).map_err(|err| {
+    let IrisDeletionsForS3 { deleted_serial_ids } = serde_json::from_slice(&s3_object_bytes)
+        .map_err(|err| {
             utils::log_error(
                 COMPONENT,
                 format!("Failed to deserialize S3 object: {}", err),

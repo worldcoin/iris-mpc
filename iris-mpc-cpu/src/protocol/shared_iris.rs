@@ -3,6 +3,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::{get_dummy_shares_for_deletion, iris::IrisCode},
     job::IrisQueryBatchEntries,
+    PARTY_COUNT,
 };
 use itertools::izip;
 use rand::{CryptoRng, Rng};
@@ -14,6 +15,12 @@ pub struct GaloisRingSharedIris {
     pub code: GaloisRingIrisCodeShare,
     pub mask: GaloisRingTrimmedMaskCodeShare,
 }
+
+// Pair of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
+
+// Set of pairs of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; PARTY_COUNT];
 
 impl GaloisRingSharedIris {
     /// Empty code and mask share. party_id is 0-based.

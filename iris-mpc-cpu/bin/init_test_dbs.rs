@@ -221,6 +221,7 @@ async fn main() -> Result<()> {
         .map(|x| IrisCode::from(&x.unwrap()))
         .tuples();
     let stream = limited_iterator(stream, num_irises).chunks(SECRET_SHARING_BATCH_SIZE);
+
     for (batch_idx, vectors_batch) in stream.into_iter().enumerate() {
         let vectors_batch: Vec<(_, _)> = vectors_batch.collect();
         n_read += vectors_batch.len();
