@@ -1,6 +1,15 @@
+use std::collections::HashMap;
+
 use super::types::GaloisRingSharedIrisPair;
 use eyre::Result;
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVersionId};
+use iris_mpc_cpu::{
+    genesis::plaintext::{
+        GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState, GenesisState,
+        PersistentState,
+    },
+    hnsw::GraphMem,
+};
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::Itertools;
 
@@ -41,4 +50,28 @@ pub async fn insert_iris_shares(
         start_serial_id as IrisSerialId,
         end_serial_id as IrisSerialId,
     ))
+}
+
+pub fn construct_initial_genesis_state(
+    genesis_config: GenesisConfig,
+    genesis_args: GenesisArgs,
+    input: HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>,
+) -> GenesisState {
+    GenesisState {
+        src_db: GenesisSrcDbState {
+            irises: input,
+            modifications: (),
+        },
+        dst_db: GenesisDstDbState {
+            irises: HashMap::new(),
+            graphs: [GraphMem::new(), GraphMem::new()],
+            persistent_state: PersistentState {
+                last_indexed_iris_id: None,
+                last_indexed_modification_id: None,
+            },
+        },
+        config: genesis_config,
+        args: genesis_args,
+        s3_deletions: Vec::new(),
+    }
 }

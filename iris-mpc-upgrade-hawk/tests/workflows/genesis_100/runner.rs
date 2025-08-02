@@ -4,8 +4,14 @@ use crate::utils::{
     TestExecutionEnvironment, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use futures::future::join_all;
-use iris_mpc_cpu::genesis::get_iris_deletions;
+use futures::{future::join_all, join};
+use iris_mpc_cpu::{
+    execution::hawk_main::StoreId,
+    genesis::{
+        get_iris_deletions,
+        plaintext::{GenesisArgs, GenesisConfig},
+    },
+};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 
 macro_rules! join_all_and_report_errors {
@@ -71,13 +77,61 @@ impl TestRun for Test {
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         let db_provider = NetDbProvider::new_from_config(&self.configs).await;
-        for db in db_provider.iter() {
+        for (db, config) in itertools::izip!(db_provider.iter(), self.configs.iter()) {
+            let num_irises = db.gpu_iris_store.count_irises().await?;
+            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
+
             let num_irises = db.cpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, self.params.max_indexation_id() as usize);
+
+            let num_modifications = db.gpu_iris_store.last_modifications(1).await?;
+            assert_eq!(num_modifications.len(), 0);
+
+            let num_modifications = db.cpu_iris_store.last_modifications(1).await?;
+            assert_eq!(num_modifications.len(), 0);
+
+            // build a graph from non secret shared irises using the same parameters and check
+            // if genesis produced the same output
+            let expected = db
+                .simulate_genesis(
+                    GenesisConfig {
+                        hnsw_M: config.hnsw_param_M,
+                        hnsw_ef_constr: config.hnsw_param_ef_constr,
+                        hnsw_ef_search: config.hnsw_param_ef_search,
+                        hawk_prf_key: Some(self.params.rng_state()),
+                    },
+                    GenesisArgs {
+                        max_indexation_id: self.params.max_indexation_id(),
+                        batch_size: self.params.batch_size(),
+                        batch_size_error_rate: self.params.batch_size_error_rate(),
+                    },
+                )
+                .await?;
+
+            let (graph_left, graph_right) = join!(
+                async {
+                    let mut graph_tx = db.graph_store.tx().await?;
+                    graph_tx
+                        .with_graph(StoreId::Left)
+                        .load_to_mem(db.graph_store.pool(), 8)
+                        .await
+                },
+                async {
+                    let mut graph_tx = db.graph_store.tx().await?;
+                    graph_tx
+                        .with_graph(StoreId::Right)
+                        .load_to_mem(db.graph_store.pool(), 8)
+                        .await
+                }
+            );
+            let graph_left = graph_left.expect("Could not load left graph");
+            let graph_right = graph_right.expect("Could not load right graph");
+
+            assert!(graph_left == expected.dst_db.graphs[0]);
+            assert!(graph_right == expected.dst_db.graphs[1]);
         }
 
-        // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state
-        // TODO
+        // todo: assert persisted_state
 
         Ok(())
     }
@@ -113,7 +167,6 @@ impl TestRun for Test {
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let db_provider = NetDbProvider::new_from_config(&self.configs).await;
-
         for db in db_provider.iter() {
             let num_irises = db.gpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, self.params.max_indexation_id() as usize);
@@ -121,7 +174,11 @@ impl TestRun for Test {
             let num_irises = db.cpu_iris_store.count_irises().await?;
             assert_eq!(num_irises, 0);
 
-            // todo: make assertion about the graph table?
+            let num_modifications = db.gpu_iris_store.last_modifications(1).await?;
+            assert_eq!(num_modifications.len(), 0);
+
+            let num_modifications = db.cpu_iris_store.last_modifications(1).await?;
+            assert_eq!(num_modifications.len(), 0);
         }
 
         // Assert localstack.

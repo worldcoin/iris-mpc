@@ -1,23 +1,28 @@
+use std::collections::HashMap;
+
 use super::{
     constants::{COUNT_OF_PARTIES, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
     types::HawkConfigs,
 };
-use crate::utils::GaloisRingSharedIrisPair;
+use crate::utils::{store::construct_initial_genesis_state, GaloisRingSharedIrisPair};
 use eyre::Result;
+use futures::StreamExt;
 use iris_mpc_common::{
     config::Config as NodeConfig,
+    iris_db::iris::{IrisCode, IrisCodeArray},
     postgres::{AccessMode, PostgresClient},
 };
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
+    genesis::plaintext::{run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisState},
+    hawkers::plaintext_store::PlaintextStore,
+    hnsw::graph::graph_store::GraphPg as GraphStore,
 };
-use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{DbStoredIris, Store as IrisStore, StoredIrisRef};
 
 /// Encapsulates API pointers to a database.
 pub struct NodeDbProvider {
     pub gpu_iris_store: IrisStore,
     pub cpu_iris_store: IrisStore,
-    // todo: wrap this in a BothEyes
     pub graph_store: GraphStore<PlaintextStore>,
 }
 
@@ -103,6 +108,49 @@ impl NodeDbProvider {
         self.clear_all_tables().await?;
         self.insert_gpu_iris_store(shares).await?;
         Ok(())
+    }
+
+    pub async fn simulate_genesis(
+        &self,
+        genesis_config: GenesisConfig,
+        genesis_args: GenesisArgs,
+    ) -> Result<GenesisState> {
+        fn u8_to_iris(input: &[u16]) -> IrisCodeArray {
+            assert_eq!(input.len(), 6400, "invalid length");
+
+            let input_u8: &[u8] =
+                unsafe { std::slice::from_raw_parts(input.as_ptr() as *const u8, input.len() * 2) };
+
+            let mut arr = [0u64; 200];
+            for (i, chunk) in input_u8.chunks_exact(8).enumerate() {
+                arr[i] = u64::from_le_bytes(chunk.try_into().unwrap());
+            }
+            IrisCodeArray(arr)
+        }
+
+        let mut input = HashMap::new();
+        let mut stream = self.cpu_iris_store.stream_irises().await;
+        while let Some(iris) = stream.next().await {
+            let iris: DbStoredIris = iris?;
+            input.insert(
+                iris.id() as u32,
+                (
+                    iris.version_id(),
+                    IrisCode {
+                        code: u8_to_iris(iris.left_code()),
+                        mask: u8_to_iris(iris.left_mask()),
+                    },
+                    IrisCode {
+                        code: u8_to_iris(iris.right_code()),
+                        mask: u8_to_iris(iris.right_mask()),
+                    },
+                ),
+            );
+        }
+
+        let genesis_state = construct_initial_genesis_state(genesis_config, genesis_args, input);
+        let r = run_plaintext_genesis(genesis_state).await?;
+        Ok(r)
     }
 }
 
