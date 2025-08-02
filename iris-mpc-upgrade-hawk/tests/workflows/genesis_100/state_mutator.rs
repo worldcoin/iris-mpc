@@ -11,15 +11,10 @@ use iris_mpc_common::config::NetConfig;
 ///
 /// # Arguments
 ///
+/// * `net_config` - Network wide configuration.
 /// * `params` - Test parameters.
-/// * `args` - Net args.
-/// * `config` - Net configuration.
 ///
-pub async fn upload_iris_deletions(
-    _params: &TestParams,
-    _args: &NetArgs,
-    _config: &NetConfig,
-) -> Result<()> {
+pub async fn upload_iris_deletions(_net_config: &NetConfig, _params: &TestParams) -> Result<()> {
     println!("TODO: insert_iris_deletions");
 
     Ok(())
@@ -29,11 +24,11 @@ pub async fn upload_iris_deletions(
 ///
 /// # Arguments
 ///
-/// * `config` - Net configuration.
+/// * `net_config` - Network wide configuration.
 /// * `params` - Test parameters.
 ///
 pub async fn insert_iris_shares_into_gpu_stores(
-    config: &NetConfig,
+    net_config: &NetConfig,
     params: &TestParams,
 ) -> Result<()> {
     // Set shares batch generator.
@@ -46,7 +41,7 @@ pub async fn insert_iris_shares_into_gpu_stores(
 
     // Iterate over batches and insert into GPU store.
     // TODO: process serial id ranges.
-    let db_provider = NetDbProvider::new_from_config(config).await;
+    let db_provider = NetDbProvider::new_from_config(net_config).await;
     let tx_batch_size = params.shares_pgres_tx_batch_size();
     let _ = system_state::insert_iris_shares(&batch_generator, &db_provider, tx_batch_size)
         .await

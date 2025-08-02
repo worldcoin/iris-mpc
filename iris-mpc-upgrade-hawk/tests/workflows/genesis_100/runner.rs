@@ -92,12 +92,15 @@ impl TestRun for Test {
         // Set inputs.
         self.inputs = Some(TestInputs::from(self.params));
 
-        // Set system state.
-        // ... insert Iris shares -> GPU dB.
-        state_mutator::insert_iris_shares_into_gpu_stores(self.net_config(), self.params()).await;
+        // Insert Iris shares -> GPU dB.
+        state_mutator::insert_iris_shares_into_gpu_stores(self.net_config(), self.params())
+            .await
+            .unwrap();
 
-        // ... insert Iris deletions -> AWS S3.
-        // state_mutator::insert_iris_deletions(self.params(), self.args(), self.config()).await;
+        // Upload Iris deletions -> AWS S3.
+        state_mutator::upload_iris_deletions(self.net_config(), self.params())
+            .await
+            .unwrap();
 
         Ok(())
     }

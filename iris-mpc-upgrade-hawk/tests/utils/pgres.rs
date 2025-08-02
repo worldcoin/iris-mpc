@@ -30,6 +30,7 @@ impl DbConnectionInfo {
         }
     }
 
+    #[allow(dead_code)]
     pub fn new_read_only(config: &NodeConfig, schema_suffix: &String) -> Self {
         Self::new(config, schema_suffix, AccessMode::ReadOnly)
     }
@@ -57,6 +58,7 @@ impl DbConnectionInfo {
 /// Encapsulates API pointers to a database.
 pub struct NodeDbContext {
     /// Pointer to HNSW Graph store API.
+    #[allow(dead_code)]
     graph_store: GraphStore<PlaintextStore>,
 
     /// Pointer to Iris store API.
@@ -83,6 +85,7 @@ impl NodeDbContext {
 
 /// Accessors.
 impl NodeDbContext {
+    #[allow(dead_code)]
     pub fn graph_store(&self) -> &GraphStore<PlaintextStore> {
         &self.graph_store
     }
@@ -95,6 +98,7 @@ impl NodeDbContext {
 /// Encapsulates API pointers to a database.
 pub struct NodeDbProvider {
     /// Pointer to HNSW Graph store API.
+    #[allow(dead_code)]
     cpu_store: NodeDbContext,
 
     /// Pointer to Iris store API.
@@ -132,6 +136,7 @@ impl NodeDbProvider {
 
 /// Accessors.
 impl NodeDbProvider {
+    #[allow(dead_code)]
     pub fn cpu_store(&self) -> &NodeDbContext {
         &self.cpu_store
     }

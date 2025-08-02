@@ -38,6 +38,7 @@ impl TestInputs {
 
 /// Accessors.
 impl TestInputs {
+    #[allow(dead_code)]
     pub fn net_args(&self) -> &NetArgs {
         &self.net_args
     }
@@ -72,6 +73,7 @@ pub struct SystemStateInputs {
     modification_identifiers: Vec<i64>,
 
     // Test parameters.
+    #[allow(dead_code)]
     params: TestParams,
 }
 
@@ -97,6 +99,7 @@ impl SystemStateInputs {
 
 /// Methods.
 impl SystemStateInputs {
+    #[allow(dead_code)]
     pub fn iris_shares_stream(
         &self,
     ) -> IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>> {

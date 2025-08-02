@@ -4,7 +4,6 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum TestError {
     #[error("Node process panic: Node={0} :: Error={1}")]
-    #[allow(dead_code)]
     NodePanicError(usize, String),
 
     #[error("A test setup error occurred: {0}")]
