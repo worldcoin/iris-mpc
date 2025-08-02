@@ -16,6 +16,7 @@ use iris_mpc_cpu::{
     genesis::plaintext::{run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisState},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::graph_store::GraphPg as GraphStore,
+    protocol::shared_iris::GaloisRingSharedIris,
 };
 use iris_mpc_store::{DbStoredIris, Store as IrisStore, StoredIrisRef};
 
@@ -115,47 +116,33 @@ impl NodeDbProvider {
         genesis_config: GenesisConfig,
         genesis_args: GenesisArgs,
     ) -> Result<GenesisState> {
-        fn u8_to_mask(input: &[u16]) -> IrisCodeArray {
-            assert_eq!(input.len(), 6400, "invalid length");
-
-            let input_u8: &[u8] =
-                unsafe { std::slice::from_raw_parts(input.as_ptr() as *const u8, input.len() * 2) };
-
-            let mut arr = [0u64; 200];
-            for (i, chunk) in input_u8.chunks_exact(8).enumerate() {
-                arr[i] = u64::from_le_bytes(chunk.try_into().unwrap());
-            }
-            IrisCodeArray(arr)
-        }
-
-        fn u8_to_iris(input: &[u16]) -> IrisCodeArray {
-            assert_eq!(input.len(), 6400, "invalid length");
-
-            let input_u8: &[u8] =
-                unsafe { std::slice::from_raw_parts(input.as_ptr() as *const u8, input.len() * 2) };
-
-            let mut arr = [0u64; 200];
-            for (i, chunk) in input_u8.chunks_exact(8).enumerate() {
-                arr[i] = u64::from_le_bytes(chunk.try_into().unwrap());
-            }
-            IrisCodeArray(arr)
-        }
-
         let mut input = HashMap::new();
         let mut stream = self.cpu_iris_store.stream_irises().await;
         while let Some(iris) = stream.next().await {
             let iris: DbStoredIris = iris?;
+            let left_iris = GaloisRingSharedIris::try_from_buffers_inner(
+                0,
+                iris.left_code(),
+                iris.left_mask(),
+            )?;
+
+            let right_iris = GaloisRingSharedIris::try_from_buffers_inner(
+                0,
+                iris.right_code(),
+                iris.right_mask(),
+            )?;
+
             input.insert(
                 iris.id() as u32,
                 (
                     iris.version_id(),
                     IrisCode {
-                        code: u8_to_iris(iris.left_code()),
-                        mask: u8_to_iris(iris.left_mask()),
+                        code: IrisCodeArray(left_iris.code.coefs),
+                        mask: IrisCodeArray(left_iris.mask.coefs),
                     },
                     IrisCode {
-                        code: u8_to_iris(iris.right_code()),
-                        mask: u8_to_iris(iris.right_mask()),
+                        code: IrisCodeArray(right_iris.code.coefs),
+                        mask: IrisCodeArray(right_iris.mask.coefs),
                     },
                 ),
             );
