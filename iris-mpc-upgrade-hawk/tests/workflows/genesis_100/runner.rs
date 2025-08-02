@@ -1,31 +1,21 @@
+use std::sync::Arc;
+
 use super::params::Params;
 use crate::utils::{
     constants::COUNT_OF_PARTIES, resources, s3_client, HawkConfigs, NetDbProvider, TestError,
     TestExecutionEnvironment, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use futures::{future::join_all, join};
+use futures::join;
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     genesis::{
         get_iris_deletions,
-        plaintext::{GenesisArgs, GenesisConfig},
+        plaintext::{GenesisArgs, GenesisConfig, GenesisState},
     },
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
-
-macro_rules! join_all_and_report_errors {
-    ($futures:expr, $err_msg:expr) => {{
-        let results = join_all($futures).await;
-        for (idx, result) in results.iter().enumerate() {
-            if let Err(e) = result {
-                panic!("{}: Error from Node {}: {:?}", $err_msg, idx, e);
-            }
-        }
-        results
-    }};
-}
 
 /// HNSW Genesis test.
 pub struct Test {
@@ -80,22 +70,11 @@ impl TestRun for Test {
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         let db_provider = NetDbProvider::new_from_config(&self.configs).await;
-        for (db, config) in itertools::izip!(db_provider.iter(), self.configs.iter()) {
-            let num_irises = db.gpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
 
-            let num_irises = db.cpu_iris_store.count_irises().await?;
-            assert_eq!(num_irises, self.params.max_indexation_id() as usize);
-
-            let num_modifications = db.gpu_iris_store.last_modifications(1).await?;
-            assert_eq!(num_modifications.len(), 0);
-
-            let num_modifications = db.cpu_iris_store.last_modifications(1).await?;
-            assert_eq!(num_modifications.len(), 0);
-
-            // build a graph from non secret shared irises using the same parameters and check
-            // if genesis produced the same output
-            let expected = db
+        let expected: Arc<GenesisState> = {
+            let db = db_provider.iter().next().unwrap();
+            let config = &self.configs[0];
+            let r = db
                 .simulate_genesis(
                     GenesisConfig {
                         hnsw_M: config.hnsw_param_M,
@@ -109,32 +88,57 @@ impl TestRun for Test {
                         batch_size_error_rate: self.params.batch_size_error_rate(),
                     },
                 )
-                .await?;
+                .await
+                .unwrap();
+            Arc::new(r)
+        };
 
-            let (graph_left, graph_right) = join!(
-                async {
-                    let mut graph_tx = db.graph_store.tx().await?;
-                    graph_tx
-                        .with_graph(StoreId::Left)
-                        .load_to_mem(db.graph_store.pool(), 8)
-                        .await
-                },
-                async {
-                    let mut graph_tx = db.graph_store.tx().await?;
-                    graph_tx
-                        .with_graph(StoreId::Right)
-                        .load_to_mem(db.graph_store.pool(), 8)
-                        .await
-                }
-            );
-            let graph_left = graph_left.expect("Could not load left graph");
-            let graph_right = graph_right.expect("Could not load right graph");
+        let mut join_set = JoinSet::new();
+        for db in db_provider.into_iter() {
+            let expected = expected.clone();
+            let max_indexation_id = self.params.max_indexation_id() as usize;
+            join_set.spawn(async move {
+                let num_irises = db.gpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
 
-            assert!(graph_left == expected.dst_db.graphs[0]);
-            assert!(graph_right == expected.dst_db.graphs[1]);
+                let num_irises = db.cpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
+
+                let num_modifications = db.gpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                let num_modifications = db.cpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                let (graph_left, graph_right) = join!(
+                    async {
+                        let mut graph_tx = db.graph_store.tx().await.unwrap();
+                        graph_tx
+                            .with_graph(StoreId::Left)
+                            .load_to_mem(db.graph_store.pool(), 8)
+                            .await
+                    },
+                    async {
+                        let mut graph_tx = db.graph_store.tx().await.unwrap();
+                        graph_tx
+                            .with_graph(StoreId::Right)
+                            .load_to_mem(db.graph_store.pool(), 8)
+                            .await
+                    }
+                );
+                let graph_left = graph_left.expect("Could not load left graph");
+                let graph_right = graph_right.expect("Could not load right graph");
+
+                assert!(graph_left == expected.dst_db.graphs[0]);
+                assert!(graph_right == expected.dst_db.graphs[1]);
+
+                // todo: assert persisted_state
+            });
         }
 
-        // todo: assert persisted_state
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
 
         Ok(())
     }
@@ -160,16 +164,6 @@ impl TestRun for Test {
 
         while let Some(r) = join_set.join_next().await {
             r.unwrap();
-        }
-
-        // clear Iris deletions -> AWS S3.
-        for config in self.configs.iter() {
-            let aws_clients = iris_mpc::services::aws::clients::AwsClients::new(config)
-                .await
-                .expect("failed to create aws clients");
-            s3_client::clear_s3_iris_deletions(config, &aws_clients.s3_client)
-                .await
-                .expect("failed to clear iris deletions");
         }
 
         let mut join_set = JoinSet::new();
@@ -219,7 +213,6 @@ impl TestRun for Test {
 
         // Assert localstack.
 
-        let max_indexation_id = self.params.max_indexation_id();
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
             let max_indexation_id = self.params.max_indexation_id();
