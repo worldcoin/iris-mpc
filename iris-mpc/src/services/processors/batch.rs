@@ -714,17 +714,17 @@ impl<'a> BatchProcessor<'a> {
 
             match result {
                 Ok((share_left, share_right)) => {
-                    self.batch_query.valid_entries.push(true);
-                    self.add_shares_to_batch_query(share_left, share_right);
+                    self.batch_query
+                        .push_matching_request_shares(share_left, share_right, true);
                 }
                 Err(e) => {
                     tracing::error!("Failed to process iris shares: {:?}", e);
                     self.handle_share_processing_error(index).await?;
 
                     // Create dummy shares for invalid entry
-                    let ((dummy_left, dummy_right), valid) = self.create_dummy_shares();
-                    self.batch_query.valid_entries.push(valid);
-                    self.add_shares_to_batch_query(dummy_left, dummy_right);
+                    let (dummy_left, dummy_right) = self.create_dummy_shares();
+                    self.batch_query
+                        .push_matching_request_shares(dummy_left, dummy_right, false);
                 }
             }
         }
@@ -867,7 +867,7 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
-    fn create_dummy_shares(&self) -> ((GaloisShares, GaloisShares), bool) {
+    fn create_dummy_shares(&self) -> (GaloisShares, GaloisShares) {
         let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(self.party_id);
         let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(self.party_id);
 
@@ -882,76 +882,7 @@ impl<'a> BatchProcessor<'a> {
             mask_mirrored: dummy_mask_share.all_rotations(),
         };
 
-        ((dummy.clone(), dummy), false)
-    }
-
-    fn add_shares_to_batch_query(&mut self, share_left: GaloisShares, share_right: GaloisShares) {
-        self.batch_query
-            .left_iris_requests
-            .code
-            .push(share_left.code);
-        self.batch_query
-            .left_iris_requests
-            .mask
-            .push(share_left.mask);
-        self.batch_query
-            .left_iris_rotated_requests
-            .code
-            .extend(share_left.code_rotated);
-        self.batch_query
-            .left_iris_rotated_requests
-            .mask
-            .extend(share_left.mask_rotated);
-        self.batch_query
-            .left_iris_interpolated_requests
-            .code
-            .extend(share_left.code_interpolated);
-        self.batch_query
-            .left_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_interpolated);
-
-        self.batch_query
-            .right_iris_requests
-            .code
-            .push(share_right.code);
-        self.batch_query
-            .right_iris_requests
-            .mask
-            .push(share_right.mask);
-        self.batch_query
-            .right_iris_rotated_requests
-            .code
-            .extend(share_right.code_rotated);
-        self.batch_query
-            .right_iris_rotated_requests
-            .mask
-            .extend(share_right.mask_rotated);
-        self.batch_query
-            .right_iris_interpolated_requests
-            .code
-            .extend(share_right.code_interpolated);
-        self.batch_query
-            .right_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_interpolated);
-
-        self.batch_query
-            .left_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_left.code_mirrored);
-        self.batch_query
-            .left_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_mirrored);
-        self.batch_query
-            .right_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_right.code_mirrored);
-        self.batch_query
-            .right_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_mirrored);
+        (dummy.clone(), dummy)
     }
 }
 
