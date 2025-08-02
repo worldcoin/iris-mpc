@@ -62,16 +62,16 @@ impl Test {
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        // Set node process futures.
-        let node_futures: Vec<_> = self
-            .configs
-            .iter()
-            .cloned()
-            .map(|config| exec_genesis(self.genesis_args.clone(), config))
-            .collect();
+        // these need to be on separate tasks
+        let mut handles = vec![];
+        for config in &self.configs {
+            let config = config.clone();
+            let genesis_args = self.genesis_args.clone();
+            let handle = tokio::spawn(async move { exec_genesis(genesis_args, config).await });
+            handles.push(handle);
+        }
 
-        join_all_and_report_errors!(node_futures, "failed to exec genesis");
-
+        join_all_and_report_errors!(handles, "failed to exec genesis");
         Ok(())
     }
 
