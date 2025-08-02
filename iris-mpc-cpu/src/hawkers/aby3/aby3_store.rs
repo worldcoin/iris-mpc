@@ -240,6 +240,14 @@ impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(&query.iris).await
     }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, &query.iris).await)
+    }
 }
 
 #[cfg(test)]

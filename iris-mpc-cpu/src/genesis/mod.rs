@@ -1,6 +1,7 @@
 mod batch_generator;
 mod hawk_handle;
 mod hawk_job;
+pub mod plaintext;
 pub mod state_accessor;
 pub mod state_mutator;
 pub mod state_sync;
