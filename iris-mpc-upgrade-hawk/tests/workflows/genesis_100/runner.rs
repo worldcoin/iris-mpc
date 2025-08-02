@@ -7,6 +7,7 @@ use crate::utils::{
 };
 use eyre::Result;
 use futures::join;
+use futures::StreamExt;
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     genesis::{
@@ -14,6 +15,7 @@ use iris_mpc_cpu::{
         plaintext::{GenesisArgs, GenesisConfig, GenesisState},
     },
 };
+use iris_mpc_store::DbStoredIris;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
 
@@ -79,7 +81,7 @@ impl TestRun for Test {
         let db_provider = NetDbProvider::new_from_config(&self.configs).await;
 
         let mut join_set = JoinSet::new();
-        for (cpu_iris_shares, db, config) in itertools::izip!(
+        for (expected_iris_shares, db, config) in itertools::izip!(
             cpu_iris_shares.into_iter(),
             db_provider.into_iter(),
             self.configs.iter().cloned()
@@ -99,7 +101,15 @@ impl TestRun for Test {
                 let num_modifications = db.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                // todo: compare db.cpu_iris_store to cpu_iris_shares
+                let mut iris_stream = db.cpu_iris_store.stream_irises().await.unwrap();
+                for expected_pair in &expected_iris_shares {
+                    let db_iris: DbStoredIris = iris_stream
+                        .next()
+                        .await
+                        .expect("stream ended early")
+                        .expect("failed to get share");
+                    // TODO: convert from DbStoredIris to GaloisRingSharedIris and compare
+                }
 
                 // build a graph from the secret shared irises
                 let expected = db
