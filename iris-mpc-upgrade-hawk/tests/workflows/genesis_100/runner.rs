@@ -13,6 +13,7 @@ use iris_mpc_cpu::{
     },
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
+use tokio::task::JoinSet;
 
 macro_rules! join_all_and_report_errors {
     ($futures:expr, $err_msg:expr) => {{
@@ -63,15 +64,17 @@ impl Test {
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
-        let mut handles = vec![];
+        let mut join_set = JoinSet::new();
         for config in &self.configs {
             let config = config.clone();
             let genesis_args = self.genesis_args.clone();
-            let handle = tokio::spawn(async move { exec_genesis(genesis_args, config).await });
-            handles.push(handle);
+            join_set.spawn(async move { exec_genesis(genesis_args, config).await });
         }
 
-        join_all_and_report_errors!(handles, "failed to exec genesis");
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap()?;
+        }
+
         Ok(())
     }
 
