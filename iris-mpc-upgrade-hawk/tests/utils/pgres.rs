@@ -111,13 +111,17 @@ impl NodeDbProvider {
     }
 
     pub async fn new_from_config(config: &NodeConfig) -> Self {
+        // TODO:
+        // Ensure gpu store is readonly also as this is the case in PROD.
+        // There is an issue when running against a fresh dB as the migration
+        // is not being executed if AccessMode=ReadOnly.
         Self::new(
             NodeDbContext::new(DbConnectionInfo::new_read_write(
                 config,
                 config.hnsw_schema_name_suffix(),
             ))
             .await,
-            NodeDbContext::new(DbConnectionInfo::new_read_only(
+            NodeDbContext::new(DbConnectionInfo::new_read_write(
                 config,
                 config.gpu_schema_name_suffix(),
             ))

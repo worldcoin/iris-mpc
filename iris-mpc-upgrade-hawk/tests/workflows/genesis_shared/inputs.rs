@@ -63,9 +63,13 @@ impl TestInputs {
 /// Inputs required to initialise system state prior to a test run.
 #[derive(Debug, Clone)]
 pub struct SystemStateInputs {
-    // Serial identifiers of deleted Iris's.
+    // Set of serial identifiers associated with deleted Iris's.
     #[allow(dead_code)]
-    iris_deletions: Vec<IrisSerialId>,
+    deletions_identifiers: Vec<IrisSerialId>,
+
+    // Set of modifications identifiers associated with modified Iris's.
+    #[allow(dead_code)]
+    modification_identifiers: Vec<i64>,
 
     // Test parameters.
     params: TestParams,
@@ -74,9 +78,10 @@ pub struct SystemStateInputs {
 /// Constructor.
 impl SystemStateInputs {
     #[allow(dead_code)]
-    pub fn new(params: TestParams, iris_deletions: Vec<IrisSerialId>) -> Self {
+    pub fn new(params: TestParams, deletions: Vec<IrisSerialId>, modifications: Vec<i64>) -> Self {
         Self {
-            iris_deletions,
+            deletions_identifiers: deletions,
+            modification_identifiers: modifications,
             params,
         }
     }
@@ -86,7 +91,7 @@ impl SystemStateInputs {
 impl SystemStateInputs {
     #[allow(dead_code)]
     pub fn iris_deletions(&self) -> &Vec<IrisSerialId> {
-        &self.iris_deletions
+        &self.deletions_identifiers
     }
 }
 

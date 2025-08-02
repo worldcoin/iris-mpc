@@ -55,16 +55,18 @@ impl Test {
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        // Set node process futures.
-        let node_futures: Vec<_> = PARTY_IDX_SET
-            .into_iter()
-            .map(|node_idx: PartyIdx| {
-                exec_genesis(self.node_args(node_idx), self.node_config(node_idx))
-            })
-            .collect();
-
-        // Await futures to complete.
-        self.results = Some(futures::future::join_all(node_futures).await);
+        // Spawn node process futures & await.
+        self.results = Some(
+            futures::future::join_all(
+                PARTY_IDX_SET
+                    .into_iter()
+                    .map(|node_idx: PartyIdx| {
+                        exec_genesis(self.node_args(node_idx), self.node_config(node_idx))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .await,
+        );
 
         Ok(())
     }

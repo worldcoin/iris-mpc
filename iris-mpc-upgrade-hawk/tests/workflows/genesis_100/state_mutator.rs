@@ -1,11 +1,11 @@
 use crate::system_state;
 use crate::{
-    utils::{pgres::NetDbProvider, resources::read_iris_shares_batch},
+    resources::read_iris_shares_batch,
+    utils::pgres::NetDbProvider,
     workflows::genesis_shared::{net::NetArgs, params::TestParams},
 };
-use iris_mpc_common::{config::NetConfig, PARTY_IDX_SET};
-use iris_mpc_cpu::genesis::state_mutator::insert_iris_deletions;
-use itertools::Itertools;
+use eyre::Result;
+use iris_mpc_common::config::NetConfig;
 
 /// Inserts Iris deletions into AWS S3 bucket.
 ///
@@ -15,47 +15,44 @@ use itertools::Itertools;
 /// * `args` - Net args.
 /// * `config` - Net configuration.
 ///
-pub async fn upload_iris_deletions_into_s3(
+pub async fn upload_iris_deletions(
     _params: &TestParams,
     _args: &NetArgs,
     _config: &NetConfig,
-) {
+) -> Result<()> {
     println!("TODO: insert_iris_deletions");
+
+    Ok(())
 }
 
 /// Inserts Iris shares into GPU store.
 ///
 /// # Arguments
 ///
-/// * `params` - Test parameters.
 /// * `config` - Net configuration.
+/// * `params` - Test parameters.
 ///
-pub async fn insert_iris_shares_into_gpu_stores(config: &NetConfig, params: &TestParams) {
+pub async fn insert_iris_shares_into_gpu_stores(
+    config: &NetConfig,
+    params: &TestParams,
+) -> Result<()> {
     // Set shares batch generator.
-    // TODO: move these vars to test params.
+    let batch_size = params.shares_generator_batch_size();
+    let read_maximum = params.max_indexation_id() as usize;
+    let rng_state = params.shares_generator_rng_state();
     let skip_offset = 0;
-    let shares_batch_generator = read_iris_shares_batch(
-        params.shares_generator_batch_size(),
-        params.max_indexation_id() as usize,
-        params.shares_generator_rng_state(),
-        skip_offset,
-    )
-    .unwrap();
+    let batch_generator =
+        read_iris_shares_batch(batch_size, read_maximum, rng_state, skip_offset).unwrap();
 
-    // Set db provider.
+    // Iterate over batches and insert into GPU store.
+    // TODO: process serial id ranges.
     let db_provider = NetDbProvider::new_from_config(config).await;
+    let tx_batch_size = params.shares_pgres_tx_batch_size();
+    let _ = system_state::insert_iris_shares(&batch_generator, &db_provider, tx_batch_size)
+        .await
+        .unwrap();
 
-    // Iterate over batches by party and insert into GPU store.
-    for chunk in shares_batch_generator.into_iter() {
-        let shares = chunk.into_iter().map(|x| x.to_vec()).collect_vec();
-        for party_idx in PARTY_IDX_SET {
-            let (_start_serial_id, _end_serial_id) = system_state::insert_iris_shares(
-                db_provider.of_node(party_idx).gpu_store().iris_store(),
-                params.shares_pgres_tx_batch_size(),
-                shares.iter().map(|i| i[party_idx].to_owned()).collect_vec(),
-            )
-            .await
-            .unwrap();
-        }
-    }
+    // TODO: process serial id ranges.
+
+    Ok(())
 }

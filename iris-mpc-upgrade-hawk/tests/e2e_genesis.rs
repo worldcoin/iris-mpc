@@ -1,6 +1,7 @@
 use eyre::Result;
 use utils::{TestRun, TestRunContextInfo};
 
+mod resources;
 mod system_state;
 mod utils;
 mod workflows;
@@ -22,7 +23,6 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 
     fn get_params() -> TestParams {
         // Node arguments ... common across all nodes.
-        // TODO: move to static resources (JSON | TOML).
         let batch_size = 0;
         let batch_size_error_rate = 256;
         let max_indexation_id = 100;
@@ -32,8 +32,9 @@ async fn test_hnsw_genesis_100() -> Result<()> {
         // Node config files.
         let node_config_idx = 0;
 
-        // Test setup parameters.
-        // TODO: decide if these are constants, if not then move to resources.
+        // System state setup parameters.
+        let max_deletions = None;
+        let max_modifications = None;
         let shares_generator_batch_size = defaults::SHARES_GENERATOR_BATCH_SIZE;
         let shares_generator_rng_state = defaults::SHARES_GENERATOR_RNG_STATE;
         let shares_pgres_tx_batch_size = defaults::SHARES_GENERATOR_PGRES_TX_BATCH_SIZE;
@@ -41,7 +42,9 @@ async fn test_hnsw_genesis_100() -> Result<()> {
         TestParams::new(
             batch_size,
             batch_size_error_rate,
+            max_deletions,
             max_indexation_id,
+            max_modifications,
             perform_db_snapshot,
             use_db_backup_as_source,
             node_config_idx,

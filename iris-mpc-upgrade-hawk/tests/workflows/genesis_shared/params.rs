@@ -1,4 +1,4 @@
-use crate::utils::resources::NODE_CONFIG_KIND_GENESIS;
+use crate::resources::NODE_CONFIG_KIND_GENESIS;
 use iris_mpc_common::IrisSerialId;
 
 /// Excapsulates data used to initialise test inputs.
@@ -10,8 +10,14 @@ pub struct TestParams {
     // Error rate to be applied when calculating dynamic batch sizes.
     batch_size_error_rate: usize,
 
+    // Maximum number of Ieis deletions to load into memory.
+    max_deletions: Option<usize>,
+
     // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
+
+    // Maximum number of Iris modifications to load into memory.
+    max_modifications: Option<usize>,
 
     // Ordinal identifier of node config file to read from test resources.
     node_config_idx: usize,
@@ -37,7 +43,9 @@ impl TestParams {
     pub fn new(
         batch_size: usize,
         batch_size_error_rate: usize,
+        max_deletions: Option<usize>,
         max_indexation_id: IrisSerialId,
+        max_modifications: Option<usize>,
         perform_db_snapshot: bool,
         use_db_backup_as_source: bool,
         node_config_idx: usize,
@@ -48,7 +56,9 @@ impl TestParams {
         Self {
             batch_size,
             batch_size_error_rate,
+            max_deletions,
             max_indexation_id,
+            max_modifications,
             node_config_idx,
             perform_db_snapshot,
             use_db_backup_as_source,
@@ -69,8 +79,16 @@ impl TestParams {
         self.batch_size_error_rate
     }
 
+    pub fn max_deletions(&self) -> Option<usize> {
+        self.max_deletions
+    }
+
     pub fn max_indexation_id(&self) -> IrisSerialId {
         self.max_indexation_id
+    }
+
+    pub fn max_modifications(&self) -> Option<usize> {
+        self.max_modifications
     }
 
     pub fn node_config_idx(&self) -> usize {

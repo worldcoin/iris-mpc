@@ -1,5 +1,5 @@
 use crate::{
-    utils::resources,
+    resources,
     workflows::genesis_shared::{
         inputs::{SystemStateInputs, TestInputs},
         net::NetArgs,
@@ -63,6 +63,18 @@ impl From<TestParams> for TestInputs {
 /// Convertor: TestParams -> SystemStateInputs.
 impl From<TestParams> for SystemStateInputs {
     fn from(params: TestParams) -> Self {
-        SystemStateInputs::new(params, vec![])
+        let deletions = match params.max_deletions() {
+            Some(max) => resources::read_iris_deletions(max, 0).unwrap(),
+            None => vec![],
+        };
+
+        // TODO: elaborate upon this ... probably the resource loader will
+        // return either a stream or a Vec of actual modifications.
+        let modifications = match params.max_modifications() {
+            Some(max) => resources::read_iris_modifications(max, 0).unwrap(),
+            None => vec![],
+        };
+
+        SystemStateInputs::new(params, deletions, modifications)
     }
 }
