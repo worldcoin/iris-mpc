@@ -1,8 +1,6 @@
 use crate::system_state;
 use crate::{
-    resources::read_iris_shares_batch,
-    utils::pgres::NetDbProvider,
-    workflows::genesis_shared::{net::NetArgs, params::TestParams},
+    resources, utils::pgres::NetDbProvider, workflows::genesis_shared::params::TestParams,
 };
 use eyre::Result;
 use iris_mpc_common::config::NetConfig;
@@ -14,8 +12,20 @@ use iris_mpc_common::config::NetConfig;
 /// * `net_config` - Network wide configuration.
 /// * `params` - Test parameters.
 ///
-pub async fn upload_iris_deletions(_net_config: &NetConfig, _params: &TestParams) -> Result<()> {
-    println!("TODO: insert_iris_deletions");
+pub async fn upload_iris_deletions(net_config: &NetConfig, params: &TestParams) -> Result<()> {
+    // Set deletions.
+    let data = match params.max_deletions() {
+        Some(max) => {
+            let skip_offset = 0;
+            resources::read_iris_deletions(max, skip_offset).unwrap()
+        }
+        None => vec![],
+    };
+
+    // Upload to AWS S3.
+    system_state::upload_iris_deletions(net_config, &data)
+        .await
+        .unwrap();
 
     Ok(())
 }
@@ -37,7 +47,8 @@ pub async fn insert_iris_shares_into_gpu_stores(
     let rng_state = params.shares_generator_rng_state();
     let skip_offset = 0;
     let batch_generator =
-        read_iris_shares_batch(batch_size, read_maximum, rng_state, skip_offset).unwrap();
+        resources::read_iris_shares_batch(batch_size, read_maximum, rng_state, skip_offset)
+            .unwrap();
 
     // Iterate over batches and insert into GPU store.
     // TODO: process serial id ranges.
