@@ -12,7 +12,7 @@ pub(super) fn get_subdirectory_of_exec_env() -> &'static str {
 pub(super) fn get_path_to_assets() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
-    format!("{crate_root}/tests/assets")
+    format!("{crate_root}/tests/resources/assets")
 }
 
 #[cfg(test)]
