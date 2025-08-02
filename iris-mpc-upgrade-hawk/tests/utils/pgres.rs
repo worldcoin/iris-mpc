@@ -116,7 +116,8 @@ impl NodeDbProvider {
         genesis_config: GenesisConfig,
         genesis_args: GenesisArgs,
     ) -> Result<GenesisState> {
-        let mut input = HashMap::new();
+        todo!("convert from database iris shares to a IrisCode")
+        /*let mut input = HashMap::new();
         let mut stream = self.cpu_iris_store.stream_irises().await;
         while let Some(iris) = stream.next().await {
             let iris: DbStoredIris = iris?;
@@ -151,6 +152,7 @@ impl NodeDbProvider {
         let genesis_state = construct_initial_genesis_state(genesis_config, genesis_args, input);
         let r = run_plaintext_genesis(genesis_state).await?;
         Ok(r)
+        */
     }
 }
 

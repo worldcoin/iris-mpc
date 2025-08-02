@@ -69,33 +69,22 @@ impl TestRun for Test {
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
+        // these are in secret shared form
+        let cpu_iris_shares = resources::read_iris_shares(
+            self.params.rng_state(),
+            0,
+            self.params.max_indexation_id() as usize,
+        )
+        .unwrap();
         let db_provider = NetDbProvider::new_from_config(&self.configs).await;
 
-        let expected: Arc<GenesisState> = {
-            let db = db_provider.iter().next().unwrap();
-            let config = &self.configs[0];
-            let r = db
-                .simulate_genesis(
-                    GenesisConfig {
-                        hnsw_M: config.hnsw_param_M,
-                        hnsw_ef_constr: config.hnsw_param_ef_constr,
-                        hnsw_ef_search: config.hnsw_param_ef_search,
-                        hawk_prf_key: Some(self.params.rng_state()),
-                    },
-                    GenesisArgs {
-                        max_indexation_id: self.params.max_indexation_id(),
-                        batch_size: self.params.batch_size(),
-                        batch_size_error_rate: self.params.batch_size_error_rate(),
-                    },
-                )
-                .await
-                .unwrap();
-            Arc::new(r)
-        };
-
         let mut join_set = JoinSet::new();
-        for db in db_provider.into_iter() {
-            let expected = expected.clone();
+        for (cpu_iris_shares, db, config) in itertools::izip!(
+            cpu_iris_shares.into_iter(),
+            db_provider.into_iter(),
+            self.configs.iter().cloned()
+        ) {
+            let params = self.params.clone();
             let max_indexation_id = self.params.max_indexation_id() as usize;
             join_set.spawn(async move {
                 let num_irises = db.gpu_iris_store.count_irises().await.unwrap();
@@ -109,6 +98,26 @@ impl TestRun for Test {
 
                 let num_modifications = db.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
+
+                // todo: compare db.cpu_iris_store to cpu_iris_shares
+
+                // build a graph from the secret shared irises
+                let expected = db
+                    .simulate_genesis(
+                        GenesisConfig {
+                            hnsw_M: config.hnsw_param_M,
+                            hnsw_ef_constr: config.hnsw_param_ef_constr,
+                            hnsw_ef_search: config.hnsw_param_ef_search,
+                            hawk_prf_key: Some(params.rng_state()),
+                        },
+                        GenesisArgs {
+                            max_indexation_id: params.max_indexation_id(),
+                            batch_size: params.batch_size(),
+                            batch_size_error_rate: params.batch_size_error_rate(),
+                        },
+                    )
+                    .await
+                    .unwrap();
 
                 let (graph_left, graph_right) = join!(
                     async {
@@ -145,20 +154,22 @@ impl TestRun for Test {
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
-        for (db, shares) in itertools::izip!(
-            NetDbProvider::new_from_config(&self.configs)
-                .await
-                .into_iter(),
-            resources::read_iris_shares(
-                self.params.rng_state(),
-                0,
-                self.params.max_indexation_id() as usize,
-            )
-            .unwrap()
+
+        // TODO: convert these to GaloisRingSharedIris
+        // these are for the GPU database. don't want the secret shared form
+        let gpu_irises: Arc<Vec<_>> = Arc::new(
+            resources::read_iris_code_pairs(0, self.params.max_indexation_id() as usize)
+                .unwrap()
+                .collect(),
+        );
+
+        for db in NetDbProvider::new_from_config(&self.configs)
+            .await
             .into_iter()
-        ) {
+        {
+            let gpu_irises = gpu_irises.clone();
             join_set.spawn(async move {
-                db.init_iris_stores(shares.as_slice()).await.unwrap();
+                db.init_iris_stores(gpu_irises.as_slice()).await.unwrap();
             });
         }
 
