@@ -5,8 +5,7 @@ use super::{
 use crate::{
     execution::hawk_main::{
         insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkMutation, HawkSession, HawkSessionRef, SingleHawkMutation, LEFT,
-        RIGHT, STORE_IDS,
+        BothEyes, HawkActor, HawkMutation, HawkSession, SingleHawkMutation, LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -34,7 +33,7 @@ impl Handle {
         /// - ensures system state is in sync.
         async fn do_health_check(
             actor: &mut HawkActor,
-            sessions: &mut BothEyes<Vec<HawkSessionRef>>,
+            sessions: &mut BothEyes<Vec<HawkSession>>,
             job_failed: bool,
         ) -> Result<()> {
             // Reset sessions upon an error.
@@ -101,7 +100,7 @@ impl Handle {
     ///
     pub async fn handle_job(
         actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
         request: JobRequest,
     ) -> Result<JobResult> {
         let now = Instant::now();
@@ -169,9 +168,20 @@ impl Handle {
                                     .collect_vec();
 
                                 // Insert into in-memory store, and return insertion plans for use by DB
-                                let plans =
-                                    insert(insert_session, &searcher, plans, &batch_ids).await?;
-                                connect_plans.extend(plans);
+                                {
+                                    let mut store = insert_session.aby3_store.write().await;
+                                    let mut graph = insert_session.graph_store.write().await;
+
+                                    let plans = insert(
+                                        &mut *store,
+                                        &mut *graph,
+                                        &searcher,
+                                        plans,
+                                        &batch_ids,
+                                    )
+                                    .await?;
+                                    connect_plans.extend(plans);
+                                }
                             }
 
                             Ok(connect_plans)
@@ -245,8 +255,12 @@ impl Handle {
                                     let plans = vec![Some(insert_plan)];
                                     let ids = vec![Some(vector_id)];
 
-                                    let connect_plan =
-                                        insert(session, &searcher, plans, &ids).await?;
+                                    let connect_plan = {
+                                        let mut store = session.aby3_store.write().await;
+                                        let mut graph = session.graph_store.write().await;
+
+                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?
+                                    };
 
                                     Ok((connect_plan, vector_id))
                                 }

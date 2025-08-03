@@ -1,7 +1,7 @@
 use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::search::SearchIds,
+        hawk_main::{insert::InsertPlanV, search::SearchIds},
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -11,9 +11,7 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, neighborhood::SortedNeighborhoodV},
-        searcher::ConnectPlanV,
-        GraphMem, HnswParams, HnswSearcher, VectorStore,
+        graph::graph_store, searcher::ConnectPlanV, GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     network::tcp::{build_network_handle, NetworkHandle},
     protocol::{
@@ -214,60 +212,44 @@ type MapEdges<T> = HashMap<VectorId, T>;
 /// If true, a match is `left OR right`, otherwise `left AND right`.
 type UseOrRule = bool;
 
+type Aby3Ref = Arc<RwLock<Aby3Store>>;
+
 type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
 pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
+#[derive(Clone)]
 pub struct HawkSession {
-    aby3_store: Aby3Store,
-    graph_store: GraphRef,
-    hnsw_prf_key: Arc<[u8; 16]>,
+    pub aby3_store: Aby3Ref,
+    pub graph_store: GraphRef,
+    pub hnsw_prf_key: Arc<[u8; 16]>,
 }
-
-// Thread safe reference to a HakwSession instance.
-pub type HawkSessionRef = Arc<RwLock<HawkSession>>;
 
 pub type SearchResult = (
     <Aby3Store as VectorStore>::VectorRef,
     <Aby3Store as VectorStore>::DistanceRef,
 );
 
-/// InsertPlan specifies where a query may be inserted into the HNSW graph.
-/// That is lists of neighbors for each layer.
-pub type InsertPlan = InsertPlanV<Aby3Store>;
+#[derive(Debug, Clone)]
+pub struct HawkInsertPlan {
+    pub plan: InsertPlanV<Aby3Store>,
+    pub match_count: usize,
+}
 
 /// ConnectPlan specifies how to connect a new node to the HNSW graph.
 /// This includes the updates to the neighbors' own neighbor lists, including
 /// bilateral edges.
 pub type ConnectPlan = ConnectPlanV<Aby3Store>;
 
-#[derive(Debug)]
-pub struct InsertPlanV<V: VectorStore> {
-    query: V::QueryRef,
-    links: Vec<SortedNeighborhoodV<V>>,
-    match_count: usize,
-    set_ep: bool,
-}
-// Manual implementation of Clone for InsertPlan, since derive(Clone) does not propagate the nested Clone bounds on V::QueryRef via TransientRef.
-impl Clone for InsertPlan {
-    fn clone(&self) -> Self {
-        Self {
-            query: self.query.clone(),
-            links: self.links.clone(),
-            match_count: self.match_count,
-            set_ep: self.set_ep,
-        }
-    }
-}
-
-impl<V: VectorStore> InsertPlanV<V> {
-    pub fn match_ids(&self) -> Vec<V::VectorRef> {
-        self.links
+impl HawkInsertPlan {
+    pub fn match_ids(&self) -> Vec<VectorId> {
+        self.plan
+            .links
             .iter()
             .take(1)
             .flat_map(|bottom_layer| bottom_layer.iter())
             .take(self.match_count)
-            .map(|(id, _)| id.clone())
+            .map(|(id, _)| *id)
             .collect_vec()
     }
 }
@@ -389,9 +371,7 @@ impl HawkActor {
         Ok(self.prf_key.as_ref().unwrap().clone())
     }
 
-    pub async fn new_sessions_orient(
-        &mut self,
-    ) -> Result<BothOrient<BothEyes<Vec<HawkSessionRef>>>> {
+    pub async fn new_sessions_orient(&mut self) -> Result<BothOrient<BothEyes<Vec<HawkSession>>>> {
         let [mut left, mut right] = self.new_sessions().await?;
 
         let left_mirror = left.split_off(left.len() / 2);
@@ -399,7 +379,7 @@ impl HawkActor {
         Ok([[left, right], [left_mirror, right_mirror]])
     }
 
-    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSessionRef>>> {
+    pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
         for tcp_session in self.networking.make_sessions().await? {
             network_sessions.push(NetworkSession {
@@ -444,7 +424,7 @@ impl HawkActor {
         store_id: StoreId,
         mut network_session: NetworkSession,
         hnsw_prf_key: &Arc<[u8; 16]>,
-    ) -> impl Future<Output = Result<HawkSessionRef>> {
+    ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
         let hnsw_prf_key = hnsw_prf_key.clone();
@@ -452,29 +432,33 @@ impl HawkActor {
         async move {
             let my_session_seed = thread_rng().gen();
             let prf = setup_replicated_prf(&mut network_session, my_session_seed).await?;
+            let aby3_store = Aby3Store {
+                session: Session {
+                    network_session,
+                    prf,
+                },
+                storage,
+            };
 
             let hawk_session = HawkSession {
-                aby3_store: Aby3Store {
-                    session: Session {
-                        network_session,
-                        prf,
-                    },
-                    storage,
-                },
+                aby3_store: Arc::new(RwLock::new(aby3_store)),
                 graph_store,
                 hnsw_prf_key,
             };
 
-            Ok(Arc::new(RwLock::new(hawk_session)))
+            Ok(hawk_session)
         }
     }
 
     pub async fn insert(
         &mut self,
-        sessions: &[HawkSessionRef],
-        plans: VecRequests<Option<InsertPlan>>,
+        sessions: &[HawkSession],
+        plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        // Map insertion plans to inner InsertionPlanV
+        let plans = plans.into_iter().map(|p| p.map(|p| p.plan)).collect_vec();
+
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -483,19 +467,28 @@ impl HawkActor {
 
         // Parallel insertions are not supported, so only one session is needed.
         let session = &sessions[0];
+        let mut store = session.aby3_store.write().await;
+        let mut graph = session.graph_store.write().await;
 
-        insert::insert(session, &self.searcher, plans, &insertion_ids).await
+        insert::insert(
+            &mut *store,
+            &mut *graph,
+            &self.searcher,
+            plans,
+            &insertion_ids,
+        )
+        .await
     }
 
     async fn update_anon_stats(
         &mut self,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
-        search_results: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
+        search_results: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
     ) -> Result<()> {
         for side in [LEFT, RIGHT] {
             self.cache_distances(side, &search_results[side]);
-            let mut session = sessions[side][0].write().await;
-            self.fill_anonymized_statistics_buckets(&mut session.aby3_store.session, side)
+            let session = &mut sessions[side][0].aby3_store.write().await.session;
+            self.fill_anonymized_statistics_buckets(session, side)
                 .await?;
         }
         Ok(())
@@ -509,17 +502,21 @@ impl HawkActor {
             .collect_vec()
     }
 
-    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<InsertPlan>]) {
+    fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
         let distances = search_results
             .iter() // All requests.
             .flat_map(|rots| rots.iter()) // All rotations.
             .flat_map(|plan| {
-                plan.links.first().into_iter().flat_map(move |neighbors| {
-                    neighbors
-                        .iter()
-                        .take(plan.match_count)
-                        .map(|(_, distance)| distance.clone())
-                })
+                plan.plan
+                    .links
+                    .first()
+                    .into_iter()
+                    .flat_map(move |neighbors| {
+                        neighbors
+                            .iter()
+                            .take(plan.match_count)
+                            .map(|(_, distance)| distance.clone())
+                    })
             });
         tracing::info!(
             "Keeping {} distances for eye {side} out of {} search results. Cache size: {}/{}",
@@ -1251,7 +1248,7 @@ impl HawkHandle {
 
     async fn handle_job(
         hawk_actor: &mut HawkActor,
-        sessions_orient: &BothOrient<BothEyes<Vec<HawkSessionRef>>>,
+        sessions_orient: &BothOrient<BothEyes<Vec<HawkSession>>>,
         request: HawkRequest,
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
@@ -1356,8 +1353,8 @@ impl HawkHandle {
 
     async fn handle_mutations(
         hawk_actor: &mut HawkActor,
-        sessions: &BothEyes<Vec<HawkSessionRef>>,
-        search_results: BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        sessions: &BothEyes<Vec<HawkSession>>,
+        search_results: BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
         match_result: &matching::BatchStep3,
         resets: ResetPlan,
         request: &HawkRequest,
@@ -1477,7 +1474,7 @@ impl HawkHandle {
 
     async fn health_check(
         hawk_actor: &mut HawkActor,
-        sessions: &mut BothOrient<BothEyes<Vec<HawkSessionRef>>>,
+        sessions: &mut BothOrient<BothEyes<Vec<HawkSession>>>,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {

@@ -1,12 +1,12 @@
 use super::{
     rot::{Rotations, VecRots, WithRot},
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, HawkSession, HawkSessionRef, InsertPlan, VecRequests, LEFT, RIGHT,
+    BothEyes, HawkInsertPlan, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
         scheduler::{collect_results, parallelize},
-        StoreId,
+        InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store},
     hnsw::{GraphMem, HnswSearcher},
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<Aby3Query, ROT>>>>;
-pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<InsertPlan, ROT>>>;
+pub type SearchResults<ROT = WithRot> = BothEyes<VecRequests<VecRots<HawkInsertPlan, ROT>>>;
 
 /// Identifiers of requests
 pub type SearchIds = Arc<VecRequests<String>>;
@@ -28,7 +28,7 @@ pub struct SearchParams {
 }
 
 pub async fn search<ROT>(
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
     search_params: SearchParams,
@@ -41,7 +41,7 @@ where
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
-    let (tx, rx) = unbounded_channel::<(TaskId, InsertPlan)>();
+    let (tx, rx) = unbounded_channel::<(TaskId, HawkInsertPlan)>();
 
     let per_session = |batch: Batch| {
         let session = sessions[batch.i_eye][batch.i_session].clone();
@@ -50,9 +50,8 @@ where
         let search_params = search_params.clone();
         let tx = tx.clone();
         async move {
-            let mut session = session.write().await;
             per_session(
-                &mut session,
+                &session,
                 &search_queries,
                 &search_ids,
                 &search_params,
@@ -73,13 +72,14 @@ where
 }
 
 async fn per_session<ROT>(
-    session: &mut HawkSession,
+    session: &HawkSession,
     search_queries: &SearchQueries<ROT>,
     search_ids: &SearchIds,
     search_params: &SearchParams,
-    tx: UnboundedSender<(TaskId, InsertPlan)>,
+    tx: UnboundedSender<(TaskId, HawkInsertPlan)>,
     batch: Batch,
 ) -> Result<()> {
+    let mut vector_store = session.aby3_store.write().await;
     let graph_store = session.graph_store.clone().read_owned().await;
 
     for task in batch.tasks {
@@ -96,8 +96,14 @@ async fn per_session<ROT>(
                 .hnsw
                 .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?
         }
-        let result =
-            per_query(session, query, search_params, &graph_store, insertion_layer).await?;
+        let result = per_query(
+            query,
+            search_params,
+            &mut vector_store,
+            &graph_store,
+            insertion_layer,
+        )
+        .await?;
         tx.send((task.id(), result))?;
     }
 
@@ -105,36 +111,30 @@ async fn per_session<ROT>(
 }
 
 async fn per_query(
-    session: &mut HawkSession,
     query: Aby3Query,
     search_params: &SearchParams,
+    aby3_store: &mut Aby3Store,
     graph_store: &GraphMem<Aby3Store>,
     insertion_layer: usize,
-) -> Result<InsertPlan> {
+) -> Result<HawkInsertPlan> {
     let (links, set_ep) = search_params
         .hnsw
-        .search_to_insert(
-            &mut session.aby3_store,
-            graph_store,
-            &query,
-            insertion_layer,
-        )
+        .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
     let match_count = if search_params.do_match {
-        search_params
-            .hnsw
-            .match_count(&mut session.aby3_store, &links)
-            .await?
+        search_params.hnsw.match_count(aby3_store, &links).await?
     } else {
         0
     };
 
-    Ok(InsertPlan {
-        query,
-        links,
+    Ok(HawkInsertPlan {
+        plan: InsertPlanV {
+            query,
+            links,
+            set_ep,
+        },
         match_count,
-        set_ep,
     })
 }
 
@@ -143,26 +143,23 @@ async fn per_query(
 ///
 /// (The `match_count` field returned is always set to 0.)
 pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
-    session: HawkSessionRef,
+    session: HawkSession,
     query: Aby3Query,
     searcher: &HnswSearcher,
     identifier: &H,
-) -> Result<InsertPlan> {
-    let mut session = session.write().await;
-
+) -> Result<InsertPlanV<Aby3Store>> {
+    let mut store = session.aby3_store.write().await;
     let graph = session.graph_store.clone().read_owned().await;
 
     let insertion_layer = searcher.select_layer_prf(&session.hnsw_prf_key, identifier)?;
 
     let (links, set_ep) = searcher
-        .search_to_insert(&mut session.aby3_store, &graph, &query, insertion_layer)
+        .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
 
-    Ok(InsertPlan {
+    Ok(InsertPlanV {
         query,
         links,
-        // TODO consider refactoring this field out of InsertPlan
-        match_count: 0,
         set_ep,
     })
 }
@@ -207,7 +204,7 @@ mod tests {
                 // Match because i from make_request is the same as i from init_db.
                 assert_eq!(rotations.center().match_count, 1);
                 assert_eq!(
-                    rotations.center().links[0].edges[0].0,
+                    rotations.center().plan.links[0].edges[0].0,
                     VectorId::from_0_index(i as u32)
                 );
             }

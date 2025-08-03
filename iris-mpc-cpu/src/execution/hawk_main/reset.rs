@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::{
     rot::WithoutRot,
     search::{self, SearchParams, SearchQueries, SearchResults},
-    BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT, RIGHT,
+    BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
 use crate::{execution::hawk_main::search::SearchIds, protocol::shared_iris::GaloisRingSharedIris};
 use eyre::Result;
@@ -22,7 +22,7 @@ pub struct ResetPlan {
 
 pub async fn search_to_reset(
     hawk_actor: &mut HawkActor,
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
     request: &HawkRequest,
 ) -> Result<ResetPlan> {
     // Get the reset updates from the request.

@@ -164,6 +164,14 @@ impl VectorStoreMut for PlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query.clone())
     }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, query.clone()))
+    }
 }
 
 /// PlaintextStore with synchronization primitives for multithreaded use.
@@ -238,6 +246,14 @@ impl VectorStore for SharedPlaintextStore {
 impl VectorStoreMut for SharedPlaintextStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query).await
+    }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, query).await)
     }
 }
 

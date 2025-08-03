@@ -1,6 +1,6 @@
 use super::{
-    intra_batch::IntraMatch, rot::VecRots, BothEyes, InsertPlan, MapEdges, Orientation, StoreId,
-    UseOrRule, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    intra_batch::IntraMatch, rot::VecRots, BothEyes, HawkInsertPlan, MapEdges, Orientation,
+    StoreId, UseOrRule, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ pub struct BatchStep1(VecRequests<Step1>);
 
 impl BatchStep1 {
     pub fn new(
-        plans: &BothEyes<VecRequests<VecRots<InsertPlan>>>,
+        plans: &BothEyes<VecRequests<VecRots<HawkInsertPlan>>>,
         luc_ids: &VecRequests<Vec<VectorId>>,
         request_types: VecRequests<RequestType>,
     ) -> Self {
@@ -78,7 +78,7 @@ struct Step1 {
 
 impl Step1 {
     fn new(
-        search_results: BothEyes<&VecRots<InsertPlan>>,
+        search_results: BothEyes<&VecRots<HawkInsertPlan>>,
         luc_ids: Vec<VectorId>,
         request_type: RequestType,
     ) -> Step1 {
@@ -457,7 +457,7 @@ impl Filter {
 mod tests {
     use iris_mpc_common::ROTATIONS;
 
-    use crate::execution::hawk_main::HawkResult;
+    use crate::execution::hawk_main::{HawkResult, InsertPlanV};
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::SortedNeighborhood;
     use crate::protocol::shared_iris::GaloisRingSharedIris;
@@ -699,15 +699,17 @@ mod tests {
         }
 
         let search_result = |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>| {
-            let insert_plan = InsertPlan {
-                query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
+            let insert_plan = HawkInsertPlan {
                 match_count: match_ids.len(),
-                links: vec![SortedNeighborhood::from_ascending_vec(
-                    chain!(match_ids, non_match_ids)
-                        .map(|v| (v, distance()))
-                        .collect_vec(),
-                )],
-                set_ep: false,
+                plan: InsertPlanV {
+                    query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
+                    links: vec![SortedNeighborhood::from_ascending_vec(
+                        chain!(match_ids, non_match_ids)
+                            .map(|v| (v, distance()))
+                            .collect_vec(),
+                    )],
+                    set_ep: false,
+                },
             };
             VecRots::from(vec![insert_plan; ROTATIONS])
         };
