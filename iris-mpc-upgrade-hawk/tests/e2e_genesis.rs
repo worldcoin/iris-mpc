@@ -23,13 +23,15 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 
     fn get_params() -> TestParams {
         // Node arguments ... common across all nodes.
+        // TODO: consider moving to JSON files ... one per node.
         let batch_size = 0;
         let batch_size_error_rate = 256;
         let max_indexation_id = 100;
         let perform_db_snapshot = false;
         let use_db_backup_as_source = false;
 
-        // Node config files.
+        // Node config.
+        // This value indicates the index of the node configuration to load into memory.
         let node_config_idx = 0;
 
         // System state setup parameters.
@@ -55,7 +57,8 @@ async fn test_hnsw_genesis_100() -> Result<()> {
     }
 
     let ctx = TestRunContextInfo::new(100, 1);
-    Test::new(get_params()).run(ctx).await?;
+    let params = get_params();
+    Test::new(params).run(ctx).await?;
 
     Ok(())
 }

@@ -16,19 +16,18 @@ use std::{fs::File, io::BufReader, io::Error};
 ///
 /// An iterator over Iris code pairs.
 ///
-pub fn read_iris_code_pairs(
+pub fn read_iris_codes(
     read_maximum: usize,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
-    // TODO: use strong names for ndjson file.
-    let path_to_iris_codes = format!(
+    let path_to_resources = format!(
         "{}/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
         get_path_to_assets(),
     );
 
     // Set file stream.
-    let file = File::open(path_to_iris_codes).unwrap();
+    let file = File::open(path_to_resources).unwrap();
     let reader = BufReader::new(file);
     let stream = serde_json::Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
@@ -52,12 +51,12 @@ pub fn read_iris_code_pairs(
 ///
 /// A chunked iterator over Iris code pairs.
 ///
-pub fn read_iris_code_pairs_batch(
+pub fn read_iris_codes_batch(
     batch_size: usize,
     read_maximum: usize,
     skip_offset: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
-    let stream = read_iris_code_pairs(read_maximum, skip_offset)
+    let stream = read_iris_codes(read_maximum, skip_offset)
         .unwrap()
         .chunks(batch_size);
 
@@ -66,14 +65,14 @@ pub fn read_iris_code_pairs_batch(
 
 #[cfg(test)]
 mod tests {
-    use super::{read_iris_code_pairs, read_iris_code_pairs_batch};
+    use super::{read_iris_codes, read_iris_codes_batch};
 
     #[test]
     fn test_read_iris_code_pairs() {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
         for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for _ in read_iris_code_pairs(read_maximum, skip_offset).unwrap() {
+            for _ in read_iris_codes(read_maximum, skip_offset).unwrap() {
                 n_read += 1;
             }
             assert_eq!(read_maximum, n_read);
@@ -87,7 +86,7 @@ mod tests {
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in read_iris_code_pairs_batch(batch_size, read_maximum, skip_offset)
+            for chunk in read_iris_codes_batch(batch_size, read_maximum, skip_offset)
                 .unwrap()
                 .into_iter()
             {

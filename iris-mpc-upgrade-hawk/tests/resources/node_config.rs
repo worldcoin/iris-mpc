@@ -54,14 +54,15 @@ pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_node_config, read_node_config_by_name};
+    use super::{read_node_config, read_node_config_by_name, NODE_CONFIG_KIND_GENESIS};
     use iris_mpc_common::PARTY_IDX_SET;
 
     #[test]
     fn test_read_node_config() {
         for party_idx in PARTY_IDX_SET {
             for config_idx in [0] {
-                let cfg = read_node_config(&party_idx, "genesis", config_idx).unwrap();
+                let cfg =
+                    read_node_config(&party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
                 assert!(cfg.party_id == party_idx);
             }
         }

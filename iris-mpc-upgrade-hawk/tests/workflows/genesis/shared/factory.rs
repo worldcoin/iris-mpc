@@ -31,19 +31,7 @@ impl From<TestParams> for NetArgs {
 /// Convertor: TestParams -> NetConfig.
 impl From<TestParams> for NetConfig {
     fn from(params: TestParams) -> Self {
-        PARTY_IDX_SET
-            .iter()
-            .map(|party_idx| {
-                resources::read_node_config(
-                    party_idx,
-                    params.node_config_kind(),
-                    params.node_config_idx(),
-                )
-                .unwrap()
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap()
+        resources::read_net_config(params.node_config_kind(), params.node_config_idx()).unwrap()
     }
 }
 
@@ -62,7 +50,10 @@ impl From<TestParams> for TestInputs {
 impl From<TestParams> for SystemStateInputs {
     fn from(params: TestParams) -> Self {
         let deletions = match params.max_deletions() {
-            Some(max) => resources::read_iris_deletions(max, 0).unwrap(),
+            Some(n_take) => {
+                let skip_offset = 0;
+                resources::read_iris_deletions(n_take, skip_offset).unwrap()
+            }
             None => vec![],
         };
 

@@ -1,4 +1,4 @@
-use super::iris_codes::read_iris_code_pairs;
+use super::iris_codes::read_iris_codes;
 use crate::utils::convertor::to_galois_ring_shares;
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use itertools::{IntoChunks, Itertools};
@@ -21,7 +21,7 @@ pub fn read_iris_shares(
     rng_state: u64,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
-    let stream = read_iris_code_pairs(read_maximum, skip_offset)
+    let stream = read_iris_codes(read_maximum, skip_offset)
         .unwrap()
         .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair)));
 

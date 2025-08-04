@@ -15,7 +15,7 @@ use iris_mpc_cpu::genesis::utils::aws::{
 };
 
 /// Component name for logging purposes.
-const COMPONENT: &str = "SystemState-Aws";
+const COMPONENT: &str = "STATE-AWS";
 
 /// Default AWS region.  TODO: remove.
 const DEFAULT_AWS_REGION: &str = "eu-north-1";
@@ -89,6 +89,10 @@ async fn get_s3_client(config: &NodeConfig) -> Result<S3_Client> {
         .aws
         .and_then(|aws| aws.region)
         .unwrap_or_else(|| DEFAULT_AWS_REGION.to_owned());
+    logger::log_info(
+        COMPONENT,
+        format!("Instantiating S3 client for region: {}", region).as_str(),
+    );
     let region_provider = AWS_Region::new(region);
     let shared_config = aws_config::from_env().region(region_provider).load().await;
     let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
@@ -97,6 +101,62 @@ async fn get_s3_client(config: &NodeConfig) -> Result<S3_Client> {
         .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
         .build();
+    let s3_client = S3_Client::from_conf(s3_config);
 
-    Ok(S3_Client::from_conf(s3_config))
+    Ok(s3_client)
+}
+
+#[cfg(test)]
+mod test {
+    use super::{get_s3_client, upload_iris_deletions, NetConfig};
+    use crate::resources::{self, NODE_CONFIG_KIND_GENESIS};
+
+    fn get_net_config() -> NetConfig {
+        resources::read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_get_s3_client() {
+        for (party_idx, cfg) in get_net_config().iter().enumerate() {
+            match get_s3_client(&cfg).await {
+                Ok(_) => (),
+                Err(err) => panic!(
+                    "Failed to get S3 client: Party IDX={} :: Err={}",
+                    party_idx, err
+                ),
+            };
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_s3_client_and_list_buckets() {
+        for cfg in get_net_config() {
+            let s3_client = get_s3_client(&cfg).await.unwrap();
+            let n_buckets = s3_client
+                .list_buckets()
+                .send()
+                .await
+                .unwrap()
+                .buckets
+                .unwrap()
+                .iter()
+                .len();
+            assert!(n_buckets > 0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upload_iris_deletions() {
+        let cfg = get_net_config();
+
+        match upload_iris_deletions(&cfg, &vec![]).await {
+            Ok(_) => (),
+            Err(err) => panic!("Failed to upload Iris deletions: Err={}", err),
+        };
+    }
+
+    #[tokio::test]
+    async fn test_upload_iris_deletions_node() {
+        println!("TODO");
+    }
 }
