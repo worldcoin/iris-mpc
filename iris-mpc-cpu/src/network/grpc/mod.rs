@@ -37,7 +37,7 @@ mod tests {
     use super::{session::GrpcSession, *};
     use crate::{
         execution::{local::generate_local_identities, player::Role, session::SessionId},
-        hawkers::aby3::{aby3_store::prepare_query, test_utils::shared_random_setup},
+        hawkers::aby3::{aby3_store::Aby3Query, test_utils::shared_random_setup},
         hnsw::HnswSearcher,
         network::{value::NetworkValue, NetworkType, Networking},
     };
@@ -335,7 +335,7 @@ mod tests {
                     .storage
                     .get_vector_or_empty(&vector_id)
                     .await;
-                let q = prepare_query((*q).clone());
+                let q = Aby3Query::new(&q);
                 let store = store.clone();
                 let graph = graph.clone();
                 jobs.spawn(async move {

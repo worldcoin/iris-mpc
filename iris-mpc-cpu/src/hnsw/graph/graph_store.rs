@@ -667,7 +667,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[&1].clone();
+            let q = vector_store.storage.points[&1].1.clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -718,7 +718,7 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.points[&1].clone();
+            let q = vector_store.storage.points[&1].1.clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
