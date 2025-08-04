@@ -5,7 +5,7 @@ use crate::utils::{
     constants::COUNT_OF_PARTIES,
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
-    s3_client::{get_s3_client, upload_iris_deletions},
+    s3_client::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
@@ -135,20 +135,12 @@ impl TestRun for Test {
         }
         self.genesis_outputs.replace(genesis_outputs);
 
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            join_set.spawn(async move {
-                let deleted_serial_ids = vec![];
-                let s3_client = get_s3_client(&config).await.unwrap();
-                upload_iris_deletions(&deleted_serial_ids, &s3_client, &config)
-                    .await
-                    .unwrap();
-            });
-        }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        let config = &self.configs[0];
+        let deleted_serial_ids = vec![];
+        let aws_clients = get_aws_clients(config).await.unwrap();
+        upload_iris_deletions(&deleted_serial_ids, &aws_clients.s3_client, config)
+            .await
+            .unwrap();
 
         Ok(())
     }
@@ -178,21 +170,13 @@ impl TestRun for Test {
 
         // Assert localstack.
 
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let max_indexation_id = self.genesis_args.max_indexation_id;
-            join_set.spawn(async move {
-                let s3_client = get_s3_client(&config).await.unwrap();
-                let deletions = get_iris_deletions(&config, &s3_client, max_indexation_id)
-                    .await
-                    .unwrap();
-                assert_eq!(deletions.len(), 0);
-            });
-        }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        let config = &self.configs[0];
+        let max_indexation_id = self.genesis_args.max_indexation_id;
+        let aws_clients = get_aws_clients(config).await.unwrap();
+        let deletions = get_iris_deletions(config, &aws_clients.s3_client, max_indexation_id)
+            .await
+            .unwrap();
+        assert_eq!(deletions.len(), 0);
 
         Ok(())
     }

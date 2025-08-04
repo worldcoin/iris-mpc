@@ -20,6 +20,12 @@ const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
 /// Key for persistent state store entry for last indexed modification id
 const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
+// Struct for deserialization.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct S3Object {
+    pub deleted_serial_ids: Vec<IrisSerialId>,
+}
+
 /// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
@@ -37,12 +43,6 @@ pub async fn get_iris_deletions(
     s3_client: &S3_Client,
     max_indexation_id: IrisSerialId,
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
-    // Struct for deserialization.
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    struct S3Object {
-        deleted_serial_ids: Vec<IrisSerialId>,
-    }
-
     // Set bucket and key based on environment
     let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
     let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
