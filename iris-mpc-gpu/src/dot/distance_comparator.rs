@@ -8,10 +8,7 @@ use crate::{
     threshold_ring::protocol::{ChunkShare, ChunkShareView},
 };
 use cudarc::{
-    driver::{
-        result::memset_d8_sync, CudaFunction, CudaSlice, CudaStream, CudaView, DevicePtr,
-        DeviceSlice, LaunchAsync,
-    },
+    driver::{CudaFunction, CudaSlice, CudaStream, CudaView, LaunchAsync},
     nvrtc::compile_ptx,
 };
 use itertools::Itertools;
@@ -771,54 +768,5 @@ impl DistanceComparator {
                     .unwrap()
             })
             .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_buffer(&self, max_size: usize) -> Vec<ChunkShare<u16>> {
-        (0..self.device_manager.device_count())
-            .map(|i| {
-                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-                let b = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-
-                self.device_manager.device(i).bind_to_thread().unwrap();
-                unsafe {
-                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
-                    memset_d8_sync(*b.device_ptr(), 0xff, b.num_bytes()).unwrap();
-                }
-
-                ChunkShare::new(a, b)
-            })
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_counter(&self) -> Vec<CudaSlice<u32>> {
-        (0..self.device_manager.device_count())
-            .map(|i| self.device_manager.device(i).alloc_zeros(1).unwrap())
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_index(&self, max_size: usize) -> Vec<CudaSlice<u64>> {
-        (0..self.device_manager.device_count())
-            .map(|i| {
-                let a = self.device_manager.device(i).alloc_zeros(max_size).unwrap();
-                unsafe {
-                    memset_d8_sync(*a.device_ptr(), 0xff, a.num_bytes()).unwrap();
-                }
-                a
-            })
-            .collect::<Vec<_>>()
-    }
-
-    pub fn prepare_match_distances_buckets(&self, n_buckets: usize) -> ChunkShare<u32> {
-        let a = self
-            .device_manager
-            .device(0)
-            .alloc_zeros(n_buckets)
-            .unwrap();
-        let b = self
-            .device_manager
-            .device(0)
-            .alloc_zeros(n_buckets)
-            .unwrap();
-        ChunkShare::new(a, b)
     }
 }
