@@ -1,7 +1,7 @@
 use super::utils::{self, errors::IndexationError};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
-    hawkers::aby3::aby3_store::{QueryRef, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
 };
 use eyre::Result;
 use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
@@ -17,10 +17,10 @@ pub struct Batch {
     pub batch_id: usize,
 
     /// Array of left iris codes, in query format.
-    pub left_queries: Vec<QueryRef>,
+    pub left_queries: Vec<Aby3Query>,
 
     /// Array of right iris codes, in query format.
-    pub right_queries: Vec<QueryRef>,
+    pub right_queries: Vec<Aby3Query>,
 
     /// Array of vector ids of iris enrollments.
     pub vector_ids: Vec<VectorId>,
@@ -34,8 +34,8 @@ impl Batch {
     fn new(
         batch_id: usize,
         vector_ids: Vec<VectorId>,
-        left_queries: Vec<QueryRef>,
-        right_queries: Vec<QueryRef>,
+        left_queries: Vec<Aby3Query>,
+        right_queries: Vec<Aby3Query>,
         vector_ids_to_persist: Vec<VectorId>,
     ) -> Self {
         Self {
@@ -133,7 +133,7 @@ pub trait BatchIterator {
     fn next_batch(
         &mut self,
         last_indexed_id: IrisSerialId,
-        iris_stores: &BothEyes<SharedIrisesRef>,
+        iris_stores: &BothEyes<Aby3SharedIrisesRef>,
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
 }
 
@@ -292,7 +292,7 @@ impl BatchIterator for BatchGenerator {
     async fn next_batch(
         &mut self,
         last_indexed_id: IrisSerialId,
-        imem_iris_stores: &BothEyes<SharedIrisesRef>,
+        imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
     ) -> Result<Option<Batch>, IndexationError> {
         let (identifiers, identifiers_for_indexation) = match self.next_identifiers(last_indexed_id)
         {
@@ -324,11 +324,25 @@ impl BatchIterator for BatchGenerator {
 
         self.batch_count += 1;
 
+        let left_queries = imem_iris_stores[LEFT]
+            .get_vectors_or_empty(vector_ids.iter())
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect();
+
+        let right_queries = imem_iris_stores[RIGHT]
+            .get_vectors_or_empty(vector_ids.iter())
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect();
+
         Ok(Some(Batch::new(
             self.batch_count,
             vector_ids.clone(),
-            imem_iris_stores[LEFT].get_queries(vector_ids.iter()).await,
-            imem_iris_stores[RIGHT].get_queries(vector_ids.iter()).await,
+            left_queries,
+            right_queries,
             vector_ids_for_persistence.clone(),
         )))
     }
@@ -464,13 +478,14 @@ mod tests {
     }
 
     // Returns a test imem Iris store.
-    fn get_iris_imem_stores() -> (BothEyes<SharedIrisesRef>, usize) {
+    fn get_iris_imem_stores() -> (BothEyes<Aby3SharedIrisesRef>, usize) {
         let mut rng = AesRng::seed_from_u64(RNG_SEED);
-        let iris_stores: BothEyes<SharedIrisesRef> = [StoreId::Left, StoreId::Right].map(|_| {
-            let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
-            setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
-                .remove(PARTY_ID)
-        });
+        let iris_stores: BothEyes<Aby3SharedIrisesRef> =
+            [StoreId::Left, StoreId::Right].map(|_| {
+                let plaintext_store = PlaintextStore::new_random(&mut rng, SIZE_OF_IRIS_DB);
+                setup_aby3_shared_iris_stores_with_preloaded_db(&mut rng, &plaintext_store)
+                    .remove(PARTY_ID)
+            });
 
         (iris_stores, SIZE_OF_IRIS_DB)
     }

@@ -16,3 +16,6 @@ pub mod aby3;
 
 /// Store with vectors in plaintext form.
 pub mod plaintext_store;
+
+/// Data structure for shared in-memory irises
+pub mod shared_irises;
