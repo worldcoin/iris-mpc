@@ -7,7 +7,6 @@ use crate::utils::{
 };
 use eyre::Result;
 use futures::join;
-use futures::StreamExt;
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     genesis::{

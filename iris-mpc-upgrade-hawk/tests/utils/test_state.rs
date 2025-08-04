@@ -1,7 +1,6 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
 use eyre::Result;
-use futures::StreamExt;
 use iris_mpc_common::{
     config::Config,
     iris_db::iris::IrisCode,
@@ -139,11 +138,11 @@ impl MpcNode {
 
         let genesis_state =
             construct_initial_genesis_state(genesis_config, self.genesis_args, genesis_input);
-        let expected_genesis_state = run_plaintext_genesis(genesis_state.clone()).await?;
+        let expected_genesis_state = run_plaintext_genesis(genesis_state).await?;
 
         let shares = encode_plaintext_iris_for_party(pairs, self.rng_state, self.config.party_id);
         self.init_iris_stores(shares.as_slice()).await?;
-        Ok(genesis_state)
+        Ok(expected_genesis_state)
     }
 }
 
