@@ -139,10 +139,15 @@ impl MpcNode {
 
         let genesis_state =
             construct_initial_genesis_state(genesis_config, self.genesis_args, genesis_input);
-        let expected_genesis_state = run_plaintext_genesis(genesis_state).await?;
+
+        let expected_genesis_state = run_plaintext_genesis(genesis_state)
+            .await
+            .expect("plaintext genesis failed");
 
         let shares = encode_plaintext_iris_for_party(pairs, self.rng_state, self.config.party_id);
-        self.init_iris_stores(shares.as_slice()).await?;
+        self.init_iris_stores(shares.as_slice())
+            .await
+            .expect("init iris stores failed");
         Ok(expected_genesis_state)
     }
 
@@ -223,7 +228,8 @@ fn get_genesis_input(
 ) -> HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)> {
     let mut r = HashMap::new();
     for (idx, (left, right)) in pairs.iter().enumerate() {
-        r.insert(idx as _, (0, left.clone(), right.clone()));
+        // warning: iris id can't be zero
+        r.insert(idx as u32 + 1, (0, left.clone(), right.clone()));
     }
     r
 }
