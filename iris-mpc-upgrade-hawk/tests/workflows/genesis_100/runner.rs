@@ -129,6 +129,9 @@ impl TestRun for Test {
                     .await
                     .unwrap();
 
+                // todo: build plaintext genesis from the .ndjson file
+                // todo: compare the plaintext geneis graph to the secret shared cpu graph.
+                // maybe also check the iris ids and versions
                 let (graph_left, graph_right) = join!(
                     async {
                         let mut graph_tx = db.graph_store.tx().await.unwrap();
