@@ -1,18 +1,17 @@
+//! simulates a MPC node, complete with configuration (HAWK and Genesis) and database connections.
+//! a simulation consists of 3 MPC nodes; a utility is included to construct all 3 nodes from a list of common::Config structs
+
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
+    mpc_node::{MpcNode, MpcNodes},
     resources::{self},
     s3_deletions::{get_s3_client, upload_iris_deletions},
-    test_state::{MpcNode, MpcNodes},
     HawkConfigs, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use futures::join;
-use iris_mpc_cpu::{
-    execution::hawk_main::StoreId,
-    genesis::{
-        get_iris_deletions,
-        plaintext::{GenesisArgs, GenesisState},
-    },
+use iris_mpc_cpu::genesis::{
+    get_iris_deletions,
+    plaintext::{GenesisArgs, GenesisState},
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;

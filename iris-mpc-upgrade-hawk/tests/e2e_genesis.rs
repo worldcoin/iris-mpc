@@ -28,6 +28,7 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 
 #[tokio::test]
 #[serial]
+#[traced_test]
 async fn test_hnsw_genesis_101() -> Result<()> {
     use iris_mpc_cpu::genesis::plaintext::GenesisArgs;
     use workflows::genesis_101::Test;

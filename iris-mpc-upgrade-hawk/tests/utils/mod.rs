@@ -1,10 +1,10 @@
 pub mod constants;
 mod errors;
 mod logger;
+pub mod mpc_node;
 pub mod resources;
 pub mod runner;
 pub mod s3_deletions;
-pub mod test_state;
 
 pub use errors::TestError;
 use iris_mpc_common::{config::Config, iris_db::iris::IrisCode};

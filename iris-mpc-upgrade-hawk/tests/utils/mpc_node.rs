@@ -1,7 +1,6 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
 use eyre::Result;
-use futures::StreamExt;
 use iris_mpc_common::{
     config::Config,
     iris_db::iris::IrisCode,
@@ -188,11 +187,6 @@ impl MpcNodes {
                 MpcNode::new(config[2].clone(), genesis_args, rng_state).await,
             ],
         }
-    }
-
-    /// Returns an iterator over references to the node database providers.
-    pub fn iter(&self) -> impl Iterator<Item = &MpcNode> {
-        self.nodes.iter()
     }
 
     pub fn into_iter(self) -> impl Iterator<Item = MpcNode> {
