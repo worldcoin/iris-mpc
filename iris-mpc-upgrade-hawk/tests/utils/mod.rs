@@ -1,7 +1,7 @@
 pub mod constants;
 mod errors;
-mod logger;
 pub mod irises;
+mod logger;
 pub mod resources;
 pub mod runner;
 pub mod s3_deletions;

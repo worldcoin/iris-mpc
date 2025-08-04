@@ -1,6 +1,9 @@
 use super::{factory, types::TestInputs};
 use crate::utils::{
-    irises::{clear_iris_shares, init_dbs, persist_iris_shares, read_irises_from_ndjson, share_irises_locally},
+    irises::{
+        clear_iris_shares, init_dbs, persist_iris_shares, read_irises_from_ndjson,
+        share_irises_locally,
+    },
     resources::get_resource_path,
     s3_deletions::{get_s3_client, upload_iris_deletions},
     TestError, TestRun, TestRunContextInfo,
@@ -102,11 +105,15 @@ impl TestRun for Test {
 
         // Clear GPU database iris shares
         for db in dbs_gpu.iter() {
-            clear_iris_shares(db).await.map_err(|e| TestError::SetupError(e.to_string()))?;
+            clear_iris_shares(db)
+                .await
+                .map_err(|e| TestError::SetupError(e.to_string()))?;
         }
 
         // Write 100 Iris shares -> GPU databases
-        persist_iris_shares(&iris_shares, &dbs_gpu).await.map_err(|e| TestError::SetupError(e.to_string()))?;
+        persist_iris_shares(&iris_shares, &dbs_gpu)
+            .await
+            .map_err(|e| TestError::SetupError(e.to_string()))?;
 
         // Initialize CPU databases
         let (db_urls, db_schemas) = test_inputs
@@ -124,7 +131,9 @@ impl TestRun for Test {
 
         // Clear CPU database iris shares
         for db in dbs_cpu.iter() {
-            clear_iris_shares(db).await.map_err(|e| TestError::SetupError(e.to_string()))?;
+            clear_iris_shares(db)
+                .await
+                .map_err(|e| TestError::SetupError(e.to_string()))?;
         }
 
         // Initialize deleted iris codes in S3 bucket
