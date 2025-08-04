@@ -1,5 +1,5 @@
 use crate::utils::{errors::TestError, logger};
-use aws_config;
+use aws_config::{from_env, retry::RetryConfig};
 use aws_sdk_s3::{
     config::{Builder as S3_ConfigBuilder, Region as AWS_Region},
     primitives::ByteStream as S3_ByteStream,
@@ -94,9 +94,9 @@ async fn get_s3_client(config: &NodeConfig) -> Result<S3_Client> {
         format!("Instantiating S3 client for region: {}", region).as_str(),
     );
     let region_provider = AWS_Region::new(region);
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let shared_config = from_env().region(region_provider).load().await;
     let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
-    let retry_config = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
+    let retry_config = RetryConfig::standard().with_max_attempts(5);
     let s3_config = S3_ConfigBuilder::from(&shared_config)
         .force_path_style(force_path_style)
         .retry_config(retry_config.clone())
@@ -118,7 +118,7 @@ mod test {
     #[tokio::test]
     async fn test_get_s3_client() {
         for (party_idx, cfg) in get_net_config().iter().enumerate() {
-            match get_s3_client(&cfg).await {
+            match get_s3_client(cfg).await {
                 Ok(_) => (),
                 Err(err) => panic!(
                     "Failed to get S3 client: Party IDX={} :: Err={}",

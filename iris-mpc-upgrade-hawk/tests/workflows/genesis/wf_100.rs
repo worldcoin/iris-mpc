@@ -18,7 +18,7 @@ pub struct Test {
     /// Test run parameters.
     params: TestParams,
 
-    /// Node execution results.
+    /// Execution results over set of nodes being tested.
     results: Option<NetExecutionResult>,
 }
 
@@ -36,8 +36,16 @@ impl Test {
 
 /// Accessors.
 impl Test {
+    fn db_provider(&self) -> &NetDbProvider {
+        self.db_provider.as_ref().unwrap()
+    }
+
     fn inputs(&self) -> &TestInputs {
         self.inputs.as_ref().unwrap()
+    }
+
+    fn params(&self) -> &TestParams {
+        &self.params
     }
 }
 
@@ -82,16 +90,16 @@ impl TestRun for Test {
 
     async fn setup(&mut self) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(TestInputs::from(&self.params));
+        self.inputs = Some(TestInputs::from(self.params()));
 
         // Set dB provider.
         self.db_provider = Some(NetDbProvider::new_from_config(self.inputs().net_config()).await);
 
         // Insert Iris shares -> GPU dBs.
         system_state::insert_iris_shares(
-            self.db_provider.as_ref().unwrap(),
+            self.db_provider(),
             &self.inputs().iris_shares_stream(),
-            self.params.shares_pgres_tx_batch_size(),
+            self.params().shares_pgres_tx_batch_size(),
         )
         .await
         .unwrap();
@@ -111,10 +119,13 @@ impl TestRun for Test {
         // Assert inputs.
         assert!(&self.inputs.is_some());
 
-        // Assert dBs.
+        // Assert Iris shares inserted into GPU dBs.
         // TODO
 
-        // Assert localstack.
+        // Assert Iris deletions uploaded to localstack.
+        // TODO
+
+        // Assert Iris modifications inserted into CPU dBs.
         // TODO
 
         Ok(())

@@ -1,6 +1,6 @@
 use crate::utils::pgres::NetDbProvider;
 use eyre::Result;
-use iris_mpc_common::{config::NetConfig, IrisSerialId, PARTY_IDX_SET};
+use iris_mpc_common::{IrisSerialId, PARTY_IDX_SET};
 use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIrisPair, GaloisRingSharedIrisPairSet};
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::{IntoChunks, Itertools};
@@ -28,7 +28,7 @@ pub async fn insert_iris_shares(
         result.push(
             insert_iris_shares_batch(
                 chunk.into_iter().map(|x| x.to_vec()).collect_vec(),
-                &db_provider,
+                db_provider,
                 tx_batch_size,
             )
             .await

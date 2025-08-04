@@ -60,11 +60,9 @@ mod tests {
     #[test]
     fn test_read_node_config() {
         for party_idx in PARTY_IDX_SET {
-            for config_idx in [0] {
-                let cfg =
-                    read_node_config(&party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
-                assert!(cfg.party_id == party_idx);
-            }
+            let config_idx = 0;
+            let cfg = read_node_config(&party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
+            assert!(cfg.party_id == party_idx);
         }
     }
 

@@ -25,7 +25,6 @@ pub struct TestInputs {
     net_config: NetConfig,
 
     // Test parameters.
-    #[allow(dead_code)]
     params: TestParams,
 }
 
@@ -54,11 +53,11 @@ impl TestInputs {
         &self.iris_deletions
     }
 
+    #[allow(dead_code)]
     pub fn iris_modifications(&self) -> &Vec<i64> {
         &self.iris_modifications
     }
 
-    #[allow(dead_code)]
     pub fn iris_shares_stream(
         &self,
     ) -> IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>> {

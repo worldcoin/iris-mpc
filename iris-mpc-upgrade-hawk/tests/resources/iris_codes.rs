@@ -2,7 +2,7 @@ use super::utils::get_path_to_assets;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodePair};
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
-use serde_json;
+use serde_json::Deserializer;
 use std::{fs::File, io::BufReader, io::Error};
 
 /// Returns iterator over Iris code pairs deserialized from an ndjson file.
@@ -29,7 +29,7 @@ pub fn read_iris_codes(
     // Set file stream.
     let file = File::open(path_to_resources).unwrap();
     let reader = BufReader::new(file);
-    let stream = serde_json::Deserializer::from_reader(reader)
+    let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
         .skip(skip_offset)
         .map(|x| IrisCode::from(&x.unwrap()))
