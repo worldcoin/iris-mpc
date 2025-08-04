@@ -1,27 +1,25 @@
 #[cfg(feature = "gpu_dependent")]
-mod e2e_test {
+mod e2e_anon_stats_test {
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
         job::Eye,
-        test::{generate_full_test_db, load_test_db, TestCaseGenerator},
+        test::{generate_full_test_db, load_test_db, SimpleAnonStatsTestGenerator},
     };
     use iris_mpc_gpu::{helpers::device_manager::DeviceManager, server::ServerActor};
     use rand::random;
     use std::{env, sync::Arc};
     use tokio::sync::oneshot;
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 
     const DB_SIZE: usize = 8 * 1000;
     const DB_BUFFER: usize = 8 * 1000;
-    const NUM_BATCHES: usize = 30;
+    const NUM_BATCHES: usize = 300;
     const MAX_BATCH_SIZE: usize = 64;
-    const N_BUCKETS: usize = 10;
-    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
-    const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
-    const MAX_DELETIONS_PER_BATCH: usize = 10;
-    const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
+    const N_BUCKETS: usize = 8;
+    const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
+    const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -29,7 +27,11 @@ mod e2e_test {
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info".into()),
             )
-            .with(tracing_subscriber::fmt::layer())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_span_events(FmtSpan::ENTER | FmtSpan::EXIT)
+                    .with_target(true),
+            )
             .init();
     }
 
@@ -90,7 +92,7 @@ mod e2e_test {
             internal_seed
         );
 
-        let test_db = generate_full_test_db(DB_SIZE, db_seed, false);
+        let test_db = generate_full_test_db(DB_SIZE, db_seed, true);
         let party_db0 = test_db.party_db(0);
         let party_db1 = test_db.party_db(1);
         let party_db2 = test_db.party_db(2);
@@ -114,7 +116,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db0, &mut actor);
@@ -148,7 +150,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db1, &mut actor);
@@ -182,7 +184,7 @@ mod e2e_test {
                 false,
                 false,
                 Eye::Left,
-                true,
+                false,
             ) {
                 Ok((mut actor, handle)) => {
                     load_test_db(&party_db2, &mut actor);
@@ -201,18 +203,12 @@ mod e2e_test {
         let mut handle1 = rx1.await??;
         let mut handle2 = rx2.await??;
 
-        let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, internal_seed, false);
+        let mut test_case_generator =
+            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS);
 
-        test_case_generator.enable_bucket_statistic_checks(N_BUCKETS);
-
+        tracing::info!("Setup done, starting tests");
         test_case_generator
-            .run_n_batches(
-                NUM_BATCHES,
-                MAX_BATCH_SIZE,
-                MAX_DELETIONS_PER_BATCH,
-                MAX_RESET_UPDATES_PER_BATCH,
-                [&mut handle0, &mut handle1, &mut handle2],
-            )
+            .run_n_batches(NUM_BATCHES, [&mut handle0, &mut handle1, &mut handle2])
             .await?;
 
         drop(handle0);

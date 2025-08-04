@@ -1,12 +1,21 @@
 use super::{
-    constants::COUNT_OF_PARTIES, convertor::to_galois_ring_shares, types::GaloisRingSharedIrisPair,
-    IrisCodePair, TestExecutionEnvironment, TestRunContextInfo,
+    constants::COUNT_OF_PARTIES, types::GaloisRingSharedIrisPair, IrisCodePair,
+    TestExecutionEnvironment, TestRunContextInfo,
 };
-use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode};
-use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
+use iris_mpc_common::{
+    config::Config as NodeConfig, iris_db::iris::IrisCode, IrisSerialId, IrisVersionId,
+};
+use iris_mpc_cpu::{
+    protocol::shared_iris::GaloisRingSharedIris, py_bindings::plaintext_store::Base64IrisCode,
+};
 use itertools::{IntoChunks, Itertools};
+use rand::{rngs::StdRng, SeedableRng};
 use serde_json;
-use std::{fs::File, io::BufReader, io::Error};
+use std::{
+    collections::HashMap,
+    fs::File,
+    io::{BufReader, Error},
+};
 
 /// Returns subdirectory name for current test run environment.
 fn get_subdirectory_of_exec_env(exec_env: &TestExecutionEnvironment) -> &'static str {
@@ -23,21 +32,10 @@ fn get_path_to_resources() -> String {
     format!("{crate_root}/tests/resources")
 }
 
-/// Returns iterator over Iris code pairs deserialized from an ndjson file.
-///
-/// # Arguments
-///
-/// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
-///
-/// # Returns
-///
-/// An iterator over Iris code pairs.
-///
-pub fn read_iris_code_pairs(
+pub fn read_plaintext_iris(
     skip_offset: usize,
     max_items: usize,
-) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
+) -> Result<Vec<IrisCodePair>, Error> {
     // Set path.
     // TODO: use strong names for ndjson file.
     let path_to_iris_codes = format!(
@@ -55,61 +53,40 @@ pub fn read_iris_code_pairs(
         .tuples()
         .take(max_items);
 
-    Ok(stream)
+    Ok(stream.collect())
 }
 
-/// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
-///
-/// # Arguments
-///
-/// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
-///
-/// # Returns
-///
-/// A chunked iterator over Iris code pairs.
-///
-pub fn read_iris_code_pairs_batch(
-    batch_size: usize,
-    skip_offset: usize,
-    max_items: usize,
-) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
-    let stream = read_iris_code_pairs(skip_offset, max_items)
-        .unwrap()
-        .chunks(batch_size);
-
-    Ok(stream)
-}
-
-/// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
-///
-/// # Arguments
-///
-/// * `rng_state` - State of an RNG being used to inject entropy to share creation.
-/// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
-/// * `max_items` - Maximum number of Iris code pairs to read.
-///
-/// # Returns
-///
-/// An iterator over Iris shares.
-///
-pub fn read_iris_shares(
-    rng_state: u64,
-    skip_offset: usize,
-    max_items: usize,
-) -> Result<Vec<Vec<GaloisRingSharedIrisPair>>, Error> {
-    let stream = read_iris_code_pairs(skip_offset, max_items)
-        .unwrap()
-        .map(move |code_pair| to_galois_ring_shares(rng_state, &code_pair));
-
-    let mut vecs = vec![vec![]; COUNT_OF_PARTIES];
-    for shares in stream {
-        for (share, v) in itertools::izip!(&*shares, &mut vecs) {
-            v.push(share.clone());
-        }
+pub fn get_genesis_input(
+    pairs: &[IrisCodePair],
+) -> HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)> {
+    let mut r = HashMap::new();
+    for (idx, (left, right)) in pairs.iter().enumerate() {
+        r.insert(idx as _, (0, left.clone(), right.clone()));
     }
-    Ok(vecs)
+    r
+}
+
+pub fn encode_plaintext_iris_for_party(
+    pairs: &[IrisCodePair],
+    rng_state: u64,
+    party_idx: usize,
+) -> Vec<GaloisRingSharedIrisPair> {
+    pairs
+        .iter()
+        .map(|code_pair| {
+            // Set RNG for each pair to match shares_encoding.rs behavior
+            let mut shares_seed = StdRng::seed_from_u64(rng_state);
+
+            // Set MPC participant specific Iris shares from Iris code + entropy.
+            let (code_l, code_r) = code_pair;
+            let shares_l =
+                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_l.to_owned());
+            let shares_r =
+                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_r.to_owned());
+
+            (shares_l[party_idx].clone(), shares_r[party_idx].clone())
+        })
+        .collect()
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -144,9 +121,8 @@ pub fn read_node_config(
 #[cfg(test)]
 mod tests {
     use super::{
-        get_path_to_resources, get_subdirectory_of_exec_env, read_iris_code_pairs,
-        read_iris_code_pairs_batch, read_iris_shares, read_node_config, TestExecutionEnvironment,
-        TestRunContextInfo, COUNT_OF_PARTIES,
+        get_path_to_resources, get_subdirectory_of_exec_env, read_node_config, read_plaintext_iris,
+        TestExecutionEnvironment, TestRunContextInfo, COUNT_OF_PARTIES,
     };
     use std::path::Path;
 
@@ -178,42 +154,8 @@ mod tests {
         // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
         for (skip_offset, max_items) in [(0, 100), (838, 81)] {
             let mut n_read = 0;
-            for _ in read_iris_code_pairs(skip_offset, max_items).unwrap() {
+            for _ in read_plaintext_iris(skip_offset, max_items).unwrap() {
                 n_read += 1;
-            }
-            assert_eq!(n_read, max_items);
-        }
-    }
-
-    #[test]
-    fn test_read_iris_code_pairs_batch() {
-        // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
-        for (skip_offset, max_items, batch_size, expected_batches) in
-            [(0, 100, 10, 10), (838, 81, 9, 9)]
-        {
-            let mut n_chunks = 0;
-            for chunk in read_iris_code_pairs_batch(batch_size, skip_offset, max_items)
-                .unwrap()
-                .into_iter()
-            {
-                n_chunks += 1;
-                let mut n_items = 0;
-                for _ in chunk.into_iter() {
-                    n_items += 1;
-                }
-                assert_eq!(n_items, batch_size);
-            }
-            assert_eq!(n_chunks, expected_batches);
-        }
-    }
-
-    #[test]
-    fn test_read_iris_shares() {
-        for (skip_offset, max_items) in [(0, 100), (838, 81)] {
-            let mut n_read = 0;
-            for shares in read_iris_shares(DEFAULT_RNG_STATE, skip_offset, max_items).unwrap() {
-                n_read += 1;
-                assert_eq!(shares.len(), COUNT_OF_PARTIES);
             }
             assert_eq!(n_read, max_items);
         }
