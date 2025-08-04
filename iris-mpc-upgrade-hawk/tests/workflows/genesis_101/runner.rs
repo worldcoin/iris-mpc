@@ -15,8 +15,9 @@ use iris_mpc_cpu::{
     },
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
+use itertools::izip;
 use tokio::task::JoinSet;
-/// HNSW Genesis test.
+
 pub struct Test {
     configs: HawkConfigs,
 
@@ -24,7 +25,7 @@ pub struct Test {
 
     rng_state: u64,
 
-    genesis_outputs: Vec<GenesisState>,
+    genesis_outputs: Option<Vec<GenesisState>>,
 }
 
 impl Test {
@@ -43,7 +44,7 @@ impl Test {
             configs,
             genesis_args,
             rng_state,
-            genesis_outputs: vec![],
+            genesis_outputs: None,
         }
     }
 
@@ -86,7 +87,10 @@ impl TestRun for Test {
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
-        for node in self.get_nodes().await {
+        for (node, expected) in izip!(
+            self.get_nodes().await,
+            self.genesis_outputs.take().unwrap().into_iter()
+        ) {
             let max_indexation_id = self.genesis_args.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
@@ -101,42 +105,7 @@ impl TestRun for Test {
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                let iris_stream = node.cpu_iris_store.stream_irises().await;
-                /*for expected_pair in &expected_iris_shares {
-                    let db_iris: DbStoredIris = iris_stream
-                        .next()
-                        .await
-                        .expect("stream ended early")
-                        .expect("failed to get share");
-                    // TODO: convert from DbStoredIris to GaloisRingSharedIris and compare
-                }*/
-
-                // todo: build plaintext genesis from the .ndjson file
-                // todo: compare the plaintext geneis graph to the secret shared cpu graph.
-                // maybe also check the iris ids and versions
-                let (graph_left, graph_right) = join!(
-                    async {
-                        let mut graph_tx = node.graph_store.tx().await.unwrap();
-                        graph_tx
-                            .with_graph(StoreId::Left)
-                            .load_to_mem(node.graph_store.pool(), 8)
-                            .await
-                    },
-                    async {
-                        let mut graph_tx = node.graph_store.tx().await.unwrap();
-                        graph_tx
-                            .with_graph(StoreId::Right)
-                            .load_to_mem(node.graph_store.pool(), 8)
-                            .await
-                    }
-                );
-                let graph_left = graph_left.expect("Could not load left graph");
-                let graph_right = graph_right.expect("Could not load right graph");
-
-                //assert!(graph_left == expected.dst_db.graphs[0]);
-                //assert!(graph_right == expected.dst_db.graphs[1]);
-
-                // todo: assert persisted_state
+                node.assert_graphs_match(&expected).await;
             });
         }
 
@@ -161,9 +130,11 @@ impl TestRun for Test {
             });
         }
 
+        let mut genesis_outputs = vec![];
         while let Some(r) = join_set.join_next().await {
-            self.genesis_outputs.push(r.unwrap());
+            genesis_outputs.push(r.unwrap());
         }
+        self.genesis_outputs.replace(genesis_outputs);
 
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {

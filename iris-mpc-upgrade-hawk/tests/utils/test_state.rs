@@ -1,6 +1,7 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
 use eyre::Result;
+use futures::StreamExt;
 use iris_mpc_common::{
     config::Config,
     iris_db::iris::IrisCode,
@@ -8,6 +9,7 @@ use iris_mpc_common::{
     IrisSerialId, IrisVersionId,
 };
 use iris_mpc_cpu::{
+    execution::hawk_main::StoreId,
     genesis::plaintext::{
         run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState,
         GenesisState, PersistentState,
@@ -143,6 +145,30 @@ impl MpcNode {
         let shares = encode_plaintext_iris_for_party(pairs, self.rng_state, self.config.party_id);
         self.init_iris_stores(shares.as_slice()).await?;
         Ok(expected_genesis_state)
+    }
+
+    pub async fn assert_graphs_match(&self, expected: &GenesisState) {
+        let (graph_left, graph_right) = futures::join!(
+            async {
+                let mut graph_tx = self.graph_store.tx().await.unwrap();
+                graph_tx
+                    .with_graph(StoreId::Left)
+                    .load_to_mem(self.graph_store.pool(), 8)
+                    .await
+            },
+            async {
+                let mut graph_tx = self.graph_store.tx().await.unwrap();
+                graph_tx
+                    .with_graph(StoreId::Right)
+                    .load_to_mem(self.graph_store.pool(), 8)
+                    .await
+            }
+        );
+        let graph_left = graph_left.expect("Could not load left graph");
+        let graph_right = graph_right.expect("Could not load right graph");
+
+        assert!(graph_left == expected.dst_db.graphs[0]);
+        assert!(graph_right == expected.dst_db.graphs[1]);
     }
 }
 
