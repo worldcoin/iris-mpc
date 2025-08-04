@@ -46,7 +46,7 @@ use tokio::{
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,

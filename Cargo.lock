@@ -2522,6 +2522,7 @@ dependencies = [
  "dotenvy",
  "eyre",
  "futures",
+ "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-gpu",
