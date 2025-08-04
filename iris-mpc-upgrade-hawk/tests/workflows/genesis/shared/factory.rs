@@ -8,8 +8,8 @@ use iris_mpc_common::{config::NetConfig, PARTY_IDX_SET};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Convertor: TestParams -> NetArgs.
-impl From<TestParams> for NetArgs {
-    fn from(params: TestParams) -> Self {
+impl From<&TestParams> for NetArgs {
+    fn from(params: &TestParams) -> Self {
         // TODO: move to static resources (JSON | TOML).
         let args = NodeArgs::new(
             params.batch_size(),
@@ -29,15 +29,15 @@ impl From<TestParams> for NetArgs {
 }
 
 /// Convertor: TestParams -> NetConfig.
-impl From<TestParams> for NetConfig {
-    fn from(params: TestParams) -> Self {
+impl From<&TestParams> for NetConfig {
+    fn from(params: &TestParams) -> Self {
         resources::read_net_config(params.node_config_kind(), params.node_config_idx()).unwrap()
     }
 }
 
 /// Convertor: TestParams -> TestInputs.
-impl From<TestParams> for TestInputs {
-    fn from(params: TestParams) -> Self {
+impl From<&TestParams> for TestInputs {
+    fn from(params: &TestParams) -> Self {
         TestInputs::new(
             NetArgs::from(params),
             NetConfig::from(params),
@@ -47,10 +47,10 @@ impl From<TestParams> for TestInputs {
 }
 
 /// Convertor: TestParams -> SystemStateInputs.
-impl From<TestParams> for SystemStateInputs {
-    fn from(params: TestParams) -> Self {
+impl From<&TestParams> for SystemStateInputs {
+    fn from(params: &TestParams) -> Self {
         SystemStateInputs::new(
-            params,
+            params.clone(),
             resources::read_iris_deletions(params.max_deletions(), 0).unwrap(),
             resources::read_iris_modifications(params.max_modifications(), 0).unwrap(),
         )

@@ -1,17 +1,17 @@
 use super::shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
 use crate::{
-    resources, system_state,
+    system_state,
     utils::{pgres::NetDbProvider, TestError, TestRun},
 };
 use eyre::Result;
-use iris_mpc_common::{
-    config::{Config as NodeConfig, NetConfig},
-    PartyIdx, PARTY_IDX_SET,
-};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs as NodeArgs};
+use iris_mpc_common::{PartyIdx, PARTY_IDX_SET};
+use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
 /// HNSW Genesis test.
 pub struct Test {
+    /// A dB provider for interacting with various stores.
+    db_provider: Option<NetDbProvider>,
+
     /// Test run inputs.
     inputs: Option<TestInputs>,
 
@@ -26,6 +26,7 @@ pub struct Test {
 impl Test {
     pub fn new(params: TestParams) -> Self {
         Self {
+            db_provider: None,
             inputs: None,
             results: None,
             params,
@@ -35,24 +36,8 @@ impl Test {
 
 /// Accessors.
 impl Test {
-    pub fn inputs(&self) -> &TestInputs {
+    fn inputs(&self) -> &TestInputs {
         self.inputs.as_ref().unwrap()
-    }
-
-    pub fn net_config(&self) -> &NetConfig {
-        self.inputs().net_config()
-    }
-
-    pub fn node_args(&self, node_idx: PartyIdx) -> NodeArgs {
-        self.inputs().node_args(node_idx).clone()
-    }
-
-    pub fn node_config(&self, node_idx: PartyIdx) -> NodeConfig {
-        self.inputs().node_config(node_idx).clone()
-    }
-
-    pub fn params(&self) -> &TestParams {
-        &self.params
     }
 }
 
@@ -65,7 +50,10 @@ impl TestRun for Test {
                 PARTY_IDX_SET
                     .into_iter()
                     .map(|node_idx: PartyIdx| {
-                        exec_genesis(self.node_args(node_idx), self.node_config(node_idx))
+                        exec_genesis(
+                            self.inputs().node_args(node_idx).to_owned(),
+                            self.inputs().node_config(node_idx).to_owned(),
+                        )
                     })
                     .collect::<Vec<_>>(),
             )
@@ -94,17 +82,27 @@ impl TestRun for Test {
 
     async fn setup(&mut self) -> Result<(), TestError> {
         // Set inputs.
-        self.inputs = Some(TestInputs::from(self.params));
+        self.inputs = Some(TestInputs::from(&self.params));
 
-        // Insert Iris shares -> GPU dB.
-        insert_iris_shares_into_gpu_store(self.net_config(), self.params())
-            .await
-            .unwrap();
+        // Set dB provider.
+        self.db_provider = Some(NetDbProvider::new_from_config(self.inputs().net_config()).await);
 
-        // Upload Iris deletions -> AWS S3.
-        upload_iris_deletions(self.net_config(), self.inputs())
-            .await
-            .unwrap();
+        // Insert Iris shares -> GPU dBs.
+        system_state::insert_iris_shares(
+            self.db_provider.as_ref().unwrap(),
+            &self.inputs().system_state().iris_shares_stream(),
+            self.params.shares_pgres_tx_batch_size(),
+        )
+        .await
+        .unwrap();
+
+        // Upload Iris deletions -> AWS S3 buckets.
+        system_state::upload_iris_deletions(
+            self.inputs().net_config(),
+            self.inputs().system_state().iris_deletions(),
+        )
+        .await
+        .unwrap();
 
         Ok(())
     }
@@ -129,40 +127,4 @@ impl TestRun for Test {
     async fn teardown_assert(&mut self) -> Result<(), TestError> {
         Ok(())
     }
-}
-
-/// Inserts Iris shares into GPU store.
-async fn insert_iris_shares_into_gpu_store(
-    net_config: &NetConfig,
-    params: &TestParams,
-) -> Result<()> {
-    // Set shares batch generator.
-    let batch_size = params.shares_generator_batch_size();
-    let read_maximum = params.max_indexation_id() as usize;
-    let rng_state = params.shares_generator_rng_state();
-    let skip_offset = 0;
-    let batch_generator =
-        resources::read_iris_shares_batch(batch_size, read_maximum, rng_state, skip_offset)
-            .unwrap();
-
-    // Iterate over batches and insert into GPU store.
-    // TODO: process serial id ranges.
-    let db_provider = NetDbProvider::new_from_config(net_config).await;
-    let tx_batch_size = params.shares_pgres_tx_batch_size();
-    let _ = system_state::insert_iris_shares(&batch_generator, &db_provider, tx_batch_size)
-        .await
-        .unwrap();
-
-    // TODO: process serial id ranges.
-
-    Ok(())
-}
-
-/// Uploads Iris deletions into AWS S3 bucket.
-async fn upload_iris_deletions(net_config: &NetConfig, inputs: &TestInputs) -> Result<()> {
-    system_state::upload_iris_deletions(net_config, inputs.system_state_inputs().iris_deletions())
-        .await
-        .unwrap();
-
-    Ok(())
 }

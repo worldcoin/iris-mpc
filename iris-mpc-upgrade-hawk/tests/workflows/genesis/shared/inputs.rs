@@ -1,11 +1,12 @@
 use super::{net::NetArgs, params::TestParams};
+use crate::resources;
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     IrisSerialId, PartyIdx,
 };
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
-use itertools::{IntoChunks, Itertools};
+use itertools::IntoChunks;
 
 /// Excapsulates data used to drive a test run.
 #[derive(Debug, Clone)]
@@ -55,8 +56,7 @@ impl TestInputs {
         &self.net_config[node_idx]
     }
 
-    #[allow(dead_code)]
-    pub fn system_state_inputs(&self) -> &SystemStateInputs {
+    pub fn system_state(&self) -> &SystemStateInputs {
         &self.system_state_inputs
     }
 }
@@ -65,12 +65,11 @@ impl TestInputs {
 #[derive(Debug, Clone)]
 pub struct SystemStateInputs {
     // Set of serial identifiers associated with deleted Iris's.
-    #[allow(dead_code)]
-    deletions_identifiers: Vec<IrisSerialId>,
+    iris_deletions: Vec<IrisSerialId>,
 
     // Set of modifications identifiers associated with modified Iris's.
     #[allow(dead_code)]
-    modification_identifiers: Vec<i64>,
+    iris_modifications: Vec<i64>,
 
     // Test parameters.
     #[allow(dead_code)]
@@ -80,10 +79,14 @@ pub struct SystemStateInputs {
 /// Constructor.
 impl SystemStateInputs {
     #[allow(dead_code)]
-    pub fn new(params: TestParams, deletions: Vec<IrisSerialId>, modifications: Vec<i64>) -> Self {
+    pub fn new(
+        params: TestParams,
+        iris_deletions: Vec<IrisSerialId>,
+        iris_modifications: Vec<i64>,
+    ) -> Self {
         Self {
-            deletions_identifiers: deletions,
-            modification_identifiers: modifications,
+            iris_deletions,
+            iris_modifications,
             params,
         }
     }
@@ -91,9 +94,17 @@ impl SystemStateInputs {
 
 /// Accessors.
 impl SystemStateInputs {
-    #[allow(dead_code)]
     pub fn iris_deletions(&self) -> &Vec<IrisSerialId> {
-        &self.deletions_identifiers
+        &self.iris_deletions
+    }
+
+    #[allow(dead_code)]
+    pub fn iris_modifications(&self) -> &Vec<i64> {
+        &self.iris_modifications
+    }
+
+    pub fn params(&self) -> &TestParams {
+        &self.params
     }
 }
 
@@ -103,6 +114,12 @@ impl SystemStateInputs {
     pub fn iris_shares_stream(
         &self,
     ) -> IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>> {
-        std::iter::empty().chunks(self.params.batch_size())
+        resources::read_iris_shares_batch(
+            self.params().shares_generator_batch_size(),
+            self.params().max_indexation_id() as usize,
+            self.params().shares_generator_rng_state(),
+            self.params().shares_generator_skip_offset(),
+        )
+        .unwrap()
     }
 }

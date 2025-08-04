@@ -34,6 +34,9 @@ pub struct TestParams {
     // Size of batches when generating Iris shares for testing purposes.
     shares_generator_batch_size: usize,
 
+    // Offset to apply when loading Iris shares.
+    shares_generator_skip_offset: usize,
+
     // Batch size when persisting iris shares to pgres stores.
     shares_pgres_tx_batch_size: usize,
 }
@@ -87,6 +90,10 @@ impl TestParams {
     pub fn shares_generator_rng_state(&self) -> u64 {
         self.shares_generator_rng_state
     }
+
+    pub fn shares_generator_skip_offset(&self) -> usize {
+        self.shares_generator_skip_offset
+    }
 }
 
 /// Builder for TestParams.
@@ -102,6 +109,7 @@ pub struct TestParamsBuilder {
     use_db_backup_as_source: bool,
     shares_generator_rng_state: u64,
     shares_generator_batch_size: usize,
+    shares_generator_skip_offset: usize,
     shares_pgres_tx_batch_size: usize,
 }
 
@@ -118,6 +126,7 @@ impl TestParamsBuilder {
             use_db_backup_as_source: false,
             shares_generator_rng_state: 0,
             shares_generator_batch_size: 100,
+            shares_generator_skip_offset: 0,
             shares_pgres_tx_batch_size: 100,
         }
     }
@@ -174,6 +183,11 @@ impl TestParamsBuilder {
         self
     }
 
+    pub fn shares_generator_skip_offset(mut self, value: usize) -> Self {
+        self.shares_generator_skip_offset = value;
+        self
+    }
+
     pub fn shares_pgres_tx_batch_size(mut self, value: usize) -> Self {
         self.shares_pgres_tx_batch_size = value;
         self
@@ -193,6 +207,7 @@ impl TestParamsBuilder {
             use_db_backup_as_source: self.use_db_backup_as_source,
             shares_generator_batch_size: self.shares_generator_batch_size,
             shares_generator_rng_state: self.shares_generator_rng_state,
+            shares_generator_skip_offset: self.shares_generator_skip_offset,
             shares_pgres_tx_batch_size: self.shares_pgres_tx_batch_size,
         }
     }

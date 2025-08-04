@@ -1,6 +1,6 @@
 use crate::utils::pgres::NetDbProvider;
 use eyre::Result;
-use iris_mpc_common::{IrisSerialId, PARTY_IDX_SET};
+use iris_mpc_common::{config::NetConfig, IrisSerialId, PARTY_IDX_SET};
 use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIrisPair, GaloisRingSharedIrisPairSet};
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::{IntoChunks, Itertools};
@@ -9,8 +9,8 @@ use itertools::{IntoChunks, Itertools};
 ///
 /// # Arguments
 ///
-/// * `batch_generator` - A generator of batches of Iris shares to be inserted into stores.
-/// * `db_provider` - Iris PostgreSQL store provider.
+/// * `db_provider` - Network wide dB provider.
+/// * `iris_shares_stream` - A generator of batches of Iris shares to be inserted into stores.
 /// * `tx_batch_size` - Constraint over number of Iris shares to persist in a single pgres transaction.
 ///
 /// # Returns
@@ -18,13 +18,13 @@ use itertools::{IntoChunks, Itertools};
 /// A set of ranges of inserted Iris serial identifiers.
 ///
 pub async fn insert_iris_shares(
-    batch_generator: &IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>,
     db_provider: &NetDbProvider,
+    iris_shares_stream: &IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>,
     tx_batch_size: usize,
 ) -> Result<Vec<Vec<(IrisSerialId, IrisSerialId)>>> {
     // TODO: refactor using iter.map.collect ...etc.
     let mut result = Vec::new();
-    for chunk in batch_generator.into_iter() {
+    for chunk in iris_shares_stream.into_iter() {
         result.push(
             insert_iris_shares_batch(
                 chunk.into_iter().map(|x| x.to_vec()).collect_vec(),
