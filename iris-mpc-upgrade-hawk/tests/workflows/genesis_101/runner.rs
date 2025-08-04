@@ -12,12 +12,10 @@ use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     genesis::{
         get_iris_deletions,
-        plaintext::{run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisState},
+        plaintext::{GenesisArgs, GenesisState},
     },
 };
-use iris_mpc_store::DbStoredIris;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use std::sync::Arc;
 use tokio::task::JoinSet;
 /// HNSW Genesis test.
 pub struct Test {
@@ -64,7 +62,7 @@ impl TestRun for Test {
         let mut join_set = JoinSet::new();
         for config in &self.configs {
             let config = config.clone();
-            let genesis_args = self.genesis_args.clone();
+            let genesis_args = self.genesis_args;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
@@ -104,7 +102,7 @@ impl TestRun for Test {
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                let mut iris_stream = node.cpu_iris_store.stream_irises().await;
+                let iris_stream = node.cpu_iris_store.stream_irises().await;
                 /*for expected_pair in &expected_iris_shares {
                     let db_iris: DbStoredIris = iris_stream
                         .next()

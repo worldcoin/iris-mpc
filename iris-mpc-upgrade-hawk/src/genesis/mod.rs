@@ -120,7 +120,7 @@ impl ExecutionContextInfo {
         max_modification_persist_id: i64,
     ) -> Self {
         Self {
-            args: args.clone(),
+            args: *args,
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,

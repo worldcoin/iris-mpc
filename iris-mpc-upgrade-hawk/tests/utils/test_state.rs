@@ -4,7 +4,7 @@ use eyre::Result;
 use futures::StreamExt;
 use iris_mpc_common::{
     config::Config,
-    iris_db::iris::{IrisCode, IrisCodeArray},
+    iris_db::iris::IrisCode,
     postgres::{AccessMode, PostgresClient},
     IrisSerialId, IrisVersionId,
 };
@@ -17,7 +17,7 @@ use iris_mpc_cpu::{
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
     protocol::shared_iris::GaloisRingSharedIris,
 };
-use iris_mpc_store::{DbStoredIris, Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use rand::{rngs::StdRng, SeedableRng};
 use std::collections::HashMap;
 
@@ -128,7 +128,7 @@ impl MpcNode {
         &self,
         pairs: &[IrisCodePair],
     ) -> Result<GenesisState> {
-        let genesis_input = get_genesis_input(&pairs);
+        let genesis_input = get_genesis_input(pairs);
 
         let genesis_config = GenesisConfig {
             hnsw_M: self.config.hnsw_param_M,
@@ -141,7 +141,7 @@ impl MpcNode {
             construct_initial_genesis_state(genesis_config, self.genesis_args, genesis_input);
         let expected_genesis_state = run_plaintext_genesis(genesis_state.clone()).await?;
 
-        let shares = encode_plaintext_iris_for_party(&pairs, self.rng_state, self.config.party_id);
+        let shares = encode_plaintext_iris_for_party(pairs, self.rng_state, self.config.party_id);
         self.init_iris_stores(shares.as_slice()).await?;
         Ok(genesis_state)
     }
