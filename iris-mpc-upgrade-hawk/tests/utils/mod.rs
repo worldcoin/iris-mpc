@@ -4,6 +4,7 @@ mod logger;
 pub mod mpc_node;
 pub mod resources;
 pub mod runner;
+pub mod s3_client;
 pub mod s3_deletions;
 
 pub use errors::TestError;

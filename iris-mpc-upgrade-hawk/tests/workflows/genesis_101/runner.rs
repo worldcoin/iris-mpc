@@ -5,7 +5,7 @@ use crate::utils::{
     constants::COUNT_OF_PARTIES,
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
-    s3_deletions::{get_s3_client, upload_iris_deletions},
+    s3_client::{get_s3_client, upload_iris_deletions},
     HawkConfigs, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
@@ -139,8 +139,8 @@ impl TestRun for Test {
         for config in self.configs.iter().cloned() {
             join_set.spawn(async move {
                 let deleted_serial_ids = vec![];
-                let s3_client = get_s3_client(None, &config.environment).await.unwrap();
-                upload_iris_deletions(&deleted_serial_ids, &s3_client, &config.environment)
+                let s3_client = get_s3_client(&config).await.unwrap();
+                upload_iris_deletions(&deleted_serial_ids, &s3_client, &config)
                     .await
                     .unwrap();
             });
@@ -182,7 +182,7 @@ impl TestRun for Test {
         for config in self.configs.iter().cloned() {
             let max_indexation_id = self.genesis_args.max_indexation_id;
             join_set.spawn(async move {
-                let s3_client = get_s3_client(None, &config.environment).await.unwrap();
+                let s3_client = get_s3_client(&config).await.unwrap();
                 let deletions = get_iris_deletions(&config, &s3_client, max_indexation_id)
                     .await
                     .unwrap();
