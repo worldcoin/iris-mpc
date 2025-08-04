@@ -1,6 +1,8 @@
-use super::super::shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
-use super::state_mutator;
-use crate::utils::{TestError, TestRun};
+use super::shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
+use crate::{
+    resources, system_state,
+    utils::{pgres::NetDbProvider, TestError, TestRun},
+};
 use eyre::Result;
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
@@ -33,16 +35,20 @@ impl Test {
 
 /// Accessors.
 impl Test {
+    pub fn inputs(&self) -> &TestInputs {
+        self.inputs.as_ref().unwrap()
+    }
+
     pub fn net_config(&self) -> &NetConfig {
-        self.inputs.as_ref().unwrap().net_config()
+        self.inputs().net_config()
     }
 
     pub fn node_args(&self, node_idx: PartyIdx) -> NodeArgs {
-        self.inputs.as_ref().unwrap().node_args(node_idx).clone()
+        self.inputs().node_args(node_idx).clone()
     }
 
     pub fn node_config(&self, node_idx: PartyIdx) -> NodeConfig {
-        self.inputs.as_ref().unwrap().node_config(node_idx).clone()
+        self.inputs().node_config(node_idx).clone()
     }
 
     pub fn params(&self) -> &TestParams {
@@ -91,12 +97,12 @@ impl TestRun for Test {
         self.inputs = Some(TestInputs::from(self.params));
 
         // Insert Iris shares -> GPU dB.
-        state_mutator::insert_iris_shares_into_gpu_stores(self.net_config(), self.params())
+        insert_iris_shares_into_gpu_store(self.net_config(), self.params())
             .await
             .unwrap();
 
         // Upload Iris deletions -> AWS S3.
-        state_mutator::upload_iris_deletions(self.net_config(), self.params())
+        upload_iris_deletions(self.net_config(), self.inputs())
             .await
             .unwrap();
 
@@ -123,4 +129,40 @@ impl TestRun for Test {
     async fn teardown_assert(&mut self) -> Result<(), TestError> {
         Ok(())
     }
+}
+
+/// Inserts Iris shares into GPU store.
+async fn insert_iris_shares_into_gpu_store(
+    net_config: &NetConfig,
+    params: &TestParams,
+) -> Result<()> {
+    // Set shares batch generator.
+    let batch_size = params.shares_generator_batch_size();
+    let read_maximum = params.max_indexation_id() as usize;
+    let rng_state = params.shares_generator_rng_state();
+    let skip_offset = 0;
+    let batch_generator =
+        resources::read_iris_shares_batch(batch_size, read_maximum, rng_state, skip_offset)
+            .unwrap();
+
+    // Iterate over batches and insert into GPU store.
+    // TODO: process serial id ranges.
+    let db_provider = NetDbProvider::new_from_config(net_config).await;
+    let tx_batch_size = params.shares_pgres_tx_batch_size();
+    let _ = system_state::insert_iris_shares(&batch_generator, &db_provider, tx_batch_size)
+        .await
+        .unwrap();
+
+    // TODO: process serial id ranges.
+
+    Ok(())
+}
+
+/// Uploads Iris deletions into AWS S3 bucket.
+async fn upload_iris_deletions(net_config: &NetConfig, inputs: &TestInputs) -> Result<()> {
+    system_state::upload_iris_deletions(net_config, inputs.system_state_inputs().iris_deletions())
+        .await
+        .unwrap();
+
+    Ok(())
 }

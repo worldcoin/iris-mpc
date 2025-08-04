@@ -11,13 +11,13 @@ pub struct TestParams {
     batch_size_error_rate: usize,
 
     // Maximum number of Ieis deletions to load into memory.
-    max_deletions: Option<usize>,
+    max_deletions: usize,
 
     // Serial identifier of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
 
     // Maximum number of Iris modifications to load into memory.
-    max_modifications: Option<usize>,
+    max_modifications: usize,
 
     // Ordinal identifier of node config file to read from test resources.
     node_config_idx: usize,
@@ -38,37 +38,6 @@ pub struct TestParams {
     shares_pgres_tx_batch_size: usize,
 }
 
-/// Constructor.
-impl TestParams {
-    pub fn new(
-        batch_size: usize,
-        batch_size_error_rate: usize,
-        max_deletions: Option<usize>,
-        max_indexation_id: IrisSerialId,
-        max_modifications: Option<usize>,
-        perform_db_snapshot: bool,
-        use_db_backup_as_source: bool,
-        node_config_idx: usize,
-        shares_generator_batch_size: usize,
-        shares_generator_rng_state: u64,
-        shares_pgres_tx_batch_size: usize,
-    ) -> Self {
-        Self {
-            batch_size,
-            batch_size_error_rate,
-            max_deletions,
-            max_indexation_id,
-            max_modifications,
-            node_config_idx,
-            perform_db_snapshot,
-            use_db_backup_as_source,
-            shares_generator_batch_size,
-            shares_generator_rng_state,
-            shares_pgres_tx_batch_size,
-        }
-    }
-}
-
 /// Accessors.
 impl TestParams {
     pub fn batch_size(&self) -> usize {
@@ -79,7 +48,7 @@ impl TestParams {
         self.batch_size_error_rate
     }
 
-    pub fn max_deletions(&self) -> Option<usize> {
+    pub fn max_deletions(&self) -> usize {
         self.max_deletions
     }
 
@@ -87,7 +56,7 @@ impl TestParams {
         self.max_indexation_id
     }
 
-    pub fn max_modifications(&self) -> Option<usize> {
+    pub fn max_modifications(&self) -> usize {
         self.max_modifications
     }
 
@@ -117,5 +86,114 @@ impl TestParams {
 
     pub fn shares_generator_rng_state(&self) -> u64 {
         self.shares_generator_rng_state
+    }
+}
+
+/// Builder for TestParams.
+#[derive(Default)]
+pub struct TestParamsBuilder {
+    batch_size: usize,
+    batch_size_error_rate: usize,
+    max_deletions: usize,
+    max_indexation_id: IrisSerialId,
+    max_modifications: usize,
+    node_config_idx: usize,
+    perform_db_snapshot: bool,
+    use_db_backup_as_source: bool,
+    shares_generator_rng_state: u64,
+    shares_generator_batch_size: usize,
+    shares_pgres_tx_batch_size: usize,
+}
+
+impl TestParamsBuilder {
+    pub fn new() -> Self {
+        Self {
+            batch_size: 0,
+            batch_size_error_rate: 256,
+            max_deletions: 0,
+            max_indexation_id: 1000,
+            max_modifications: 0,
+            node_config_idx: 0,
+            perform_db_snapshot: false,
+            use_db_backup_as_source: false,
+            shares_generator_rng_state: 0,
+            shares_generator_batch_size: 100,
+            shares_pgres_tx_batch_size: 100,
+        }
+    }
+}
+
+impl TestParamsBuilder {
+    pub fn batch_size(mut self, value: usize) -> Self {
+        self.batch_size = value;
+        self
+    }
+
+    pub fn batch_size_error_rate(mut self, value: usize) -> Self {
+        self.batch_size_error_rate = value;
+        self
+    }
+
+    pub fn max_deletions(mut self, value: usize) -> Self {
+        self.max_deletions = value;
+        self
+    }
+
+    pub fn max_indexation_id(mut self, value: IrisSerialId) -> Self {
+        self.max_indexation_id = value;
+        self
+    }
+
+    pub fn max_modifications(mut self, value: usize) -> Self {
+        self.max_modifications = value;
+        self
+    }
+
+    pub fn perform_db_snapshot(mut self, value: bool) -> Self {
+        self.perform_db_snapshot = value;
+        self
+    }
+
+    pub fn use_db_backup_as_source(mut self, value: bool) -> Self {
+        self.use_db_backup_as_source = value;
+        self
+    }
+
+    pub fn node_config_idx(mut self, value: usize) -> Self {
+        self.node_config_idx = value;
+        self
+    }
+
+    pub fn shares_generator_batch_size(mut self, value: usize) -> Self {
+        self.shares_generator_batch_size = value;
+        self
+    }
+
+    pub fn shares_generator_rng_state(mut self, value: u64) -> Self {
+        self.shares_generator_rng_state = value;
+        self
+    }
+
+    pub fn shares_pgres_tx_batch_size(mut self, value: usize) -> Self {
+        self.shares_pgres_tx_batch_size = value;
+        self
+    }
+}
+
+impl TestParamsBuilder {
+    pub fn build(&self) -> TestParams {
+        TestParams {
+            batch_size: self.batch_size,
+            batch_size_error_rate: self.batch_size_error_rate,
+            max_deletions: self.max_deletions,
+            max_indexation_id: self.max_indexation_id,
+            max_modifications: self.max_modifications,
+            node_config_idx: self.node_config_idx,
+            perform_db_snapshot: self.perform_db_snapshot,
+            use_db_backup_as_source: self.use_db_backup_as_source,
+            shares_generator_batch_size: self.shares_generator_batch_size,
+            shares_generator_rng_state: self.shares_generator_rng_state,
+            shares_pgres_tx_batch_size: self.shares_pgres_tx_batch_size,
+        }
     }
 }

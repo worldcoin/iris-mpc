@@ -49,21 +49,10 @@ impl From<TestParams> for TestInputs {
 /// Convertor: TestParams -> SystemStateInputs.
 impl From<TestParams> for SystemStateInputs {
     fn from(params: TestParams) -> Self {
-        let deletions = match params.max_deletions() {
-            Some(n_take) => {
-                let skip_offset = 0;
-                resources::read_iris_deletions(n_take, skip_offset).unwrap()
-            }
-            None => vec![],
-        };
-
-        // TODO: elaborate upon this ... probably the resource loader will
-        // return either a stream or a Vec of actual modifications.
-        let modifications = match params.max_modifications() {
-            Some(max) => resources::read_iris_modifications(max, 0).unwrap(),
-            None => vec![],
-        };
-
-        SystemStateInputs::new(params, deletions, modifications)
+        SystemStateInputs::new(
+            params,
+            resources::read_iris_deletions(params.max_deletions(), 0).unwrap(),
+            resources::read_iris_modifications(params.max_modifications(), 0).unwrap(),
+        )
     }
 }
