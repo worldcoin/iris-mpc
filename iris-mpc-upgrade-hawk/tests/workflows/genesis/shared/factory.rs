@@ -1,8 +1,4 @@
-use super::{
-    inputs::{SystemStateInputs, TestInputs},
-    net::NetArgs,
-    params::TestParams,
-};
+use super::{inputs::TestInputs, net::NetArgs, params::TestParams};
 use crate::resources;
 use iris_mpc_common::{config::NetConfig, PARTY_IDX_SET};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
@@ -39,18 +35,9 @@ impl From<&TestParams> for NetConfig {
 impl From<&TestParams> for TestInputs {
     fn from(params: &TestParams) -> Self {
         TestInputs::new(
+            params.to_owned(),
             NetArgs::from(params),
             NetConfig::from(params),
-            SystemStateInputs::from(params),
-        )
-    }
-}
-
-/// Convertor: TestParams -> SystemStateInputs.
-impl From<&TestParams> for SystemStateInputs {
-    fn from(params: &TestParams) -> Self {
-        SystemStateInputs::new(
-            params.clone(),
             resources::read_iris_deletions(params.max_deletions(), 0).unwrap(),
             resources::read_iris_modifications(params.max_modifications(), 0).unwrap(),
         )

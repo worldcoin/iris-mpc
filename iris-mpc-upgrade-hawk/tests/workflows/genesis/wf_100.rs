@@ -90,7 +90,7 @@ impl TestRun for Test {
         // Insert Iris shares -> GPU dBs.
         system_state::insert_iris_shares(
             self.db_provider.as_ref().unwrap(),
-            &self.inputs().system_state().iris_shares_stream(),
+            &self.inputs().iris_shares_stream(),
             self.params.shares_pgres_tx_batch_size(),
         )
         .await
@@ -99,7 +99,7 @@ impl TestRun for Test {
         // Upload Iris deletions -> AWS S3 buckets.
         system_state::upload_iris_deletions(
             self.inputs().net_config(),
-            self.inputs().system_state().iris_deletions(),
+            self.inputs().iris_deletions(),
         )
         .await
         .unwrap();
