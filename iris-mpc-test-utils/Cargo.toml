@@ -39,8 +39,8 @@ toml = { version = "0.8.23", features = ["preserve_order"] }
 async-trait.workspace = true
 
 [[bin]]
-name = "generate-node-toml"
-path = "bin/generate_node_toml.rs"
+name = "generate-node-toml-from-evars"
+path = "bin/generate_node_toml_from_evars.rs"
 
 [[bin]]
 name = "generate-serial-ids-for-deletion"
