@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
 aws-config.workspace = true
 aws-sdk-rds.workspace = true
 aws-sdk-sqs.workspace = true
@@ -37,6 +38,10 @@ chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
 async-trait.workspace = true
+
+[[bin]]
+name = "generate-iris-codes-plaintext"
+path = "bin/generate_iris_codes_plaintext.rs"
 
 [[bin]]
 name = "generate-node-toml-from-evars"

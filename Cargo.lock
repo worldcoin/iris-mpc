@@ -2480,6 +2480,7 @@ dependencies = [
 name = "iris-mpc-test-utils"
 version = "0.1.0"
 dependencies = [
+ "aes-prng",
  "async-trait",
  "aws-config",
  "aws-sdk-rds",

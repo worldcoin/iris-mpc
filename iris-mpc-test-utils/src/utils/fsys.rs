@@ -8,11 +8,18 @@ pub fn get_exec_env_subdirectory() -> &'static str {
     }
 }
 
-/// Returns path to resources assets directory.
+/// Returns path to resource assets directory.
 pub fn get_assets_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
     format!("{crate_root}/assets")
+}
+
+/// Returns path to resource data directory.
+pub fn get_data_root() -> String {
+    let crate_root = env!("CARGO_MANIFEST_DIR");
+
+    format!("{crate_root}/data")
 }
 
 #[cfg(test)]
