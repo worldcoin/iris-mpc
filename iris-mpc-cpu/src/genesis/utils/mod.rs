@@ -1,3 +1,4 @@
+pub mod aws;
 pub(crate) mod errors;
 pub mod logger;
 

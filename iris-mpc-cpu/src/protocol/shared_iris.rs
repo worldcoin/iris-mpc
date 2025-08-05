@@ -15,6 +15,12 @@ pub struct GaloisRingSharedIris {
     pub mask: GaloisRingTrimmedMaskCodeShare,
 }
 
+// Pair of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
+
+// Set of pairs of Iris shares associated with left/right eyes.
+pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; 3];
+
 impl GaloisRingSharedIris {
     /// Empty code and mask share. party_id is 0-based.
     pub fn default_for_party(party_id: usize) -> Self {
