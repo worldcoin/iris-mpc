@@ -1,12 +1,11 @@
-use std::{fs::File, io::BufReader, ops::DerefMut, path::PathBuf};
+use std::{fs::File, io::BufReader, path::PathBuf};
 
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hnsw::graph::test_utils::DbContext, protocol::shared_iris::GaloisRingSharedIris,
-    py_bindings::plaintext_store::Base64IrisCode,
+    protocol::shared_iris::GaloisRingSharedIris, py_bindings::plaintext_store::Base64IrisCode,
 };
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
 
 use crate::utils::logger::log_info;
@@ -72,34 +71,4 @@ pub fn share_irises_locally(
     }
 
     Ok(shared_irises)
-}
-
-pub async fn persist_iris_shares(
-    iris_shares: &Vec<Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>>,
-    dbs: &Vec<DbContext>,
-) -> Result<()> {
-    for (db, shares) in izip!(dbs, iris_shares) {
-        #[allow(clippy::drain_collect)]
-        db.persist_vector_shares(shares.clone()).await?;
-    }
-
-    Ok(())
-}
-
-pub async fn init_dbs(db_urls: Vec<String>, db_schemas: Vec<String>) -> Vec<DbContext> {
-    let mut dbs = Vec::new();
-    for (url, schema) in izip!(db_urls.iter(), db_schemas.iter()).take(N_PARTIES) {
-        dbs.push(DbContext::new(url, schema).await);
-    }
-    dbs
-}
-
-pub async fn clear_iris_shares(db: &DbContext) -> Result<()> {
-    let mut query = sqlx::QueryBuilder::new("TRUNCATE irises");
-
-    let mut tx = db.store.tx().await?;
-    query.build().execute(tx.deref_mut()).await?;
-    tx.commit().await?;
-
-    Ok(())
 }

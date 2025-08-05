@@ -1,162 +1,199 @@
-use super::{factory, types::TestInputs};
+use std::sync::Arc;
+
 use crate::utils::{
-    irises::{
-        clear_iris_shares, init_dbs, persist_iris_shares, read_irises_from_ndjson,
-        share_irises_locally,
-    },
-    resources::get_resource_path,
-    s3_deletions::{get_s3_client, upload_iris_deletions},
-    TestError, TestRun, TestRunContextInfo,
+    constants::COUNT_OF_PARTIES,
+    irises,
+    mpc_node::{MpcNode, MpcNodes},
+    resources::{self},
+    s3_deletions::{get_aws_clients, upload_iris_deletions},
+    HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
 };
-use eyre::{Report, Result};
-use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
+use eyre::Result;
+use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
+use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
+use itertools::izip;
+use tokio::task::JoinSet;
 
-/// HNSW Genesis test.
 pub struct Test {
-    /// Data encapsulating test inputs.
-    inputs: Option<TestInputs>,
-
-    /// Results of node process execution.
-    node_results: Option<Vec<Result<(), Report>>>,
+    configs: HawkConfigs,
 }
 
-/// Constructor.
+const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
+    max_indexation_id: 100,
+    batch_size: 10,
+    batch_size_error_rate: 250,
+};
+
+const DEFAULT_RNG_SEED: u64 = 0;
+
+fn get_irises() -> Vec<IrisCodePair> {
+    let irises_path =
+        resources::get_resource_path("iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
+    irises::read_irises_from_ndjson(irises_path, 100).unwrap()
+}
+
 impl Test {
     pub fn new() -> Self {
-        Self {
-            inputs: None,
-            node_results: None,
-        }
+        let exec_env = TestRunContextInfo::new(0, 0);
+
+        let configs = (0..COUNT_OF_PARTIES)
+            .map(|idx| {
+                resources::read_node_config(&exec_env, format!("node-{idx}-genesis-0")).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+
+        Self { configs }
+    }
+
+    async fn get_nodes(&self) -> impl Iterator<Item = MpcNode> {
+        MpcNodes::new(&self.configs).await.into_iter()
     }
 }
 
 /// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        // Set node process inputs.
-        let node_inputs = self
-            .inputs
-            .as_ref()
-            .unwrap()
-            .net_inputs()
-            .node_process_inputs()
-            .iter();
+        // these need to be on separate tasks
+        let mut join_set = JoinSet::new();
+        for config in self.configs.iter().cloned() {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            join_set.spawn(async move {
+                exec_genesis(
+                    ExecutionArgs::new(
+                        genesis_args.batch_size,
+                        genesis_args.batch_size_error_rate,
+                        genesis_args.max_indexation_id,
+                        false,
+                        false,
+                    ),
+                    config,
+                )
+                .await
+            });
+        }
 
-        // Set node process futures.
-        let node_futures: Vec<_> = node_inputs
-            .map(|node_input| {
-                exec_genesis(node_input.args().to_owned(), node_input.config().to_owned())
-            })
-            .collect();
-
-        // Await futures to complete.
-        self.node_results = Some(futures::future::join_all(node_futures).await);
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap()?;
+        }
 
         Ok(())
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        // Assert node process results.
-        for (node_idx, node_result) in self.node_results.as_ref().unwrap().iter().enumerate() {
-            match node_result {
-                Ok(_) => (),
-                Err(err) => {
-                    return Err(TestError::NodeProcessPanicError(node_idx, err.to_string()));
-                }
-            }
+        let config = &self.configs[0];
+        let plaintext_irises = get_irises();
+        let expected = Arc::new(
+            MpcNode::simulate_genesis(
+                DEFAULT_GENESIS_ARGS,
+                config,
+                &plaintext_irises,
+                DEFAULT_RNG_SEED,
+            )
+            .await
+            .unwrap(),
+        );
+
+        let mut join_set = JoinSet::new();
+        for node in self.get_nodes().await {
+            let expected = expected.clone();
+            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
+            join_set.spawn(async move {
+                // inspect the postgres tables - iris counts, modifications, and persisted_state
+                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
+
+                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
+
+                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                assert_eq!(100, node.get_last_indexed_iris_id().await);
+                assert_eq!(0, node.get_last_indexed_modification_id().await);
+
+                node.assert_graphs_match(&expected).await;
+            });
         }
 
-        // Assert CPU dB tables: iris, hawk_graph_entry, hawk_graph_links, persistent_state
-        // TODO
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
 
         Ok(())
     }
 
-    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        // Set inputs.
-        let test_inputs = factory::get_test_inputs(ctx);
-        self.inputs = Some(test_inputs.clone());
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
+        let plaintext_irises = get_irises();
+        let secret_shared_irises =
+            irises::share_irises_locally(&plaintext_irises, DEFAULT_RNG_SEED).unwrap();
 
-        // Initialize GPU databases
-        let (db_urls, db_schemas) = test_inputs
-            .net_inputs()
-            .node_process_inputs()
-            .iter()
-            .map(|n| {
-                (
-                    n.config().database.as_ref().unwrap().url.clone(),
-                    n.config().gpu_schema_name_suffix.clone(),
-                )
-            })
-            .unzip();
-        let dbs_gpu = init_dbs(db_urls, db_schemas).await;
-
-        // Read 100 iris code pairs into memory
-        let irises_path =
-            get_resource_path("/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
-        let iris_codes = read_irises_from_ndjson(irises_path, 100)
-            .map_err(|e| TestError::SetupError(e.to_string()))?;
-
-        // Generate secret shares of iris codes
-        let iris_shares = share_irises_locally(&iris_codes, 0)
-            .map_err(|e| TestError::SetupError(e.to_string()))?;
-
-        // Clear GPU database iris shares
-        for db in dbs_gpu.iter() {
-            clear_iris_shares(db)
-                .await
-                .map_err(|e| TestError::SetupError(e.to_string()))?;
+        let mut join_set = JoinSet::new();
+        for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
+            join_set.spawn(async move {
+                node.init_tables(&shares).await.unwrap();
+            });
         }
 
-        // Write 100 Iris shares -> GPU databases
-        persist_iris_shares(&iris_shares, &dbs_gpu)
-            .await
-            .map_err(|e| TestError::SetupError(e.to_string()))?;
-
-        // Initialize CPU databases
-        let (db_urls, db_schemas) = test_inputs
-            .net_inputs()
-            .node_process_inputs()
-            .iter()
-            .map(|n| {
-                (
-                    n.config().cpu_database.as_ref().unwrap().url.clone(),
-                    n.config().hnsw_schema_name_suffix.clone(),
-                )
-            })
-            .unzip();
-        let dbs_cpu = init_dbs(db_urls, db_schemas).await;
-
-        // Clear CPU database iris shares
-        for db in dbs_cpu.iter() {
-            clear_iris_shares(db)
-                .await
-                .map_err(|e| TestError::SetupError(e.to_string()))?;
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
         }
 
-        // Initialize deleted iris codes in S3 bucket
+        // any config file is sufficient to connect to S3
+        let config = &self.configs[0];
+
         let deleted_serial_ids = vec![];
-        let s3_region = "us-east-1";
-        let deployment_mode = "dev";
-        let s3_client = get_s3_client(Some(s3_region), deployment_mode)
-            .await
-            .map_err(|e| TestError::SetupError(e.to_string()))?;
-        upload_iris_deletions(&deleted_serial_ids, &s3_client, deployment_mode).await?;
-
-        // TODO clear modifications table in GPU and CPU databases
+        let aws_clients = get_aws_clients(config).await.unwrap();
+        upload_iris_deletions(
+            &deleted_serial_ids,
+            &aws_clients.s3_client,
+            &config.environment,
+        )
+        .await
+        .unwrap();
 
         Ok(())
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
-        // Assert inputs.
-        assert!(&self.inputs.is_some());
+        let mut join_set = JoinSet::new();
+        for node in self.get_nodes().await {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            join_set.spawn(async move {
+                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, max_indexation_id);
 
-        // Assert dBs.
-        // TODO
+                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                assert_eq!(num_irises, 0);
+
+                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                assert_eq!(num_modifications.len(), 0);
+
+                assert_eq!(0, node.get_last_indexed_iris_id().await);
+                assert_eq!(0, node.get_last_indexed_modification_id().await);
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
 
         // Assert localstack.
-        // TODO
+
+        let config = &self.configs[0];
+        let aws_clients = get_aws_clients(config).await.unwrap();
+        let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
+            .await
+            .unwrap();
+        assert_eq!(deletions.len(), 0);
 
         Ok(())
     }

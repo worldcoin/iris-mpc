@@ -16,6 +16,7 @@ mod workflows;
 ///     graph construction is equivalent for each node;
 #[tokio::test]
 #[serial]
+#[traced_test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;

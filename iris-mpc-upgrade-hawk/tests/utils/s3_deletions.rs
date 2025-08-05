@@ -1,23 +1,12 @@
 use crate::utils::{errors::TestError, logger};
-use aws_config;
-use aws_sdk_s3::{
-    config::{Builder as S3_ConfigBuilder, Region as AWS_Region},
-    primitives::ByteStream as S3_ByteStream,
-    Client as S3_Client,
-};
+use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
 use eyre::Result;
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc_common::{
-    config::{Config, ENV_PROD, ENV_STAGE},
-    IrisSerialId,
-};
+use iris_mpc_common::{config::Config, IrisSerialId};
 use serde::Serialize;
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "SystemState-Aws";
-
-/// Default AWS region.  TODO: remove.
-const DEFAULT_AWS_REGION: &str = "eu-north-1";
 
 /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
 pub async fn upload_iris_deletions(
@@ -59,22 +48,6 @@ pub async fn upload_iris_deletions(
         })?;
 
     Ok(())
-}
-
-/// Returns an S3 client with retry configuration.
-pub async fn get_s3_client(region: Option<&str>, environment: &str) -> Result<S3_Client> {
-    let region = region.unwrap_or(DEFAULT_AWS_REGION).to_string();
-    let region_provider = AWS_Region::new(region);
-    // TODO modify this to take all configuration values explicitly, instead of some from environment
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
-    let force_path_style = environment != ENV_PROD && environment != ENV_STAGE;
-    let retry_config = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
-    let s3_config = S3_ConfigBuilder::from(&shared_config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config.clone())
-        .build();
-
-    Ok(S3_Client::from_conf(s3_config))
 }
 
 /// Returns an S3 client with retry configuration.

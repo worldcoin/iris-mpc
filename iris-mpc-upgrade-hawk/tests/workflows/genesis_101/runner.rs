@@ -52,10 +52,32 @@ impl Test {
     }
 }
 
-/// Trait: TestRun.
 impl TestRun for Test {
+    // run genesis twice - first indexing 50 and then up to 100
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
+        let mut join_set = JoinSet::new();
+        for config in self.configs.iter().cloned() {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            join_set.spawn(async move {
+                exec_genesis(
+                    ExecutionArgs::new(
+                        genesis_args.batch_size,
+                        genesis_args.batch_size_error_rate,
+                        genesis_args.max_indexation_id / 2,
+                        false,
+                        false,
+                    ),
+                    config,
+                )
+                .await
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap()?;
+        }
+
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
