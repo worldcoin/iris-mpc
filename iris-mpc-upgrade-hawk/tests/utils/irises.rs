@@ -20,7 +20,7 @@ const N_PARTIES: usize = 3;
 /// Number of iris code pairs to generate secret shares for at a time.
 const SECRET_SHARING_BATCH_SIZE: usize = 5000;
 
-pub async fn read_irises_from_ndjson(
+pub fn read_irises_from_ndjson(
     ndjson_path: PathBuf,
     num_pairs: usize,
 ) -> Result<Vec<(IrisCode, IrisCode)>> {
@@ -43,29 +43,6 @@ pub async fn read_irises_from_ndjson(
         .collect_vec();
 
     Ok(iris_pairs)
-}
-
-pub fn encode_plaintext_iris_for_party(
-    pairs: &[(IrisCode, IrisCode)],
-    rng_state: u64,
-    party_idx: usize,
-) -> Vec<(GaloisRingSharedIris, GaloisRingSharedIris)> {
-    pairs
-        .iter()
-        .map(|code_pair| {
-            // Set RNG for each pair to match shares_encoding.rs behavior
-            let mut shares_seed = StdRng::seed_from_u64(rng_state);
-
-            // Set MPC participant specific Iris shares from Iris code + entropy.
-            let (code_l, code_r) = code_pair;
-            let shares_l =
-                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_l.to_owned());
-            let shares_r =
-                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_r.to_owned());
-
-            (shares_l[party_idx].clone(), shares_r[party_idx].clone())
-        })
-        .collect()
 }
 
 pub fn share_irises_locally(

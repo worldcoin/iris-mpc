@@ -92,11 +92,9 @@ impl TestRun for Test {
         let dbs_gpu = init_dbs(db_urls, db_schemas).await;
 
         // Read 100 iris code pairs into memory
-        let irises_path = get_resource_path(
-            "/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson".to_string(),
-        );
-        let iris_codes = read_irises_from_ndjson(irises_path.into(), 100)
-            .await
+        let irises_path =
+            get_resource_path("/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
+        let iris_codes = read_irises_from_ndjson(irises_path, 100)
             .map_err(|e| TestError::SetupError(e.to_string()))?;
 
         // Generate secret shares of iris codes

@@ -96,13 +96,11 @@ impl MpcNode {
         }
     }
 
-    pub async fn init_iris_store_from_plaintext(&self, pairs: &[IrisCodePair], rng_seed: u64) {
-        let shares =
-            super::irises::encode_plaintext_iris_for_party(pairs, rng_seed, self.config.party_id);
-
-        self.init_iris_stores(&shares)
-            .await
-            .expect("init iris stores failed");
+    /// clear all tables and insert irises into the GPU database
+    pub async fn init_tables(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
+        self.clear_all_tables().await?;
+        self.insert_into_gpu_iris_store(shares).await?;
+        Ok(())
     }
 
     pub async fn simulate_genesis(
@@ -179,12 +177,6 @@ impl MpcNode {
 
 // test setup
 impl MpcNode {
-    async fn init_iris_stores(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
-        self.clear_all_tables().await?;
-        self.insert_into_gpu_iris_store(shares).await?;
-        Ok(())
-    }
-
     async fn clear_all_tables(&self) -> Result<()> {
         let mut graph_tx = self.graph_store.tx().await?;
         graph_tx

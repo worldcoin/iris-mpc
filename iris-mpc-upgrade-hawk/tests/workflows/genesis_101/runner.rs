@@ -1,5 +1,6 @@
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
+    irises,
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
@@ -8,6 +9,7 @@ use crate::utils::{
 use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
+use itertools::izip;
 use tokio::task::JoinSet;
 
 pub struct Test {
@@ -94,10 +96,10 @@ impl TestRun for Test {
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
 
-                // run plaintext genesis and compare against the graph tables
-                let plaintext_irises =
-                    resources::read_plaintext_iris(0, genesis_args.max_indexation_id as usize)
-                        .unwrap();
+                let irises_path = resources::get_resource_path(
+                    "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
+                );
+                let plaintext_irises = irises::read_irises_from_ndjson(irises_path, 100).unwrap();
                 let expected = node
                     .simulate_genesis(genesis_args, &plaintext_irises, DEFAULT_RNG_SEED)
                     .await
@@ -114,15 +116,17 @@ impl TestRun for Test {
     }
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
+        let irises_path = resources::get_resource_path(
+            "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
+        );
+        let plaintext_irises = irises::read_irises_from_ndjson(irises_path, 100).unwrap();
+        let secret_shared_irises =
+            irises::share_irises_locally(&plaintext_irises, DEFAULT_RNG_SEED).unwrap();
+
         let mut join_set = JoinSet::new();
-        for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
+        for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
             join_set.spawn(async move {
-                let plaintext_irises =
-                    resources::read_plaintext_iris(0, genesis_args.max_indexation_id as usize)
-                        .unwrap();
-                node.init_iris_store_from_plaintext(&plaintext_irises, DEFAULT_RNG_SEED)
-                    .await;
+                node.init_tables(&shares).await.unwrap();
             });
         }
 

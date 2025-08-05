@@ -7,6 +7,7 @@ use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::Itertools;
 use std::fs::File;
 use std::io::{BufReader, Error};
+use std::path::{Path, PathBuf};
 
 impl TestRunEnvironment {
     /// Returns subdirectory name for current test run environment.
@@ -26,8 +27,8 @@ fn get_resources_root() -> String {
 }
 
 /// Returns the path in the source tree of a resource asset.
-pub fn get_resource_path(location: String) -> String {
-    format!("{}/{}", get_resources_root(), location)
+pub fn get_resource_path(location: &str) -> PathBuf {
+    Path::new(&get_resources_root()).join(location)
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -41,26 +42,4 @@ pub fn read_node_config(ctx: &TestRunContextInfo, config_fname: String) -> Resul
     let cfg = std::fs::read_to_string(path_to_cfg)?;
 
     Ok(toml::from_str(&cfg).unwrap())
-}
-
-pub fn read_plaintext_iris(
-    skip_offset: usize,
-    max_items: usize,
-) -> Result<Vec<IrisCodePair>, Error> {
-    let path_to_iris_codes = format!(
-        "{}/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
-        get_resources_root(),
-    );
-
-    // Set file stream.
-    let file = File::open(path_to_iris_codes).unwrap();
-    let reader = BufReader::new(file);
-    let stream = serde_json::Deserializer::from_reader(reader)
-        .into_iter::<Base64IrisCode>()
-        .skip(skip_offset)
-        .map(|x| IrisCode::from(&x.unwrap()))
-        .tuples()
-        .take(max_items);
-
-    Ok(stream.collect())
 }
