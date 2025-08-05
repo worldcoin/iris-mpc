@@ -21,8 +21,6 @@ pub enum NetworkValue {
     StateChecksum(StateChecksum),
     // outside of this module, use vec_to_network() and vec_from_network() instead of accessing this variant directly.
     NetworkVec(Vec<Self>),
-    // used to verify that the PRFs aren't out of sync
-    PrfCheck(RingElement<u128>),
 }
 
 #[repr(u8)]
@@ -40,7 +38,6 @@ pub enum DescriptorByte {
     StateChecksum = 0x09,
     // this is used by the TCP framing protocol.
     NetworkVec = 0x0A,
-    PrfCheck = 0x0B,
 }
 
 impl DescriptorByte {
@@ -55,7 +52,6 @@ impl DescriptorByte {
             DescriptorByte::VecRing16 | DescriptorByte::VecRing32 | DescriptorByte::VecRing64 => 5,
             DescriptorByte::StateChecksum => 1 + 8 + 8,
             DescriptorByte::NetworkVec => 5,
-            DescriptorByte::PrfCheck => 1 + size_of::<u128>(),
         }
     }
 }
@@ -95,7 +91,6 @@ impl NetworkValue {
             NetworkValue::VecRing64(_) => DescriptorByte::VecRing64,
             NetworkValue::StateChecksum(_) => DescriptorByte::StateChecksum,
             NetworkValue::NetworkVec(_) => DescriptorByte::NetworkVec,
-            NetworkValue::PrfCheck(_) => DescriptorByte::PrfCheck,
         };
         descriptor_byte.into()
     }
@@ -143,7 +138,6 @@ impl NetworkValue {
 
         match self {
             NetworkValue::PrfKey(key) => res.extend_from_slice(key),
-            NetworkValue::PrfCheck(v) => res.extend_from_slice(&v.convert().to_le_bytes()),
             NetworkValue::RingElementBit(_) => {
                 // Do nothing, the descriptor byte already contains the bit
                 // value
@@ -251,14 +245,6 @@ impl NetworkValue {
                 Ok(NetworkValue::PrfKey(<[u8; PRF_KEY_SIZE]>::try_from(
                     &serialized[1..1 + PRF_KEY_SIZE],
                 )?))
-            }
-            DescriptorByte::PrfCheck => {
-                if serialized.len() != 1 + size_of::<u128>() {
-                    bail!("Invalid length for PrfSqueeze");
-                }
-                Ok(NetworkValue::PrfCheck(RingElement(u128::from_le_bytes(
-                    <[u8; 16]>::try_from(&serialized[1..1 + 16])?,
-                ))))
             }
             DescriptorByte::RingElementBit1 | DescriptorByte::RingElementBit0 => {
                 if serialized.len() != 1 {
