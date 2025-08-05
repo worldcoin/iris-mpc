@@ -1,6 +1,6 @@
 use clap::Parser;
 use iris_mpc_cpu::genesis::utils::aws::IrisDeletionsForS3;
-use iris_mpc_test_utils::resources::generators::generate_iris_deletions;
+use iris_mpc_test_utils::resources::generate_iris_deletions;
 use serde_json::{self, json};
 use std::{fs::File, io::Write, path::Path};
 

@@ -8,6 +8,19 @@ use std::io::Error;
 /// Node config kind: genesis.
 pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
 
+/// Returns a node's config deserialized from environment variables.
+///
+/// # Returns
+///
+/// A node's config deserialized from environment variables.
+///
+pub fn generate_node_config_from_env_vars() -> NodeConfig {
+    // Activate environment variables.
+    dotenvy::dotenv().ok();
+
+    NodeConfig::load_config("SMPC").unwrap()
+}
+
 /// Returns node configuration deserialized from a toml file.
 ///
 /// # Arguments

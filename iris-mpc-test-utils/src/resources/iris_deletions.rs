@@ -6,6 +6,23 @@ use std::io::Error;
 /// Name of ndjson file containing a set of Iris codes.
 const FNAME_1K: &str = "iris-deletions/20250805-iris-deletions-1k.json";
 
+/// Returns a set of Iris serial identifiers to be associated with deleted Iris shares.
+///
+/// # Arguments
+///
+/// * `n_deletions` - The number of deletions to generate.
+///
+/// # Returns
+///
+/// A set of Iris serial identifiers to be associated with deleted Iris shares.
+///
+pub fn generate_iris_deletions(n_deletions: usize) -> Vec<IrisSerialId> {
+    // Every 50 Iris serial identifiers will be marked for deletion.
+    (0..n_deletions)
+        .map(|i| ((i + 1) * 50) as IrisSerialId)
+        .collect()
+}
+
 /// Returns serial identifiers associated with deleted Iris's.
 ///
 /// # Arguments

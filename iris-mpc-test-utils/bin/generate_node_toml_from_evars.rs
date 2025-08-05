@@ -1,6 +1,6 @@
 use clap::Parser;
 use iris_mpc_common::config::Config as NodeConfig;
-use iris_mpc_test_utils::resources::generators::generate_node_config_from_env_vars;
+use iris_mpc_test_utils::resources::generate_node_config_from_env_vars;
 use std::fs;
 use std::io::Write;
 
