@@ -1,9 +1,9 @@
 use super::{net::NetArgs, params::TestParams};
-use crate::{resources, utils::types::PartyIdx};
-use iris_mpc_common::{
-    config::{Config as NodeConfig, NetConfig},
-    IrisSerialId,
+use crate::{
+    resources,
+    utils::types::{NetConfig, PartyIdx},
 };
+use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 use itertools::IntoChunks;

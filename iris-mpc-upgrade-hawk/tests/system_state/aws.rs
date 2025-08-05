@@ -1,10 +1,7 @@
-use crate::utils::{aws::get_s3_client, errors::TestError, logger};
+use crate::utils::{aws::get_s3_client, errors::TestError, logger, types::NetConfig};
 use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use eyre::Result;
-use iris_mpc_common::{
-    config::{Config as NodeConfig, NetConfig},
-    IrisSerialId,
-};
+use iris_mpc_common::{config::Config as NodeConfig, IrisSerialId};
 use iris_mpc_cpu::genesis::utils::aws::{
     get_s3_bucket_for_iris_deletions, get_s3_key_for_iris_deletions, IrisDeletionsForS3,
 };

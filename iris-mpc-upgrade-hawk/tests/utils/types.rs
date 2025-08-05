@@ -1,3 +1,5 @@
+use iris_mpc_common::config::Config as NodeConfig;
+
 //. Enum over set of node types.
 #[allow(dead_code)]
 #[allow(clippy::upper_case_acronyms)]
@@ -8,3 +10,6 @@ pub enum NodeType {
 
 /// Type alias: Ordinal identifier of an MPC participant.
 pub type PartyIdx = usize;
+
+// Network wide configuration set.
+pub type NetConfig = [NodeConfig; 3];

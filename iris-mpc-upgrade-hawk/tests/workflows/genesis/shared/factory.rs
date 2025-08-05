@@ -1,6 +1,8 @@
 use super::{inputs::TestInputs, net::NetArgs, params::TestParams};
-use crate::{resources, utils::constants::PARTY_IDX_SET};
-use iris_mpc_common::config::NetConfig;
+use crate::{
+    resources,
+    utils::{constants::PARTY_IDX_SET, types::NetConfig},
+};
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs as NodeArgs;
 
 /// Convertor: TestParams -> NetArgs.

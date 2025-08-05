@@ -1,10 +1,11 @@
+use super::types::NetConfig;
 use aws_config::{from_env, retry::RetryConfig};
 use aws_sdk_s3::{
     config::{Builder as S3_ConfigBuilder, Region as AWS_Region},
     Client as S3_Client,
 };
 use eyre::Result;
-use iris_mpc_common::config::{Config as NodeConfig, NetConfig, ENV_PROD, ENV_STAGE};
+use iris_mpc_common::config::{Config as NodeConfig, ENV_PROD, ENV_STAGE};
 
 /// Default AWS region.
 const DEFAULT_AWS_REGION: &str = "eu-north-1";

@@ -1,9 +1,9 @@
-use crate::utils::{
+use super::{
     constants::{PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
-    types::{NodeType, PartyIdx},
+    types::{NetConfig, NodeType, PartyIdx},
 };
 use iris_mpc_common::{
-    config::{Config as NodeConfig, NetConfig},
+    config::Config as NodeConfig,
     postgres::{AccessMode, PostgresClient},
     PARTY_COUNT,
 };

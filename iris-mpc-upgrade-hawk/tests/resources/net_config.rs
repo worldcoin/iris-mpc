@@ -1,6 +1,5 @@
 use super::node_config::read_node_config;
-use crate::utils::constants::PARTY_IDX_SET;
-use iris_mpc_common::config::NetConfig;
+use crate::utils::{constants::PARTY_IDX_SET, types::NetConfig};
 use std::io::Error;
 
 /// Returns network configuration deserialized from a toml file.
