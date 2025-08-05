@@ -1,5 +1,6 @@
 pub mod constants;
 mod errors;
+pub mod irises;
 mod logger;
 pub mod mpc_node;
 pub mod resources;

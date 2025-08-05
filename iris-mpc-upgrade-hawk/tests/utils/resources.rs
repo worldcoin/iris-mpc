@@ -19,17 +19,24 @@ impl TestRunEnvironment {
 }
 
 /// Returns path to resources root directory.
-fn get_path_to_resources() -> String {
+fn get_resources_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
     format!("{crate_root}/tests/resources")
+}
+
+/// Returns the path in the source tree of a resource asset.
+///
+/// Format of resource location should start with a leading forward slash.
+pub fn get_resource_path(location: String) -> String {
+    format!("{}{}", get_resources_root(), location)
 }
 
 /// Returns node configuration deserialized from a toml file.
 pub fn read_node_config(ctx: &TestRunContextInfo, config_fname: String) -> Result<Config, Error> {
     let path_to_cfg = format!(
         "{}/node-config/{}/{}.toml",
-        get_path_to_resources(),
+        get_resources_root(),
         ctx.env().subdirectory(),
         config_fname
     );
