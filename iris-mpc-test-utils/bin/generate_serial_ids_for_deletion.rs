@@ -23,18 +23,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("Maximum number should not exceed 300,000".into());
     }
 
-    println!(
-        "Generating {} random serial IDs for deletion...",
-        args.n_deletions
-    );
-
-    // Generate.
+    // Generate Iris serial identifiers.
     let mut indices = generate_iris_deletions(args.n_deletions);
     indices.sort();
 
     // Write to file.
     let path = Path::new(&args.path_to_output_file);
-    let mut file = File::create(path)?;
+    let mut file = File::create(path).unwrap();
     let json_output = json!(IrisDeletionsForS3 {
         deleted_serial_ids: indices.clone()
     });
