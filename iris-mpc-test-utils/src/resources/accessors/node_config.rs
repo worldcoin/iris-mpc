@@ -62,19 +62,19 @@ mod tests {
 
     #[test]
     fn test_read_node_config() {
-        for party_idx in PARTY_IDX_SET {
-            let config_idx = 0;
+        let config_idx = 0;
+        PARTY_IDX_SET.iter().for_each(|party_idx| {
             let cfg = read_node_config(&party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
-            assert!(cfg.party_id == party_idx);
-        }
+            assert!(cfg.party_id == *party_idx);
+        });
     }
 
     #[test]
     fn test_read_node_config_by_name() {
-        for party_idx in PARTY_IDX_SET {
+        PARTY_IDX_SET.iter().for_each(|party_idx| {
             let fname = format!("node-{}-genesis-0", party_idx);
             let cfg = read_node_config_by_name(fname).unwrap();
-            assert!(cfg.party_id == party_idx);
-        }
+            assert!(cfg.party_id == *party_idx);
+        });
     }
 }

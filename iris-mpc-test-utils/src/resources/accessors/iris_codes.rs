@@ -69,7 +69,6 @@ mod tests {
 
     #[test]
     fn test_read_iris_code_pairs() {
-        // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
         for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
             for _ in read_iris_codes(read_maximum, skip_offset).unwrap() {
@@ -81,7 +80,6 @@ mod tests {
 
     #[test]
     fn test_read_iris_code_pairs_batch() {
-        // NOTE: currently runs against a default ndjson file of 1000 iris codes (i.e. 500 pairs).
         for (batch_size, read_maximum, skip_offset, expected_batches) in
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {

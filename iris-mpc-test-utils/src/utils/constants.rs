@@ -1,6 +1,6 @@
 use super::types::PartyIdx;
 
-// Count of MPC protocol parties.
+/// Count of MPC protocol parties.
 #[cfg(test)]
 pub const PARTY_COUNT: usize = 3;
 

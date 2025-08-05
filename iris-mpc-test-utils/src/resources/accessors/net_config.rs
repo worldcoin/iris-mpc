@@ -29,7 +29,10 @@ mod tests {
 
     #[test]
     fn test_read_net_config() {
-        let cfg = read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
-        assert!(cfg.len() == PARTY_COUNT);
+        let net_config = read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
+        assert!(net_config.len() == PARTY_COUNT);
+        for (party_idx, node_config) in net_config.iter().enumerate() {
+            assert!(node_config.party_id == party_idx);
+        }
     }
 }
