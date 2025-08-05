@@ -1378,6 +1378,14 @@ impl HawkHandle {
             mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
