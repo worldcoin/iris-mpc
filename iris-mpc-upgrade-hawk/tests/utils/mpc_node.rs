@@ -23,6 +23,15 @@ use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::Itertools;
 use std::collections::HashMap;
 
+// these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
+mod constants {
+    /// Domain for persistent state store entry for last indexed id
+    pub const STATE_DOMAIN: &str = "genesis";
+    // Key for persistent state store entry for last indexed iris id
+    pub const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
+    // Key for persistent state store entry for last indexed modification id
+    pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
+}
 /// represents a party in the MPC computation
 pub struct MpcNode {
     // databases
@@ -204,6 +213,28 @@ impl MpcNode {
 
         assert!(graph_left == expected.dst_db.graphs[0]);
         assert!(graph_right == expected.dst_db.graphs[1]);
+    }
+
+    pub async fn get_last_indexed_iris_id(&self) -> IrisSerialId {
+        self.graph_store
+            .get_persistent_state(
+                constants::STATE_DOMAIN,
+                constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+            )
+            .await
+            .unwrap()
+            .unwrap_or_default()
+    }
+
+    pub async fn get_last_indexed_modification_id(&self) -> i64 {
+        self.graph_store
+            .get_persistent_state(
+                constants::STATE_DOMAIN,
+                constants::STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+            )
+            .await
+            .unwrap()
+            .unwrap_or_default()
     }
 }
 
