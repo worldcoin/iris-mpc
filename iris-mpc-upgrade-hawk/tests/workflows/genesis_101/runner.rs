@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
@@ -80,11 +82,23 @@ impl TestRun for Test {
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        let mut join_set = JoinSet::new();
+        let config = &self.configs[0];
+        let plaintext_irises = get_irises();
+        let expected = Arc::new(
+            MpcNode::simulate_genesis(
+                DEFAULT_GENESIS_ARGS,
+                config,
+                &plaintext_irises,
+                DEFAULT_RNG_SEED,
+            )
+            .await
+            .unwrap(),
+        );
 
+        let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            let expected = expected.clone();
+            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
@@ -102,11 +116,6 @@ impl TestRun for Test {
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
 
-                let plaintext_irises = get_irises();
-                let expected = node
-                    .simulate_genesis(genesis_args, &plaintext_irises, DEFAULT_RNG_SEED)
-                    .await
-                    .unwrap();
                 node.assert_graphs_match(&expected).await;
             });
         }

@@ -39,9 +39,6 @@ pub struct MpcNode {
     pub gpu_iris_store: IrisStore,
     pub cpu_iris_store: IrisStore,
     pub graph_store: GraphStore<PlaintextStore>,
-
-    // inputs
-    pub config: Config,
 }
 
 /// Simulates a 3 party multi party computation. Is intended to be built from a list of configurations in a way that
@@ -92,7 +89,6 @@ impl MpcNode {
             gpu_iris_store: IrisStore::new(&gpu_client).await.unwrap(),
             cpu_iris_store: IrisStore::new(&cpu_client).await.unwrap(),
             graph_store: GraphStore::new(&cpu_client).await.unwrap(),
-            config,
         }
     }
 
@@ -103,18 +99,19 @@ impl MpcNode {
         Ok(())
     }
 
+    /// Doesn't actually require a MpcNode
     pub async fn simulate_genesis(
-        &self,
         genesis_args: GenesisArgs,
+        config: &Config,
         pairs: &[IrisCodePair],
         rng_state: u64,
     ) -> Result<GenesisState> {
         let genesis_input = get_genesis_input(pairs);
 
         let genesis_config = GenesisConfig {
-            hnsw_M: self.config.hnsw_param_M,
-            hnsw_ef_constr: self.config.hnsw_param_ef_constr,
-            hnsw_ef_search: self.config.hnsw_param_ef_search,
+            hnsw_M: config.hnsw_param_M,
+            hnsw_ef_constr: config.hnsw_param_ef_constr,
+            hnsw_ef_search: config.hnsw_param_ef_search,
             hawk_prf_key: Some(rng_state),
         };
 
