@@ -15,13 +15,9 @@ macro_rules! run_test {
     ($count:expr, $idx:expr) => {{
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            if cfg!(feature = "db_dependent") {
-                let ctx = TestRunContextInfo::new($count, $idx);
-                Test::new().run(ctx).await
-            } else {
-                Ok(())
-            }
-        })?
+            let ctx = TestRunContextInfo::new($count, $idx);
+            Test::new().run(ctx).await
+        })
     }};
 }
 
@@ -35,16 +31,18 @@ macro_rules! run_test {
 ///     graph construction is equivalent for each node;
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
-    run_test!(100, 1);
+    run_test!(100, 1)?;
     Ok(())
 }
 
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_hnsw_genesis_101() -> Result<()> {
     use workflows::genesis_101::Test;
-    run_test!(101, 1);
+    run_test!(101, 1)?;
     Ok(())
 }
