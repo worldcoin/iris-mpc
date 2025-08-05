@@ -1,12 +1,6 @@
-use crate::utils::IrisCodePair;
-
 use super::{TestRunContextInfo, TestRunEnvironment};
 use iris_mpc_common::config::Config;
-use iris_mpc_common::iris_db::iris::IrisCode;
-use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
-use itertools::Itertools;
-use std::fs::File;
-use std::io::{BufReader, Error};
+use std::io::Error;
 use std::path::{Path, PathBuf};
 
 impl TestRunEnvironment {
