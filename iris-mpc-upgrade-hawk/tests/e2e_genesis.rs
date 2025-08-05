@@ -1,10 +1,29 @@
 use eyre::Result;
 use serial_test::serial;
-use tracing_test::traced_test;
 use utils::{TestRun, TestRunContextInfo};
 
 mod utils;
 mod workflows;
+
+// the #[serial] macro doesn't work with #[tokio::test] but it works with #[test].
+// rather than implement a static mutex, simply use another macro to launch a tokio runtime
+// to run the genesis tests.
+//
+// as long as there is a struct called Test that can be created by ::new(), and implements TestRun,
+// this macro will work.
+macro_rules! run_test {
+    ($count:expr, $idx:expr) => {{
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            if cfg!(feature = "db_dependent") {
+                let ctx = TestRunContextInfo::new($count, $idx);
+                Test::new().run(ctx).await
+            } else {
+                Ok(())
+            }
+        })?
+    }};
+}
 
 /// HNSW-Genesis-100
 ///   against:
@@ -14,30 +33,18 @@ mod workflows;
 ///   asserts:
 ///     node processes exit normally;
 ///     graph construction is equivalent for each node;
-#[tokio::test]
+#[test]
 #[serial]
-#[traced_test]
-async fn test_hnsw_genesis_100() -> Result<()> {
+fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
-
-    if cfg!(feature = "db_dependent") {
-        let ctx = TestRunContextInfo::new(100, 1);
-        Test::new().run(ctx).await?;
-    }
-
+    run_test!(100, 1);
     Ok(())
 }
 
-#[tokio::test]
+#[test]
 #[serial]
-#[traced_test]
-async fn test_hnsw_genesis_101() -> Result<()> {
+fn test_hnsw_genesis_101() -> Result<()> {
     use workflows::genesis_101::Test;
-
-    if cfg!(feature = "db_dependent") {
-        let ctx = TestRunContextInfo::new(101, 1);
-        Test::new().run(ctx).await?;
-    }
-
+    run_test!(101, 1);
     Ok(())
 }

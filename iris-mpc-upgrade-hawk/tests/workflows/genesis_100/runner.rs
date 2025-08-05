@@ -69,7 +69,6 @@ impl TestRun for Test {
                         false,
                     ),
                     config,
-                    None,
                 )
                 .await
             });

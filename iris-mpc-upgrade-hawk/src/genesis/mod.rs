@@ -39,10 +39,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{
-        mpsc::{self, Sender},
-        oneshot,
-    },
+    sync::mpsc::{self, Sender},
     time::timeout,
 };
 
