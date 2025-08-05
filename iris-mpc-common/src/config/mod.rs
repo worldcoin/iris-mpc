@@ -1,6 +1,6 @@
 use crate::{config::json_wrapper::JsonStrWrapper, job::Eye};
 use clap::Parser;
-use eyre::{eyre, Result};
+use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 
@@ -431,16 +431,8 @@ impl Config {
 }
 
 impl Config {
-    pub fn hnsw_schema_name_suffix(&self) -> &String {
-        &self.hnsw_schema_name_suffix
-    }
-
-    pub fn gpu_schema_name_suffix(&self) -> &String {
-        &self.gpu_schema_name_suffix
-    }
-
     /// Returns name of a dB schema for connecting to a node's dB.
-    pub fn get_db_schema(&self, schema_suffix: &String) -> String {
+    pub fn get_db_schema(&self, schema_suffix: &str) -> String {
         let Self {
             schema_name,
             environment,
@@ -455,13 +447,8 @@ impl Config {
     }
 
     /// Returns name of a dB url for connecting to a node's dB.
-    pub fn get_db_url(&self) -> String {
-        self.database
-            .as_ref()
-            .ok_or(eyre!("Missing database config"))
-            .unwrap()
-            .url
-            .clone()
+    pub fn get_db_url(&self) -> Option<String> {
+        self.database.as_ref().map(|x| x.url.clone())
     }
 }
 

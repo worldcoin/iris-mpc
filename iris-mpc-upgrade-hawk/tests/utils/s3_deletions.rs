@@ -79,7 +79,7 @@ pub async fn get_s3_client(region: Option<&str>, environment: &str) -> Result<S3
 
 /// Returns an S3 client with retry configuration.
 pub async fn get_aws_clients(config: &Config) -> Result<AwsClients> {
-    let aws_clients = AwsClients::new(&config)
+    let aws_clients = AwsClients::new(config)
         .await
         .expect("failed to create aws clients");
     Ok(aws_clients)

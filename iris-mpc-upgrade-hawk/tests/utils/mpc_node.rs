@@ -48,16 +48,16 @@ pub struct MpcNode {
 impl MpcNode {
     pub async fn new(config: Config, genesis_args: GenesisArgs, rng_state: u64) -> Self {
         let cpu_client = PostgresClient::new(
-            &config.get_db_url(),
-            &config.get_db_schema(config.hnsw_schema_name_suffix()),
+            &config.get_db_url().unwrap(),
+            &config.get_db_schema(&config.hnsw_schema_name_suffix),
             AccessMode::ReadWrite,
         )
         .await
         .unwrap();
 
         let gpu_client = PostgresClient::new(
-            &config.get_db_url(),
-            &config.get_db_schema(config.gpu_schema_name_suffix()),
+            &config.get_db_url().unwrap(),
+            &config.get_db_schema(&config.gpu_schema_name_suffix),
             AccessMode::ReadWrite,
         )
         .await
