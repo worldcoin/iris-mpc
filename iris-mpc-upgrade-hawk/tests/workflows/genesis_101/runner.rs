@@ -47,8 +47,7 @@ impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
-        for config in &self.configs {
-            let config = config.clone();
+        for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
