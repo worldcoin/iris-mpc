@@ -17,12 +17,13 @@ mod workflows;
 #[tokio::test]
 #[serial]
 #[traced_test]
-#[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
 
-    let ctx = TestRunContextInfo::new(100, 1);
-    Test::new().run(ctx).await?;
+    if cfg!(feature = "db_dependent") {
+        let ctx = TestRunContextInfo::new(100, 1);
+        Test::new().run(ctx).await?;
+    }
 
     Ok(())
 }
@@ -33,8 +34,10 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 async fn test_hnsw_genesis_101() -> Result<()> {
     use workflows::genesis_101::Test;
 
-    let ctx = TestRunContextInfo::new(101, 1);
-    Test::new().run(ctx).await?;
+    if cfg!(feature = "db_dependent") {
+        let ctx = TestRunContextInfo::new(101, 1);
+        Test::new().run(ctx).await?;
+    }
 
     Ok(())
 }

@@ -39,7 +39,10 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::mpsc::{self, Sender},
+    sync::{
+        mpsc::{self, Sender},
+        oneshot,
+    },
     time::timeout,
 };
 
@@ -135,14 +138,18 @@ impl ExecutionContextInfo {
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
-/// an isolated database snapshot of previously validated unique iris shares.
+/// an isolated database snapshot of previously validated unique iris shares
 ///
 /// # Arguments
 ///
 /// * `args` - Process arguments.
 /// * `config` - Process configuration instance.
 ///
-pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
+pub async fn exec(
+    args: ExecutionArgs,
+    config: Config,
+    shutdown_ch: Option<oneshot::Receiver<()>>,
+) -> Result<()> {
     // Phase 0: setup.
     let (
         ctx,
@@ -155,6 +162,18 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         graph_store,
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
+
+    // code path to enable shutdown when unit testing.
+    if let Some(shutdown_rx) = shutdown_ch {
+        let shutdown_handler_clone = Arc::clone(&shutdown_handler);
+        tokio::spawn(async move {
+            if shutdown_rx.await.is_ok() {
+                log_info(String::from("External shutdown signal received"));
+                shutdown_handler_clone.trigger_manual_shutdown();
+            }
+        });
+    }
+
     log_info(String::from("Setup complete."));
     log_info(format!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",

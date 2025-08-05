@@ -12,7 +12,7 @@ use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
-use tokio::task::JoinSet;
+use tokio::{sync::oneshot, task::JoinSet};
 
 pub struct Test {
     configs: HawkConfigs,
@@ -60,6 +60,7 @@ impl TestRun for Test {
         for config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
+                let (tx, rx) = oneshot::channel();
                 exec_genesis(
                     ExecutionArgs::new(
                         genesis_args.batch_size,
@@ -69,14 +70,21 @@ impl TestRun for Test {
                         false,
                     ),
                     config,
+                    Some(rx),
                 )
                 .await
+                .unwrap();
+                tx.send(()).unwrap();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             });
         }
 
         while let Some(r) = join_set.join_next().await {
-            r.unwrap()?;
+            r.unwrap();
         }
+
+        println!("exec finished. waiting for addresses to not be in use");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
 
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
@@ -91,6 +99,7 @@ impl TestRun for Test {
                         false,
                     ),
                     config,
+                    None,
                 )
                 .await
             });

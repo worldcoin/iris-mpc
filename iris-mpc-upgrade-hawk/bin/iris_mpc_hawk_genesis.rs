@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     };
 
     // Invoke main.
-    match exec(args, config).await {
+    match exec(args, config, None).await {
         Ok(_) => {
             log_info("Server", "Exited normally".to_string());
         }
