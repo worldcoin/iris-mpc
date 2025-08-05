@@ -29,7 +29,7 @@ fn get_resources_root() -> String {
 ///
 /// Format of resource location should start with a leading forward slash.
 pub fn get_resource_path(location: String) -> String {
-    format!("{}{}", get_resources_root(), location)
+    format!("{}/{}", get_resources_root(), location)
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -51,7 +51,7 @@ pub fn read_plaintext_iris(
 ) -> Result<Vec<IrisCodePair>, Error> {
     let path_to_iris_codes = format!(
         "{}/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
-        get_path_to_resources(),
+        get_resources_root(),
     );
 
     // Set file stream.

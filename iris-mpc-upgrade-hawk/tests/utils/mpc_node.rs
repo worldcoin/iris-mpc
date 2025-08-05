@@ -15,10 +15,9 @@ use iris_mpc_cpu::{
     },
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
-    protocol::shared_iris::GaloisRingSharedIris,
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
-use rand::{rngs::StdRng, SeedableRng};
+use itertools::Itertools;
 use std::collections::HashMap;
 
 /// represents a party in the MPC computation
@@ -91,26 +90,40 @@ impl MpcNode {
     /// Adds arbitrary irises to the database. The iris ID will be the new
     /// number of entries after the insertion
     pub async fn insert_gpu_iris_store(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
-        let starting_len = self.gpu_iris_store.count_irises().await?;
+        const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
         let mut tx = self.gpu_iris_store.tx().await?;
-        // use the idx as the id field
-        let mut to_insert = vec![];
-        for (idx, shares) in shares.iter().enumerate() {
-            to_insert.push(StoredIrisRef {
-                // warning: id should be >= 1
-                id: (starting_len + idx + 1) as _,
-                left_code: &shares.0.code.coefs,
-                left_mask: &shares.0.mask.coefs,
-                right_code: &shares.1.code.coefs,
-                right_mask: &shares.1.mask.coefs,
-            })
+        let starting_len = self.gpu_iris_store.count_irises().await?;
+
+        let chunks: Vec<Vec<_>> = shares
+            .iter()
+            .enumerate()
+            .chunks(SECRET_SHARING_PG_TX_SIZE)
+            .into_iter()
+            .map(|chunk| chunk.collect())
+            .collect();
+
+        for batch in chunks.into_iter() {
+            // use the idx as the id field
+            let iris_refs: Vec<_> = batch
+                .into_iter()
+                .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
+                    // warning: id should be >= 1
+                    id: (starting_len + idx + 1) as _,
+                    left_code: &iris_l.code.coefs,
+                    left_mask: &iris_l.mask.coefs,
+                    right_code: &iris_r.code.coefs,
+                    right_mask: &iris_r.mask.coefs,
+                })
+                .collect();
+
+            self.gpu_iris_store
+                .insert_irises(&mut tx, &iris_refs)
+                .await?;
+            tx.commit().await?;
+            tx = self.gpu_iris_store.tx().await?;
         }
 
-        self.gpu_iris_store
-            .insert_irises(&mut tx, &to_insert)
-            .await?;
-        tx.commit().await?;
         Ok(())
     }
 
@@ -144,8 +157,12 @@ impl MpcNode {
             .await
             .expect("plaintext genesis failed");
 
-        let shares = encode_plaintext_iris_for_party(pairs, self.rng_state, self.config.party_id);
-        self.init_iris_stores(shares.as_slice())
+        let shares = super::irises::encode_plaintext_iris_for_party(
+            pairs,
+            self.rng_state,
+            self.config.party_id,
+        );
+        self.init_iris_stores(&shares)
             .await
             .expect("init iris stores failed");
         Ok(expected_genesis_state)
@@ -234,6 +251,7 @@ fn get_genesis_input(
     r
 }
 
+/* moved to irises.rs
 fn encode_plaintext_iris_for_party(
     pairs: &[IrisCodePair],
     rng_state: u64,
@@ -256,3 +274,4 @@ fn encode_plaintext_iris_for_party(
         })
         .collect()
 }
+*/
