@@ -10,7 +10,7 @@ use crate::utils::{
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{
-    get_iris_deletions,
+    get_iris_deletions, get_last_indexed_modification_id,
     plaintext::{GenesisArgs, GenesisState},
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
@@ -161,6 +161,13 @@ impl TestRun for Test {
 
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
+
+                let persisted_modification_id: Option<i64> = node
+                    .graph_store
+                    .get_persistent_state("Genesis", "last_indexed_iris_id")
+                    .await
+                    .unwrap();
+                assert_eq!(0, persisted_modification_id.unwrap_or_default());
             });
         }
 
