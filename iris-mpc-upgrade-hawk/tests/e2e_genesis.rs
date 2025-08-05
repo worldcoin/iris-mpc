@@ -27,3 +27,17 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+#[serial]
+#[traced_test]
+async fn test_hnsw_genesis_101() -> Result<()> {
+    use workflows::genesis_101::Test;
+
+    if cfg!(feature = "db_dependent") {
+        let ctx = TestRunContextInfo::new(101, 1);
+        Test::new().run(ctx).await?;
+    }
+
+    Ok(())
+}
