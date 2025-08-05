@@ -1,10 +1,13 @@
 use super::shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
 use crate::{
     system_state,
-    utils::{pgres::NetDbProvider, TestError, TestRun},
+    utils::{
+        constants::PARTY_IDX_SET,
+        types::{NodeType, PartyIdx},
+        {pgres::NetDbProvider, TestError, TestRun},
+    },
 };
 use eyre::Result;
-use iris_mpc_common::{PartyIdx, PARTY_IDX_SET};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
 /// HNSW Genesis test.
@@ -98,6 +101,7 @@ impl TestRun for Test {
         // Insert Iris shares -> GPU dBs.
         system_state::insert_iris_shares(
             self.db_provider(),
+            NodeType::GPU,
             &self.inputs().iris_shares_stream(),
             self.params().shares_pgres_tx_batch_size(),
         )
@@ -120,7 +124,13 @@ impl TestRun for Test {
         assert!(&self.inputs.is_some());
 
         // Assert Iris shares inserted into GPU dBs.
-        // TODO
+        for iris_count in system_state::get_iris_counts(self.db_provider(), &NodeType::GPU)
+            .await
+            .unwrap()
+            .iter()
+        {
+            assert_eq!(*iris_count, self.params().max_indexation_id() as usize);
+        }
 
         // Assert Iris deletions uploaded to localstack.
         // TODO

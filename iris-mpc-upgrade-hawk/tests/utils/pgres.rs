@@ -1,7 +1,11 @@
+use crate::utils::{
+    constants::{PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
+    types::{NodeType, PartyIdx},
+};
 use iris_mpc_common::{
     config::{Config as NodeConfig, NetConfig},
     postgres::{AccessMode, PostgresClient},
-    PartyIdx, PARTY_COUNT, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2,
+    PARTY_COUNT,
 };
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,
@@ -14,7 +18,7 @@ pub struct DbConnectionInfo {
     access_mode: AccessMode,
 
     /// Connection schema.
-    schema: String,
+    schema_name: String,
 
     /// Connection URL.
     url: String,
@@ -25,7 +29,7 @@ impl DbConnectionInfo {
     fn new(config: &NodeConfig, schema_suffix: &String, access_mode: AccessMode) -> Self {
         Self {
             access_mode,
-            schema: config.get_db_schema(schema_suffix),
+            schema_name: config.get_db_schema(schema_suffix),
             url: config.get_db_url(),
         }
     }
@@ -46,8 +50,8 @@ impl DbConnectionInfo {
         self.access_mode
     }
 
-    pub fn schema(&self) -> &String {
-        &self.schema
+    pub fn schema_name(&self) -> &String {
+        &self.schema_name
     }
 
     pub fn url(&self) -> &String {
@@ -70,7 +74,7 @@ impl NodeDbContext {
     pub async fn new(connection_info: DbConnectionInfo) -> Self {
         let client = PostgresClient::new(
             connection_info.url(),
-            connection_info.schema(),
+            connection_info.schema_name(),
             connection_info.access_mode(),
         )
         .await
@@ -136,13 +140,20 @@ impl NodeDbProvider {
 
 /// Accessors.
 impl NodeDbProvider {
-    #[allow(dead_code)]
-    pub fn cpu_store(&self) -> &NodeDbContext {
-        &self.cpu_store
+    fn store(&self, node_type: &NodeType) -> &NodeDbContext {
+        match node_type {
+            NodeType::CPU => &self.cpu_store,
+            NodeType::GPU => &self.gpu_store,
+        }
     }
 
-    pub fn gpu_store(&self) -> &NodeDbContext {
-        &self.gpu_store
+    #[allow(dead_code)]
+    pub fn graph_store(&self, node_type: &NodeType) -> &GraphStore<PlaintextStore> {
+        self.store(node_type).graph_store()
+    }
+
+    pub fn iris_store(&self, node_type: &NodeType) -> &IrisStore {
+        self.store(node_type).iris_store()
     }
 }
 
@@ -171,7 +182,39 @@ impl NetDbProvider {
 
 /// Accessors.
 impl NetDbProvider {
-    pub fn of_node(&self, idx: PartyIdx) -> &NodeDbProvider {
-        &self.nodes[idx]
+    pub fn provider(&self, party_idx: PartyIdx) -> &NodeDbProvider {
+        &self.nodes[party_idx]
+    }
+
+    pub fn providers(&self) -> &[NodeDbProvider; PARTY_COUNT] {
+        &self.nodes
+    }
+
+    #[allow(dead_code)]
+    pub fn graph_store(
+        &self,
+        party_idx: PartyIdx,
+        node_type: &NodeType,
+    ) -> &GraphStore<PlaintextStore> {
+        self.provider(party_idx).store(node_type).graph_store()
+    }
+
+    #[allow(dead_code)]
+    pub fn graph_stores(&self, node_type: &NodeType) -> Vec<&GraphStore<PlaintextStore>> {
+        self.providers()
+            .iter()
+            .map(|provider| provider.graph_store(node_type))
+            .collect()
+    }
+
+    pub fn iris_store(&self, party_idx: PartyIdx, node_type: &NodeType) -> &IrisStore {
+        self.provider(party_idx).store(node_type).iris_store()
+    }
+
+    pub fn iris_stores(&self, node_type: &NodeType) -> Vec<&IrisStore> {
+        self.providers()
+            .iter()
+            .map(|provider| provider.iris_store(node_type))
+            .collect()
     }
 }

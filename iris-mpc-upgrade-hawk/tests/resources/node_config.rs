@@ -1,5 +1,6 @@
 use super::utils::{get_path_to_assets, get_subdirectory_of_exec_env};
-use iris_mpc_common::{config::Config as NodeConfig, PartyIdx};
+use crate::utils::types::PartyIdx;
+use iris_mpc_common::config::Config as NodeConfig;
 use std::io::Error;
 
 /// Node config kind: genesis.
@@ -55,7 +56,7 @@ pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
 #[cfg(test)]
 mod tests {
     use super::{read_node_config, read_node_config_by_name, NODE_CONFIG_KIND_GENESIS};
-    use iris_mpc_common::PARTY_IDX_SET;
+    use crate::utils::constants::PARTY_IDX_SET;
 
     #[test]
     fn test_read_node_config() {

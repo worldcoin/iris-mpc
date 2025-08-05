@@ -1,5 +1,6 @@
 use eyre::Result;
 use utils::{defaults, TestRun, TestRunContextInfo};
+use workflows::genesis::shared::params::TestParamsBuilder;
 
 mod resources;
 mod system_state;
@@ -17,7 +18,6 @@ mod workflows;
 #[tokio::test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
-    use workflows::genesis::shared::params::TestParamsBuilder;
     use workflows::genesis::wf_100::Test;
 
     Test::new(

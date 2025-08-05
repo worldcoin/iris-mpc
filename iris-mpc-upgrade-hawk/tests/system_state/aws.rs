@@ -1,13 +1,8 @@
-use crate::utils::{errors::TestError, logger};
-use aws_config::{from_env, retry::RetryConfig};
-use aws_sdk_s3::{
-    config::{Builder as S3_ConfigBuilder, Region as AWS_Region},
-    primitives::ByteStream as S3_ByteStream,
-    Client as S3_Client,
-};
+use crate::utils::{aws::get_s3_client, errors::TestError, logger};
+use aws_sdk_s3::primitives::ByteStream as S3_ByteStream;
 use eyre::Result;
 use iris_mpc_common::{
-    config::{Config as NodeConfig, NetConfig, ENV_PROD, ENV_STAGE},
+    config::{Config as NodeConfig, NetConfig},
     IrisSerialId,
 };
 use iris_mpc_cpu::genesis::utils::aws::{
@@ -16,9 +11,6 @@ use iris_mpc_cpu::genesis::utils::aws::{
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "STATE-AWS";
-
-/// Default AWS region.  TODO: remove.
-const DEFAULT_AWS_REGION: &str = "eu-north-1";
 
 /// Uploads a set of serial identifiers marked as deleted to each node's AWS S3 bucket.
 ///
@@ -82,57 +74,24 @@ async fn upload_iris_deletions_node(
     Ok(())
 }
 
-/// Returns an S3 client with retry configuration.
-async fn get_s3_client(config: &NodeConfig) -> Result<S3_Client> {
-    let region = config
-        .to_owned()
-        .aws
-        .and_then(|aws| aws.region)
-        .unwrap_or_else(|| DEFAULT_AWS_REGION.to_owned());
-    logger::log_info(
-        COMPONENT,
-        format!("Instantiating S3 client for region: {}", region).as_str(),
-    );
-    let region_provider = AWS_Region::new(region);
-    let shared_config = from_env().region(region_provider).load().await;
-    let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-    let s3_config = S3_ConfigBuilder::from(&shared_config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config.clone())
-        .build();
-    let s3_client = S3_Client::from_conf(s3_config);
-
-    Ok(s3_client)
-}
-
 #[cfg(test)]
 mod test {
-    use super::{get_s3_client, upload_iris_deletions, NetConfig};
-    use crate::resources::{self, NODE_CONFIG_KIND_GENESIS};
+    use super::{upload_iris_deletions, NetConfig};
+    use crate::{
+        resources::{self, NODE_CONFIG_KIND_GENESIS},
+        utils::aws::get_s3_client,
+    };
 
     fn get_net_config() -> NetConfig {
         resources::read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
     }
 
     #[tokio::test]
-    async fn test_get_s3_client() {
-        for (party_idx, cfg) in get_net_config().iter().enumerate() {
-            match get_s3_client(cfg).await {
-                Ok(_) => (),
-                Err(err) => panic!(
-                    "Failed to get S3 client: Party IDX={} :: Err={}",
-                    party_idx, err
-                ),
-            };
-        }
-    }
-
-    #[tokio::test]
     async fn test_get_s3_client_and_list_buckets() {
         for cfg in get_net_config() {
-            let s3_client = get_s3_client(&cfg).await.unwrap();
-            let n_buckets = s3_client
+            let n_buckets = get_s3_client(&cfg)
+                .await
+                .unwrap()
                 .list_buckets()
                 .send()
                 .await
