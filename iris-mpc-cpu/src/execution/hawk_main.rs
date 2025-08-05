@@ -52,7 +52,7 @@ use search::{SearchParams, SearchQueries};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     future::Future,
     hash::{Hash, Hasher},
     ops::Not,
@@ -535,7 +535,7 @@ impl HawkActor {
 
     fn cache_distances(&mut self, side: usize, search_results: &[VecRots<HawkInsertPlan>]) {
         // maps query_id and db_id to a vector of distances.
-        let mut distances_with_ids: HashMap<(u32, u32), Vec<DistanceShare<u32>>> = HashMap::new();
+        let mut distances_with_ids: BTreeMap<(u32, u32), Vec<DistanceShare<u32>>> = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
             for insert_plan in vec_rots.iter() {
                 let last_layer_insert_plan = match insert_plan.plan.links.first() {
