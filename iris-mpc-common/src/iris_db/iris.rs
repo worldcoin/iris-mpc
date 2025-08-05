@@ -174,7 +174,6 @@ pub struct IrisCode {
     pub code: IrisCodeArray,
     pub mask: IrisCodeArray,
 }
-
 impl Default for IrisCode {
     fn default() -> Self {
         Self {
