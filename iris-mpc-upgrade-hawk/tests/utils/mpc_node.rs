@@ -9,9 +9,12 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
-    genesis::plaintext::{
-        run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState,
-        GenesisState, PersistentState,
+    genesis::{
+        plaintext::{
+            run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState,
+            GenesisSrcDbState, GenesisState, PersistentState,
+        },
+        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     },
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
@@ -65,21 +68,21 @@ impl MpcNode {
     }
 
     pub async fn clear_all_tables(&self) -> Result<()> {
-        {
-            let mut graph_tx = self.graph_store.tx().await.unwrap();
-            graph_tx
-                .with_graph(StoreId::Left)
-                .clear_tables()
-                .await
-                .expect("Could not clear left graph");
-            graph_tx
-                .with_graph(StoreId::Right)
-                .clear_tables()
-                .await
-                .expect("Could not clear right graph");
+        let mut graph_tx = self.graph_store.tx().await?;
+        graph_tx
+            .with_graph(StoreId::Left)
+            .clear_tables()
+            .await
+            .expect("Could not clear left graph");
+        graph_tx
+            .with_graph(StoreId::Right)
+            .clear_tables()
+            .await
+            .expect("Could not clear right graph");
 
-            graph_tx.tx.commit().await.unwrap();
-        }
+        unset_last_indexed_iris_id(&mut graph_tx.tx).await?;
+        unset_last_indexed_modification_id(&mut graph_tx.tx).await?;
+        graph_tx.tx.commit().await?;
 
         // delete irises
         self.gpu_iris_store.rollback(0).await?;
