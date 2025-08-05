@@ -169,24 +169,22 @@ impl MpcNode {
     }
 
     pub async fn assert_graphs_match(&self, expected: &GenesisState) {
-        let (graph_left, graph_right) = futures::join!(
-            async {
-                let mut graph_tx = self.graph_store.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(self.graph_store.pool(), 8)
-                    .await
-            },
-            async {
-                let mut graph_tx = self.graph_store.tx().await.unwrap();
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(self.graph_store.pool(), 8)
-                    .await
-            }
-        );
-        let graph_left = graph_left.expect("Could not load left graph");
-        let graph_right = graph_right.expect("Could not load right graph");
+        let graph_left = {
+            let mut graph_tx = self.graph_store.tx().await.unwrap();
+            graph_tx
+                .with_graph(StoreId::Left)
+                .load_to_mem(self.graph_store.pool(), 2)
+                .await
+        }
+        .expect("Could not load left graph");
+        let graph_right = {
+            let mut graph_tx = self.graph_store.tx().await.unwrap();
+            graph_tx
+                .with_graph(StoreId::Right)
+                .load_to_mem(self.graph_store.pool(), 2)
+                .await
+        }
+        .expect("Could not load right graph");
 
         assert!(graph_left == expected.dst_db.graphs[0]);
         assert!(graph_right == expected.dst_db.graphs[1]);
