@@ -1,5 +1,5 @@
 use eyre::Result;
-use utils::{defaults, TestRun, TestRunContextInfo};
+use utils::{constants, TestRun, TestRunContextInfo};
 use workflows::genesis::{params::TestParamsBuilder, runner::TestRunner};
 
 mod resources;
@@ -28,10 +28,10 @@ async fn test_hnsw_genesis_100() -> Result<()> {
             .node_config_idx(0)
             .use_db_backup_as_source(false)
             .perform_db_snapshot(false)
-            .shares_generator_batch_size(defaults::SHARES_GENERATOR_BATCH_SIZE)
-            .shares_generator_rng_state(defaults::SHARES_GENERATOR_RNG_STATE)
+            .shares_generator_batch_size(constants::SHARES_GENERATOR_BATCH_SIZE)
+            .shares_generator_rng_state(constants::SHARES_GENERATOR_RNG_STATE)
             .shares_generator_skip_offset(0)
-            .shares_pgres_tx_batch_size(defaults::SHARES_GENERATOR_PGRES_TX_BATCH_SIZE)
+            .shares_pgres_tx_batch_size(constants::SHARES_GENERATOR_PGRES_TX_BATCH_SIZE)
             .build(),
     )
     .run(TestRunContextInfo::new(100, 1))
