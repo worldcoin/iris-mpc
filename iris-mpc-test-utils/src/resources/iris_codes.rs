@@ -12,7 +12,7 @@ const FNAME_1K: &str = "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjso
 ///
 /// # Arguments
 ///
-/// * `read_maximum` - Maximum number of Iris code pairs to read.
+/// * `n_to_read` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
 /// # Returns
@@ -20,23 +20,19 @@ const FNAME_1K: &str = "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjso
 /// An iterator over Iris code pairs.
 ///
 pub fn read_iris_codes(
-    read_maximum: usize,
+    n_to_read: usize,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
-    // Set path.
     let path_to_resources = format!("{}/{}", get_assets_root(), FNAME_1K,);
 
-    // Set file stream.
-    let file = File::open(path_to_resources).unwrap();
-    let reader = BufReader::new(file);
-    let stream = Deserializer::from_reader(reader)
-        .into_iter::<Base64IrisCode>()
-        .skip(skip_offset)
-        .map(|x| IrisCode::from(&x.unwrap()))
-        .tuples()
-        .take(read_maximum);
-
-    Ok(stream)
+    Ok(
+        Deserializer::from_reader(BufReader::new(File::open(path_to_resources).unwrap()))
+            .into_iter::<Base64IrisCode>()
+            .skip(skip_offset)
+            .map(|x| IrisCode::from(&x.unwrap()))
+            .tuples()
+            .take(n_to_read),
+    )
 }
 
 /// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
@@ -44,7 +40,7 @@ pub fn read_iris_codes(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `read_maximum` - Maximum number of Iris code pairs to read.
+/// * `n_to_read` - Maximum number of Iris code pairs to read.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
 /// # Returns
@@ -53,14 +49,12 @@ pub fn read_iris_codes(
 ///
 pub fn read_iris_codes_batch(
     batch_size: usize,
-    read_maximum: usize,
+    n_to_read: usize,
     skip_offset: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
-    let stream = read_iris_codes(read_maximum, skip_offset)
+    Ok(read_iris_codes(n_to_read, skip_offset)
         .unwrap()
-        .chunks(batch_size);
-
-    Ok(stream)
+        .chunks(batch_size))
 }
 
 #[cfg(test)]
@@ -69,22 +63,22 @@ mod tests {
 
     #[test]
     fn test_read_iris_code_pairs() {
-        for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
+        for (n_to_read, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for _ in read_iris_codes(read_maximum, skip_offset).unwrap() {
+            for _ in read_iris_codes(n_to_read, skip_offset).unwrap() {
                 n_read += 1;
             }
-            assert_eq!(read_maximum, n_read);
+            assert_eq!(n_to_read, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_code_pairs_batch() {
-        for (batch_size, read_maximum, skip_offset, expected_batches) in
+        for (batch_size, n_to_read, skip_offset, expected_batches) in
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in read_iris_codes_batch(batch_size, read_maximum, skip_offset)
+            for chunk in read_iris_codes_batch(batch_size, n_to_read, skip_offset)
                 .unwrap()
                 .into_iter()
             {

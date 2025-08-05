@@ -6,17 +6,17 @@ use std::io::Error;
 ///
 /// # Arguments
 ///
-/// * `config_kind` - Kind of node configuration toml file to be read into memory.
-/// * `config_idx` - Ordinal identifier of node configuration toml file to be read into memory.
+/// * `kind` - Kind of node configuration toml file to be read into memory.
+/// * `idx` - Ordinal identifier of node configuration toml file to be read into memory.
 ///
 /// # Returns
 ///
 /// Network level configuration.
 ///
-pub fn read_net_config(config_kind: &str, config_idx: usize) -> Result<NetConfig, Error> {
+pub fn read_net_config(kind: &str, idx: usize) -> Result<NetConfig, Error> {
     Ok(PARTY_IDX_SET
         .iter()
-        .map(|party_idx| read_node_config(party_idx, config_kind, config_idx).unwrap())
+        .map(|party_idx| read_node_config(party_idx, kind, idx).unwrap())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap())

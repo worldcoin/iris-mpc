@@ -8,7 +8,7 @@ use std::io::Error;
 ///
 /// # Arguments
 ///
-/// * `read_maximum` - Maximum number of Iris code pairs to read.
+/// * `n_to_read` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
@@ -17,15 +17,13 @@ use std::io::Error;
 /// An iterator over Iris shares.
 ///
 pub fn read_iris_shares(
-    read_maximum: usize,
+    n_to_read: usize,
     rng_state: u64,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
-    let stream = read_iris_codes(read_maximum, skip_offset)
+    Ok(read_iris_codes(n_to_read, skip_offset)
         .unwrap()
-        .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair)));
-
-    Ok(stream)
+        .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair))))
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -33,7 +31,7 @@ pub fn read_iris_shares(
 /// # Arguments
 ///
 /// * `batch_size` - Size of chunks to split Iris shares into.
-/// * `read_maximum` - Maximum number of Iris code pairs to read.
+/// * `n_to_read` - Maximum number of Iris code pairs to read.
 /// * `rng_state` - State of an RNG being used to inject entropy to share creation.
 /// * `skip_offset` - Number of Iris code pairs within ndjson file to skip.
 ///
@@ -43,15 +41,13 @@ pub fn read_iris_shares(
 ///
 pub fn read_iris_shares_batch(
     batch_size: usize,
-    read_maximum: usize,
+    n_to_read: usize,
     rng_state: u64,
     skip_offset: usize,
 ) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
-    let stream = read_iris_shares(read_maximum, rng_state, skip_offset)
+    Ok(read_iris_shares(n_to_read, rng_state, skip_offset)
         .unwrap()
-        .chunks(batch_size);
-
-    Ok(stream)
+        .chunks(batch_size))
 }
 
 #[cfg(test)]
@@ -63,24 +59,24 @@ mod tests {
 
     #[test]
     fn test_read_iris_shares() {
-        for (read_maximum, skip_offset) in [(100, 0), (81, 838)] {
+        for (n_to_read, skip_offset) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for shares in read_iris_shares(read_maximum, DEFAULT_RNG_STATE, skip_offset).unwrap() {
+            for shares in read_iris_shares(n_to_read, DEFAULT_RNG_STATE, skip_offset).unwrap() {
                 n_read += 1;
                 assert_eq!(shares.len(), PARTY_COUNT);
             }
-            assert_eq!(read_maximum, n_read);
+            assert_eq!(n_to_read, n_read);
         }
     }
 
     #[test]
     fn test_read_iris_shares_batch() {
-        for (batch_size, read_maximum, skip_offset, expected_batches) in
+        for (batch_size, n_to_read, skip_offset, expected_batches) in
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
             for chunk in
-                read_iris_shares_batch(batch_size, read_maximum, DEFAULT_RNG_STATE, skip_offset)
+                read_iris_shares_batch(batch_size, n_to_read, DEFAULT_RNG_STATE, skip_offset)
                     .unwrap()
                     .into_iter()
             {

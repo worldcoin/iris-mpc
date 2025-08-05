@@ -3,19 +3,19 @@ use crate::utils::{
     types::PartyIdx,
 };
 use iris_mpc_common::config::Config as NodeConfig;
-use std::io::Error;
+use std::{fs, io::Error};
 
 /// Node config kind: genesis.
 pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
 
-/// Returns a node's config deserialized from environment variables.
+/// Returns a node's config deserialized from SMPC environment variables.
 ///
 /// # Returns
 ///
 /// A node's config deserialized from environment variables.
 ///
 pub fn generate_node_config_from_env_vars() -> NodeConfig {
-    // Activate environment variables.
+    // Activates environment variables.
     dotenvy::dotenv().ok();
 
     NodeConfig::load_config("SMPC").unwrap()
@@ -26,21 +26,15 @@ pub fn generate_node_config_from_env_vars() -> NodeConfig {
 /// # Arguments
 ///
 /// * `party_idx` - Ordinal identifier of MPC participant.
-/// * `config_kind` - Kind of node configuration toml file to be read into memory.
-/// * `config_idx` - Ordinal identifier of node configuration toml file to be read into memory.
+/// * `kind` - Kind of node configuration toml file to be read into memory.
+/// * `idx` - Ordinal identifier of node configuration toml file to be read into memory.
 ///
 /// # Returns
 ///
 /// A node configuration file.
 ///
-pub fn read_node_config(
-    party_idx: &PartyIdx,
-    config_kind: &str,
-    config_idx: usize,
-) -> Result<NodeConfig, Error> {
-    let fname = format!("node-{}-{}-{}", party_idx, config_kind, config_idx);
-
-    read_node_config_by_name(fname)
+pub fn read_node_config(party_idx: &PartyIdx, kind: &str, idx: usize) -> Result<NodeConfig, Error> {
+    read_node_config_by_name(format!("node-{}-{}-{}", party_idx, kind, idx))
 }
 
 /// Returns node configuration deserialized from a toml file.
@@ -54,7 +48,6 @@ pub fn read_node_config(
 /// A node configuration file.
 ///
 pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
-    // Set path.
     let path_to_resource = format!(
         "{}/node-config/{}/{}.toml",
         get_assets_root(),
@@ -62,10 +55,7 @@ pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
         fname
     );
 
-    // Set raw config file content.
-    let cfg = std::fs::read_to_string(path_to_resource)?;
-
-    Ok(toml::from_str(&cfg).unwrap())
+    Ok(toml::from_str(&fs::read_to_string(path_to_resource).unwrap()).unwrap())
 }
 
 #[cfg(test)]

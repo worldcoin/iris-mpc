@@ -1,6 +1,7 @@
 use crate::utils::fsys::get_assets_root;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::genesis::utils::aws::IrisDeletionsForS3;
+use serde_json;
 use std::io::Error;
 
 /// Name of ndjson file containing a set of Iris codes.
@@ -27,16 +28,17 @@ pub fn generate_iris_deletions(n_deletions: usize) -> Vec<IrisSerialId> {
 ///
 /// # Arguments
 ///
-/// * `n_take` - Number of deletions to read into memory.
+/// * `n_to_read` - Number of deletions to read into memory.
 /// * `skip_offset` - Offset from which to start reading deletions.
 ///
 /// # Returns
 ///
 /// Vec of serial identifiers associated with deleted Iris's.
 ///
-pub fn read_iris_deletions(n_take: usize, skip_offset: usize) -> Result<Vec<IrisSerialId>, Error> {
-    use serde_json;
-
+pub fn read_iris_deletions(
+    n_to_read: usize,
+    skip_offset: usize,
+) -> Result<Vec<IrisSerialId>, Error> {
     let path_to_resource = format!("{}/{}", get_assets_root(), FNAME_1K);
     let IrisDeletionsForS3 { deleted_serial_ids } =
         serde_json::from_str(&std::fs::read_to_string(path_to_resource)?)?;
@@ -44,7 +46,7 @@ pub fn read_iris_deletions(n_take: usize, skip_offset: usize) -> Result<Vec<Iris
     Ok(deleted_serial_ids
         .into_iter()
         .skip(skip_offset)
-        .take(n_take)
+        .take(n_to_read)
         .collect())
 }
 
