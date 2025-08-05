@@ -57,7 +57,7 @@ pub fn read_iris_shares_batch(
 #[cfg(test)]
 mod tests {
     use super::{read_iris_shares, read_iris_shares_batch};
-    use iris_mpc_common::PARTY_COUNT;
+    use crate::utils::constants::PARTY_COUNT;
 
     const DEFAULT_RNG_STATE: u64 = 93;
 

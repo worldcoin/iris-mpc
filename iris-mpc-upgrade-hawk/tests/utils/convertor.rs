@@ -37,7 +37,7 @@ pub fn to_galois_ring_shares(
 #[cfg(test)]
 mod tests {
     use super::{to_galois_ring_shares, IrisCodePair};
-    use iris_mpc_common::PARTY_COUNT;
+    use crate::utils::constants::PARTY_COUNT;
 
     const DEFAULT_RNG_STATE: u64 = 93;
 

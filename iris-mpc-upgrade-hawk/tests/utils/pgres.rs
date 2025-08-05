@@ -1,11 +1,10 @@
 use super::{
-    constants::{PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
+    constants::{PARTY_COUNT, PARTY_IDX_0, PARTY_IDX_1, PARTY_IDX_2},
     types::{NetConfig, NodeType, PartyIdx},
 };
 use iris_mpc_common::{
     config::Config as NodeConfig,
     postgres::{AccessMode, PostgresClient},
-    PARTY_COUNT,
 };
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore, hnsw::graph::graph_store::GraphPg as GraphStore,

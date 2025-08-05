@@ -15,9 +15,6 @@ pub mod test;
 pub mod tracing;
 pub mod vector_id;
 
-// Count of MPC protocol parties.
-pub const PARTY_COUNT: usize = 3;
-
 pub const IRIS_CODE_LENGTH: usize = 12_800;
 pub const MASK_CODE_LENGTH: usize = 6_400;
 pub const ROTATIONS: usize = 31;

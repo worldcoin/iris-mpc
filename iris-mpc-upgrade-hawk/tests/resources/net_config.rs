@@ -25,7 +25,7 @@ pub fn read_net_config(config_kind: &str, config_idx: usize) -> Result<NetConfig
 #[cfg(test)]
 mod tests {
     use super::{super::NODE_CONFIG_KIND_GENESIS, read_net_config};
-    use iris_mpc_common::PARTY_COUNT;
+    use crate::utils::constants::PARTY_COUNT;
 
     #[test]
     fn test_read_net_config() {

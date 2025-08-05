@@ -1,5 +1,5 @@
+use crate::utils::constants::PARTY_COUNT;
 use eyre::{Report, Result};
-use iris_mpc_common::PARTY_COUNT;
 use iris_mpc_upgrade_hawk::genesis::{
     ExecutionArgs as NodeArgs, ExecutionResult as NodeExecutionResult,
 };

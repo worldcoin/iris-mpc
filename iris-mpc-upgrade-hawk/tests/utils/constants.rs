@@ -1,5 +1,8 @@
 use super::types::PartyIdx;
 
+// Count of MPC protocol parties.
+pub const PARTY_COUNT: usize = 3;
+
 /// MPC party ordinal identifiers.
 pub const PARTY_IDX_0: PartyIdx = 0;
 pub const PARTY_IDX_1: PartyIdx = 1;
