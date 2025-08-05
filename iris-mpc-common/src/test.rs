@@ -431,7 +431,7 @@ impl TestCaseGenerator {
         batch0.full_face_mirror_attacks_detection_enabled = true;
         batch1.full_face_mirror_attacks_detection_enabled = true;
         batch2.full_face_mirror_attacks_detection_enabled = true;
-        let batch_size = self.rng.gen_range(1..max_batch_size);
+        let batch_size = self.rng.gen_range(1..=max_batch_size);
 
         self.batch_duplicates.clear();
         self.skip_invalidate = false;
