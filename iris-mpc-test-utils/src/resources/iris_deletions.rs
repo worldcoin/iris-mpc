@@ -1,4 +1,4 @@
-use crate::utils::fsys::get_path_to_assets;
+use crate::utils::fsys::get_assets_root;
 use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::genesis::utils::aws::IrisDeletionsForS3;
 use std::io::Error;
@@ -37,7 +37,7 @@ pub fn generate_iris_deletions(n_deletions: usize) -> Vec<IrisSerialId> {
 pub fn read_iris_deletions(n_take: usize, skip_offset: usize) -> Result<Vec<IrisSerialId>, Error> {
     use serde_json;
 
-    let path_to_resource = format!("{}/{}", get_path_to_assets(), FNAME_1K);
+    let path_to_resource = format!("{}/{}", get_assets_root(), FNAME_1K);
     let IrisDeletionsForS3 { deleted_serial_ids } =
         serde_json::from_str(&std::fs::read_to_string(path_to_resource)?)?;
 

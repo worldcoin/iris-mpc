@@ -1,5 +1,5 @@
 use crate::utils::{
-    fsys::{get_path_to_assets, get_subdirectory_of_exec_env},
+    fsys::{get_assets_root, get_exec_env_subdirectory},
     types::PartyIdx,
 };
 use iris_mpc_common::config::Config as NodeConfig;
@@ -57,8 +57,8 @@ pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
     // Set path.
     let path_to_resource = format!(
         "{}/node-config/{}/{}.toml",
-        get_path_to_assets(),
-        get_subdirectory_of_exec_env(),
+        get_assets_root(),
+        get_exec_env_subdirectory(),
         fname
     );
 

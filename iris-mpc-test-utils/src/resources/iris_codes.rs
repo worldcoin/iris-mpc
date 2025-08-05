@@ -1,4 +1,4 @@
-use crate::utils::fsys::get_path_to_assets;
+use crate::utils::fsys::get_assets_root;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodePair};
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
@@ -24,7 +24,7 @@ pub fn read_iris_codes(
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
-    let path_to_resources = format!("{}/{}", get_path_to_assets(), FNAME_1K,);
+    let path_to_resources = format!("{}/{}", get_assets_root(), FNAME_1K,);
 
     // Set file stream.
     let file = File::open(path_to_resources).unwrap();

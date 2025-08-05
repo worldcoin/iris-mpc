@@ -2,7 +2,7 @@ use super::types::PartyIdx;
 
 /// Count of MPC protocol parties.
 #[cfg(test)]
-pub const PARTY_COUNT: usize = 3;
+pub const PARTY_COUNT: usize = PARTY_IDX_SET.len();
 
 /// MPC party ordinal identifiers.
 pub const PARTY_IDX_0: PartyIdx = 0;
