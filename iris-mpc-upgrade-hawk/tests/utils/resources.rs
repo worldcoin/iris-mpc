@@ -14,7 +14,7 @@ impl TestRunEnvironment {
 }
 
 /// Returns path to resources root directory.
-fn get_resources_root() -> String {
+pub fn get_resources_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
     format!("{crate_root}/tests/resources")

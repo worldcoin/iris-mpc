@@ -57,13 +57,17 @@ pub fn share_irises_locally(
         // Reset RNG for each pair to match shares_encoding.rs behavior
         let mut shares_seed = StdRng::seed_from_u64(shares_rng_seed);
 
-        let left_shares =
-            GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, left_iris.clone());
-        let right_shares =
-            GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, right_iris.clone());
+        let left_shares = Box::new(GaloisRingSharedIris::generate_shares_locally(
+            &mut shares_seed,
+            left_iris.clone(),
+        ));
+        let right_shares = Box::new(GaloisRingSharedIris::generate_shares_locally(
+            &mut shares_seed,
+            right_iris.clone(),
+        ));
 
-        for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-            shared_irises[party].push((shares_l, shares_r));
+        for (idx, arr) in shared_irises.iter_mut().enumerate() {
+            arr.push((left_shares[idx].clone(), right_shares[idx].clone()))
         }
     }
 

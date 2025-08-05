@@ -4,7 +4,7 @@ use crate::utils::{
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
-    HawkConfigs, TestError, TestRun, TestRunContextInfo,
+    HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
@@ -23,6 +23,12 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
 };
 
 const DEFAULT_RNG_SEED: u64 = 0;
+
+fn get_irises() -> Vec<IrisCodePair> {
+    let irises_path =
+        resources::get_resource_path("iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
+    irises::read_irises_from_ndjson(irises_path, 100).unwrap()
+}
 
 impl Test {
     pub fn new() -> Self {
@@ -96,10 +102,7 @@ impl TestRun for Test {
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
 
-                let irises_path = resources::get_resource_path(
-                    "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
-                );
-                let plaintext_irises = irises::read_irises_from_ndjson(irises_path, 100).unwrap();
+                let plaintext_irises = get_irises();
                 let expected = node
                     .simulate_genesis(genesis_args, &plaintext_irises, DEFAULT_RNG_SEED)
                     .await
@@ -116,10 +119,7 @@ impl TestRun for Test {
     }
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        let irises_path = resources::get_resource_path(
-            "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
-        );
-        let plaintext_irises = irises::read_irises_from_ndjson(irises_path, 100).unwrap();
+        let plaintext_irises = get_irises();
         let secret_shared_irises =
             irises::share_irises_locally(&plaintext_irises, DEFAULT_RNG_SEED).unwrap();
 
