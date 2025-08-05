@@ -1,5 +1,8 @@
 use super::{factory, types::TestInputs};
-use crate::utils::{TestError, TestRun, TestRunContextInfo};
+use crate::utils::{
+    s3_deletions::{get_s3_client, upload_iris_deletions},
+    TestError, TestRun, TestRunContextInfo,
+};
 use eyre::{Report, Result};
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
@@ -71,8 +74,13 @@ impl TestRun for Test {
         // Write 100 Iris shares -> GPU dB.
         // TODO
 
-        // Write empty Iris deletions -> localstack.
-        // TODO
+        let deleted_serial_ids = vec![];
+        let s3_region = "us-east-1";
+        let deployment_mode = "dev";
+        let s3_client = get_s3_client(Some(s3_region), deployment_mode)
+            .await
+            .map_err(|e| TestError::SetupError(e.to_string()))?;
+        upload_iris_deletions(&deleted_serial_ids, &s3_client, deployment_mode).await?;
 
         Ok(())
     }
