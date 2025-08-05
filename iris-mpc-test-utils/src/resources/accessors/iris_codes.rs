@@ -5,6 +5,9 @@ use itertools::{IntoChunks, Itertools};
 use serde_json::Deserializer;
 use std::{fs::File, io::BufReader, io::Error};
 
+/// Name of ndjson file containing a set of Iris codes.
+const FNAME_1K: &str = "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson";
+
 /// Returns iterator over Iris code pairs deserialized from an ndjson file.
 ///
 /// # Arguments
@@ -21,10 +24,7 @@ pub fn read_iris_codes(
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     // Set path.
-    let path_to_resources = format!(
-        "{}/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
-        get_path_to_assets(),
-    );
+    let path_to_resources = format!("{}/{}", get_path_to_assets(), FNAME_1K,);
 
     // Set file stream.
     let file = File::open(path_to_resources).unwrap();

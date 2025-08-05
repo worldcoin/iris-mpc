@@ -3,6 +3,9 @@ use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::genesis::utils::aws::IrisDeletionsForS3;
 use std::io::Error;
 
+/// Name of ndjson file containing a set of Iris codes.
+const FNAME_1K: &str = "iris-deletions/20250805-iris-deletions-1k.json";
+
 /// Returns serial identifiers associated with deleted Iris's.
 ///
 /// # Arguments
@@ -17,10 +20,7 @@ use std::io::Error;
 pub fn read_iris_deletions(n_take: usize, skip_offset: usize) -> Result<Vec<IrisSerialId>, Error> {
     use serde_json;
 
-    let path_to_resource = format!(
-        "{}/iris-deletions/20250805-iris-deletions-1k.json",
-        get_path_to_assets(),
-    );
+    let path_to_resource = format!("{}/{}", get_path_to_assets(), FNAME_1K);
     let IrisDeletionsForS3 { deleted_serial_ids } =
         serde_json::from_str(&std::fs::read_to_string(path_to_resource)?)?;
 
