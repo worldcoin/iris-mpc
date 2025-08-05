@@ -13,7 +13,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
 
     // --- Single-threaded Version ---
 
-    let batch_size = 1;
+    let batch_size = 100;
     let mut g = c.benchmark_group(format!(
         "galois_ring_pairwise_distance * batch_size={batch_size} * single-threaded"
     ));
@@ -64,7 +64,6 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
 
     // --- Parallel Version ---
 
-    let batch_size = 8;
     let num_threads = num_cpus::get_physical();
 
     let pool = ThreadPoolBuilder::new()
