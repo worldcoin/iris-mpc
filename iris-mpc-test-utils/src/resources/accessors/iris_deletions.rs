@@ -17,7 +17,10 @@ use std::io::Error;
 pub fn read_iris_deletions(n_take: usize, skip_offset: usize) -> Result<Vec<IrisSerialId>, Error> {
     use serde_json;
 
-    let path_to_resource = format!("{}/iris-deletions/data.json", get_path_to_assets(),);
+    let path_to_resource = format!(
+        "{}/iris-deletions/20250805-iris-deletions-1k.json",
+        get_path_to_assets(),
+    );
     let IrisDeletionsForS3 { deleted_serial_ids } =
         serde_json::from_str(&std::fs::read_to_string(path_to_resource)?)?;
 

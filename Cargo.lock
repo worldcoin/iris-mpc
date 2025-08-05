@@ -2477,7 +2477,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "iris-mpc-test-resources"
+name = "iris-mpc-test-utils"
 version = "0.1.0"
 dependencies = [
  "async-trait",

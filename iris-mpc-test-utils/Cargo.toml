@@ -1,5 +1,5 @@
 [package]
-name = "iris-mpc-test-resources"
+name = "iris-mpc-test-utils"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
@@ -37,3 +37,7 @@ chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
 async-trait.workspace = true
+
+[[bin]]
+name = "generate-serial-ids-for-deletion"
+path = "bin/generate_serial_ids_for_deletion.rs"

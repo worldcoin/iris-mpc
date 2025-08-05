@@ -8,7 +8,7 @@ members = [
     "iris-mpc-store",
     "iris-mpc-py",
     "iris-mpc-upgrade-hawk",
-    "iris-mpc-test-resources",
+    "iris-mpc-test-utils",
 ]
 resolver = "2"
 
