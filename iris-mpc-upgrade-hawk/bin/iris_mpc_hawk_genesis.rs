@@ -172,9 +172,9 @@ fn parse_args() -> Result<ExecutionArgs> {
     };
 
     Ok(ExecutionArgs::new(
-        max_indexation_id,
         batch_size,
         batch_size_error_rate,
+        max_indexation_id,
         perform_snapshot,
         use_backup_as_source,
     ))

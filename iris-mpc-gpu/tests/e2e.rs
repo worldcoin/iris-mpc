@@ -90,7 +90,7 @@ mod e2e_test {
             internal_seed
         );
 
-        let test_db = generate_full_test_db(DB_SIZE, db_seed);
+        let test_db = generate_full_test_db(DB_SIZE, db_seed, false);
         let party_db0 = test_db.party_db(0);
         let party_db1 = test_db.party_db(1);
         let party_db2 = test_db.party_db(2);
@@ -203,11 +203,7 @@ mod e2e_test {
 
         let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, internal_seed, false);
 
-        test_case_generator.enable_bucket_statistic_checks(
-            N_BUCKETS,
-            num_devices,
-            MATCH_DISTANCES_BUFFER_SIZE,
-        );
+        test_case_generator.enable_bucket_statistic_checks(N_BUCKETS);
 
         test_case_generator
             .run_n_batches(

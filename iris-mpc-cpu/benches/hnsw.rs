@@ -5,7 +5,7 @@ use iris_mpc_cpu::{
     execution::local::LocalRuntime,
     hawkers::{
         aby3::{
-            aby3_store::prepare_query,
+            aby3_store::Aby3Query,
             test_utils::{get_owner_index, lazy_setup_from_files_with_grpc},
         },
         plaintext_store::PlaintextStore,
@@ -245,7 +245,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
 
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
-                            let query = prepare_query(raw_query[player_index].clone());
+                            let query = Aby3Query::new_from_raw(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
 
@@ -289,7 +289,7 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         let mut jobs = JoinSet::new();
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
-                            let query = prepare_query(raw_query[player_index].clone());
+                            let query = Aby3Query::new_from_raw(raw_query[player_index].clone());
                             let searcher = searcher.clone();
                             let vector_store = vector_store.clone();
                             jobs.spawn(async move {
