@@ -295,28 +295,3 @@ fn get_genesis_input(
     }
     r
 }
-
-/* moved to irises.rs
-fn encode_plaintext_iris_for_party(
-    pairs: &[IrisCodePair],
-    rng_state: u64,
-    party_idx: usize,
-) -> Vec<GaloisRingSharedIrisPair> {
-    pairs
-        .iter()
-        .map(|code_pair| {
-            // Set RNG for each pair to match shares_encoding.rs behavior
-            let mut shares_seed = StdRng::seed_from_u64(rng_state);
-
-            // Set MPC participant specific Iris shares from Iris code + entropy.
-            let (code_l, code_r) = code_pair;
-            let shares_l =
-                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_l.to_owned());
-            let shares_r =
-                GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, code_r.to_owned());
-
-            (shares_l[party_idx].clone(), shares_r[party_idx].clone())
-        })
-        .collect()
-}
-*/

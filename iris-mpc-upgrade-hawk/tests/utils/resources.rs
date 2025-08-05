@@ -26,8 +26,6 @@ fn get_resources_root() -> String {
 }
 
 /// Returns the path in the source tree of a resource asset.
-///
-/// Format of resource location should start with a leading forward slash.
 pub fn get_resource_path(location: String) -> String {
     format!("{}/{}", get_resources_root(), location)
 }

@@ -39,8 +39,8 @@ pub async fn get_iris_deletions(
 ) -> Result<Vec<IrisSerialId>, IndexationError> {
     // Struct for deserialization.
     #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct S3Object {
-        pub deleted_serial_ids: Vec<IrisSerialId>,
+    struct S3Object {
+        deleted_serial_ids: Vec<IrisSerialId>,
     }
 
     // Set bucket and key based on environment
