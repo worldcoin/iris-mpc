@@ -30,20 +30,10 @@ async fn test_hnsw_genesis_100() -> Result<()> {
 #[serial]
 #[traced_test]
 async fn test_hnsw_genesis_101() -> Result<()> {
-    use iris_mpc_cpu::genesis::plaintext::GenesisArgs;
     use workflows::genesis_101::Test;
 
     let ctx = TestRunContextInfo::new(101, 1);
-    Test::new(
-        GenesisArgs {
-            max_indexation_id: 100,
-            batch_size: 10,
-            batch_size_error_rate: 256,
-        },
-        0_u64,
-    )
-    .run(ctx)
-    .await?;
+    Test::new().run(ctx).await?;
 
     Ok(())
 }

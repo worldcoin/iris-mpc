@@ -1,6 +1,3 @@
-//! simulates a MPC node, complete with configuration (HAWK and Genesis) and database connections.
-//! a simulation consists of 3 MPC nodes; a utility is included to construct all 3 nodes from a list of common::Config structs
-
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     mpc_node::{MpcNode, MpcNodes},
@@ -9,26 +6,24 @@ use crate::utils::{
     HawkConfigs, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_cpu::genesis::{
-    get_iris_deletions,
-    plaintext::{GenesisArgs, GenesisState},
-};
+use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use itertools::izip;
 use tokio::task::JoinSet;
 
 pub struct Test {
     configs: HawkConfigs,
-
-    genesis_args: GenesisArgs,
-
-    rng_state: u64,
-
-    genesis_outputs: Option<Vec<GenesisState>>,
 }
 
+const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
+    max_indexation_id: 100,
+    batch_size: 10,
+    batch_size_error_rate: 250,
+};
+
+const DEFAULT_RNG_SEED: u64 = 0;
+
 impl Test {
-    pub fn new(genesis_args: GenesisArgs, rng_state: u64) -> Self {
+    pub fn new() -> Self {
         let exec_env = TestRunContextInfo::new(0, 0);
 
         let configs = (0..COUNT_OF_PARTIES)
@@ -39,18 +34,11 @@ impl Test {
             .try_into()
             .unwrap();
 
-        Self {
-            configs,
-            genesis_args,
-            rng_state,
-            genesis_outputs: None,
-        }
+        Self { configs }
     }
 
     async fn get_nodes(&self) -> impl Iterator<Item = MpcNode> {
-        MpcNodes::new(&self.configs, self.genesis_args, self.rng_state)
-            .await
-            .into_iter()
+        MpcNodes::new(&self.configs).await.into_iter()
     }
 }
 
@@ -61,7 +49,7 @@ impl TestRun for Test {
         let mut join_set = JoinSet::new();
         for config in &self.configs {
             let config = config.clone();
-            let genesis_args = self.genesis_args;
+            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
@@ -86,12 +74,12 @@ impl TestRun for Test {
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
-        for (node, expected) in izip!(
-            self.get_nodes().await,
-            self.genesis_outputs.take().unwrap().into_iter()
-        ) {
-            let max_indexation_id = self.genesis_args.max_indexation_id as usize;
+
+        for node in self.get_nodes().await {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            let max_indexation_id = genesis_args.max_indexation_id as usize;
             join_set.spawn(async move {
+                // inspect the postgres tables - iris counts, modifications, and persisted_state
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
@@ -104,10 +92,18 @@ impl TestRun for Test {
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                node.assert_graphs_match(&expected).await;
-
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
+
+                // run plaintext genesis and compare against the graph tables
+                let plaintext_irises =
+                    resources::read_plaintext_iris(0, genesis_args.max_indexation_id as usize)
+                        .unwrap();
+                let expected = node
+                    .simulate_genesis(genesis_args, &plaintext_irises, DEFAULT_RNG_SEED)
+                    .await
+                    .unwrap();
+                node.assert_graphs_match(&expected).await;
             });
         }
 
@@ -120,25 +116,24 @@ impl TestRun for Test {
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
-
         for node in self.get_nodes().await {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 let plaintext_irises =
-                    resources::read_plaintext_iris(0, node.genesis_args.max_indexation_id as usize)
+                    resources::read_plaintext_iris(0, genesis_args.max_indexation_id as usize)
                         .unwrap();
-                node.setup_from_plaintext_irises(&plaintext_irises)
-                    .await
-                    .unwrap()
+                node.init_iris_store_from_plaintext(&plaintext_irises, DEFAULT_RNG_SEED)
+                    .await;
             });
         }
 
-        let mut genesis_outputs = vec![];
         while let Some(r) = join_set.join_next().await {
-            genesis_outputs.push(r.unwrap());
+            r.unwrap();
         }
-        self.genesis_outputs.replace(genesis_outputs);
 
+        // any config file is sufficient to connect to S3
         let config = &self.configs[0];
+
         let deleted_serial_ids = vec![];
         let aws_clients = get_aws_clients(config).await.unwrap();
         upload_iris_deletions(
@@ -155,7 +150,8 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let max_indexation_id = node.genesis_args.max_indexation_id as usize;
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            let max_indexation_id = genesis_args.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
@@ -181,9 +177,8 @@ impl TestRun for Test {
         // Assert localstack.
 
         let config = &self.configs[0];
-        let max_indexation_id = self.genesis_args.max_indexation_id;
         let aws_clients = get_aws_clients(config).await.unwrap();
-        let deletions = get_iris_deletions(config, &aws_clients.s3_client, max_indexation_id)
+        let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
             .await
             .unwrap();
         assert_eq!(deletions.len(), 0);
