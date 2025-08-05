@@ -47,6 +47,19 @@ impl TestInputs {
     }
 }
 
+/// Convertor: TestParams -> TestInputs.
+impl From<&TestParams> for TestInputs {
+    fn from(params: &TestParams) -> Self {
+        TestInputs::new(
+            params.to_owned(),
+            NetArgs::from(params),
+            NetConfig::from(params),
+            resources::read_iris_deletions(params.max_deletions(), 0).unwrap(),
+            resources::read_iris_modifications(params.max_modifications(), 0).unwrap(),
+        )
+    }
+}
+
 /// Accessors.
 impl TestInputs {
     pub fn iris_deletions(&self) -> &Vec<IrisSerialId> {

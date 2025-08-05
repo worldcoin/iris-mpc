@@ -23,7 +23,7 @@ async fn test_hnsw_genesis_100() -> Result<()> {
             .batch_size(0)
             .batch_size_error_rate(256)
             .max_deletions(0)
-            .max_indexation_id(1000)
+            .max_indexation_id(100)
             .max_modifications(0)
             .node_config_idx(0)
             .use_db_backup_as_source(false)
