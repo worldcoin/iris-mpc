@@ -6,8 +6,9 @@ use aws_sdk_s3::{
     Client as S3_Client,
 };
 use eyre::Result;
+use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc_common::{
-    config::{ENV_PROD, ENV_STAGE},
+    config::{Config, ENV_PROD, ENV_STAGE},
     IrisSerialId,
 };
 use serde::Serialize;
@@ -74,6 +75,14 @@ pub async fn get_s3_client(region: Option<&str>, environment: &str) -> Result<S3
         .build();
 
     Ok(S3_Client::from_conf(s3_config))
+}
+
+/// Returns an S3 client with retry configuration.
+pub async fn get_aws_clients(config: &Config) -> Result<AwsClients> {
+    let aws_clients = AwsClients::new(&config)
+        .await
+        .expect("failed to create aws clients");
+    Ok(aws_clients)
 }
 
 // Struct for S3 serialization.

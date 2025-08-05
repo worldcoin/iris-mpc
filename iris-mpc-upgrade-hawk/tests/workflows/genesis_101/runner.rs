@@ -5,7 +5,7 @@ use crate::utils::{
     constants::COUNT_OF_PARTIES,
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
-    s3_client::{get_aws_clients, upload_iris_deletions},
+    s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
@@ -141,9 +141,13 @@ impl TestRun for Test {
         let config = &self.configs[0];
         let deleted_serial_ids = vec![];
         let aws_clients = get_aws_clients(config).await.unwrap();
-        upload_iris_deletions(&deleted_serial_ids, &aws_clients.s3_client, config)
-            .await
-            .unwrap();
+        upload_iris_deletions(
+            &deleted_serial_ids,
+            &aws_clients.s3_client,
+            &config.environment,
+        )
+        .await
+        .unwrap();
 
         Ok(())
     }
