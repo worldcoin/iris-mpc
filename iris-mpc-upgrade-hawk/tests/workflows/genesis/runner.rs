@@ -96,7 +96,7 @@ impl TestRun for TestRunner {
         self.inputs = Some(TestInputs::from(self.params()));
 
         // Set dB provider.
-        self.db_provider = Some(NetDbProvider::new_from_config(self.inputs().net_config()).await);
+        self.db_provider = Some(NetDbProvider::new(self.inputs().net_config()).await);
 
         // Insert Iris shares -> GPU dBs.
         system_state::insert_iris_shares(

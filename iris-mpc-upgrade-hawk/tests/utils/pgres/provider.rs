@@ -17,18 +17,14 @@ pub struct NetDbProvider {
 
 /// Constructor.
 impl NetDbProvider {
-    pub fn new(node_0: NodeDbProvider, node_1: NodeDbProvider, node_2: NodeDbProvider) -> Self {
+    pub async fn new(config: &NetConfig) -> Self {
         Self {
-            nodes: [node_0, node_1, node_2],
+            nodes: [
+                NodeDbProvider::new_from_config(&config[PARTY_IDX_0]).await,
+                NodeDbProvider::new_from_config(&config[PARTY_IDX_1]).await,
+                NodeDbProvider::new_from_config(&config[PARTY_IDX_2]).await,
+            ],
         }
-    }
-
-    pub async fn new_from_config(config: &NetConfig) -> Self {
-        Self::new(
-            NodeDbProvider::new_from_config(&config[PARTY_IDX_0]).await,
-            NodeDbProvider::new_from_config(&config[PARTY_IDX_1]).await,
-            NodeDbProvider::new_from_config(&config[PARTY_IDX_2]).await,
-        )
     }
 }
 
