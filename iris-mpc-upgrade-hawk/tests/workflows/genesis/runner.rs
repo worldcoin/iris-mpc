@@ -1,4 +1,4 @@
-use super::shared::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
+use super::{inputs::TestInputs, net::NetExecutionResult, params::TestParams};
 use crate::{
     system_state,
     utils::{
@@ -11,7 +11,7 @@ use eyre::Result;
 use iris_mpc_upgrade_hawk::genesis::exec as exec_genesis;
 
 /// HNSW Genesis test.
-pub struct Test {
+pub struct TestRunner {
     /// A dB provider for interacting with various stores.
     db_provider: Option<NetDbProvider>,
 
@@ -26,7 +26,7 @@ pub struct Test {
 }
 
 /// Constructor.
-impl Test {
+impl TestRunner {
     pub fn new(params: TestParams) -> Self {
         Self {
             db_provider: None,
@@ -38,7 +38,7 @@ impl Test {
 }
 
 /// Accessors.
-impl Test {
+impl TestRunner {
     fn db_provider(&self) -> &NetDbProvider {
         self.db_provider.as_ref().unwrap()
     }
@@ -53,7 +53,7 @@ impl Test {
 }
 
 /// Trait: TestRun.
-impl TestRun for Test {
+impl TestRun for TestRunner {
     async fn exec(&mut self) -> Result<(), TestError> {
         // Spawn node process futures & await.
         self.results = Some(
@@ -123,7 +123,7 @@ impl TestRun for Test {
         // Assert inputs.
         assert!(&self.inputs.is_some());
 
-        // Assert Iris shares inserted into GPU dBs.
+        // Assert Iris shares inserted into GPU dB.
         for iris_count in system_state::get_iris_counts(self.db_provider(), &NodeType::GPU)
             .await
             .unwrap()

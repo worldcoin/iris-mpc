@@ -1,2 +1,5 @@
-pub mod shared;
-pub mod wf_100;
+pub(crate) mod factory;
+pub(crate) mod inputs;
+pub(crate) mod net;
+pub(crate) mod params;
+pub(crate) mod runner;
