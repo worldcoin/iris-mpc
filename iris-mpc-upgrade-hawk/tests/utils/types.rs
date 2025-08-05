@@ -1,4 +1,6 @@
 //. Enum over set of node types.
+#[allow(dead_code)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum NodeType {
     CPU,
     GPU,
