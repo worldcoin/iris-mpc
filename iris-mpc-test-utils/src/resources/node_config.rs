@@ -67,7 +67,7 @@ mod tests {
     fn test_read_node_config() {
         let config_idx = 0;
         PARTY_IDX_SET.iter().for_each(|party_idx| {
-            let cfg = read_node_config(&party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
+            let cfg = read_node_config(party_idx, NODE_CONFIG_KIND_GENESIS, config_idx).unwrap();
             assert!(cfg.party_id == *party_idx);
         });
     }
