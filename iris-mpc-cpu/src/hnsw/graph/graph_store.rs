@@ -215,22 +215,6 @@ impl<V: VectorStore> GraphPg<V> {
 
         Ok(())
     }
-
-    /// Ensures that graph_entry and graph_links table are empty. For testing only
-    pub async fn clear_hawk_graph_tables(&self) -> Result<()> {
-        let schema = &self.schema_name;
-        let entry_table = format!("\"{}\".hawk_graph_entry", schema);
-        let links_table = format!("\"{}\".hawk_graph_links", schema);
-
-        sqlx::query(&format!("DELETE FROM {entry_table}"))
-            .execute(&self.pool)
-            .await?;
-        sqlx::query(&format!("DELETE FROM {links_table}"))
-            .execute(&self.pool)
-            .await?;
-
-        Ok(())
-    }
 }
 
 pub struct GraphTx<'a, V> {
@@ -416,6 +400,23 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set links: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Ensures that graph_entry and graph_links table are empty. For testing only
+    pub async fn clear_tables(&mut self) -> Result<()> {
+        let entry_table = self.entry_table();
+        let links_table = self.links_table();
+
+        sqlx::query(&format!("DELETE FROM {entry_table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await?;
+        sqlx::query(&format!("DELETE FROM {links_table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await?;
 
         Ok(())
     }

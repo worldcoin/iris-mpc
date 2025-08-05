@@ -65,8 +65,21 @@ impl MpcNode {
     }
 
     pub async fn clear_all_tables(&self) -> Result<()> {
-        // only the cpu database uses the graph store.
-        self.graph_store.clear_hawk_graph_tables().await?;
+        {
+            let mut graph_tx = self.graph_store.tx().await.unwrap();
+            graph_tx
+                .with_graph(StoreId::Left)
+                .clear_tables()
+                .await
+                .expect("Could not clear left graph");
+            graph_tx
+                .with_graph(StoreId::Right)
+                .clear_tables()
+                .await
+                .expect("Could not clear right graph");
+
+            graph_tx.tx.commit().await.unwrap();
+        }
 
         // delete irises
         self.gpu_iris_store.rollback(0).await?;
