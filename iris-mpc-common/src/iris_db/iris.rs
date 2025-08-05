@@ -175,9 +175,6 @@ pub struct IrisCode {
     pub mask: IrisCodeArray,
 }
 
-// Pair of Iris codes aassociated with left/right eyes.
-pub type IrisCodePair = (IrisCode, IrisCode);
-
 impl Default for IrisCode {
     fn default() -> Self {
         Self {

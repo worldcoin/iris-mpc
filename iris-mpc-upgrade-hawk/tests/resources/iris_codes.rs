@@ -1,5 +1,6 @@
 use super::utils::get_path_to_assets;
-use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodePair};
+use crate::utils::types::IrisCodePair;
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::py_bindings::plaintext_store::Base64IrisCode;
 use itertools::{IntoChunks, Itertools};
 use serde_json::Deserializer;

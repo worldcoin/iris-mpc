@@ -1,4 +1,4 @@
-use iris_mpc_common::iris_db::iris::IrisCodePair;
+use super::types::IrisCodePair;
 use iris_mpc_cpu::protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPairSet};
 use rand::{prelude::StdRng, SeedableRng};
 
