@@ -1,5 +1,7 @@
 use super::constants::COUNT_OF_PARTIES;
-use crate::utils::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
+use crate::utils::{
+    modifications::ModificationInput, GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair,
+};
 use eyre::Result;
 use iris_mpc_common::{
     config::Config,
@@ -182,8 +184,19 @@ impl MpcNode {
     }
 }
 
-// test setup
+// misc
 impl MpcNode {
+    pub async fn insert_modifications(&self, mods: &[ModificationInput]) -> Result<()> {
+        let tx = self.gpu_iris_store.tx().await?;
+        for m in mods {
+            self.gpu_iris_store
+                .insert_modification(Some(m.serial_id), m.request_type.to_str(), None)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn clear_all_tables(&self) -> Result<()> {
         let mut graph_tx = self.graph_store.tx().await?;
         graph_tx

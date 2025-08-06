@@ -54,8 +54,9 @@ Preconditions:
 GPU iris database has entries from 1 to 100, inclusive
 CPU iris database and graph database is empty
 CPU modifications and persisted_state tables are empty
-GPU modifications and persisted_state tables are empty
-S3 deletions: [101, 102, 103, 104, 105]
+GPU persisted_state table is empty
+GPU modifications table has 3 uniqueness modifications, for ids 1-3, which genesis ignores
+There are zero deletions on S3
 
 Test:
 index genesis up to 100
@@ -66,5 +67,6 @@ CPU iris database has entries from 1 to 100, inclusive
 CPU modifications table is empty
 CPU persisted_state table shows the max indexed modification is 0 and max indexed iris is 100
 CPU graph database matches the output of plaintext genesis
-CPU graph database at layer zero has 100 links because none of the deletions apply
+CPU graph database at layer zero has 100 links
+There are zero deletions on S3
 
