@@ -26,11 +26,12 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
 };
 
 static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
-    ModificationInput::from_slice(&[
-        (1, ModificationType::Uniqueness),
-        (2, ModificationType::Uniqueness),
-        (3, ModificationType::Uniqueness),
-    ])
+    ModificationInput::from_slice(
+        &(51..=75)
+            .map(|id| (id, ModificationType::ResetUpdate))
+            .chain((76..=100).map(|id| (id, ModificationType::Reauth)))
+            .collect::<Vec<_>>(),
+    )
 });
 
 fn get_irises() -> Vec<IrisCodePair> {
@@ -64,14 +65,15 @@ impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
+        for mut config in self.configs.iter().cloned() {
+            // hack to get around an "address already in use" error, emitted by HawkHandle
+            config.service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        DEFAULT_GENESIS_ARGS.max_indexation_id,
                         false,
                         false,
                     ),
@@ -100,30 +102,27 @@ impl TestRun for Test {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             let expected = expected.clone();
-            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
-                assert_eq!(num_irises, max_indexation_id);
+                assert_eq!(num_irises, DEFAULT_GENESIS_ARGS.max_indexation_id as usize);
 
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
-                assert_eq!(num_irises, max_indexation_id);
+                assert_eq!(num_irises, DEFAULT_GENESIS_ARGS.max_indexation_id as usize);
 
                 let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
                 let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
-                assert_eq!(0, node.get_last_indexed_modification_id().await);
+                // this is the ID of the entry in the table, not the id of the iris that was modified.
+                assert_eq!(50, node.get_last_indexed_modification_id().await);
 
                 node.assert_graphs_match(&expected).await;
 
-                assert_eq!(
-                    expected.dst_db.graphs[0].layers[0].links.len(),
-                    DEFAULT_GENESIS_ARGS.max_indexation_id as usize
-                );
+                assert_eq!(expected.dst_db.graphs[0].layers[0].links.len(), 50);
             });
         }
 
@@ -141,6 +140,7 @@ impl TestRun for Test {
             "All hawk_prf_key values in configs must be equal"
         );
 
+        // load 100 irises
         let plaintext_irises = get_irises();
         let secret_shared_irises =
             irises::share_irises_locally(&plaintext_irises, hawk_prf0.unwrap_or_default()).unwrap();
@@ -149,8 +149,6 @@ impl TestRun for Test {
         for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
             join_set.spawn(async move {
                 node.init_tables(&shares).await.unwrap();
-
-                node.insert_modifications(&MODIFICATIONS).await.unwrap();
             });
         }
 
@@ -171,20 +169,53 @@ impl TestRun for Test {
         .await
         .unwrap();
 
+        // next run genesis to index the first 50
+        let mut join_set = JoinSet::new();
+        for config in self.configs.iter().cloned() {
+            join_set.spawn(async move {
+                exec_genesis(
+                    ExecutionArgs::new(
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        50,
+                        false,
+                        false,
+                    ),
+                    config,
+                )
+                .await
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap()?;
+        }
+
+        // finally, insert modifications
+        let mut join_set = JoinSet::new();
+        for node in self.get_nodes().await {
+            join_set.spawn(async move {
+                node.insert_modifications(&MODIFICATIONS).await.unwrap();
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
+
         Ok(())
     }
 
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            let max_indexation_id = 50;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
-                assert_eq!(num_irises, max_indexation_id);
+                assert_eq!(num_irises, 100);
 
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
-                assert_eq!(num_irises, 0);
+                assert_eq!(num_irises, max_indexation_id);
 
                 let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), MODIFICATIONS.len());
@@ -192,7 +223,10 @@ impl TestRun for Test {
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                assert_eq!(0, node.get_last_indexed_iris_id().await);
+                assert_eq!(
+                    max_indexation_id as u32,
+                    node.get_last_indexed_iris_id().await
+                );
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
             });
         }

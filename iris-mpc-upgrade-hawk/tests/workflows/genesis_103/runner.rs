@@ -149,7 +149,6 @@ impl TestRun for Test {
         for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
             join_set.spawn(async move {
                 node.init_tables(&shares).await.unwrap();
-
                 node.insert_modifications(&MODIFICATIONS).await.unwrap();
             });
         }
@@ -177,8 +176,7 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
