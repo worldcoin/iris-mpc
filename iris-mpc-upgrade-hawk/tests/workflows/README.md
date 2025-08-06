@@ -5,6 +5,7 @@ Preconditions:
 GPU iris database has entries from 1 to 100, inclusive
 CPU iris database and graph database is empty
 CPU modifications and persisted_state tables are empty
+GPU modifications and persisted_state tables are empty
 There are zero deletions on S3
 
 Test:
@@ -34,6 +35,7 @@ Preconditions:
 GPU iris database has entries from 1 to 100, inclusive
 CPU iris database and graph database is empty
 CPU modifications and persisted_state tables are empty
+GPU modifications and persisted_state tables are empty
 S3 deletions: [1, 2, 3, 4, 5]
 
 Test:
@@ -52,6 +54,7 @@ Preconditions:
 GPU iris database has entries from 1 to 100, inclusive
 CPU iris database and graph database is empty
 CPU modifications and persisted_state tables are empty
+GPU modifications and persisted_state tables are empty
 S3 deletions: [101, 102, 103, 104, 105]
 
 Test:
