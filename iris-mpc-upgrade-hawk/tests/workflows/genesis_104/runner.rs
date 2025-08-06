@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
+    modifications::{ModificationInput, ModificationType},
     mpc_node::{MpcNode, MpcNodes},
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
@@ -12,7 +13,6 @@ use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
-use std::sync::LazyLock;
 use tokio::task::JoinSet;
 
 pub struct Test {
@@ -25,7 +25,13 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_error_rate: 250,
 };
 
-pub static DELETED_SERIAL_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| vec![101, 102, 103, 104, 105]);
+static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
+    ModificationInput::from_slice(&[
+        (1, ModificationType::Uniqueness),
+        (2, ModificationType::Uniqueness),
+        (3, ModificationType::Uniqueness),
+    ])
+});
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
@@ -86,14 +92,9 @@ impl TestRun for Test {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
         let expected = Arc::new(
-            MpcNode::simulate_genesis_with_deletions(
-                DEFAULT_GENESIS_ARGS,
-                config,
-                &plaintext_irises,
-                DELETED_SERIAL_IDS.clone(),
-            )
-            .await
-            .unwrap(),
+            MpcNode::simulate_genesis(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+                .await
+                .unwrap(),
         );
 
         let mut join_set = JoinSet::new();
@@ -108,10 +109,10 @@ impl TestRun for Test {
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
@@ -148,6 +149,8 @@ impl TestRun for Test {
         for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
             join_set.spawn(async move {
                 node.init_tables(&shares).await.unwrap();
+
+                node.insert_modifications(&MODIFICATIONS).await.unwrap();
             });
         }
 
@@ -158,9 +161,10 @@ impl TestRun for Test {
         // any config file is sufficient to connect to S3
         let config = &self.configs[0];
 
+        let deleted_serial_ids = vec![];
         let aws_clients = get_aws_clients(config).await.unwrap();
         upload_iris_deletions(
-            &DELETED_SERIAL_IDS,
+            &deleted_serial_ids,
             &aws_clients.s3_client,
             &config.environment,
         )
@@ -182,8 +186,8 @@ impl TestRun for Test {
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, 0);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
@@ -201,10 +205,10 @@ impl TestRun for Test {
 
         let config = &self.configs[0];
         let aws_clients = get_aws_clients(config).await.unwrap();
-        let deletions = get_iris_deletions(config, &aws_clients.s3_client, 105)
+        let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
             .await
             .unwrap();
-        assert_eq!(deletions.len(), DELETED_SERIAL_IDS.len());
+        assert_eq!(deletions.len(), 0);
 
         Ok(())
     }
