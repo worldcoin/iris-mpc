@@ -2050,9 +2050,15 @@ impl ServerActor {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
-        let old_distance_cache_counters = self
-            .match_distances_buffer
-            .load_counters(&self.device_manager, eye_db);
+        let old_distance_cache_counters = match orientation {
+            Orientation::Normal => Some(
+                self.match_distances_buffer
+                    .load_counters(&self.device_manager, eye_db),
+            ),
+            Orientation::Mirror => {
+                None // Do not work on mirror
+            }
+        };
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2262,14 +2268,24 @@ impl ServerActor {
             0,
             &self.streams[0],
         );
-        tracing::warn!("Loading additions for this run...");
-        let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
-            &self.device_manager,
-            eye_db,
-            old_distance_cache_counters,
-            &self.streams[0],
-        );
-        tracing::warn!("Loading additions for this run done...");
+        let new_partial_match_buffer = match old_distance_cache_counters {
+            Some(counters) => {
+                tracing::warn!("Loading additions for this run");
+                let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
+                    &self.device_manager,
+                    eye_db,
+                    counters,
+                    &self.streams[0],
+                );
+                tracing::warn!(
+                    "Loading additions for this run done...\n{new_partial_match_buffer:?}"
+                );
+                new_partial_match_buffer
+            }
+            None => {
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
+            }
+        };
 
         (partial_results_with_rotations, new_partial_match_buffer)
     }
@@ -2286,10 +2302,15 @@ impl ServerActor {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
 
-        // TODO: mirror?
-        let old_distance_cache_counters = self
-            .match_distances_buffer
-            .load_counters(&self.device_manager, eye_db);
+        let old_distance_cache_counters = match orientation {
+            Orientation::Normal => Some(
+                self.match_distances_buffer
+                    .load_counters(&self.device_manager, eye_db),
+            ),
+            Orientation::Mirror => {
+                None // Do not work on mirror
+            }
+        };
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2600,14 +2621,24 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
 
-        tracing::warn!("Loading additions for this run");
-        let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
-            &self.device_manager,
-            eye_db,
-            old_distance_cache_counters,
-            &self.streams[0],
-        );
-        tracing::warn!("Loading additions for this run done...");
+        let new_partial_match_buffer = match old_distance_cache_counters {
+            Some(counters) => {
+                tracing::warn!("Loading additions for this run");
+                let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
+                    &self.device_manager,
+                    eye_db,
+                    counters,
+                    &self.streams[0],
+                );
+                tracing::warn!(
+                    "Loading additions for this run done...\n{new_partial_match_buffer:?}"
+                );
+                new_partial_match_buffer
+            }
+            None => {
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
+            }
+        };
 
         (partial_results_with_rotations, new_partial_match_buffer)
     }
