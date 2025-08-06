@@ -1,6 +1,9 @@
 use eyre::Result;
-use utils::{TestRun, TestRunContextInfo};
+use utils::{constants, TestRun, TestRunContextInfo};
+use workflows::genesis::{params::TestParamsBuilder, runner::TestRunner};
 
+mod resources;
+mod system_state;
 mod utils;
 mod workflows;
 
@@ -15,10 +18,24 @@ mod workflows;
 #[tokio::test]
 #[ignore = "requires external setup"]
 async fn test_hnsw_genesis_100() -> Result<()> {
-    use workflows::genesis_100::Test;
-
-    let ctx = TestRunContextInfo::new(100, 1);
-    Test::new().run(ctx).await?;
+    TestRunner::new(
+        TestParamsBuilder::new()
+            .batch_size(0)
+            .batch_size_error_rate(256)
+            .max_deletions(0)
+            .max_indexation_id(100)
+            .max_modifications(0)
+            .node_config_idx(0)
+            .use_db_backup_as_source(false)
+            .perform_db_snapshot(false)
+            .shares_generator_batch_size(constants::SHARES_GENERATOR_BATCH_SIZE)
+            .shares_generator_rng_state(constants::SHARES_GENERATOR_RNG_STATE)
+            .shares_generator_skip_offset(0)
+            .shares_pgres_tx_batch_size(constants::SHARES_GENERATOR_PGRES_TX_BATCH_SIZE)
+            .build(),
+    )
+    .run(TestRunContextInfo::new(100, 1))
+    .await?;
 
     Ok(())
 }

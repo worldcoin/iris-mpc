@@ -9,8 +9,14 @@ use std::{
 pub trait TestRun {
     /// Executes test workflow.
     async fn run(&mut self, ctx: TestRunContextInfo) -> Result<(), TestError> {
-        ctx.log_info(format!("Phase 1.1: Setup (EXECUTION ENV = {:?})", ctx.env()).as_str());
-        self.setup(&ctx).await?;
+        ctx.log_info(
+            format!(
+                "Phase 1.1: Setup (EXECUTION ENV = {:?})",
+                TestRunExecutionEnvironment::new()
+            )
+            .as_str(),
+        );
+        self.setup().await?;
 
         ctx.log_info("Phase 1.2: Setup Assertion");
         self.setup_assert().await?;
@@ -37,7 +43,7 @@ pub trait TestRun {
     async fn exec_assert(&mut self) -> Result<(), TestError>;
 
     /// Setup phase of a test's workflow.
-    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError>;
+    async fn setup(&mut self) -> Result<(), TestError>;
 
     /// Asserts that a test workflow's setup phase was successful.
     async fn setup_assert(&mut self) -> Result<(), TestError>;
@@ -49,12 +55,9 @@ pub trait TestRun {
     async fn teardown_assert(&mut self) -> Result<(), TestError>;
 }
 
-/// Metadata associated with a test run.
+/// Contextual information & utils associated with a test run.
 #[derive(Debug, Clone, Copy)]
 pub struct TestRunContextInfo {
-    /// Test run execution environment.
-    env: TestRunEnvironment,
-
     /// Test run ordinal identifier.
     idx: usize,
 
@@ -65,20 +68,12 @@ pub struct TestRunContextInfo {
 /// Constructor.
 impl TestRunContextInfo {
     pub fn new(kind: usize, idx: usize) -> Self {
-        Self {
-            env: TestRunEnvironment::new(),
-            idx,
-            kind,
-        }
+        Self { idx, kind }
     }
 }
 
 /// Accessors.
 impl TestRunContextInfo {
-    pub fn env(&self) -> &TestRunEnvironment {
-        &self.env
-    }
-
     pub fn idx(&self) -> usize {
         self.idx
     }
@@ -105,18 +100,18 @@ impl TestRunContextInfo {
 
 /// Enumeration over set of test run execution environments.
 #[derive(Debug, Clone, Copy)]
-pub enum TestRunEnvironment {
+pub enum TestRunExecutionEnvironment {
     Local,
     Docker,
 }
 
 /// Constructor.
-impl TestRunEnvironment {
+impl TestRunExecutionEnvironment {
     pub fn new() -> Self {
         if Path::new("/.dockerenv").exists() {
-            TestRunEnvironment::Docker
+            TestRunExecutionEnvironment::Docker
         } else {
-            TestRunEnvironment::Local
+            TestRunExecutionEnvironment::Local
         }
     }
 }

@@ -2,35 +2,6 @@ include:
   - docker-compose.dev.yaml
 
 services:
-  init_db:
-    # Use a more complete Rust image with build tools
-    image: rust:1-slim
-    volumes:
-      - ./:/workspace
-      - ./scripts/tools/init_db_from_plaintext_iris_file.sh:/init_db.sh
-    environment:
-      - SMPC_INIT_SKIP_HNSW_GRAPH=true
-      - SMPC_INIT_TARGET_DB_SIZE=100
-      - SMPC_INIT_PATH_TO_IRIS_PLAINTEXT=/workspace/iris-mpc-upgrade-hawk/tests/resources/iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson
-    working_dir: /workspace
-    entrypoint:
-      [
-        "bash",
-        "-c",
-        "apt-get update && apt-get install -y build-essential pkg-config autoconf automake libtool libssl-dev protobuf-compiler && /init_db.sh && mkdir -p /tmp && touch /tmp/init_db_complete && tail -f /dev/null",
-      ]
-    depends_on:
-      localstack:
-        condition: service_healthy
-      dev_db:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "test -f /tmp/init_db_complete"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 180s
-
   hnsw_tests_e2e:
     image: hnsw-tests-e2e-local:latest
     env_file:
