@@ -263,14 +263,14 @@ async fn manage_connection<T: NetworkConnection>(
         let r_outbound = &mut outbound_rx;
         let outbound_task = async move {
             let r = handle_outbound_traffic(r_writer, r_outbound, num_sessions).await;
-            tracing::debug!("handle_outbound_traffic exited: {r:?}");
+            tracing::warn!("handle_outbound_traffic exited: {r:?}");
         };
 
         let r_reader = reader.as_mut().expect("reader should be Some");
         let r_inbound = &inbound_forwarder;
         let inbound_task = async move {
             let r = handle_inbound_traffic(r_reader, r_inbound).await;
-            tracing::debug!("handle_inbound_traffic exited: {r:?}");
+            tracing::warn!("handle_inbound_traffic exited: {r:?}");
         };
 
         enum Evt {
@@ -282,7 +282,7 @@ async fn manage_connection<T: NetworkConnection>(
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::debug!("cmd channel closed");
+                        tracing::info!("cmd channel closed");
                         return;
                     }
                 }
@@ -299,6 +299,7 @@ async fn manage_connection<T: NetworkConnection>(
                     outbound_rx: rx,
                     rsp,
                 } => {
+                    metrics::counter!("network::new_sessions").increment(1);
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     inbound_forwarder = tx;
                     outbound_rx = rx;
@@ -343,6 +344,7 @@ async fn reconnect_and_replace<T: NetworkConnection>(
     reader: &mut Option<BufReader<ReadHalf<T>>>,
     writer: &mut Option<WriteHalf<T>>,
 ) -> Result<(), eyre::Report> {
+    metrics::counter!("network::reconnect").increment(1);
     reader.take();
     writer.take();
 
@@ -493,7 +495,7 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                 }
             };
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 "failed to forward message for {:?} - channel not found",
                 session_id
             );

@@ -604,6 +604,7 @@ async fn run_main_server_loop(
             );
 
             batch.sync_batch_entries(config).await?;
+            batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());

@@ -9,7 +9,7 @@ use crate::{
     network::value::{NetworkValue, StateChecksum},
 };
 
-use super::{BothEyes, HawkSession, HawkSessionRef};
+use super::{BothEyes, HawkSession};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SetHash {
@@ -76,7 +76,7 @@ impl HawkSession {
         Ok(())
     }
 
-    pub async fn state_check(sessions: BothEyes<&HawkSessionRef>) -> Result<()> {
+    pub async fn state_check(sessions: BothEyes<&HawkSession>) -> Result<()> {
         let (left_state, right_state) = join!(
             HawkSession::state_check_side(sessions[LEFT]),
             HawkSession::state_check_side(sessions[RIGHT]),
@@ -88,10 +88,9 @@ impl HawkSession {
         Ok(())
     }
 
-    async fn state_check_side(session: &HawkSessionRef) -> Result<StateChecksum> {
-        let mut session = session.write().await;
+    async fn state_check_side(session: &HawkSession) -> Result<StateChecksum> {
         let my_state = session.checksum().await;
-        let net = &mut session.aby3_store.session.network_session;
+        let net = &mut session.aby3_store.write().await.session.network_session;
 
         // Send my state to others.
         let my_msg = || NetworkValue::StateChecksum(my_state.clone());
@@ -119,7 +118,7 @@ impl HawkSession {
 
     async fn checksum(&self) -> StateChecksum {
         StateChecksum {
-            irises: self.aby3_store.storage.checksum().await,
+            irises: self.aby3_store.read().await.storage.checksum().await,
             graph: self.graph_store.read().await.checksum(),
         }
     }

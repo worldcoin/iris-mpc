@@ -30,7 +30,7 @@ use iris_mpc_cpu::{
         utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
         IndexationError, JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
@@ -67,16 +67,16 @@ pub struct ExecutionArgs {
 /// Constructor.
 impl ExecutionArgs {
     pub fn new(
-        max_indexation_id: IrisSerialId,
         batch_size: usize,
         batch_size_error_rate: usize,
+        max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            max_indexation_id,
             batch_size,
             batch_size_error_rate,
+            max_indexation_id,
             perform_snapshot,
             use_backup_as_source,
         }
@@ -239,7 +239,7 @@ async fn exec_setup(
     Arc<ShutdownHandler>,
     TaskMonitor,
     RDSClient,
-    Arc<BothEyes<SharedIrisesRef>>,
+    Arc<BothEyes<Aby3SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
     Arc<GraphPg<Aby3Store>>,
@@ -568,7 +568,7 @@ async fn exec_delta(
 ///
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
-    imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
@@ -1012,7 +1012,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
-    imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
+    imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
     graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,
