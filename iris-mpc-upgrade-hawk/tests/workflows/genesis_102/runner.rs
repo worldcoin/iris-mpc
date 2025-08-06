@@ -59,13 +59,12 @@ impl TestRun for Test {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        DEFAULT_GENESIS_ARGS.max_indexation_id,
                         false,
                         false,
                     ),
@@ -174,8 +173,7 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
