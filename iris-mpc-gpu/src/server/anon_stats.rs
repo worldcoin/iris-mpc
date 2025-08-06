@@ -251,6 +251,14 @@ pub struct CpuDistanceShare {
     mask_b: u16,
 }
 
+pub struct CpuLiftedDistanceShare {
+    idx: u64,
+    code_a: u32,
+    code_b: u32,
+    mask_a: u32,
+    mask_b: u32,
+}
+
 /// Represents a cache for one-sided distances, stored on the CPU.
 /// This will be used to do a union with the one-sided distances from the other side, to arrive at the distances for actual matches.
 #[derive(Debug, Default, Clone)]
@@ -289,4 +297,201 @@ impl TwoSidedDistanceCache {
             );
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    fn sort_internal_groups(&mut self) {
+        for (left_values, right_values) in self.map.values_mut() {
+            left_values.sort_by_key(|x| x.idx);
+            right_values.sort_by_key(|x| x.idx);
+        }
+    }
+
+    // 2. A way to reduce the distances per query to the min ones on both left and right side
+    // We will do this like we did on the CPU side:
+    //   * We will have ids associated with each distance, such that we can group them into rotations for the same query
+    //   * We will group the distances by query id, take the first one as the base, and compare the rest to it, doing conditional swaps to keep the minimum one
+    //   * For the conditional swaps, we will need to lift the 16-bit shares to 32-bit shares, which we will do in a single batch
+
+    pub fn into_min_distance_cache(mut self) -> TwoSidedMinDistanceCache {
+        self.sort_internal_groups();
+
+        let len = self.len();
+        let mut left_code_a = Vec::with_capacity(len);
+        let mut left_code_b = Vec::with_capacity(len);
+        let mut left_mask_a = Vec::with_capacity(len);
+        let mut left_mask_b = Vec::with_capacity(len);
+        let mut right_code_a = Vec::with_capacity(len);
+        let mut right_code_b = Vec::with_capacity(len);
+        let mut right_mask_a = Vec::with_capacity(len);
+        let mut right_mask_b = Vec::with_capacity(len);
+
+        let sorted = self
+            .map
+            .into_iter()
+            .sorted_by_key(|(key, _)| *key)
+            .collect_vec();
+
+        // flatten the values into a single vector to batch the lifting step
+        let flattened = sorted
+            .iter()
+            .flat_map(|(_, (left_values, right_values))| {
+                left_values
+                    .iter()
+                    .flat_map(|x| [x.code_a, x.code_b, x.mask_a, x.mask_b])
+                    .chain(
+                        right_values
+                            .iter()
+                            .flat_map(|x| [x.code_a, x.code_b, x.mask_a, x.mask_b]),
+                    )
+            })
+            .collect_vec();
+
+        // TODO: actually call down to lifting step
+        let flattened_lifted = flattened.into_iter().map(|x| x as u32).collect_vec(); // Placeholder for actual lifting logic
+
+        // Build back the structure from the flattened lifted values
+        let mut idx = 0;
+        let mut sorted = sorted
+            .into_iter()
+            .map(|(key, (left, right))| {
+                let left_values = left
+                    .into_iter()
+                    .map(|x| {
+                        let code_a = flattened_lifted[idx];
+                        let code_b = flattened_lifted[idx + 1];
+                        let mask_a = flattened_lifted[idx + 2];
+                        let mask_b = flattened_lifted[idx + 3];
+                        idx += 4;
+                        CpuLiftedDistanceShare {
+                            idx: x.idx,
+                            code_a,
+                            code_b,
+                            mask_a,
+                            mask_b,
+                        }
+                    })
+                    .collect_vec();
+                let right_values = right
+                    .into_iter()
+                    .map(|x| {
+                        let code_a = flattened_lifted[idx];
+                        let code_b = flattened_lifted[idx + 1];
+                        let mask_a = flattened_lifted[idx + 2];
+                        let mask_b = flattened_lifted[idx + 3];
+                        idx += 4;
+                        CpuLiftedDistanceShare {
+                            idx: x.idx,
+                            code_a,
+                            code_b,
+                            mask_a,
+                            mask_b,
+                        }
+                    })
+                    .collect_vec();
+
+                (key, (left_values, right_values))
+            })
+            .collect_vec();
+
+        for (_, (left_values, right_values)) in sorted.iter_mut() {
+            let left = left_values
+                .pop()
+                .expect("we have at least one value in our vec if it exists");
+            let right = right_values
+                .pop()
+                .expect("we have at least one value in our vec if it exists");
+
+            left_code_a.push(left.code_a);
+            left_code_b.push(left.code_b);
+            left_mask_a.push(left.mask_a);
+            left_mask_b.push(left.mask_b);
+            right_code_a.push(right.code_a);
+            right_code_b.push(right.code_b);
+            right_mask_a.push(right.mask_a);
+            right_mask_b.push(right.mask_b);
+        }
+
+        // While we have more than one rotation left, we will keep popping values from the rotations, comparing them and keeping the minimum one.
+        // If a specific one does not have more rotations to pop, we will just compare against the current one (essentially creating a dummy operation).
+        while sorted.iter().any(|(_, (left_values, right_values))| {
+            !left_values.is_empty() || !right_values.is_empty()
+        }) {
+            let mut left_code_a_2 = Vec::with_capacity(len);
+            let mut left_code_b_2 = Vec::with_capacity(len);
+            let mut left_mask_a_2 = Vec::with_capacity(len);
+            let mut left_mask_b_2 = Vec::with_capacity(len);
+            let mut right_code_a_2 = Vec::with_capacity(len);
+            let mut right_code_b_2 = Vec::with_capacity(len);
+            let mut right_mask_a_2 = Vec::with_capacity(len);
+            let mut right_mask_b_2 = Vec::with_capacity(len);
+            for (idx, (_, (left_values, right_values))) in sorted.iter_mut().enumerate() {
+                if let Some(left) = left_values.pop() {
+                    left_code_a_2.push(left.code_a);
+                    left_code_b_2.push(left.code_b);
+                    left_mask_a_2.push(left.mask_a);
+                    left_mask_b_2.push(left.mask_b);
+                } else {
+                    left_code_a_2.push(left_code_a[idx]);
+                    left_code_b_2.push(left_code_b[idx]);
+                    left_mask_a_2.push(left_mask_a[idx]);
+                    left_mask_b_2.push(left_mask_b[idx]);
+                }
+                if let Some(right) = right_values.pop() {
+                    right_code_a_2.push(right.code_a);
+                    right_code_b_2.push(right.code_b);
+                    right_mask_a_2.push(right.mask_a);
+                    right_mask_b_2.push(right.mask_b);
+                } else {
+                    right_code_a_2.push(right_code_a[idx]);
+                    right_code_b_2.push(right_code_b[idx]);
+                    right_mask_a_2.push(right_mask_a[idx]);
+                    right_mask_b_2.push(right_mask_b[idx]);
+                }
+            }
+        }
+
+        TwoSidedMinDistanceCache {
+            left_code_a,
+            left_code_b,
+            left_mask_a,
+            left_mask_b,
+            right_code_a,
+            right_code_b,
+            right_mask_a,
+            right_mask_b,
+        }
+    }
+
+    fn cross_compare_and_swap(
+        code_a: &mut [u32],
+        code_b: &mut [u32],
+        mask_a: &mut [u32],
+        mask_b: &mut [u32],
+        code_a_2: &[u32],
+        code_b_2: &[u32],
+        mask_a_2: &[u32],
+        mask_b_2: &[u32],
+    ) {
+        // move all to GPU
+
+        // cross_mul
+    }
+}
+
+pub struct TwoSidedMinDistanceCache {
+    left_code_a: Vec<u32>,
+    left_code_b: Vec<u32>,
+    left_mask_a: Vec<u32>,
+    left_mask_b: Vec<u32>,
+    right_code_a: Vec<u32>,
+    right_code_b: Vec<u32>,
+    right_mask_a: Vec<u32>,
+    right_mask_b: Vec<u32>,
 }
