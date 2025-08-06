@@ -2193,6 +2193,16 @@ impl ServerActor {
             Eye::Right => &self.db_match_list_right,
         };
 
+        let (
+            match_distances_buffers_codes,
+            match_distances_buffers_masks,
+            match_distances_counters,
+            match_distances_indices,
+        ) = match orientation {
+            Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+            Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
+        };
+
         // ignore all device results where the chunk size is 0
         let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
 
@@ -2213,7 +2223,17 @@ impl ServerActor {
                     &chunk_size,
                     &self.current_db_sizes,
                     &ignore_device_results,
+                    match_distances_buffers_codes,
+                    match_distances_buffers_masks,
+                    match_distances_counters,
+                    match_distances_indices,
+                    self.internal_batch_counter,
+                    &code_dots,
+                    &mask_dots,
                     batch_size,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
                     &self.streams[0],
                     db_subset_idx,
                 );
@@ -2895,7 +2915,15 @@ fn open_subset_results(
     real_db_sizes: &[usize],
     total_db_sizes: &[usize],
     ignore_db_results: &[bool],
+    match_distances_buffers_codes: &[ChunkShare<u16>],
+    match_distances_buffers_masks: &[ChunkShare<u16>],
+    match_distances_counters: &[CudaSlice<u32>],
+    match_distances_indices: &[CudaSlice<u64>],
+    batch_id: u64,
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
+    max_bucket_distances: usize,
     streams: &[CudaStream],
     index_mapping: &[Vec<u32>],
 ) {
@@ -2932,7 +2960,15 @@ fn open_subset_results(
         real_db_sizes,
         total_db_sizes,
         ignore_db_results,
+        match_distances_buffers_codes,
+        match_distances_buffers_masks,
+        match_distances_counters,
+        match_distances_indices,
+        batch_id,
+        code_dots,
+        mask_dots,
         batch_size,
+        max_bucket_distances,
         streams,
         index_mapping,
     );
