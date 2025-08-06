@@ -37,16 +37,16 @@ impl SetHash {
 }
 
 impl HawkSession {
-    pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSessionRef>>>) -> Result<()> {
+    pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
         // make a function because the borrow checker can't track the lifetimes properly if this was a closure
-        async fn squeeze_rng(session: &HawkSessionRef) -> Result<()> {
-            let mut session = session.write().await;
-            let prf = &mut session.aby3_store.session.prf;
+        async fn squeeze_rng(session: &HawkSession) -> Result<()> {
+            let mut store = session.aby3_store.write().await;
+            let prf = &mut store.session.prf;
 
             let my_share = prf.gen_zero_share::<u128>();
             let my_msg = || NetworkValue::PrfCheck(my_share);
 
-            let net = &mut session.aby3_store.session.network_session;
+            let net = &mut store.session.network_session;
             net.send_prev(my_msg()).await?;
             net.send_next(my_msg()).await?;
 
