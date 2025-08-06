@@ -72,7 +72,7 @@ env:
     value: "false"
 
   - name: SMPC__AWS__REGION
-    value: "eu-north-1"
+    value: "eu-central-1"
 
   - name: SMPC__SERVICE_PORTS
     value: '["4000","4001","4002"]'

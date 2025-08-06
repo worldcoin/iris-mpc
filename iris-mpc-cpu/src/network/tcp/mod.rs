@@ -80,8 +80,9 @@ pub async fn build_network_handle(
 
     if let Some(tls) = args.tls.as_ref() {
         tracing::info!(
-            "Building NetworkHandle, with TLS, from config: {:?}",
-            tcp_config
+            "Building NetworkHandle, with TLS, from configs: {:?} {:?}",
+            tcp_config,
+            tls,
         );
 
         let root_certs = tls.clone().root_certs;
