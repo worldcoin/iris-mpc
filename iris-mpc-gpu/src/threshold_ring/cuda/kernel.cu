@@ -617,10 +617,10 @@ conditional_select_pre(U32 *cond_a, U32 *cond_b, U32 *inout_code_a,
     U32 code_b = inout_code_b[i] - code_2_b[i];
     U32 mask_a = inout_mask_a[i] - mask_2_a[i];
     U32 mask_b = inout_mask_b[i] - mask_2_b[i];
-    inout_code_a[i] =
-        cond_a * code_a + cond_b * code_a + cond_a * code_b + rand[2 * i];
-    inout_mask_a[i] =
-        cond_a * mask_a + cond_b * mask_a + cond_a * mask_b + rand[2 * i + 1];
+    inout_code_a[i] = cond_a[i] * code_a + cond_b[i] * code_a +
+                      cond_a[i] * code_b + rand[2 * i];
+    inout_mask_a[i] = cond_a[i] * mask_a + cond_b[i] * mask_a +
+                      cond_a[i] * mask_b + rand[2 * i + 1];
   }
 }
 
@@ -631,9 +631,26 @@ conditional_select_post(U32 *inout_code_a, U32 *inout_code_b, U32 *inout_mask_a,
                         U32 *mask_2_a, U32 *mask_2_b, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
-    inout_code_a[i] += code_2_a;
-    inout_code_b[i] += code_2_b;
-    inout_mask_a[i] += mask_2_a;
-    inout_mask_b[i] += mask_2_b;
+    inout_code_a[i] += code_2_a[i];
+    inout_code_b[i] += code_2_b[i];
+    inout_mask_a[i] += mask_2_a[i];
+    inout_mask_b[i] += mask_2_b[i];
+  }
+}
+
+// implements the local part of the cross multiplication of two distance shares,
+// see cross_mul in the CPU code
+extern "C" __global__ void cross_mul_pre(U32 *out_a, U32 *code_a, U32 *code_b,
+                                         U32 *mask_a, U32 *mask_b,
+                                         U32 *code_2_a, U32 *code_2_b,
+                                         U32 *mask_2_a, U32 *mask_2_b,
+                                         U32 *rand, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    U32 code2_mask1 = code_2_a[i] * mask_a[i] + code_2_b[i] * mask_a[i] +
+                      code_2_a[i] * mask_b[i];
+    U32 code1_mask2 = code_a[i] * mask_2_a[i] + code_b[i] * mask_2_a[i] +
+                      code_a[i] * mask_2_b[i];
+    out_a[i] = rand[i] + code2_mask1 - code1_mask2;
   }
 }

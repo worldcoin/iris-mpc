@@ -150,6 +150,7 @@ struct Kernels {
     pub(crate) collapse_sum: CudaFunction,
     pub(crate) rotate_bitvec: CudaFunction,
     pub(crate) mask_bitvec: CudaFunction,
+    pub(crate) cross_mul_pre: CudaFunction,
     pub(crate) conditional_select_pre: CudaFunction,
     pub(crate) conditional_select_post: CudaFunction,
 }
@@ -188,6 +189,7 @@ impl Kernels {
                 "collapse_sum",
                 "rotate_bitvec",
                 "mask_bitvec",
+                "cross_mul_pre",
                 "conditional_select_pre",
                 "conditional_select_post",
             ],
@@ -231,6 +233,7 @@ impl Kernels {
         let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
         let rotate_bitvec = dev.get_func(Self::MOD_NAME, "rotate_bitvec").unwrap();
         let mask_bitvec = dev.get_func(Self::MOD_NAME, "mask_bitvec").unwrap();
+        let cross_mul_pre = dev.get_func(Self::MOD_NAME, "cross_mul_pre").unwrap();
         let conditional_select_pre = dev
             .get_func(Self::MOD_NAME, "conditional_select_pre")
             .unwrap();
@@ -265,6 +268,7 @@ impl Kernels {
             collapse_sum,
             rotate_bitvec,
             mask_bitvec,
+            cross_mul_pre,
             conditional_select_pre,
             conditional_select_post,
         }
@@ -2863,6 +2867,79 @@ impl Circuits {
         self.buffers.check_buffers();
     }
 
+    /// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
+    /// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
+    pub fn cross_mul(
+        &mut self,
+        out: &mut [ChunkShareView<u32>],
+        codes: &[ChunkShareView<u32>],
+        masks: &[ChunkShareView<u32>],
+        codes_2: &[ChunkShareView<u32>],
+        masks_2: &[ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, codes.len());
+        assert_eq!(self.n_devices, masks.len());
+        assert_eq!(self.n_devices, codes_2.len());
+        assert_eq!(self.n_devices, masks_2.len());
+
+        for (idx, (out, code, mask, code_2, mask_2)) in izip!(
+            out.iter(),
+            codes.iter(),
+            masks.iter(),
+            codes_2.iter(),
+            masks_2.iter()
+        )
+        .enumerate()
+        {
+            let len = code.len();
+            assert_eq!(code.len(), mask.len());
+            assert_eq!(code_2.len(), mask_2.len());
+            assert_eq!(code.len(), code_2.len());
+
+            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len).unwrap() };
+            {
+                let rng = &mut self.rngs[idx];
+                let mut rand_view = rand.slice_mut(..);
+                rng.fill_rng_into(&mut rand_view, &streams[idx]);
+            }
+
+            let cfg = launch_config_from_elements_and_threads(
+                code.len() as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .cross_mul_pre
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &out.a, &code.a, &code.b, &mask.a, &mask.b, &code_2.a, &code_2.b,
+                            &mask_2.a, &mask_2.b, &rand, len,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+        // reshare the results
+        result::group_start().unwrap();
+        for (idx, send) in out.iter().enumerate() {
+            self.comms[idx]
+                .send_view(&send.a, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        for (idx, recv) in out.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+    }
+
     pub fn conditionally_select_difference(
         &mut self,
         conds: &[ChunkShareView<u32>],
@@ -2945,8 +3022,7 @@ impl Circuits {
         }
         result::group_end().unwrap();
 
-        for (idx, (cond, code, mask, code_2, mask_2)) in izip!(
-            conds.iter(),
+        for (idx, (code, mask, code_2, mask_2)) in izip!(
             codes.iter_mut(),
             masks.iter_mut(),
             codes_2.iter(),
