@@ -1,0 +1,14 @@
+[
+    {
+        "serial_id": 1,
+        "request_type": "reset_update"
+    },
+    {
+        "serial_id": 2,
+        "request_type": "reauth"
+    },
+    {
+        "serial_id": 3,
+        "request_type": "uniqueness"
+    }
+]
