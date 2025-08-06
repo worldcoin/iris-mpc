@@ -2721,6 +2721,97 @@ impl Circuits {
         self.buffers.check_buffers();
     }
 
+    // 2D anon stats implementation plan.
+    // 1. Align more with the CPU code, since it would make it easier overall, even though the MPC operations are more expensive
+    // We want to have the following interface to the 2D bucketing function:
+    // Inputs:
+    //  * distances: Vec<code_dot_left, mask_dot_left, code_dot_right, mask_dot_right>, a vec of distance tuples that matched on both sides, already reduced in terms of min fhd
+    //   * thresholds_a: Vec<u16>, thresholds are given as a/b, where b=2^16
+    // Outputs:
+    //   * buckets: Vec<u32>, of length thresholds_a^2, with layout: (left=0,right=0), (left=0,right=1), ..., (left=1,right=0), (left=1,right=1), ... (left = N-1, right = N-1)
+
+    // This is step one, we will also need:
+    // 2. A way to reduce the distances per query to the min ones on both left and right side
+    // We will do this like we did on the CPU side:
+    //   * We will have ids associated with each distance, such that we can group them into rotations for the same query
+    //   * We will group the distances by query id, take the first one as the base, and compare the rest to it, doing conditional swaps to keep the minimum one
+    //   * For the conditional swaps, we will need to lift the 16-bit shares to 32-bit shares, which we will do in a single batch
+    //
+    // 3. Finally, we will need to collect the distances for matching elements during the batch evaluation.
+    // This is actually one of the more complex parts, as during the evaluation of the right/left hand side, we do not know yet if this partial match is actually a full match as well.
+    // We will do this by:
+    //   * Storing all partial matches on the left side in a buffer (which we already do, however, this might get cleared if we produce 1D anon stats...)
+    //   * Storing all partial matches on the right side in a buffer (which we already do, however, this might get cleared if we produce 1D anon stats...)
+    //   * So the above buffers also need to be completely new ones I guess
+    //   * After each query is fully done, we have to copy this to CPU, sort the entries by global_id, and do a set union on the global_id%rotations of left and right side
+    //   * Then we can add it to a temporary storage which is later on input into phase2 when it is large enough...
+    pub fn compare_multiple_thresholds_2d(
+        &mut self,
+        code_dots_left: &[ChunkShareView<u32>],
+        mask_dots_left: &[ChunkShareView<u32>],
+        code_dots_right: &[ChunkShareView<u32>],
+        mask_dots_right: &[ChunkShareView<u32>],
+        streams: &[CudaStream],
+        thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
+        buckets_squared: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
+    ) {
+        assert_eq!(self.n_devices, code_dots_left.len());
+        assert_eq!(self.n_devices, code_dots_right.len());
+        assert_eq!(self.n_devices, mask_dots_left.len());
+        assert_eq!(self.n_devices, mask_dots_right.len());
+        assert_eq!(
+            thresholds_a.len() * thresholds_a.len(),
+            buckets_squared.len()
+        );
+        for (cl, ml, cr, mr) in izip!(
+            code_dots_left,
+            mask_dots_left,
+            code_dots_right,
+            mask_dots_right
+        ) {
+            assert!(cl.len() % 64 == 0);
+            assert!(ml.len() == cl.len());
+            assert!(cr.len() == cl.len());
+            assert!(mr.len() == cl.len());
+        }
+
+        // allocate a temporary buffer for the lifted shares
+        let lifted_left: Vec<()> = Vec::with_capacity(thresholds_a.len());
+        let lifted_right: Vec<()> = Vec::with_capacity(thresholds_a.len());
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+
+        for (code, mask, buffer) in [
+            (code_dots_left, mask_dots_left, lifted_left),
+            (code_dots_right, mask_dots_right, lifted_right),
+        ] {
+            for (bucket_idx, a) in thresholds_a.iter().enumerate() {
+                // Continue with threshold comparison
+                self.lifted_sub(&mut x, mask, code, *a as u32, streams);
+                self.extract_msb(&mut x, streams);
+
+                // Result is in the first bit of the result buffer
+                let result = self.take_result_buffer();
+
+                let mut bits = Vec::with_capacity(self.n_devices);
+                for r in result.iter() {
+                    // Result is in the first bit of the input
+                    bits.push(r.get_offset(0, self.chunk_size));
+                }
+
+                // Expand the result buffer to the x buffer and perform arithmetic xor
+                self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+                // TODO: save x into some global buffer
+                todo!("Save x into some global buffer, based on DIR and bucket_idx");
+                self.return_result_buffer(result);
+            }
+        }
+        // TODO: iterate over global buffer and do the outer product, without communication, aggregating the results into the buckets_squared.a part
+        // TODO: add randomness and communicate all of the bucket_squared.a parts to other parties
+        // TODO: Reconstruct and reveal the results
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        self.buffers.check_buffers();
+    }
     pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
         let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
