@@ -99,11 +99,22 @@ impl MpcNode {
         Ok(())
     }
 
-    /// Doesn't actually require a MpcNode
+    // the genesis simulation doesn't actually require a MpcNode
+
     pub async fn simulate_genesis(
         genesis_args: GenesisArgs,
         config: &Config,
         pairs: &[IrisCodePair],
+    ) -> Result<GenesisState> {
+        Self::simulate_genesis_with_deletions(genesis_args, config, pairs, vec![]).await
+    }
+
+    // maybe a little sloppy but don't want to make merge conflicts with other branches at this time.
+    pub async fn simulate_genesis_with_deletions(
+        genesis_args: GenesisArgs,
+        config: &Config,
+        pairs: &[IrisCodePair],
+        deletions: Vec<u32>,
     ) -> Result<GenesisState> {
         let genesis_input = get_genesis_input(pairs);
 
@@ -115,7 +126,7 @@ impl MpcNode {
         };
 
         let genesis_state =
-            construct_initial_genesis_state(genesis_config, genesis_args, genesis_input);
+            construct_initial_genesis_state(genesis_config, genesis_args, genesis_input, deletions);
 
         let expected_genesis_state = run_plaintext_genesis(genesis_state)
             .await
@@ -254,6 +265,7 @@ fn construct_initial_genesis_state(
     genesis_config: GenesisConfig,
     genesis_args: GenesisArgs,
     input: HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>,
+    s3_deletions: Vec<u32>,
 ) -> GenesisState {
     GenesisState {
         src_db: GenesisSrcDbState {
@@ -270,7 +282,7 @@ fn construct_initial_genesis_state(
         },
         config: genesis_config,
         args: genesis_args,
-        s3_deletions: Vec::new(),
+        s3_deletions,
     }
 }
 

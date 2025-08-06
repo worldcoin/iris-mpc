@@ -46,3 +46,12 @@ fn test_hnsw_genesis_101() -> Result<()> {
     run_test!(101, 1)?;
     Ok(())
 }
+
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hnsw_genesis_102() -> Result<()> {
+    use workflows::genesis_102::Test;
+    run_test!(102, 1)?;
+    Ok(())
+}
