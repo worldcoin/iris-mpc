@@ -12,7 +12,7 @@ const GRAPH_SIZE_RANGE: [usize; 4] = [1, 10, 100, 1000];
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    write_plaintext_iris_codes(RNG_SEED, N_TO_GENERATE, GRAPH_SIZE_RANGE.to_vec()).await;
+    write_plaintext_iris_codes(RNG_SEED, N_TO_GENERATE, GRAPH_SIZE_RANGE.to_vec(), None).await;
 
     Ok(())
 }
