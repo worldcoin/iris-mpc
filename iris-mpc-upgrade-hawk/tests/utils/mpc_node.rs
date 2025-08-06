@@ -104,7 +104,6 @@ impl MpcNode {
         genesis_args: GenesisArgs,
         config: &Config,
         pairs: &[IrisCodePair],
-        rng_state: u64,
     ) -> Result<GenesisState> {
         let genesis_input = get_genesis_input(pairs);
 
@@ -112,7 +111,7 @@ impl MpcNode {
             hnsw_M: config.hnsw_param_M,
             hnsw_ef_constr: config.hnsw_param_ef_constr,
             hnsw_ef_search: config.hnsw_param_ef_search,
-            hawk_prf_key: Some(rng_state),
+            hawk_prf_key: config.hawk_prf_key,
         };
 
         let genesis_state =

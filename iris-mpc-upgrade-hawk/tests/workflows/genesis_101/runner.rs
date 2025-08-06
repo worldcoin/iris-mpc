@@ -24,8 +24,6 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_error_rate: 250,
 };
 
-const DEFAULT_RNG_SEED: u64 = 0;
-
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
         resources::get_resource_path("iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
@@ -111,14 +109,9 @@ impl TestRun for Test {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
         let expected = Arc::new(
-            MpcNode::simulate_genesis(
-                DEFAULT_GENESIS_ARGS,
-                config,
-                &plaintext_irises,
-                DEFAULT_RNG_SEED,
-            )
-            .await
-            .unwrap(),
+            MpcNode::simulate_genesis(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+                .await
+                .unwrap(),
         );
 
         let mut join_set = JoinSet::new();
@@ -154,9 +147,15 @@ impl TestRun for Test {
     }
 
     async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
+        let hawk_prf0 = self.configs[0].hawk_prf_key;
+        assert!(
+            self.configs.iter().all(|c| c.hawk_prf_key == hawk_prf0),
+            "All hawk_prf_key values in configs must be equal"
+        );
+
         let plaintext_irises = get_irises();
         let secret_shared_irises =
-            irises::share_irises_locally(&plaintext_irises, DEFAULT_RNG_SEED).unwrap();
+            irises::share_irises_locally(&plaintext_irises, hawk_prf0.unwrap_or_default()).unwrap();
 
         let mut join_set = JoinSet::new();
         for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
