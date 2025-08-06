@@ -150,6 +150,8 @@ struct Kernels {
     pub(crate) collapse_sum: CudaFunction,
     pub(crate) rotate_bitvec: CudaFunction,
     pub(crate) mask_bitvec: CudaFunction,
+    pub(crate) conditional_select_pre: CudaFunction,
+    pub(crate) conditional_select_post: CudaFunction,
 }
 
 impl Kernels {
@@ -186,6 +188,8 @@ impl Kernels {
                 "collapse_sum",
                 "rotate_bitvec",
                 "mask_bitvec",
+                "conditional_select_pre",
+                "conditional_select_post",
             ],
         )
         .unwrap();
@@ -227,6 +231,12 @@ impl Kernels {
         let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
         let rotate_bitvec = dev.get_func(Self::MOD_NAME, "rotate_bitvec").unwrap();
         let mask_bitvec = dev.get_func(Self::MOD_NAME, "mask_bitvec").unwrap();
+        let conditional_select_pre = dev
+            .get_func(Self::MOD_NAME, "conditional_select_pre")
+            .unwrap();
+        let conditional_select_post = dev
+            .get_func(Self::MOD_NAME, "conditional_select_post")
+            .unwrap();
 
         Kernels {
             and,
@@ -255,6 +265,8 @@ impl Kernels {
             collapse_sum,
             rotate_bitvec,
             mask_bitvec,
+            conditional_select_pre,
+            conditional_select_post,
         }
     }
 }
@@ -2812,6 +2824,160 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         self.buffers.check_buffers();
     }
+    pub fn cross_compare_and_swap(
+        &mut self,
+        codes: &mut [ChunkShareView<u32>],
+        masks: &mut [ChunkShareView<u32>],
+        codes_2: &[ChunkShareView<u32>],
+        masks_2: &[ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, codes.len());
+        assert_eq!(self.n_devices, masks.len());
+        assert_eq!(self.n_devices, codes_2.len());
+        assert_eq!(self.n_devices, masks_2.len());
+        for chunk in codes.iter().chain(masks.iter()) {
+            assert!(chunk.len() % 64 == 0);
+        }
+
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+
+        self.extract_msb(&mut x, streams);
+        // Result is in the first bit of the result buffer
+        let result = self.take_result_buffer();
+
+        let mut bits = Vec::with_capacity(self.n_devices);
+        for r in result.iter() {
+            // Result is in the first bit of the input
+            bits.push(r.get_offset(0, self.chunk_size));
+        }
+
+        // Expand the result buffer to the x buffer and perform arithmetic xor
+        self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+        self.return_result_buffer(result);
+
+        self.conditionally_select_difference(&x, codes, masks, codes_2, masks_2, streams);
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        self.buffers.check_buffers();
+    }
+
+    pub fn conditionally_select_difference(
+        &mut self,
+        conds: &[ChunkShareView<u32>],
+        codes: &mut [ChunkShareView<u32>],
+        masks: &mut [ChunkShareView<u32>],
+        codes_2: &[ChunkShareView<u32>],
+        masks_2: &[ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, codes.len());
+        assert_eq!(self.n_devices, masks.len());
+        assert_eq!(self.n_devices, codes_2.len());
+        assert_eq!(self.n_devices, masks_2.len());
+
+        for (idx, (cond, code, mask, code_2, mask_2)) in izip!(
+            conds.iter(),
+            codes.iter_mut(),
+            masks.iter_mut(),
+            codes_2.iter(),
+            masks_2.iter()
+        )
+        .enumerate()
+        {
+            let len = code.len();
+            assert_eq!(code.len(), mask.len());
+            assert_eq!(code_2.len(), mask_2.len());
+            assert_eq!(code.len(), code_2.len());
+
+            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len * 2).unwrap() };
+            {
+                let rng = &mut self.rngs[idx];
+                let mut rand_view = rand.slice_mut(..);
+                rng.fill_rng_into(&mut rand_view, &streams[idx]);
+            }
+
+            let cfg = launch_config_from_elements_and_threads(
+                code.len() as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .conditional_select_pre
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &cond.a, &cond.b, &code.a, &code.b, &mask.a, &mask.b, &code_2.a,
+                            &code_2.b, &mask_2.a, &mask_2.b, &rand, len,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+        // reshare the results
+        result::group_start().unwrap();
+        for (idx, send) in codes.iter().enumerate() {
+            self.comms[idx]
+                .send_view(&send.a, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        for (idx, recv) in codes.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+        result::group_start().unwrap();
+        for (idx, send) in masks.iter().enumerate() {
+            self.comms[idx]
+                .send_view(&send.a, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        for (idx, recv) in masks.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+
+        for (idx, (cond, code, mask, code_2, mask_2)) in izip!(
+            conds.iter(),
+            codes.iter_mut(),
+            masks.iter_mut(),
+            codes_2.iter(),
+            masks_2.iter()
+        )
+        .enumerate()
+        {
+            let len = code.len();
+            let cfg = launch_config_from_elements_and_threads(
+                code.len() as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .conditional_select_post
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &code.a, &code.b, &mask.a, &mask.b, &code_2.a, &code_2.b, &mask_2.a,
+                            &mask_2.b, len,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
         let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
         let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();

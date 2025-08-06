@@ -599,3 +599,41 @@ extern "C" __global__ void mask_bitvec(U64 *inout_a, U64 *inout_b, U64 *mask,
     inout_b[i] = inout_b[i] & mask[i];
   }
 }
+
+// Calculates the pre-networking step for a conditional select operation.
+// Conditional multiplexing:
+// If control bit is 1, select d1, else select d2.
+// res = c * d1 + (1 - c) * d2 = d2 + c * (d1 - d2);
+// We need to do it for both code_dot and mask_dot.
+// we start with the mult of c and d1-d2
+extern "C" __global__ void
+conditional_select_pre(U32 *cond_a, U32 *cond_b, U32 *inout_code_a,
+                       U32 *inout_code_b, U32 *inout_mask_a, U32 *inout_mask_b,
+                       U32 *code_2_a, U32 *code_2_b, U32 *mask_2_a,
+                       U32 *mask_2_b, U32 *rand, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    U32 code_a = inout_code_a[i] - code_2_a[i];
+    U32 code_b = inout_code_b[i] - code_2_b[i];
+    U32 mask_a = inout_mask_a[i] - mask_2_a[i];
+    U32 mask_b = inout_mask_b[i] - mask_2_b[i];
+    inout_code_a[i] =
+        cond_a * code_a + cond_b * code_a + cond_a * code_b + rand[2 * i];
+    inout_mask_a[i] =
+        cond_a * mask_a + cond_b * mask_a + cond_a * mask_b + rand[2 * i + 1];
+  }
+}
+
+// finally compute the result by adding the d2 shares
+extern "C" __global__ void
+conditional_select_post(U32 *inout_code_a, U32 *inout_code_b, U32 *inout_mask_a,
+                        U32 *inout_mask_b, U32 *code_2_a, U32 *code_2_b,
+                        U32 *mask_2_a, U32 *mask_2_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    inout_code_a[i] += code_2_a;
+    inout_code_b[i] += code_2_b;
+    inout_mask_a[i] += mask_2_a;
+    inout_mask_b[i] += mask_2_b;
+  }
+}
