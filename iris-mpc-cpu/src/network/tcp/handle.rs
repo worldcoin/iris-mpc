@@ -299,7 +299,7 @@ async fn manage_connection<T: NetworkConnection>(
                     outbound_rx: rx,
                     rsp,
                 } => {
-                    metrics::counter!("network::new_sessions").increment(1);
+                    metrics::counter!("network.new_sessions").increment(1);
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     inbound_forwarder = tx;
                     outbound_rx = rx;
@@ -344,7 +344,7 @@ async fn reconnect_and_replace<T: NetworkConnection>(
     reader: &mut Option<BufReader<ReadHalf<T>>>,
     writer: &mut Option<WriteHalf<T>>,
 ) -> Result<(), eyre::Report> {
-    metrics::counter!("network::reconnect").increment(1);
+    metrics::counter!("network.reconnect").increment(1);
     reader.take();
     writer.take();
 
@@ -396,11 +396,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             if buf.len() >= BUFFER_CAPACITY {
-                metrics::counter!("network::flush_reason::buf_len").increment(1);
+                metrics::counter!("network.flush_reason::buf_len").increment(1);
             } else if buffered_msgs >= num_sessions {
-                metrics::counter!("network::flush_reason::msg_count").increment(1);
+                metrics::counter!("network.flush_reason::msg_count").increment(1);
             } else {
-                metrics::counter!("network::flush_reason::timeout").increment(1);
+                metrics::counter!("network.flush_reason::timeout").increment(1);
             }
         }
 
