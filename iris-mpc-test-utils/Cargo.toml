@@ -34,6 +34,7 @@ metrics-exporter-statsd = "0.7"
 serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
+iris-mpc-store = { path = "../iris-mpc-store" }
 chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }

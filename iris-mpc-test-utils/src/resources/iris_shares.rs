@@ -1,5 +1,5 @@
 use super::iris_codes::read_iris_codes;
-use crate::utils::convertor::to_galois_ring_shares;
+use crate::utils::convertor::to_galois_ring_share_pair_set;
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIrisPairSet;
 use itertools::{IntoChunks, Itertools};
 use std::io::Error;
@@ -23,7 +23,7 @@ pub fn read_iris_shares(
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
     Ok(read_iris_codes(n_to_read, skip_offset)
         .unwrap()
-        .map(move |code_pair| Box::new(to_galois_ring_shares(rng_state, &code_pair))))
+        .map(move |code_pair| to_galois_ring_share_pair_set(rng_state, &code_pair)))
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
