@@ -49,10 +49,11 @@ pub fn to_galois_ring_share_pair_set(
 ///
 /// A stored Iris reference (in readiness for upload to a dB)
 ///
-pub fn to_stored_iris_ref<'a>(
+#[allow(dead_code)]
+pub fn to_stored_iris_ref(
     serial_id: IrisSerialId,
-    share_pair: &'a GaloisRingSharedIrisPair,
-) -> StoredIrisRef<'a> {
+    share_pair: &GaloisRingSharedIrisPair,
+) -> StoredIrisRef<'_> {
     let (iris_l, iris_r) = share_pair;
 
     StoredIrisRef {
@@ -75,10 +76,11 @@ pub fn to_stored_iris_ref<'a>(
 ///
 /// A 3 element array of stored Iris references.
 ///
-pub fn to_stored_iris_ref_set<'a>(
+#[allow(dead_code)]
+pub fn to_stored_iris_ref_set(
     serial_id: IrisSerialId,
-    share_pair_set: &'a Box<GaloisRingSharedIrisPairSet>,
-) -> Box<StoredIrisRefSet<'a>> {
+    share_pair_set: &GaloisRingSharedIrisPairSet,
+) -> Box<StoredIrisRefSet<'_>> {
     Box::new([
         to_stored_iris_ref(serial_id, &share_pair_set[0]),
         to_stored_iris_ref(serial_id, &share_pair_set[1]),
