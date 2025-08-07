@@ -2769,16 +2769,11 @@ impl Circuits {
         mask_dots_right: &[ChunkShareView<u32>],
         streams: &[CudaStream],
         thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
-        buckets_squared: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
-    ) {
+    ) -> Vec<u32> {
         assert_eq!(self.n_devices, code_dots_left.len());
         assert_eq!(self.n_devices, code_dots_right.len());
         assert_eq!(self.n_devices, mask_dots_left.len());
         assert_eq!(self.n_devices, mask_dots_right.len());
-        assert_eq!(
-            thresholds_a.len() * thresholds_a.len(),
-            buckets_squared.len()
-        );
         for (cl, ml, cr, mr) in izip!(
             code_dots_left,
             mask_dots_left,
@@ -2789,19 +2784,20 @@ impl Circuits {
             assert!(ml.len() == cl.len());
             assert!(cr.len() == cl.len());
             assert!(mr.len() == cl.len());
+            assert!(cl.len() <= self.chunk_size * 64);
         }
 
         // allocate a temporary buffer for the lifted shares
-        let lifted_left: Vec<()> = Vec::with_capacity(thresholds_a.len());
-        let lifted_right: Vec<()> = Vec::with_capacity(thresholds_a.len());
+        let mut lifted_left: Vec<(Vec<u32>, Vec<u32>)> = Vec::with_capacity(thresholds_a.len());
+        let mut lifted_right: Vec<(Vec<u32>, Vec<u32>)> = Vec::with_capacity(thresholds_a.len());
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
         let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
 
         for (code, mask, buffer) in [
-            (code_dots_left, mask_dots_left, lifted_left),
-            (code_dots_right, mask_dots_right, lifted_right),
+            (code_dots_left, mask_dots_left, &mut lifted_left),
+            (code_dots_right, mask_dots_right, &mut lifted_right),
         ] {
-            for (bucket_idx, a) in thresholds_a.iter().enumerate() {
+            for a in thresholds_a.iter() {
                 // Continue with threshold comparison
                 self.lifted_sub(&mut x, mask, code, *a as u32, streams);
                 self.extract_msb(&mut x, streams);
@@ -2817,16 +2813,79 @@ impl Circuits {
 
                 // Expand the result buffer to the x buffer and perform arithmetic xor
                 self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
-                // TODO: save x into some global buffer
-                todo!("Save x into some global buffer, based on DIR and bucket_idx");
+
+                for (i, bit) in x.iter().enumerate() {
+                    let len = code[i].len();
+                    let a = dtoh_on_stream_sync(&bit.a.slice(..len), &self.devs[i], &streams[i])
+                        .unwrap();
+                    let b = dtoh_on_stream_sync(&bit.b.slice(..len), &self.devs[i], &streams[i])
+                        .unwrap();
+                    buffer.push((a, b));
+                }
                 self.return_result_buffer(result);
             }
         }
-        // TODO: iterate over global buffer and do the outer product, without communication, aggregating the results into the buckets_squared.a part
-        // TODO: add randomness and communicate all of the bucket_squared.a parts to other parties
-        // TODO: Reconstruct and reveal the results
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        // Now we have the lifted 0/1 shares in lifted_left and lifted_right, do an outer product + aggregation to get all of the results.
+        // TODO: we do this on the CPU for now, let's keep an eye on the performance though since it scales quadratically with the number of thresholds
+        let mut buckets = Vec::with_capacity(thresholds_a.len() * thresholds_a.len());
+        for left_results in lifted_left.iter() {
+            for right_results in lifted_right.iter() {
+                // We have to do the outer product of the left and right results
+                // and aggregate them into the buckets_squared
+                assert_eq!(left_results.0.len(), right_results.0.len());
+                assert_eq!(left_results.1.len(), right_results.1.len());
+                let local_aggregated = izip!(
+                    left_results.0.iter(),
+                    left_results.1.iter(),
+                    right_results.0.iter(),
+                    right_results.1.iter()
+                )
+                .map(|(&l_a, &l_b, &r_a, &r_b)| {
+                    // local part of multiplication, without randomness yet, will be added in the end
+                    l_a.wrapping_mul(r_a)
+                        .wrapping_add(l_a.wrapping_mul(r_b))
+                        .wrapping_add(l_b.wrapping_mul(r_a))
+                })
+                .fold(0u32, |acc, x| acc.wrapping_add(x));
+                buckets.push(local_aggregated);
+            }
+        }
+
+        // Move the results to the first GPU, and communicate to reveal the results
+        let result_buckets = {
+            // TODO: add randomness to the buckets
+            let result_share = htod_on_stream_sync(&buckets, &self.devs[0], &streams[0]).unwrap();
+            let mut buf0 = self.devs[0].alloc_zeros::<u32>(result_share.len()).unwrap();
+            let mut buf1 = self.devs[0].alloc_zeros::<u32>(result_share.len()).unwrap();
+
+            result::group_start().unwrap();
+            self.comms[0]
+                .send(&result_share, self.next_id, &streams[0])
+                .unwrap();
+            self.comms[0]
+                .receive(&mut buf0, self.prev_id, &streams[0])
+                .unwrap();
+            result::group_end().unwrap();
+            result::group_start().unwrap();
+            self.comms[0]
+                .send(&result_share, self.prev_id, &streams[0])
+                .unwrap();
+            self.comms[0]
+                .receive(&mut buf1, self.next_id, &streams[0])
+                .unwrap();
+            result::group_end().unwrap();
+            let mut buckets1 = dtoh_on_stream_sync(&buf0, &self.devs[0], &streams[0]).unwrap();
+            let buckets2 = dtoh_on_stream_sync(&buf1, &self.devs[0], &streams[0]).unwrap();
+
+            for (b0, b1, b2) in izip!(buckets1.iter_mut(), buckets2.iter(), buckets.iter()) {
+                *b0 = b0.wrapping_add(b1.wrapping_add(*b2));
+            }
+            buckets1
+        };
+
         self.buffers.check_buffers();
+        result_buckets
     }
     pub fn cross_compare_and_swap(
         &mut self,
