@@ -5,7 +5,7 @@ use siphasher::sip::SipHasher13;
 use std::hash::{Hash, Hasher};
 
 use crate::{
-    execution::hawk_main::{LEFT, RIGHT},
+    execution::hawk_main::{BothOrient, LEFT, RIGHT},
     network::value::{NetworkValue, StateChecksum},
 };
 
@@ -37,6 +37,45 @@ impl SetHash {
 }
 
 impl HawkSession {
+    pub async fn prf_check(sessions: &BothOrient<BothEyes<Vec<HawkSession>>>) -> Result<()> {
+        // make a function because the borrow checker can't track the lifetimes properly if this was a closure
+        async fn squeeze_rng(session: &HawkSession) -> Result<()> {
+            let mut store = session.aby3_store.write().await;
+            let prf = &mut store.session.prf;
+
+            let my_share = prf.gen_zero_share::<u128>();
+            let my_msg = || NetworkValue::PrfCheck(my_share);
+
+            let net = &mut store.session.network_session;
+            net.send_prev(my_msg()).await?;
+            net.send_next(my_msg()).await?;
+
+            let decode = |msg| match msg {
+                Ok(NetworkValue::PrfCheck(c)) => Ok(c),
+                other => {
+                    tracing::error!("Unexpected message format: {:?}", other);
+                    Err(eyre!("Could not deserialize PrfCheck"))
+                }
+            };
+            let prev_share = decode(net.receive_prev().await)?;
+            let next_share = decode(net.receive_next().await)?;
+
+            if (prev_share + my_share + next_share).convert() != 0_u128 {
+                bail!("PRFs are out of sync");
+            }
+            Ok(())
+        }
+
+        let _ = futures::future::try_join_all(
+            sessions
+                .iter()
+                .flat_map(|orient| orient.iter().flat_map(|eyes| eyes.iter()))
+                .map(squeeze_rng),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn state_check(sessions: BothEyes<&HawkSession>) -> Result<()> {
         let (left_state, right_state) = join!(
             HawkSession::state_check_side(sessions[LEFT]),
