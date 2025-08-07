@@ -5,8 +5,8 @@ use iris_mpc_common::{job::Eye, ROTATIONS};
 use itertools::{izip, Itertools};
 
 use crate::{
-    helpers::{device_manager::DeviceManager, dtoh_on_stream_sync},
-    threshold_ring::protocol::ChunkShare,
+    helpers::{device_manager::DeviceManager, dtoh_on_stream_sync, htod_on_stream_sync},
+    threshold_ring::protocol::{ChunkShare, Circuits},
 };
 
 pub struct DistanceCache {
@@ -319,7 +319,11 @@ impl TwoSidedDistanceCache {
     //   * We will group the distances by query id, take the first one as the base, and compare the rest to it, doing conditional swaps to keep the minimum one
     //   * For the conditional swaps, we will need to lift the 16-bit shares to 32-bit shares, which we will do in a single batch
 
-    pub fn into_min_distance_cache(mut self) -> TwoSidedMinDistanceCache {
+    pub fn into_min_distance_cache(
+        mut self,
+        protocol: &mut Circuits,
+        streams: &[CudaStream],
+    ) -> TwoSidedMinDistanceCache {
         self.sort_internal_groups();
 
         let len = self.len();
@@ -455,6 +459,78 @@ impl TwoSidedDistanceCache {
                     right_mask_b_2.push(right_mask_b[idx]);
                 }
             }
+
+            let devices = protocol.get_devices();
+
+            let mut swap = |ca: &mut Vec<_>,
+                            cb: &mut Vec<_>,
+                            ma: &mut Vec<_>,
+                            mb: &mut Vec<_>,
+                            ca2,
+                            cb2,
+                            ma2,
+                            mb2| {
+                let codes_a = htod_on_stream_sync(ca, &devices[0], &streams[0]).unwrap();
+                let codes_b = htod_on_stream_sync(cb, &devices[0], &streams[0]).unwrap();
+                let codes = ChunkShare::new(codes_a, codes_b);
+                let codes_view = codes.as_view();
+                let masks_a = htod_on_stream_sync(ma, &devices[0], &streams[0]).unwrap();
+                let masks_b = htod_on_stream_sync(mb, &devices[0], &streams[0]).unwrap();
+                let masks = ChunkShare::new(masks_a, masks_b);
+                let masks_view = masks.as_view();
+
+                let codes2_a = htod_on_stream_sync(ca2, &devices[0], &streams[0]).unwrap();
+                let codes2_b = htod_on_stream_sync(cb2, &devices[0], &streams[0]).unwrap();
+                let codes2 = ChunkShare::new(codes2_a, codes2_b);
+                let codes2_view = codes2.as_view();
+                let masks2_a = htod_on_stream_sync(ma2, &devices[0], &streams[0]).unwrap();
+                let masks2_b = htod_on_stream_sync(mb2, &devices[0], &streams[0]).unwrap();
+                let masks2 = ChunkShare::new(masks2_a, masks2_b);
+                let masks2_view = masks2.as_view();
+
+                protocol.cross_compare_and_swap(
+                    &mut [codes_view],
+                    &mut [masks_view],
+                    &[codes2_view],
+                    &[masks2_view],
+                    &streams[..1],
+                );
+
+                let result_code_a =
+                    dtoh_on_stream_sync(&codes.a, &devices[0], &streams[0]).unwrap();
+                let result_code_b =
+                    dtoh_on_stream_sync(&codes.b, &devices[0], &streams[0]).unwrap();
+                let result_mask_a =
+                    dtoh_on_stream_sync(&masks.a, &devices[0], &streams[0]).unwrap();
+                let result_mask_b =
+                    dtoh_on_stream_sync(&masks.b, &devices[0], &streams[0]).unwrap();
+
+                *ca = result_code_a;
+                *cb = result_code_b;
+                *ma = result_mask_a;
+                *mb = result_mask_b;
+            };
+
+            swap(
+                &mut left_code_a,
+                &mut left_code_b,
+                &mut left_mask_a,
+                &mut left_mask_b,
+                &left_code_a_2,
+                &left_code_b_2,
+                &left_mask_a_2,
+                &left_mask_b_2,
+            );
+            swap(
+                &mut right_code_a,
+                &mut right_code_b,
+                &mut right_mask_a,
+                &mut right_mask_b,
+                &right_code_a_2,
+                &right_code_b_2,
+                &right_mask_a_2,
+                &right_mask_b_2,
+            );
         }
 
         TwoSidedMinDistanceCache {
@@ -468,21 +544,6 @@ impl TwoSidedDistanceCache {
             right_mask_b,
         }
     }
-
-    fn cross_compare_and_swap(
-        code_a: &mut [u32],
-        code_b: &mut [u32],
-        mask_a: &mut [u32],
-        mask_b: &mut [u32],
-        code_a_2: &[u32],
-        code_b_2: &[u32],
-        mask_a_2: &[u32],
-        mask_b_2: &[u32],
-    ) {
-        // move all to GPU
-
-        // cross_mul
-    }
 }
 
 pub struct TwoSidedMinDistanceCache {
@@ -494,4 +555,8 @@ pub struct TwoSidedMinDistanceCache {
     right_code_b: Vec<u32>,
     right_mask_a: Vec<u32>,
     right_mask_b: Vec<u32>,
+}
+
+impl TwoSidedMinDistanceCache {
+    pub fn compute_buckets(self) {}
 }

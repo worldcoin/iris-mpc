@@ -2973,6 +2973,12 @@ impl Circuits {
         self.buffers.check_buffers();
         result_buckets
     }
+
+    /// Cross compare and swap the codes and masks of two sets of shares.
+    /// This function sets the codes and masks inputs/outputs to the lower threshold between code/mask and code_2/mask_2.
+    ///
+    /// This function is also one of the few ones that is allowed to be called with any number of device inputs, as long as there are at least that many devices.
+    /// In particular, it is used to do the work for the 2D anon stats minimum FHD step on the first GPU only.
     pub fn cross_compare_and_swap(
         &mut self,
         codes: &mut [ChunkShareView<u32>],
@@ -2981,10 +2987,11 @@ impl Circuits {
         masks_2: &[ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
-        assert_eq!(self.n_devices, codes.len());
-        assert_eq!(self.n_devices, masks.len());
-        assert_eq!(self.n_devices, codes_2.len());
-        assert_eq!(self.n_devices, masks_2.len());
+        let used_devices = codes.len();
+        assert!(used_devices <= self.n_devices);
+        assert_eq!(codes.len(), masks.len());
+        assert_eq!(codes_2.len(), masks_2.len());
+        assert_eq!(used_devices, codes_2.len());
         for (c, m, c2, m2) in izip!(codes.iter(), masks.iter(), codes_2.iter(), masks_2.iter()) {
             assert!(c.len() % 64 == 0);
             assert!(m.len() == c.len());
@@ -2994,13 +3001,15 @@ impl Circuits {
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
-        let mut x = Buffers::get_buffer_chunk(&x_, self.chunk_size * 64);
+        let mut xvec = Buffers::get_buffer_chunk(&x_, self.chunk_size * 64);
+        {
+            let x = &mut xvec[..used_devices];
 
-        tracing::info!("Cross compare:");
-        self.cross_mul(&mut x, codes, masks, codes_2, masks_2, streams);
-
+            tracing::info!("Cross compare:");
+            self.cross_mul(x, codes, masks, codes_2, masks_2, streams);
+        }
         tracing::info!("Extract MSB:");
-        self.extract_msb(&mut x, streams);
+        self.extract_msb(&mut xvec, streams);
         // Result is in the first bit of the result buffer
         let result = self.take_result_buffer();
 
@@ -3012,11 +3021,13 @@ impl Circuits {
 
         tracing::info!("Bit inject:");
         // Expand the result buffer to the x buffer and perform arithmetic xor
-        self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+        self.bit_inject_arithmetic_xor(&bits, &mut xvec, streams);
         self.return_result_buffer(result);
 
+        let x = &mut xvec[..used_devices];
+
         tracing::info!("Conditionally select difference:");
-        self.conditionally_select_difference(&x, codes, masks, codes_2, masks_2, streams);
+        self.conditionally_select_distance(x, codes, masks, codes_2, masks_2, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         self.buffers.check_buffers();
@@ -3025,6 +3036,9 @@ impl Circuits {
 
     /// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
     /// The cross product is computed as (d2.code_dist * d1.mask_dist - d1.code_dist * d2.mask_dist) and the result is shared.
+    ///
+    /// This is also one of the few functions that is allowed to be called with any number of device inputs, as long as there are at least that many devices.
+    /// In particular, it is used to do the work for the 2D anon stats minimum FHD step on the first GPU only.
     pub fn cross_mul(
         &mut self,
         out: &mut [ChunkShareView<u32>],
@@ -3034,10 +3048,12 @@ impl Circuits {
         masks_2: &[ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
-        assert_eq!(self.n_devices, codes.len());
-        assert_eq!(self.n_devices, masks.len());
-        assert_eq!(self.n_devices, codes_2.len());
-        assert_eq!(self.n_devices, masks_2.len());
+        let num_devices = out.len();
+        assert!(num_devices <= self.n_devices);
+        assert_eq!(out.len(), masks.len());
+        assert_eq!(codes.len(), masks.len());
+        assert_eq!(codes_2.len(), masks.len());
+        assert_eq!(masks_2.len(), masks.len());
 
         for (idx, (out, code, mask, code_2, mask_2)) in izip!(
             out.iter(),
@@ -3100,7 +3116,11 @@ impl Circuits {
         result::group_end().unwrap();
     }
 
-    pub fn conditionally_select_difference(
+    /// Conditionally select (code, masks), (codes_2, masks_2) based on (conds), if conds = 0 select *_2, otherwise select the first one.
+    ///
+    /// This is also one of the few functions that is allowed to be called with any number of device inputs, as long as there are at least that many devices.
+    /// In particular, it is used to do the work for the 2D anon stats minimum FHD step on the first GPU only.
+    pub fn conditionally_select_distance(
         &mut self,
         conds: &[ChunkShareView<u32>],
         codes: &mut [ChunkShareView<u32>],
@@ -3109,10 +3129,12 @@ impl Circuits {
         masks_2: &[ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
-        assert_eq!(self.n_devices, codes.len());
-        assert_eq!(self.n_devices, masks.len());
-        assert_eq!(self.n_devices, codes_2.len());
-        assert_eq!(self.n_devices, masks_2.len());
+        let num_devices = conds.len();
+        assert!(num_devices <= self.n_devices);
+        assert_eq!(conds.len(), masks.len());
+        assert_eq!(codes.len(), masks.len());
+        assert_eq!(codes_2.len(), masks.len());
+        assert_eq!(masks_2.len(), masks.len());
 
         for (idx, (cond, code, mask, code_2, mask_2)) in izip!(
             conds.iter(),
