@@ -3026,7 +3026,7 @@ impl Circuits {
 
         let x = &mut xvec[..used_devices];
 
-        tracing::info!("Conditionally select difference:");
+        tracing::info!("Conditionally select distance:");
         self.conditionally_select_distance(x, codes, masks, codes_2, masks_2, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);

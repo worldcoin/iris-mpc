@@ -223,7 +223,7 @@ mod conditionally_select_test {
             party.synchronize_streams(&streams);
 
             let now = Instant::now();
-            party.conditionally_select_difference(
+            party.conditionally_select_distance(
                 &cond_gpu,
                 &mut code_gpu,
                 &mut mask_gpu,
