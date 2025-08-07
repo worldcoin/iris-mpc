@@ -6,6 +6,7 @@ use crate::{
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
+use core::num;
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
@@ -153,6 +154,7 @@ struct Kernels {
     pub(crate) cross_mul_pre: CudaFunction,
     pub(crate) conditional_select_pre: CudaFunction,
     pub(crate) conditional_select_post: CudaFunction,
+    pub(crate) prelifted_sub_ab: CudaFunction,
 }
 
 impl Kernels {
@@ -192,6 +194,7 @@ impl Kernels {
                 "cross_mul_pre",
                 "conditional_select_pre",
                 "conditional_select_post",
+                "shared_prelifted_sub_ab",
             ],
         )
         .unwrap();
@@ -240,6 +243,9 @@ impl Kernels {
         let conditional_select_post = dev
             .get_func(Self::MOD_NAME, "conditional_select_post")
             .unwrap();
+        let prelifted_sub_ab = dev
+            .get_func(Self::MOD_NAME, "shared_prelifted_sub_ab")
+            .unwrap();
 
         Kernels {
             and,
@@ -271,6 +277,7 @@ impl Kernels {
             cross_mul_pre,
             conditional_select_pre,
             conditional_select_post,
+            prelifted_sub_ab,
         }
     }
 }
@@ -1899,7 +1906,52 @@ impl Circuits {
                             &o.b,
                             a,
                             self.peer_id as u32,
-                            self.chunk_size * 64,
+                            m.len(),
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    /// Performs the subtraction of mask_lifted * a - code_lifted * b. In contrast to lifted_sub, this also multiplies the B factor.
+    pub fn pre_lifted_sub_ab(
+        &mut self,
+        output: &mut [ChunkShareView<u32>],
+        mask_lifted: &[ChunkShareView<u32>],
+        code_lifted: &[ChunkShareView<u32>],
+        a: u32,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, code_lifted.len());
+        assert_eq!(self.n_devices, output.len());
+
+        for (idx, (m, c, o)) in izip!(mask_lifted, code_lifted, output).enumerate() {
+            assert!(m.len() == c.len());
+            let cfg = launch_config_from_elements_and_threads(
+                m.len() as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .prelifted_sub_ab
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &c.a,
+                            &c.b,
+                            &o.a,
+                            &o.b,
+                            a,
+                            self.peer_id as u32,
+                            m.len(),
                         ),
                     )
                     .unwrap();
@@ -2780,7 +2832,6 @@ impl Circuits {
             code_dots_right,
             mask_dots_right
         ) {
-            assert!(cl.len() % 64 == 0);
             assert!(ml.len() == cl.len());
             assert!(cr.len() == cl.len());
             assert!(mr.len() == cl.len());
@@ -2799,7 +2850,7 @@ impl Circuits {
         ] {
             for a in thresholds_a.iter() {
                 // Continue with threshold comparison
-                self.lifted_sub(&mut x, mask, code, *a as u32, streams);
+                self.pre_lifted_sub_ab(&mut x, mask, code, *a as u32, streams);
                 self.extract_msb(&mut x, streams);
 
                 // Result is in the first bit of the result buffer
@@ -2814,12 +2865,21 @@ impl Circuits {
                 // Expand the result buffer to the x buffer and perform arithmetic xor
                 self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
 
-                for (i, bit) in x.iter().enumerate() {
+                for (i, injected_bits) in x.iter().enumerate() {
                     let len = code[i].len();
-                    let a = dtoh_on_stream_sync(&bit.a.slice(..len), &self.devs[i], &streams[i])
-                        .unwrap();
-                    let b = dtoh_on_stream_sync(&bit.b.slice(..len), &self.devs[i], &streams[i])
-                        .unwrap();
+                    let a = dtoh_on_stream_sync(
+                        &injected_bits.a.slice(..len),
+                        &self.devs[i],
+                        &streams[i],
+                    )
+                    .unwrap();
+                    let b = dtoh_on_stream_sync(
+                        &injected_bits.b.slice(..len),
+                        &self.devs[i],
+                        &streams[i],
+                    )
+                    .unwrap();
+                    // TODO: this should actually extend...
                     buffer.push((a, b));
                 }
                 self.return_result_buffer(result);
@@ -2828,7 +2888,29 @@ impl Circuits {
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         // Now we have the lifted 0/1 shares in lifted_left and lifted_right, do an outer product + aggregation to get all of the results.
         // TODO: we do this on the CPU for now, let's keep an eye on the performance though since it scales quadratically with the number of thresholds
-        let mut buckets = Vec::with_capacity(thresholds_a.len() * thresholds_a.len());
+        // randomness, needs to be additively correlated, that is why we squeeze them separately and
+        // combine them later in the kernel with - instead of xor
+        let num_buckets = thresholds_a.len() * thresholds_a.len();
+        let mut buckets = {
+            let mut bucket_randomness = self.devs[0].alloc_zeros::<u32>(num_buckets * 2).unwrap();
+            {
+                let rng = &mut self.rngs[0];
+                let mut rand_view = bucket_randomness.slice_mut(..num_buckets);
+                rng.fill_my_rng_into(&mut rand_view, &streams[0]);
+                let mut rand_view = bucket_randomness.slice_mut(num_buckets..);
+                rng.fill_their_rng_into(&mut rand_view, &streams[0]);
+            }
+            let mut buckets =
+                dtoh_on_stream_sync(&bucket_randomness, &self.devs[0], &streams[0]).unwrap();
+            for i in 0..num_buckets {
+                // Make correlated randomness from the two randomness vectors
+                buckets[i] -= buckets[i + num_buckets];
+            }
+            buckets.truncate(num_buckets);
+            buckets
+        };
+
+        let mut idx = 0;
         for left_results in lifted_left.iter() {
             for right_results in lifted_right.iter() {
                 // We have to do the outer product of the left and right results
@@ -2842,13 +2924,14 @@ impl Circuits {
                     right_results.1.iter()
                 )
                 .map(|(&l_a, &l_b, &r_a, &r_b)| {
-                    // local part of multiplication, without randomness yet, will be added in the end
+                    // local part of mul, without randomness yet, will be added in the end
                     l_a.wrapping_mul(r_a)
                         .wrapping_add(l_a.wrapping_mul(r_b))
                         .wrapping_add(l_b.wrapping_mul(r_a))
                 })
                 .fold(0u32, |acc, x| acc.wrapping_add(x));
-                buckets.push(local_aggregated);
+                buckets[idx] += local_aggregated;
+                idx += 1;
             }
         }
 

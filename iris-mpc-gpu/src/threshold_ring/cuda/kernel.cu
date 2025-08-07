@@ -200,6 +200,10 @@ __device__ void lifted_sub(U32 *mask, U32 *code, U32 *output, U32 a) {
   *output = *mask * a - *code;
 }
 
+__device__ void prelifted_sub_ab(U32 *mask, U32 *code, U32 *output, U32 a) {
+  *output = *mask * a - (*code << B_BITS);
+}
+
 __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
                             U64 *x3_a, U64 *x3_b, int id) {
   U64 tmp_a = *x1_a;
@@ -455,6 +459,29 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
   if (i < n) {
     lifted_sub(&mask_a[i], &code_a[i], &output_a[i], a);
     lifted_sub(&mask_b[i], &code_b[i], &output_b[i], a);
+    switch (id) {
+    case 0:
+      output_a[i] -= 1; // Transforms the <= into <
+      break;
+    case 1:
+      output_b[i] -= 1; // Transforms the <= into <
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+// Puts the results into output_a and output_b, in contrast to lifted_sub, this
+// also adds the b factor to code
+extern "C" __global__ void shared_prelifted_sub_ab(U32 *mask_a, U32 *mask_b,
+                                                   U32 *code_a, U32 *code_b,
+                                                   U32 *output_a, U32 *output_b,
+                                                   U32 a, int id, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    prelifted_sub_ab(&mask_a[i], &code_a[i], &output_a[i], a);
+    prelifted_sub_ab(&mask_b[i], &code_b[i], &output_b[i], a);
     switch (id) {
     case 0:
       output_a[i] -= 1; // Transforms the <= into <
