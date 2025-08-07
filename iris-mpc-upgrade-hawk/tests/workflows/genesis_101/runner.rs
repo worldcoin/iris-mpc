@@ -20,7 +20,7 @@ pub struct Test {
 
 const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     max_indexation_id: 100,
-    batch_size: 10,
+    batch_size: 1,
     batch_size_error_rate: 250,
 };
 

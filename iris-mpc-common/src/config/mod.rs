@@ -431,8 +431,31 @@ impl Config {
 }
 
 impl Config {
-    /// Returns name of a dB schema for connecting to a node's dB.
-    pub fn get_db_schema(&self, schema_suffix: &str) -> String {
+    /// Returns the url for connecting to a node's gpu database.
+    pub fn get_gpu_db_url(&self) -> Option<String> {
+        self.database.as_ref().map(|x| x.url.clone())
+    }
+
+    /// Returns the url for connecting to a node's cpu database.
+    pub fn get_cpu_db_url(&self) -> Option<String> {
+        self.cpu_database.as_ref().map(|x| x.url.clone())
+    }
+
+    /// Returns the name of a database schema for connecting to a node's gpu dB.
+    pub fn get_gpu_db_schema(&self) -> String {
+        self.format_db_schema(&self.gpu_schema_name_suffix)
+    }
+
+    /// Returns the name of a database schema for connecting to a node's gpu dB.
+    pub fn get_cpu_db_schema(&self) -> String {
+        self.format_db_schema(&self.gpu_schema_name_suffix)
+    }
+
+    /// Returns the name of a database schema for connecting to a node's dB.
+    ///
+    /// Value of `schema_suffix` should be one of `config.gpu_schema_name_suffix`
+    /// or `config.hnsw_schema_name_suffix`.
+    fn format_db_schema(&self, schema_suffix: &str) -> String {
         let Self {
             schema_name,
             environment,
@@ -444,11 +467,6 @@ impl Config {
             "{}{}_{}_{}",
             schema_name, schema_suffix, environment, party_id
         )
-    }
-
-    /// Returns name of a dB url for connecting to a node's dB.
-    pub fn get_db_url(&self) -> Option<String> {
-        self.database.as_ref().map(|x| x.url.clone())
     }
 }
 

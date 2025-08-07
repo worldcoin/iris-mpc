@@ -57,8 +57,13 @@ impl MpcNodes {
             ],
         }
     }
+}
 
-    pub fn into_iter(self) -> impl Iterator<Item = MpcNode> {
+impl IntoIterator for MpcNodes {
+    type Item = MpcNode;
+    type IntoIter = std::array::IntoIter<MpcNode, COUNT_OF_PARTIES>;
+
+    fn into_iter(self) -> Self::IntoIter {
         self.nodes.into_iter()
     }
 }
@@ -67,16 +72,16 @@ impl MpcNodes {
 impl MpcNode {
     pub async fn new(config: Config) -> Self {
         let cpu_client = PostgresClient::new(
-            &config.get_db_url().unwrap(),
-            &config.get_db_schema(&config.hnsw_schema_name_suffix),
+            &config.get_cpu_db_url().unwrap(),
+            &config.get_cpu_db_schema(),
             AccessMode::ReadWrite,
         )
         .await
         .unwrap();
 
         let gpu_client = PostgresClient::new(
-            &config.get_db_url().unwrap(),
-            &config.get_db_schema(&config.gpu_schema_name_suffix),
+            &config.get_gpu_db_url().unwrap(),
+            &config.get_gpu_db_schema(),
             AccessMode::ReadWrite,
         )
         .await
