@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod compare_and_swap_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -193,8 +193,6 @@ mod compare_and_swap_test {
             .collect::<Vec<_>>();
 
         // Import to GPU
-        let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
-        let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
         let code_2_gpu = to_gpu(&code_2_share_a, &code_2_share_b, &devices, &streams);
         let mask_2_gpu = to_gpu(&mask_2_share_a, &mask_2_share_b, &devices, &streams);
         tracing::info!("id: {}, Data is on GPUs!", id);
@@ -202,6 +200,8 @@ mod compare_and_swap_test {
 
         let mut error = false;
         for _ in 0..10 {
+            let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
+            let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
             let mut code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mut mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
             let code_2_gpu = code_2_gpu.iter().map(|x| x.as_view()).collect_vec();
@@ -262,7 +262,7 @@ mod compare_and_swap_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_bucket_threshold() -> Result<()> {
+    async fn test_compare_and_swap() -> Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");

@@ -1,4 +1,4 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod conditionally_select_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -43,7 +43,7 @@ mod conditionally_select_test {
 
     fn sample_conds<R: Rng>(size: usize, rng: &mut R) -> Vec<u32> {
         (0..size)
-            .map(|_| rng.gen_range::<u32, _>(0..=1 as u32))
+            .map(|_| rng.gen_range::<u32, _>(0..=1))
             .collect::<Vec<_>>()
     }
 
@@ -206,8 +206,6 @@ mod conditionally_select_test {
 
         // Import to GPU
         let cond_gpu = to_gpu(&cond_share_a, &cond_share_b, &devices, &streams);
-        let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
-        let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
         let code_2_gpu = to_gpu(&code_2_share_a, &code_2_share_b, &devices, &streams);
         let mask_2_gpu = to_gpu(&mask_2_share_a, &mask_2_share_b, &devices, &streams);
         tracing::info!("id: {}, Data is on GPUs!", id);
@@ -215,6 +213,8 @@ mod conditionally_select_test {
 
         let mut error = false;
         for _ in 0..10 {
+            let code_gpu = to_gpu(&code_share_a, &code_share_b, &devices, &streams);
+            let mask_gpu = to_gpu(&mask_share_a, &mask_share_b, &devices, &streams);
             let cond_gpu = cond_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mut code_gpu = code_gpu.iter().map(|x| x.as_view()).collect_vec();
             let mut mask_gpu = mask_gpu.iter().map(|x| x.as_view()).collect_vec();
@@ -277,7 +277,7 @@ mod conditionally_select_test {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 3)]
-    async fn test_bucket_threshold() -> Result<()> {
+    async fn test_cond_select() -> Result<()> {
         install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");

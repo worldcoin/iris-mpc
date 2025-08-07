@@ -2845,14 +2845,16 @@ impl Circuits {
             assert!(m.len() == c.len());
             assert!(c2.len() == c.len());
             assert!(m2.len() == c2.len());
-            assert!(c.len() < self.chunk_size * 64);
+            assert!(c.len() <= self.chunk_size * 64);
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
         let mut x = Buffers::get_buffer_chunk(&x_, self.chunk_size * 64);
 
+        tracing::info!("Cross compare:");
         self.cross_mul(&mut x, codes, masks, codes_2, masks_2, streams);
 
+        tracing::info!("Extract MSB:");
         self.extract_msb(&mut x, streams);
         // Result is in the first bit of the result buffer
         let result = self.take_result_buffer();
@@ -2863,14 +2865,17 @@ impl Circuits {
             bits.push(r.get_offset(0, self.chunk_size));
         }
 
+        tracing::info!("Bit inject:");
         // Expand the result buffer to the x buffer and perform arithmetic xor
         self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
         self.return_result_buffer(result);
 
+        tracing::info!("Conditionally select difference:");
         self.conditionally_select_difference(&x, codes, masks, codes_2, masks_2, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         self.buffers.check_buffers();
+        tracing::info!("Cross compare done.");
     }
 
     /// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).
@@ -2903,11 +2908,15 @@ impl Circuits {
             assert_eq!(code_2.len(), mask_2.len());
             assert_eq!(code.len(), code_2.len());
 
-            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len).unwrap() };
+            // randomness, needs to be additively correlated, that is why we squeeze them separately and
+            // combine them later in the kernel with - instead of xor
+            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len * 2).unwrap() };
             {
                 let rng = &mut self.rngs[idx];
-                let mut rand_view = rand.slice_mut(..);
-                rng.fill_rng_into(&mut rand_view, &streams[idx]);
+                let mut rand_view = rand.slice_mut(..len);
+                rng.fill_my_rng_into(&mut rand_view, &streams[idx]);
+                let mut rand_view = rand.slice_mut(len..);
+                rng.fill_their_rng_into(&mut rand_view, &streams[idx]);
             }
 
             let cfg = launch_config_from_elements_and_threads(
@@ -2940,7 +2949,7 @@ impl Circuits {
         }
         for (idx, recv) in out.iter_mut().enumerate() {
             self.comms[idx]
-                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .receive_view(&mut recv.b, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -2974,15 +2983,19 @@ impl Circuits {
             assert_eq!(code_2.len(), mask_2.len());
             assert_eq!(code.len(), code_2.len());
 
-            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len * 2).unwrap() };
+            // randomness, needs to be additively correlated, that is why we squeeze them separately and
+            // combine them later in the kernel with - instead of xor
+            let mut rand = unsafe { self.devs[idx].alloc::<u32>(len * 4).unwrap() };
             {
                 let rng = &mut self.rngs[idx];
-                let mut rand_view = rand.slice_mut(..);
-                rng.fill_rng_into(&mut rand_view, &streams[idx]);
+                let mut rand_view = rand.slice_mut(..len * 2);
+                rng.fill_my_rng_into(&mut rand_view, &streams[idx]);
+                let mut rand_view = rand.slice_mut(len * 2..);
+                rng.fill_their_rng_into(&mut rand_view, &streams[idx]);
             }
 
             let cfg = launch_config_from_elements_and_threads(
-                code.len() as u32,
+                len as u32,
                 DEFAULT_LAUNCH_CONFIG_THREADS,
                 &self.devs[idx],
             );
@@ -3011,7 +3024,7 @@ impl Circuits {
         }
         for (idx, recv) in codes.iter_mut().enumerate() {
             self.comms[idx]
-                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .receive_view(&mut recv.b, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();
@@ -3023,7 +3036,7 @@ impl Circuits {
         }
         for (idx, recv) in masks.iter_mut().enumerate() {
             self.comms[idx]
-                .receive_view(&mut recv.b, self.next_id, &streams[idx])
+                .receive_view(&mut recv.b, self.prev_id, &streams[idx])
                 .unwrap();
         }
         result::group_end().unwrap();

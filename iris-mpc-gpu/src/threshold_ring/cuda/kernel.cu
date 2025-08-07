@@ -618,9 +618,10 @@ conditional_select_pre(U32 *cond_a, U32 *cond_b, U32 *inout_code_a,
     U32 mask_a = inout_mask_a[i] - mask_2_a[i];
     U32 mask_b = inout_mask_b[i] - mask_2_b[i];
     inout_code_a[i] = cond_a[i] * code_a + cond_b[i] * code_a +
-                      cond_a[i] * code_b + rand[2 * i];
+                      cond_a[i] * code_b + rand[2 * i] - rand[2 * n + 2 * i];
     inout_mask_a[i] = cond_a[i] * mask_a + cond_b[i] * mask_a +
-                      cond_a[i] * mask_b + rand[2 * i + 1];
+                      cond_a[i] * mask_b + rand[2 * i + 1] -
+                      rand[2 * n + 2 * i + 1];
   }
 }
 
@@ -651,6 +652,6 @@ extern "C" __global__ void cross_mul_pre(U32 *out_a, U32 *code_a, U32 *code_b,
                       code_2_a[i] * mask_b[i];
     U32 code1_mask2 = code_a[i] * mask_2_a[i] + code_b[i] * mask_2_a[i] +
                       code_a[i] * mask_2_b[i];
-    out_a[i] = rand[i] + code2_mask1 - code1_mask2;
+    out_a[i] = rand[i] - rand[n + i] + code2_mask1 - code1_mask2;
   }
 }
