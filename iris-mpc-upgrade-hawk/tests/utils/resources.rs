@@ -26,6 +26,7 @@ pub fn get_resource_path(location: &str) -> PathBuf {
 }
 
 /// Returns node configuration deserialized from a toml file.
+#[allow(dead_code)]
 pub fn read_node_config(ctx: &TestRunContextInfo, config_fname: String) -> Result<Config, Error> {
     let path_to_cfg = format!(
         "{}/node-config/{}/{}.toml",

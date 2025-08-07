@@ -33,6 +33,7 @@ iris-mpc = { path = "../iris-mpc" }
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+iris-mpc-test-utils = { path = "../iris-mpc-test-utils" }
 itertools.workspace = true
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"

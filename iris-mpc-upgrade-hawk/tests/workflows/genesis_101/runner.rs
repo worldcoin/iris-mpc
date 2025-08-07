@@ -10,6 +10,7 @@ use crate::utils::{
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
+use iris_mpc_test_utils::resources::read_node_config;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
@@ -32,12 +33,8 @@ fn get_irises() -> Vec<IrisCodePair> {
 
 impl Test {
     pub fn new() -> Self {
-        let exec_env = TestRunContextInfo::new(0, 0);
-
         let configs = (0..COUNT_OF_PARTIES)
-            .map(|idx| {
-                resources::read_node_config(&exec_env, format!("node-{idx}-genesis-0")).unwrap()
-            })
+            .map(|idx| read_node_config(&idx, "genesis", 0).unwrap())
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();

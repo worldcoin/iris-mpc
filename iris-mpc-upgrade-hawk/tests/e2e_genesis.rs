@@ -31,7 +31,6 @@ macro_rules! run_test {
 ///     graph construction is equivalent for each node;
 #[test]
 #[serial]
-#[ignore = "requires external setup"]
 fn test_hnsw_genesis_100() -> Result<()> {
     use workflows::genesis_100::Test;
     run_test!(100, 1)?;
