@@ -2840,12 +2840,18 @@ impl Circuits {
         assert_eq!(self.n_devices, masks.len());
         assert_eq!(self.n_devices, codes_2.len());
         assert_eq!(self.n_devices, masks_2.len());
-        for chunk in codes.iter().chain(masks.iter()) {
-            assert!(chunk.len() % 64 == 0);
+        for (c, m, c2, m2) in izip!(codes.iter(), masks.iter(), codes_2.iter(), masks_2.iter()) {
+            assert!(c.len() % 64 == 0);
+            assert!(m.len() == c.len());
+            assert!(c2.len() == c.len());
+            assert!(m2.len() == c2.len());
+            assert!(c.len() < self.chunk_size * 64);
         }
 
         let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
-        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+        let mut x = Buffers::get_buffer_chunk(&x_, self.chunk_size * 64);
+
+        self.cross_mul(&mut x, codes, masks, codes_2, masks_2, streams);
 
         self.extract_msb(&mut x, streams);
         // Result is in the first bit of the result buffer
