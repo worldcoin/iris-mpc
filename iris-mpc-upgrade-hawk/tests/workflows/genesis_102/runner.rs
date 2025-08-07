@@ -4,6 +4,7 @@ use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
     mpc_node::{MpcNode, MpcNodes},
+    plaintext_genesis::PlaintextGenesis,
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
@@ -85,14 +86,11 @@ impl TestRun for Test {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
         let expected = Arc::new(
-            MpcNode::simulate_genesis(
-                DEFAULT_GENESIS_ARGS,
-                config,
-                &plaintext_irises,
-                DELETED_SERIAL_IDS.clone(),
-            )
-            .await
-            .unwrap(),
+            PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+                .with_deletions(DELETED_SERIAL_IDS.clone())
+                .run()
+                .await
+                .unwrap(),
         );
 
         let mut join_set = JoinSet::new();

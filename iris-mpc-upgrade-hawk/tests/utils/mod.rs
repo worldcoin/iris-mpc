@@ -4,6 +4,7 @@ pub mod irises;
 mod logger;
 pub mod modifications;
 pub mod mpc_node;
+pub mod plaintext_genesis;
 pub mod resources;
 pub mod runner;
 pub mod s3_deletions;
