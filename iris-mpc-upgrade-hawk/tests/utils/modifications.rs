@@ -21,21 +21,39 @@ pub struct ModificationInput {
     /// needs to match an existing vector id
     pub serial_id: i64,
     pub request_type: ModificationType,
+    pub completed: bool,
+    pub persisted: bool,
 }
 
 impl ModificationInput {
-    pub fn new(serial_id: i64, request_type: ModificationType) -> Self {
+    pub fn new(
+        serial_id: i64,
+        request_type: ModificationType,
+        completed: bool,
+        persisted: bool,
+    ) -> Self {
         Self {
             serial_id,
             request_type,
+            completed,
+            persisted,
         }
     }
 
-    pub fn from_slice(inputs: &[(i64, ModificationType)]) -> Vec<Self> {
+    pub fn from_slice(inputs: &[(i64, ModificationType, bool, bool)]) -> Vec<Self> {
         inputs
             .iter()
-            .map(|(serial_id, request_type)| Self::new(*serial_id, request_type.clone()))
+            .map(|(serial_id, request_type, completed, persisted)| {
+                Self::new(*serial_id, request_type.clone(), *completed, *persisted)
+            })
             .collect()
+    }
+
+    pub fn get_status(&self) -> &'static str {
+        match self.completed {
+            true => "COMPLETED",
+            _ => "IN_PROGRESS",
+        }
     }
 }
 

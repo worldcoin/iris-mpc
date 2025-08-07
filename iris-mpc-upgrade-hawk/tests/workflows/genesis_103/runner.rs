@@ -27,9 +27,9 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
 
 static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
     ModificationInput::from_slice(&[
-        (1, ModificationType::Uniqueness),
-        (2, ModificationType::Uniqueness),
-        (3, ModificationType::Uniqueness),
+        (1, ModificationType::Uniqueness, true, true),
+        (2, ModificationType::ResetUpdate, true, true),
+        (3, ModificationType::Reauth, true, true),
     ])
 });
 
@@ -60,9 +60,7 @@ impl Test {
 }
 
 impl TestRun for Test {
-    // run genesis with deletions
     async fn exec(&mut self) -> Result<(), TestError> {
-        // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
             join_set.spawn(async move {
@@ -115,7 +113,7 @@ impl TestRun for Test {
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
-                assert_eq!(0, node.get_last_indexed_modification_id().await);
+                assert_eq!(3, node.get_last_indexed_modification_id().await);
 
                 node.assert_graphs_match(&expected).await;
 
