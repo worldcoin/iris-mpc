@@ -446,9 +446,9 @@ impl Config {
         self.format_db_schema(&self.gpu_schema_name_suffix)
     }
 
-    /// Returns the name of a database schema for connecting to a node's gpu dB.
+    /// Returns the name of a database schema for connecting to a node's cpu dB.
     pub fn get_cpu_db_schema(&self) -> String {
-        self.format_db_schema(&self.gpu_schema_name_suffix)
+        self.format_db_schema(&self.hnsw_schema_name_suffix)
     }
 
     /// Returns the name of a database schema for connecting to a node's dB.
