@@ -1,4 +1,4 @@
-use crate::utils::fsys::{get_assets_root, get_data_root};
+use crate::utils::fsys;
 use aes_prng::AesRng;
 use iris_mpc_common::iris_db::iris::{IrisCode, IrisCodePair};
 use iris_mpc_cpu::{
@@ -35,7 +35,7 @@ pub fn read_iris_codes(
     n_to_read: usize,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
-    let path_to_resources = format!("{}/{}", get_assets_root(), FNAME_1K,);
+    let path_to_resources = fsys::get_assets_path(FNAME_1K.to_string());
 
     Ok(
         Deserializer::from_reader(BufReader::new(File::open(path_to_resources).unwrap()))
@@ -91,7 +91,7 @@ pub async fn write_plaintext_iris_codes(
     // Set output directory.
     let outdir = format!(
         "{}/iris-shares-plaintext",
-        outdir.unwrap_or(get_data_root().as_str())
+        outdir.unwrap_or(fsys::get_data_root().as_str())
     );
     std::fs::create_dir_all(&outdir).unwrap();
 

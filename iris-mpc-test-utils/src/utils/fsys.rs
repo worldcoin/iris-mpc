@@ -1,21 +1,33 @@
 use super::types::ExecutionEnvironment;
+use std::path::{Path, PathBuf};
 
 /// Returns subdirectory name for current test run environment.
 pub fn get_exec_env_subdirectory() -> &'static str {
-    match ExecutionEnvironment::new() {
+    match ExecutionEnvironment::default() {
         ExecutionEnvironment::Docker => "docker",
         ExecutionEnvironment::Local => "local",
     }
 }
 
-/// Returns path to resource assets directory.
+/// Returns path to a resource within assets directory.
+pub fn get_assets_path(subpath: String) -> PathBuf {
+    Path::new(&get_assets_root()).join(subpath)
+}
+
+/// Returns path to assets directory.
 pub fn get_assets_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
     format!("{crate_root}/assets")
 }
 
-/// Returns path to resource data directory.
+/// Returns path to a resource within data directory.
+#[allow(dead_code)]
+pub fn get_data_path(subpath: String) -> PathBuf {
+    Path::new(&get_data_root()).join(subpath)
+}
+
+/// Returns path to data directory.
 pub fn get_data_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
@@ -29,7 +41,7 @@ mod tests {
 
     #[test]
     fn test_get_exec_env_subdirectory() {
-        match ExecutionEnvironment::new() {
+        match ExecutionEnvironment::default() {
             ExecutionEnvironment::Docker => {
                 assert_eq!(get_exec_env_subdirectory(), "docker");
             }

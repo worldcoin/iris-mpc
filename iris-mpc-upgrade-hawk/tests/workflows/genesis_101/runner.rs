@@ -4,13 +4,12 @@ use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
     mpc_node::{MpcNode, MpcNodes},
-    resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
-use iris_mpc_test_utils::resources::read_node_config;
+use iris_mpc_test_utils as test_utils;
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
@@ -26,15 +25,16 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
 };
 
 fn get_irises() -> Vec<IrisCodePair> {
-    let irises_path =
-        resources::get_resource_path("iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson");
+    let irises_path = test_utils::fsys::get_assets_path(
+        "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson".to_string(),
+    );
     irises::read_irises_from_ndjson(irises_path, 100).unwrap()
 }
 
 impl Test {
     pub fn new() -> Self {
         let configs = (0..COUNT_OF_PARTIES)
-            .map(|idx| read_node_config(&idx, "genesis", 0).unwrap())
+            .map(|idx| test_utils::resources::read_node_config(&idx, "genesis", 0).unwrap())
             .collect::<Vec<_>>()
             .try_into()
             .unwrap();

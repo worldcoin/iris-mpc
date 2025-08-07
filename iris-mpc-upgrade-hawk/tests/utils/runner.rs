@@ -1,15 +1,19 @@
 use super::{errors::TestError, logger};
-use std::{
-    fmt::{self, Debug},
-    path::Path,
-};
+use iris_mpc_test_utils::utils::types::ExecutionEnvironment;
+use std::fmt::{self, Debug};
 
 /// A trait encpasulating a test's workflow lifecycle.
 #[allow(async_fn_in_trait)]
 pub trait TestRun {
     /// Executes test workflow.
     async fn run(&mut self, ctx: TestRunContextInfo) -> Result<(), TestError> {
-        ctx.log_info(format!("Phase 1.1: Setup (EXECUTION ENV = {:?})", ctx.env()).as_str());
+        ctx.log_info(
+            format!(
+                "Phase 1.1: Setup (EXECUTION ENV = {:?})",
+                ExecutionEnvironment::default()
+            )
+            .as_str(),
+        );
         self.setup(&ctx).await?;
 
         ctx.log_info("Phase 1.2: Setup Assertion");
@@ -52,9 +56,6 @@ pub trait TestRun {
 /// Metadata associated with a test run.
 #[derive(Debug, Clone, Copy)]
 pub struct TestRunContextInfo {
-    /// Test run execution environment.
-    env: TestRunEnvironment,
-
     /// Test run ordinal identifier.
     idx: usize,
 
@@ -65,20 +66,12 @@ pub struct TestRunContextInfo {
 /// Constructor.
 impl TestRunContextInfo {
     pub fn new(kind: usize, idx: usize) -> Self {
-        Self {
-            env: TestRunEnvironment::new(),
-            idx,
-            kind,
-        }
+        Self { idx, kind }
     }
 }
 
 /// Accessors.
 impl TestRunContextInfo {
-    pub fn env(&self) -> &TestRunEnvironment {
-        &self.env
-    }
-
     pub fn idx(&self) -> usize {
         self.idx
     }
@@ -100,23 +93,5 @@ impl TestRunContextInfo {
     /// Logs an informational message.
     pub fn log_info(&self, msg: &str) {
         logger::log_info(format!("{}", self).as_str(), msg);
-    }
-}
-
-/// Enumeration over set of test run execution environments.
-#[derive(Debug, Clone, Copy)]
-pub enum TestRunEnvironment {
-    Local,
-    Docker,
-}
-
-/// Constructor.
-impl TestRunEnvironment {
-    pub fn new() -> Self {
-        if Path::new("/.dockerenv").exists() {
-            TestRunEnvironment::Docker
-        } else {
-            TestRunEnvironment::Local
-        }
     }
 }

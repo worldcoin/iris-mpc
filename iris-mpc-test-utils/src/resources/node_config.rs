@@ -1,7 +1,4 @@
-use crate::utils::{
-    fsys::{get_assets_root, get_exec_env_subdirectory},
-    types::PartyIdx,
-};
+use crate::utils::{fsys, types::PartyIdx};
 use iris_mpc_common::config::Config as NodeConfig;
 use std::{fs, io::Error};
 
@@ -48,12 +45,11 @@ pub fn read_node_config(party_idx: &PartyIdx, kind: &str, idx: usize) -> Result<
 /// A node configuration file.
 ///
 pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
-    let path_to_resource = format!(
-        "{}/node-config/{}/{}.toml",
-        get_assets_root(),
-        get_exec_env_subdirectory(),
+    let path_to_resource = fsys::get_assets_path(format!(
+        "node-config/{}/{}.toml",
+        fsys::get_exec_env_subdirectory(),
         fname
-    );
+    ));
 
     Ok(toml::from_str(&fs::read_to_string(path_to_resource).unwrap()).unwrap())
 }

@@ -9,9 +9,9 @@ pub enum ExecutionEnvironment {
     Docker,
 }
 
-/// Constructor.
-impl ExecutionEnvironment {
-    pub fn new() -> Self {
+/// Trait: Default.
+impl Default for ExecutionEnvironment {
+    fn default() -> Self {
         if Path::new("/.dockerenv").exists() {
             ExecutionEnvironment::Docker
         } else {
