@@ -25,6 +25,7 @@ pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextStore>>;
 pub type GenesisDeletions = Vec<IrisSerialId>;
 
 /// Plaintext representation of global state of genesis indexer.
+#[derive(Clone)]
 pub struct GenesisState {
     pub src_db: GenesisSrcDbState,
 
@@ -38,6 +39,7 @@ pub struct GenesisState {
 }
 
 /// State of the source database from the GPU server.
+#[derive(Clone)]
 pub struct GenesisSrcDbState {
     pub irises: IrisesTable,
 
@@ -45,6 +47,7 @@ pub struct GenesisSrcDbState {
 }
 
 /// State of the destination database for the CPU server.
+#[derive(Clone)]
 pub struct GenesisDstDbState {
     pub irises: IrisesTable,
 
@@ -54,6 +57,7 @@ pub struct GenesisDstDbState {
 }
 
 /// Database entries for the PersistentState table.
+#[derive(Debug, Clone, Copy)]
 pub struct PersistentState {
     pub last_indexed_iris_id: Option<IrisSerialId>,
 
@@ -61,6 +65,7 @@ pub struct PersistentState {
 }
 
 /// Logical configuration parameters of genesis `Config` struct.
+#[derive(Debug, Clone, Copy)]
 #[allow(non_snake_case)]
 pub struct GenesisConfig {
     pub hnsw_M: usize,
@@ -73,6 +78,7 @@ pub struct GenesisConfig {
 }
 
 /// Logical CLI arguments for genesis process.
+#[derive(Debug, Clone, Copy)]
 pub struct GenesisArgs {
     pub max_indexation_id: IrisSerialId,
 
