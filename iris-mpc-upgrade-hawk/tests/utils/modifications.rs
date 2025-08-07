@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 // from iris-mpc-common/helpers/smpc_request.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,20 +52,6 @@ impl ModificationInput {
         match self.completed {
             true => "COMPLETED",
             _ => "IN_PROGRESS",
-        }
-    }
-}
-
-// may not be needed.
-impl FromStr for ModificationType {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_uppercase().as_str() {
-            "reset_update" => Ok(ModificationType::ResetUpdate),
-            "reauth" => Ok(ModificationType::Reauth),
-            "uniqueness" => Ok(ModificationType::Uniqueness),
-            _ => Err(format!("Unknown ModificationType: {}", s)),
         }
     }
 }
