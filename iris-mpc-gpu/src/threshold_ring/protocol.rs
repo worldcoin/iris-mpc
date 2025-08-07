@@ -2865,6 +2865,8 @@ impl Circuits {
                 // Expand the result buffer to the x buffer and perform arithmetic xor
                 self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
 
+                let mut a_buf = Vec::new();
+                let mut b_buf = Vec::new();
                 for (i, injected_bits) in x.iter().enumerate() {
                     let len = code[i].len();
                     let a = dtoh_on_stream_sync(
@@ -2879,9 +2881,10 @@ impl Circuits {
                         &streams[i],
                     )
                     .unwrap();
-                    // TODO: this should actually extend...
-                    buffer.push((a, b));
+                    a_buf.extend(a);
+                    b_buf.extend(b);
                 }
+                buffer.push((a_buf, b_buf));
                 self.return_result_buffer(result);
             }
         }
