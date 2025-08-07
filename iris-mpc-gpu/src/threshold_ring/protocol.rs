@@ -6,7 +6,6 @@ use crate::{
     rng::chacha_corr::ChaChaCudaCorrRng,
     threshold_ring::cuda::PTX_SRC,
 };
-use core::num;
 use cudarc::{
     driver::{
         result::stream, CudaDevice, CudaFunction, CudaSlice, CudaStream, CudaView, CudaViewMut,
@@ -2889,30 +2888,31 @@ impl Circuits {
             }
         }
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
-        // Now we have the lifted 0/1 shares in lifted_left and lifted_right, do an outer product + aggregation to get all of the results.
-        // TODO: we do this on the CPU for now, let's keep an eye on the performance though since it scales quadratically with the number of thresholds
-        // randomness, needs to be additively correlated, that is why we squeeze them separately and
-        // combine them later in the kernel with - instead of xor
+        // randomness, needs to be additively correlated, that is why we squeeze them separately and subtract them below
         let num_buckets = thresholds_a.len() * thresholds_a.len();
         let mut buckets = {
-            let mut bucket_randomness = self.devs[0].alloc_zeros::<u32>(num_buckets * 2).unwrap();
+            // need to pad this temporarily to a multiple of 16 for the RNG
+            let padded_size = num_buckets.div_ceil(16) * 16;
+            let mut bucket_randomness = self.devs[0].alloc_zeros::<u32>(padded_size * 2).unwrap();
             {
                 let rng = &mut self.rngs[0];
-                let mut rand_view = bucket_randomness.slice_mut(..num_buckets);
+                let mut rand_view = bucket_randomness.slice_mut(..padded_size);
                 rng.fill_my_rng_into(&mut rand_view, &streams[0]);
-                let mut rand_view = bucket_randomness.slice_mut(num_buckets..);
+                let mut rand_view = bucket_randomness.slice_mut(padded_size..);
                 rng.fill_their_rng_into(&mut rand_view, &streams[0]);
             }
             let mut buckets =
                 dtoh_on_stream_sync(&bucket_randomness, &self.devs[0], &streams[0]).unwrap();
             for i in 0..num_buckets {
                 // Make correlated randomness from the two randomness vectors
-                buckets[i] -= buckets[i + num_buckets];
+                buckets[i] -= buckets[i + padded_size];
             }
             buckets.truncate(num_buckets);
             buckets
         };
 
+        // Now we have the lifted 0/1 shares in lifted_left and lifted_right, do an outer product + aggregation to get all of the results.
+        // TODO: we do this on the CPU for now, let's keep an eye on the performance though since it scales quadratically with the number of thresholds
         let mut idx = 0;
         for left_results in lifted_left.iter() {
             for right_results in lifted_right.iter() {

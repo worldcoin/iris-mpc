@@ -1,4 +1,4 @@
-//#[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod bucket_2d_threshold_test {
     use cudarc::{
         driver::{CudaDevice, CudaStream},
@@ -17,9 +17,20 @@ mod bucket_2d_threshold_test {
     use tokio::time::Instant;
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+    const fn gen_thresholds<const N: usize>() -> [f64; N] {
+        let mut thresholds = [0.0; N];
+        let step = 0.375 / (N as f64);
+        let mut i = 0;
+        while i < N {
+            thresholds[i] = step * (i + 1) as f64;
+            i += 1;
+        }
+        thresholds
+    }
+
     const DB_RNG_SEED: u64 = 0xdeadbeef;
-    const INPUTS_PER_GPU_SIZE: usize = 64 * 1024;
-    const THRESHOLDS: [f64; 4] = [0.1, 0.2, 0.3, 0.375];
+    const INPUTS_PER_GPU_SIZE: usize = 8 * 1024;
+    const THRESHOLDS: [f64; 25] = gen_thresholds();
 
     const B_BITS: u64 = 16;
     pub(crate) const B: u64 = 1 << B_BITS;
@@ -222,8 +233,8 @@ mod bucket_2d_threshold_test {
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
         const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
-            // Mod 16 for randomness, mod 64 for chunk size
+            INPUTS_PER_GPU_SIZE % (64) == 0,
+            // Mod 16 for randomness
         );
 
         let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
