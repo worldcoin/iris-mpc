@@ -112,15 +112,6 @@ impl MpcNode {
         genesis_args: GenesisArgs,
         config: &Config,
         pairs: &[IrisCodePair],
-    ) -> Result<GenesisState> {
-        Self::simulate_genesis_with_deletions(genesis_args, config, pairs, vec![]).await
-    }
-
-    // maybe a little sloppy but don't want to make merge conflicts with other branches at this time.
-    pub async fn simulate_genesis_with_deletions(
-        genesis_args: GenesisArgs,
-        config: &Config,
-        pairs: &[IrisCodePair],
         deletions: Vec<u32>,
     ) -> Result<GenesisState> {
         let genesis_input = get_genesis_input(pairs);

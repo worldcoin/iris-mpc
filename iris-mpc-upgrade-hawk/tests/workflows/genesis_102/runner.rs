@@ -85,7 +85,7 @@ impl TestRun for Test {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
         let expected = Arc::new(
-            MpcNode::simulate_genesis_with_deletions(
+            MpcNode::simulate_genesis(
                 DEFAULT_GENESIS_ARGS,
                 config,
                 &plaintext_irises,

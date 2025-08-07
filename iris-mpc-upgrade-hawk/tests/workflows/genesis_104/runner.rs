@@ -129,7 +129,7 @@ impl TestRun for Test {
         let plaintext_irises = get_irises();
         todo!("add modifications to the genesis simulation");
         let expected = Arc::new(
-            MpcNode::simulate_genesis(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+            MpcNode::simulate_genesis(DEFAULT_GENESIS_ARGS, config, &plaintext_irises, vec![])
                 .await
                 .unwrap(),
         );
