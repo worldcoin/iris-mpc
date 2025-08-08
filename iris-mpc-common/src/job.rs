@@ -1,5 +1,4 @@
 use crate::config::Config;
-use crate::galois_engine::degree4::GaloisShares;
 use crate::helpers::batch_sync::{
     get_batch_sync_entries, get_own_batch_sync_entries, BatchSyncEntriesResult,
 };
@@ -9,7 +8,6 @@ use crate::{
         statistics::BucketStatistics,
         sync::{Modification, ModificationKey},
     },
-    ROTATIONS,
 };
 use core::fmt;
 use eyre::{eyre, Result};
@@ -121,7 +119,6 @@ pub struct BatchQuery {
 
 impl BatchQuery {
     /// Add a Uniqueness, Reauth, or Reset Check request to the batch.
-    /// Must be followed by a call to `push_matching_request_shares` to set the shares.
     pub fn push_matching_request(
         &mut self,
         sns_message_id: String,
@@ -174,59 +171,6 @@ impl BatchQuery {
         self.reset_update_indices.push(reset_update_0_index);
         self.reset_update_shares.push(shares);
     }
-
-    pub fn push_matching_request_shares(
-        &mut self,
-        share_left: GaloisShares,
-        share_right: GaloisShares,
-        valid: bool,
-    ) {
-        self.left_iris_requests.code.push(share_left.code);
-        self.left_iris_requests.mask.push(share_left.mask);
-        self.left_iris_rotated_requests
-            .code
-            .extend(share_left.code_rotated);
-        self.left_iris_rotated_requests
-            .mask
-            .extend(share_left.mask_rotated);
-        self.left_iris_interpolated_requests
-            .code
-            .extend(share_left.code_interpolated);
-        self.left_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_interpolated);
-
-        self.right_iris_requests.code.push(share_right.code);
-        self.right_iris_requests.mask.push(share_right.mask);
-        self.right_iris_rotated_requests
-            .code
-            .extend(share_right.code_rotated);
-        self.right_iris_rotated_requests
-            .mask
-            .extend(share_right.mask_rotated);
-        self.right_iris_interpolated_requests
-            .code
-            .extend(share_right.code_interpolated);
-        self.right_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_interpolated);
-
-        self.left_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_left.code_mirrored);
-        self.left_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_mirrored);
-        self.right_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_right.code_mirrored);
-        self.right_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_mirrored);
-
-        self.valid_entries.push(valid);
-    }
-
     pub async fn sync_batch_entries(&mut self, config: &Config) -> Result<(), eyre::Error> {
         let own_sync_state = get_own_batch_sync_entries().await;
         let batch_sync_entries =
@@ -268,78 +212,6 @@ impl BatchQuery {
             self.valid_entries = valid_entries.clone();
         }
         Ok(())
-    }
-
-    pub fn retain_valid_entries(&mut self) {
-        use RequestIndex::*;
-        let valid = self.valid_entries.clone();
-
-        let index_map = (0..valid.len())
-            .filter(|old_index| valid[*old_index])
-            .enumerate()
-            .map(|(new_index, old_index)| (old_index, new_index))
-            .collect::<HashMap<usize, usize>>();
-
-        self.requests_order = self
-            .requests_order
-            .iter()
-            .filter_map(|request| match request {
-                UniqueReauthResetCheck(old_index) => index_map
-                    .get(old_index)
-                    .map(|new_index| RequestIndex::UniqueReauthResetCheck(*new_index)),
-                _ => Some(*request),
-            })
-            .collect();
-
-        macro_rules! filter_valid {
-            ($data:expr) => {
-                $data = $data
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| valid[*i])
-                    .map(|(_, v)| v.clone())
-                    .collect();
-            };
-        }
-
-        macro_rules! filter_valid_with_rotations {
-            ($data:expr) => {
-                $data = $data
-                    .chunks(ROTATIONS)
-                    .enumerate()
-                    .filter(|(i, _)| valid[*i])
-                    .flat_map(|(_, chunk)| chunk.iter().cloned())
-                    .collect();
-            };
-        }
-
-        filter_valid!(self.valid_entries);
-
-        // Fields from push_matching_request
-        filter_valid!(self.request_ids);
-        filter_valid!(self.request_types);
-        filter_valid!(self.metadata);
-        filter_valid!(self.or_rule_indices);
-        filter_valid!(self.skip_persistence);
-
-        // Fields from push_matching_request_shares
-        filter_valid!(self.left_iris_requests.code);
-        filter_valid!(self.left_iris_requests.mask);
-        filter_valid!(self.right_iris_requests.code);
-        filter_valid!(self.right_iris_requests.mask);
-
-        filter_valid_with_rotations!(self.left_iris_interpolated_requests.code);
-        filter_valid_with_rotations!(self.left_iris_interpolated_requests.mask);
-        filter_valid_with_rotations!(self.left_iris_rotated_requests.code);
-        filter_valid_with_rotations!(self.left_iris_rotated_requests.mask);
-        filter_valid_with_rotations!(self.right_iris_interpolated_requests.code);
-        filter_valid_with_rotations!(self.right_iris_interpolated_requests.mask);
-        filter_valid_with_rotations!(self.right_iris_rotated_requests.code);
-        filter_valid_with_rotations!(self.right_iris_rotated_requests.mask);
-        filter_valid_with_rotations!(self.left_mirrored_iris_interpolated_requests.code);
-        filter_valid_with_rotations!(self.left_mirrored_iris_interpolated_requests.mask);
-        filter_valid_with_rotations!(self.right_mirrored_iris_interpolated_requests.code);
-        filter_valid_with_rotations!(self.right_mirrored_iris_interpolated_requests.mask);
     }
 }
 
@@ -459,108 +331,4 @@ pub trait JobSubmissionHandle {
         &mut self,
         batch: BatchQuery,
     ) -> impl Future<Output = Result<ServerJobResult<Self::A>>>;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
-    };
-
-    #[test]
-    fn test_batch_valid_entries() {
-        let mut batch_query = BatchQuery::default();
-
-        batch_query.push_deletion_request("deletion_0".to_string(), 0, BatchMetadata::default());
-
-        for i in 0..3 {
-            batch_query.push_matching_request(
-                format!("uniq_{}", i),
-                format!("request_{}", i),
-                UNIQUENESS_MESSAGE_TYPE,
-                BatchMetadata::default(),
-                vec![],
-                false,
-            );
-
-            let code = GaloisRingIrisCodeShare {
-                id: 0,
-                coefs: [i as u16; IRIS_CODE_LENGTH],
-            };
-            let mask = GaloisRingTrimmedMaskCodeShare {
-                id: 0,
-                coefs: [i as u16; MASK_CODE_LENGTH],
-            };
-            let shares = GaloisShares {
-                code: code.clone(),
-                mask: mask.clone(),
-                code_rotated: vec![code.clone(); ROTATIONS],
-                mask_rotated: vec![mask.clone(); ROTATIONS],
-                code_interpolated: vec![code.clone(); ROTATIONS],
-                mask_interpolated: vec![mask.clone(); ROTATIONS],
-                code_mirrored: vec![code; ROTATIONS],
-                mask_mirrored: vec![mask; ROTATIONS],
-            };
-
-            batch_query.push_matching_request_shares(shares.clone(), shares, i != 1);
-        }
-
-        batch_query.push_deletion_request("deletion_1".to_string(), 0, BatchMetadata::default());
-
-        assert_eq!(batch_query.valid_entries, vec![true, false, true]);
-
-        batch_query.retain_valid_entries();
-
-        // Entry 1 was removed.
-        assert_eq!(batch_query.valid_entries, vec![true, true]);
-        assert_eq!(batch_query.request_ids, vec!["request_0", "request_2"]);
-
-        // The request order is updated.
-        assert_eq!(
-            batch_query.requests_order,
-            vec![
-                RequestIndex::Deletion(0),
-                RequestIndex::UniqueReauthResetCheck(0),
-                RequestIndex::UniqueReauthResetCheck(1), // Remaped from 2 to 1.
-                RequestIndex::Deletion(1),
-            ]
-        );
-
-        // The codes and masks are filtered.
-        assert_eq!(batch_query.left_iris_requests.code.len(), 2);
-        assert_eq!(batch_query.left_iris_requests.code[0].coefs[0], 0);
-        assert_eq!(batch_query.left_iris_requests.code[1].coefs[0], 2);
-
-        assert_eq!(batch_query.left_iris_requests.mask.len(), 2);
-        assert_eq!(batch_query.left_iris_requests.mask[0].coefs[0], 0);
-        assert_eq!(batch_query.left_iris_requests.mask[1].coefs[0], 2);
-
-        // The codes and masks with rotations are filtered.
-        assert_eq!(
-            batch_query.left_iris_rotated_requests.code.len(),
-            2 * ROTATIONS
-        );
-        assert_eq!(batch_query.left_iris_rotated_requests.code[0].coefs[0], 0);
-        assert_eq!(
-            batch_query.left_iris_rotated_requests.code[ROTATIONS].coefs[0],
-            2
-        );
-
-        assert_eq!(
-            batch_query.left_iris_rotated_requests.mask.len(),
-            2 * ROTATIONS
-        );
-        assert_eq!(batch_query.left_iris_rotated_requests.mask[0].coefs[0], 0);
-        assert_eq!(
-            batch_query.left_iris_rotated_requests.mask[ROTATIONS].coefs[0],
-            2
-        );
-
-        // The original SNS message IDs are kept.
-        assert_eq!(
-            batch_query.sns_message_ids,
-            vec!["deletion_0", "uniq_0", "uniq_1", "uniq_2", "deletion_1"]
-        );
-    }
 }
