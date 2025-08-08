@@ -1,27 +1,22 @@
 use super::constants::COUNT_OF_PARTIES;
-use crate::utils::{GaloisRingSharedIrisPair, HawkConfigs, IrisCodePair};
+use crate::utils::{modifications::ModificationInput, GaloisRingSharedIrisPair, HawkConfigs};
 use eyre::Result;
 use iris_mpc_common::{
     config::Config,
-    iris_db::iris::IrisCode,
     postgres::{AccessMode, PostgresClient},
-    IrisSerialId, IrisVersionId,
+    IrisSerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
     genesis::{
-        plaintext::{
-            run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState,
-            GenesisSrcDbState, GenesisState, PersistentState,
-        },
+        plaintext::GenesisState,
         state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     },
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
+    hnsw::graph::graph_store::GraphPg as GraphStore,
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use itertools::Itertools;
-use std::collections::HashMap;
 
 // these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
 mod constants {
@@ -103,30 +98,6 @@ impl MpcNode {
         self.insert_into_gpu_iris_store(shares).await?;
         Ok(())
     }
-
-    /// Doesn't actually require a MpcNode
-    pub async fn simulate_genesis(
-        genesis_args: GenesisArgs,
-        config: &Config,
-        pairs: &[IrisCodePair],
-    ) -> Result<GenesisState> {
-        let genesis_input = get_genesis_input(pairs);
-
-        let genesis_config = GenesisConfig {
-            hnsw_M: config.hnsw_param_M,
-            hnsw_ef_constr: config.hnsw_param_ef_constr,
-            hnsw_ef_search: config.hnsw_param_ef_search,
-            hawk_prf_key: config.hawk_prf_key,
-        };
-
-        let genesis_state =
-            construct_initial_genesis_state(genesis_config, genesis_args, genesis_input);
-
-        let expected_genesis_state = run_plaintext_genesis(genesis_state)
-            .await
-            .expect("plaintext genesis failed");
-        Ok(expected_genesis_state)
-    }
 }
 
 // utilities for unit testing, such as assertions
@@ -176,8 +147,28 @@ impl MpcNode {
     }
 }
 
-// test setup
+// misc
 impl MpcNode {
+    pub async fn insert_modifications(&self, mods: &[ModificationInput]) -> Result<()> {
+        let mut updates = vec![];
+        for m in mods {
+            let mut m2 = self
+                .gpu_iris_store
+                .insert_modification(Some(m.serial_id), m.request_type.to_str(), None)
+                .await?;
+            m2.status = m.get_status().to_string();
+            m2.persisted = m.persisted;
+            updates.push(m2);
+        }
+
+        let mut tx = self.gpu_iris_store.tx().await?;
+        self.gpu_iris_store
+            .update_modifications(&mut tx, updates.iter().collect::<Vec<_>>().as_slice())
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     async fn clear_all_tables(&self) -> Result<()> {
         let mut graph_tx = self.graph_store.tx().await?;
         graph_tx
@@ -253,40 +244,4 @@ impl MpcNode {
 
         Ok(())
     }
-}
-
-fn construct_initial_genesis_state(
-    genesis_config: GenesisConfig,
-    genesis_args: GenesisArgs,
-    input: HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>,
-) -> GenesisState {
-    GenesisState {
-        src_db: GenesisSrcDbState {
-            irises: input,
-            modifications: (),
-        },
-        dst_db: GenesisDstDbState {
-            irises: HashMap::new(),
-            graphs: [GraphMem::new(), GraphMem::new()],
-            persistent_state: PersistentState {
-                last_indexed_iris_id: None,
-                last_indexed_modification_id: None,
-            },
-        },
-        config: genesis_config,
-        args: genesis_args,
-        s3_deletions: Vec::new(),
-    }
-}
-
-// construct_initial_genesis_state() needs a special HashMap. Build it from the provided list of plaintext iris shares.
-fn get_genesis_input(
-    pairs: &[IrisCodePair],
-) -> HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)> {
-    let mut r = HashMap::new();
-    for (idx, (left, right)) in pairs.iter().enumerate() {
-        // warning: iris id can't be zero
-        r.insert(idx as u32 + 1, (0, left.clone(), right.clone()));
-    }
-    r
 }

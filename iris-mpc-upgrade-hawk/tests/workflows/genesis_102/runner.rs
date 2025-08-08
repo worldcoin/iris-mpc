@@ -13,6 +13,7 @@ use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
+use std::sync::LazyLock;
 use tokio::task::JoinSet;
 
 pub struct Test {
@@ -24,6 +25,8 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size: 1,
     batch_size_error_rate: 250,
 };
+
+pub static DELETED_SERIAL_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| vec![1, 10, 20, 50, 100]);
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
@@ -51,19 +54,18 @@ impl Test {
     }
 }
 
-/// Trait: TestRun.
 impl TestRun for Test {
+    // run genesis with deletions
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        DEFAULT_GENESIS_ARGS.max_indexation_id,
                         false,
                         false,
                     ),
@@ -85,6 +87,7 @@ impl TestRun for Test {
         let plaintext_irises = get_irises();
         let expected = Arc::new(
             PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
+                .with_deletions(DELETED_SERIAL_IDS.clone())
                 .run()
                 .await
                 .unwrap(),
@@ -112,6 +115,12 @@ impl TestRun for Test {
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
 
                 node.assert_graphs_match(&expected).await;
+
+                // the graph should not include deleted serial ids
+                assert_eq!(
+                    expected.dst_db.graphs[0].layers[0].links.len(),
+                    DEFAULT_GENESIS_ARGS.max_indexation_id as usize - DELETED_SERIAL_IDS.len()
+                );
             });
         }
 
@@ -147,10 +156,9 @@ impl TestRun for Test {
         // any config file is sufficient to connect to S3
         let config = &self.configs[0];
 
-        let deleted_serial_ids = vec![];
         let aws_clients = get_aws_clients(config).await.unwrap();
         upload_iris_deletions(
-            &deleted_serial_ids,
+            &DELETED_SERIAL_IDS,
             &aws_clients.s3_client,
             &config.environment,
         )
@@ -163,8 +171,7 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
+            let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
@@ -194,7 +201,7 @@ impl TestRun for Test {
         let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
             .await
             .unwrap();
-        assert_eq!(deletions.len(), 0);
+        assert_eq!(deletions.len(), DELETED_SERIAL_IDS.len());
 
         Ok(())
     }
