@@ -1,5 +1,5 @@
 use super::{errors::TestError, logger};
-use iris_mpc_test_utils::utils::types::ExecutionEnvironment;
+use iris_mpc_test_utils::types::ExecutionEnvironment;
 use std::fmt::{self, Debug};
 
 /// A trait encpasulating a test's workflow lifecycle.
