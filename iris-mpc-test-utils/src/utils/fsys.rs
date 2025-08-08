@@ -10,7 +10,7 @@ pub fn get_exec_env_subdirectory() -> &'static str {
 }
 
 /// Returns path to a resource within assets directory.
-pub fn get_assets_path(subpath: String) -> PathBuf {
+pub fn get_assets_path(subpath: &str) -> PathBuf {
     Path::new(&get_assets_root()).join(subpath)
 }
 

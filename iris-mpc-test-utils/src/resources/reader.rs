@@ -33,7 +33,7 @@ pub fn read_iris_codes(
     n_to_read: usize,
     skip_offset: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
-    let path_to_resources = fsys::get_assets_path(FNAME_IRIS_CODES_1K.to_string());
+    let path_to_resources = fsys::get_assets_path(FNAME_IRIS_CODES_1K);
 
     Ok(
         Deserializer::from_reader(BufReader::new(File::open(path_to_resources).unwrap()))
@@ -82,7 +82,7 @@ pub fn read_iris_deletions(
     n_to_read: usize,
     skip_offset: usize,
 ) -> Result<Vec<IrisSerialId>, Error> {
-    let path_to_resource = fsys::get_assets_path(FNAME_IRIS_DELETIONS_1K.to_string());
+    let path_to_resource = fsys::get_assets_path(FNAME_IRIS_DELETIONS_1K);
     let IrisDeletionsForS3 { deleted_serial_ids } =
         serde_json::from_str(&std::fs::read_to_string(path_to_resource)?)?;
 
@@ -186,11 +186,14 @@ pub fn read_node_config(party_idx: &PartyIdx, kind: &str, idx: usize) -> Result<
 /// A node configuration file.
 ///
 pub fn read_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
-    let path_to_resource = fsys::get_assets_path(format!(
-        "node-config/{}/{}.toml",
-        fsys::get_exec_env_subdirectory(),
-        fname
-    ));
+    let path_to_resource = fsys::get_assets_path(
+        format!(
+            "node-config/{}/{}.toml",
+            fsys::get_exec_env_subdirectory(),
+            fname
+        )
+        .as_str(),
+    );
 
     Ok(toml::from_str(&fs::read_to_string(path_to_resource).unwrap()).unwrap())
 }

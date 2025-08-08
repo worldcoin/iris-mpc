@@ -26,7 +26,7 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path = test_utils::fsys::get_assets_path(
-        "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson".to_string(),
+        "iris-shares-plaintext/20250710-synthetic-irises-1k.ndjson",
     );
     irises::read_irises_from_ndjson(irises_path, 100).unwrap()
 }
