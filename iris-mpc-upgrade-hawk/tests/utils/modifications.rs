@@ -1,3 +1,6 @@
+use iris_mpc_common::helpers::smpc_request::{
+    REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+};
 use serde::{Deserialize, Serialize};
 
 // from iris-mpc-common/helpers/smpc_request.rs
@@ -59,9 +62,9 @@ impl ModificationInput {
 impl ModificationType {
     pub fn to_str(&self) -> &'static str {
         match self {
-            ModificationType::ResetUpdate => "reset_update",
-            ModificationType::Reauth => "reauth",
-            ModificationType::Uniqueness => "uniqueness",
+            ModificationType::ResetUpdate => RESET_UPDATE_MESSAGE_TYPE,
+            ModificationType::Reauth => REAUTH_MESSAGE_TYPE,
+            ModificationType::Uniqueness => UNIQUENESS_MESSAGE_TYPE,
         }
     }
 }

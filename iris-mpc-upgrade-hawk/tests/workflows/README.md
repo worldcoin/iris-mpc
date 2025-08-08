@@ -36,7 +36,7 @@ GPU iris database has entries from 1 to 100, inclusive
 CPU iris database and graph database is empty
 CPU modifications and persisted_state tables are empty
 GPU persisted_state table is empty
-S3 deletions: [1, 2, 3, 4, 5]
+S3 deletions: [1, 10, 20, 50, 100]
 
 Test:
 index genesis up to 100
@@ -91,6 +91,7 @@ index genesis up to 100
 Postconditions:
 GPU iris database has 100 entries
 CPU iris database has 100 entries
+CPU iris database reflects irises updated by new modifications after the first run
 CPU persisted_state table shows the max indexed modification is 5 and max indexed iris is 100
 CPU graph database matches the output of plaintext genesis
 CPU graph database at layer zero has 100 links

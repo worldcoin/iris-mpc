@@ -147,6 +147,8 @@ impl TestRun for Test {
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
+                // TODO assert CPU iris database reflects irises updated by new modifications after the first run
+
                 let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 

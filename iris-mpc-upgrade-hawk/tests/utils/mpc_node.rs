@@ -151,7 +151,6 @@ impl MpcNode {
 impl MpcNode {
     pub async fn insert_modifications(&self, mods: &[ModificationInput]) -> Result<()> {
         let mut updates = vec![];
-        let tx = self.gpu_iris_store.tx().await?;
         for m in mods {
             let mut m2 = self
                 .gpu_iris_store
@@ -161,7 +160,6 @@ impl MpcNode {
             m2.persisted = m.persisted;
             updates.push(m2);
         }
-        tx.commit().await?;
 
         let mut tx = self.gpu_iris_store.tx().await?;
         self.gpu_iris_store

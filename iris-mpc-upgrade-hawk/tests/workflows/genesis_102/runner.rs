@@ -26,7 +26,7 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_error_rate: 250,
 };
 
-pub static DELETED_SERIAL_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| vec![1, 2, 3, 4, 5]);
+pub static DELETED_SERIAL_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| vec![1, 10, 20, 50, 100]);
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
