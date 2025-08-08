@@ -450,6 +450,19 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
   }
 }
 
+// Corrects lifted values by subtracting the correction values
+extern "C" __global__ void
+shared_finalized_lift_u16_u32(U32 *share_a, U32 *share_b, U16 *corr_a,
+                              U16 *corr_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    share_a[i] -= (U32)(corr_a[i]) << 16;
+    share_a[i] -= (U32)(corr_a[i + n]) << 17;
+    share_b[i] -= (U32)(corr_b[i]) << 16;
+    share_b[i] -= (U32)(corr_b[i + n]) << 17;
+  }
+}
+
 // Puts the results into output_a and output_b
 extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
                                              U32 *code_a, U32 *code_b,
@@ -472,8 +485,8 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
   }
 }
 
-// Puts the results into output_a and output_b, in contrast to lifted_sub, this
-// also adds the b factor to code
+// Puts the results into output_a and output_b, in contrast to lifted_sub,
+// this also adds the b factor to code
 extern "C" __global__ void shared_prelifted_sub_ab(U32 *mask_a, U32 *mask_b,
                                                    U32 *code_a, U32 *code_b,
                                                    U32 *output_a, U32 *output_b,
@@ -666,8 +679,8 @@ conditional_select_post(U32 *inout_code_a, U32 *inout_code_b, U32 *inout_mask_a,
   }
 }
 
-// implements the local part of the cross multiplication of two distance shares,
-// see cross_mul in the CPU code
+// implements the local part of the cross multiplication of two distance
+// shares, see cross_mul in the CPU code
 extern "C" __global__ void cross_mul_pre(U32 *out_a, U32 *code_a, U32 *code_b,
                                          U32 *mask_a, U32 *mask_b,
                                          U32 *code_2_a, U32 *code_2_b,

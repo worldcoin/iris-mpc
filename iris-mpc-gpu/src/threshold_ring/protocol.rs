@@ -154,6 +154,7 @@ struct Kernels {
     pub(crate) conditional_select_pre: CudaFunction,
     pub(crate) conditional_select_post: CudaFunction,
     pub(crate) prelifted_sub_ab: CudaFunction,
+    pub(crate) finalize_lift_u16_u32: CudaFunction,
 }
 
 impl Kernels {
@@ -194,6 +195,7 @@ impl Kernels {
                 "conditional_select_pre",
                 "conditional_select_post",
                 "shared_prelifted_sub_ab",
+                "shared_finalize_lift_u16_u32",
             ],
         )
         .unwrap();
@@ -245,6 +247,9 @@ impl Kernels {
         let prelifted_sub_ab = dev
             .get_func(Self::MOD_NAME, "shared_prelifted_sub_ab")
             .unwrap();
+        let finalize_lift_u16_u32 = dev
+            .get_func(Self::MOD_NAME, "shared_finalize_lift_u16_u32")
+            .unwrap();
 
         Kernels {
             and,
@@ -277,6 +282,7 @@ impl Kernels {
             conditional_select_pre,
             conditional_select_post,
             prelifted_sub_ab,
+            finalize_lift_u16_u32,
         }
     }
 }
@@ -1823,6 +1829,37 @@ impl Circuits {
             }
         }
     }
+    fn finalize_lift_u16_u32(
+        &mut self,
+        lifted: &mut [ChunkShareView<u32>],
+        corrections: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        assert!(self.n_devices >= lifted.len());
+        assert_eq!(corrections.len(), lifted.len());
+
+        for (idx, (lift, corr)) in izip!(lifted, corrections).enumerate() {
+            assert_eq!(lift.len(), corr.len());
+            let len = lift.len();
+            let cfg = launch_config_from_elements_and_threads(
+                len as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .finalize_lift_u16_u32
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&lift.a, &lift.b, &corr.a, &corr.b, len),
+                    )
+                    .unwrap();
+            }
+        }
+    }
 
     pub fn finalize_lifts(
         &mut self,
@@ -1991,6 +2028,45 @@ impl Circuits {
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
         self.bit_inject_ot(&c, injected, streams);
 
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer1);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer2);
+    }
+
+    /// Lifts u16 shares to u32 shares, using the same method as lift_mpc, but also already corrects the output and injects the correction values, and does not multiply with B.
+    pub fn lift_u16_to_u32(
+        &mut self,
+        shares: &[ChunkShareView<u16>],
+        out: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        const K: usize = SHARE_RING_BITSIZE;
+        let mut x1 = Vec::with_capacity(self.n_devices);
+        let mut x2 = Vec::with_capacity(self.n_devices);
+        let mut x3 = Vec::with_capacity(self.n_devices);
+        let mut c = Vec::with_capacity(self.n_devices);
+        // No subbuffer taken here, since we extract it manually
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result);
+        let buffer2 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        for (b1, b2) in izip!(&buffer1, &buffer2) {
+            let a = b1.get_offset(0, K * self.chunk_size);
+            let b = b1.get_offset(1, K * self.chunk_size);
+            let c_ = b2.get_offset(0, K * self.chunk_size);
+            let d = b2.get_range(K * self.chunk_size, (K + 2) * self.chunk_size);
+            x1.push(a);
+            x2.push(b);
+            x3.push(c_);
+            c.push(d);
+        }
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
+        let mut injected = Buffers::get_buffer_chunk(&corrections_, 64 * self.chunk_size);
+
+        self.transpose_pack_u16_with_len(shares, &mut x1, K, streams);
+        self.lift_split(shares, out, &mut x1, &mut x2, &mut x3, streams);
+        self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
+        self.bit_inject_ot(&c, &mut injected, streams);
+        self.finalize_lift_u16_u32(out, &injected, streams);
+
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer1);
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer2);
     }
