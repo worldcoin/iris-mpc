@@ -146,7 +146,7 @@ env:
     value: "true"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "HnswAnonStatsTest2"
+    value: "HnswAnonStatsTest3"
 
 initContainer:
   enabled: true
