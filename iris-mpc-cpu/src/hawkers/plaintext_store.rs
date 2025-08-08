@@ -28,6 +28,9 @@ pub type PlaintextStoredIris = Arc<IrisCode>;
 pub type PlaintextSharedIrises = SharedIrises<PlaintextStoredIris>;
 pub type PlaintextSharedIrisesRef = SharedIrisesRef<PlaintextStoredIris>;
 
+// New comment to change a file -- initiates full execution of the "CPU Integration
+// Tests" workflow.
+
 /// Vector store which works over plaintext iris codes and distance computations.
 ///
 /// This variant is only suitable for single-threaded operation.
