@@ -23,7 +23,7 @@ pub fn get_assets_root() -> String {
 
 /// Returns path to a resource within data directory.
 #[allow(dead_code)]
-pub fn get_data_path(subpath: String) -> PathBuf {
+pub fn get_data_path(subpath: &str) -> PathBuf {
     Path::new(&get_data_root()).join(subpath)
 }
 
