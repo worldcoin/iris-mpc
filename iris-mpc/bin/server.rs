@@ -1302,6 +1302,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.max_batch_size,
             config.match_distances_buffer_size,
             config.match_distances_buffer_size_extra_percent,
+            config.match_distances_2d_buffer_size,
             config.n_buckets,
             config.return_partial_results,
             config.disable_persistence,

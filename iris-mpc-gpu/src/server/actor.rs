@@ -132,6 +132,7 @@ pub struct ServerActor {
     phase2: Circuits,
     phase2_batch: Circuits,
     phase2_buckets: Circuits,
+    phase2_2d_buckets: Circuits,
     distance_comparator: DistanceComparator,
     comms: Vec<Arc<NcclComm>>,
     // DB slices
@@ -154,6 +155,7 @@ pub struct ServerActor {
     max_db_size: usize,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
+    match_distances_2d_buffer_size: usize,
     n_buckets: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -192,6 +194,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -210,6 +213,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -228,6 +232,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -248,6 +253,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -268,6 +274,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -286,6 +293,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -307,6 +315,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -429,6 +438,20 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let first_gpu_only = Arc::new(DeviceManager::init_from_devices(vec![device_manager
+            .devices()[0]
+            .clone()]));
+
+        let phase2_2d_buckets = Circuits::new(
+            party_id,
+            match_distances_2d_buffer_size,
+            match_distances_2d_buffer_size / 64,
+            Some(n_buckets),
+            next_chacha_seeds(chacha_seeds)?,
+            first_gpu_only,
+            comms.iter().take(1).cloned().collect::<Vec<_>>(),
+        );
+
         let distance_comparator =
             DistanceComparator::init(n_queries, max_db_size, device_manager.clone());
         // Prepare streams etc.
@@ -509,6 +532,7 @@ impl ServerActor {
             phase2,
             phase2_batch,
             phase2_buckets,
+            phase2_2d_buckets,
             buckets,
             distance_comparator,
             batch_codes_engine,
@@ -533,6 +557,7 @@ impl ServerActor {
             max_db_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -1602,6 +1627,56 @@ impl ServerActor {
             cache.extend(new);
         }
         tracing::warn!("Merging one-sided distance caches done");
+
+        // check if we have enough results to calculate 2D bucket statistics
+        if self
+            .both_side_match_distances_buffer
+            .iter()
+            .map(|x| x.len())
+            .sum::<usize>()
+            >= self.match_distances_2d_buffer_size
+        {
+            tracing::info!("Calculating bucket statistics for both sides");
+            let mut both_side_match_distances_buffer =
+                vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
+            std::mem::swap(
+                &mut self.both_side_match_distances_buffer,
+                &mut both_side_match_distances_buffer,
+            );
+
+            let min_distance_cache = TwoSidedDistanceCache::into_min_distance_cache(
+                both_side_match_distances_buffer,
+                &mut self.phase2_2d_buckets,
+                &self.streams[0],
+            );
+            let thresholds = (1..=self.n_buckets)
+                .map(|x: usize| {
+                    Circuits::translate_threshold_a(
+                        MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                    ) as u16
+                })
+                .collect::<Vec<_>>();
+
+            let buckets_2d = min_distance_cache.compute_buckets(
+                &mut self.phase2_2d_buckets,
+                &self.streams[0],
+                &thresholds,
+            );
+            tracing::warn!("Bucket statistics calculated");
+            for (i, bucket) in buckets_2d.iter().enumerate() {
+                let left_idx = i / self.n_buckets;
+                let right_idx = i % self.n_buckets;
+                let step = 0.375 / self.n_buckets as f64;
+                tracing::warn!(
+                    "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}",
+                    left_idx as f64 * step,
+                    (left_idx + 1) as f64 * step,
+                    right_idx as f64 * step,
+                    (right_idx + 1) as f64 * step,
+                    bucket
+                );
+            }
+        }
 
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {

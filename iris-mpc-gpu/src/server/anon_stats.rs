@@ -252,7 +252,6 @@ pub struct CpuDistanceShare {
 }
 
 pub struct CpuLiftedDistanceShare {
-    idx: u64,
     code_a: u32,
     code_b: u32,
     mask_a: u32,
@@ -302,6 +301,7 @@ impl TwoSidedDistanceCache {
         self.map.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
@@ -318,15 +318,22 @@ impl TwoSidedDistanceCache {
     //   * We will have ids associated with each distance, such that we can group them into rotations for the same query
     //   * We will group the distances by query id, take the first one as the base, and compare the rest to it, doing conditional swaps to keep the minimum one
     //   * For the conditional swaps, we will need to lift the 16-bit shares to 32-bit shares, which we will do in a single batch
-
     pub fn into_min_distance_cache(
-        mut self,
+        mut caches: Vec<TwoSidedDistanceCache>,
         protocol: &mut Circuits,
         streams: &[CudaStream],
     ) -> TwoSidedMinDistanceCache {
-        self.sort_internal_groups();
+        for cache in &mut caches {
+            cache.sort_internal_groups();
+        }
 
-        let len = self.len();
+        let actual_len = caches.iter().map(|x| x.len()).sum::<usize>();
+        let len = protocol.chunk_size() * 64;
+        tracing::info!(
+            "Computing min distance cache for {} entries, truncating to {}",
+            actual_len,
+            len
+        );
         let mut left_code_a = Vec::with_capacity(len);
         let mut left_code_b = Vec::with_capacity(len);
         let mut left_mask_a = Vec::with_capacity(len);
@@ -336,29 +343,66 @@ impl TwoSidedDistanceCache {
         let mut right_mask_a = Vec::with_capacity(len);
         let mut right_mask_b = Vec::with_capacity(len);
 
-        let sorted = self
-            .map
+        let mut sorted = caches
             .into_iter()
-            .sorted_by_key(|(key, _)| *key)
+            .flat_map(|cache| cache.map.into_iter().sorted_by_key(|(key, _)| *key))
             .collect_vec();
 
+        sorted.truncate(len);
+
         // flatten the values into a single vector to batch the lifting step
-        let flattened = sorted
+        let (flattened_a, flattened_b): (Vec<_>, Vec<_>) = sorted
             .iter()
             .flat_map(|(_, (left_values, right_values))| {
                 left_values
                     .iter()
-                    .flat_map(|x| [x.code_a, x.code_b, x.mask_a, x.mask_b])
+                    .flat_map(|x| [(x.code_a, x.code_b), (x.mask_a, x.mask_b)])
                     .chain(
                         right_values
                             .iter()
-                            .flat_map(|x| [x.code_a, x.code_b, x.mask_a, x.mask_b]),
+                            .flat_map(|x| [(x.code_a, x.code_b), (x.mask_a, x.mask_b)]),
                     )
             })
-            .collect_vec();
+            .collect();
 
+        let devices = protocol.get_devices();
         // TODO: actually call down to lifting step
-        let flattened_lifted = flattened.into_iter().map(|x| x as u32).collect_vec(); // Placeholder for actual lifting logic
+        let (flattened_lifted_a, flattened_lifted_b) = {
+            // the underlying protocol can only work on its chunk size, so we might need to call this multiple times
+            let mut flattened_lifted_a = Vec::with_capacity(flattened_a.len());
+            let mut flattened_lifted_b = Vec::with_capacity(flattened_b.len());
+
+            let result_chunk_buf = protocol.allocate_buffer(len);
+            let mut result = result_chunk_buf
+                .iter()
+                .map(|x| x.as_view())
+                .collect::<Vec<_>>();
+
+            for (chunk_a, chunk_b) in flattened_a.chunks(len).zip(flattened_b.chunks(len)) {
+                let on_device_a = if chunk_a.len() == len {
+                    htod_on_stream_sync(chunk_a, &devices[0], &streams[0]).unwrap()
+                } else {
+                    let mut chunk_pad = vec![0; len];
+                    chunk_pad[..chunk_a.len()].copy_from_slice(chunk_a);
+                    htod_on_stream_sync(&chunk_pad, &devices[0], &streams[0]).unwrap()
+                };
+                let on_device_b = if chunk_b.len() == len {
+                    htod_on_stream_sync(chunk_b, &devices[0], &streams[0]).unwrap()
+                } else {
+                    let mut chunk_pad = vec![0; len];
+                    chunk_pad[..chunk_b.len()].copy_from_slice(chunk_b);
+                    htod_on_stream_sync(&chunk_pad, &devices[0], &streams[0]).unwrap()
+                };
+                let on_device = ChunkShare::new(on_device_a, on_device_b);
+
+                protocol.lift_u16_to_u32(&[on_device.as_view()], &mut result, &streams[..1]);
+                let result_a = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
+                let result_b = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
+                flattened_lifted_a.extend(result_a.into_iter().take(chunk_a.len()));
+                flattened_lifted_b.extend(result_b.into_iter().take(chunk_a.len()));
+            }
+            (flattened_lifted_a, flattened_lifted_b)
+        };
 
         // Build back the structure from the flattened lifted values
         let mut idx = 0;
@@ -367,14 +411,13 @@ impl TwoSidedDistanceCache {
             .map(|(key, (left, right))| {
                 let left_values = left
                     .into_iter()
-                    .map(|x| {
-                        let code_a = flattened_lifted[idx];
-                        let code_b = flattened_lifted[idx + 1];
-                        let mask_a = flattened_lifted[idx + 2];
-                        let mask_b = flattened_lifted[idx + 3];
-                        idx += 4;
+                    .map(|_| {
+                        let code_a = flattened_lifted_a[idx];
+                        let code_b = flattened_lifted_b[idx + 1];
+                        let mask_a = flattened_lifted_a[idx];
+                        let mask_b = flattened_lifted_b[idx + 1];
+                        idx += 2;
                         CpuLiftedDistanceShare {
-                            idx: x.idx,
                             code_a,
                             code_b,
                             mask_a,
@@ -384,14 +427,13 @@ impl TwoSidedDistanceCache {
                     .collect_vec();
                 let right_values = right
                     .into_iter()
-                    .map(|x| {
-                        let code_a = flattened_lifted[idx];
-                        let code_b = flattened_lifted[idx + 1];
-                        let mask_a = flattened_lifted[idx + 2];
-                        let mask_b = flattened_lifted[idx + 3];
-                        idx += 4;
+                    .map(|_| {
+                        let code_a = flattened_lifted_a[idx];
+                        let code_b = flattened_lifted_b[idx + 1];
+                        let mask_a = flattened_lifted_a[idx];
+                        let mask_b = flattened_lifted_b[idx + 1];
+                        idx += 2;
                         CpuLiftedDistanceShare {
-                            idx: x.idx,
                             code_a,
                             code_b,
                             mask_a,
@@ -459,8 +501,6 @@ impl TwoSidedDistanceCache {
                     right_mask_b_2.push(right_mask_b[idx]);
                 }
             }
-
-            let devices = protocol.get_devices();
 
             let mut swap = |ca: &mut Vec<_>,
                             cb: &mut Vec<_>,
@@ -558,5 +598,41 @@ pub struct TwoSidedMinDistanceCache {
 }
 
 impl TwoSidedMinDistanceCache {
-    pub fn compute_buckets(self) {}
+    pub fn compute_buckets(
+        self,
+        protocol: &mut Circuits,
+        streams: &[CudaStream],
+        thresholds: &[u16],
+    ) -> Vec<u32> {
+        let devices = protocol.get_devices();
+
+        let left_code_a = htod_on_stream_sync(&self.left_code_a, &devices[0], &streams[0]).unwrap();
+        let left_code_b = htod_on_stream_sync(&self.left_code_b, &devices[0], &streams[0]).unwrap();
+        let left_mask_a = htod_on_stream_sync(&self.left_mask_a, &devices[0], &streams[0]).unwrap();
+        let left_mask_b = htod_on_stream_sync(&self.left_mask_b, &devices[0], &streams[0]).unwrap();
+        let left_code = ChunkShare::new(left_code_a, left_code_b);
+        let left_mask = ChunkShare::new(left_mask_a, left_mask_b);
+
+        let right_code_a =
+            htod_on_stream_sync(&self.right_code_a, &devices[0], &streams[0]).unwrap();
+        let right_code_b =
+            htod_on_stream_sync(&self.right_code_b, &devices[0], &streams[0]).unwrap();
+        let right_mask_a =
+            htod_on_stream_sync(&self.right_mask_a, &devices[0], &streams[0]).unwrap();
+        let right_mask_b =
+            htod_on_stream_sync(&self.right_mask_b, &devices[0], &streams[0]).unwrap();
+        let right_code = ChunkShare::new(right_code_a, right_code_b);
+        let right_mask = ChunkShare::new(right_mask_a, right_mask_b);
+
+        let results = protocol.compare_multiple_thresholds_2d(
+            &[left_code.as_view()],
+            &[left_mask.as_view()],
+            &[right_code.as_view()],
+            &[right_mask.as_view()],
+            streams,
+            thresholds,
+        );
+        protocol.synchronize_streams(streams);
+        results
+    }
 }
