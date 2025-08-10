@@ -3039,6 +3039,7 @@ impl Circuits {
             let result_share = htod_on_stream_sync(&buckets, &self.devs[0], &streams[0]).unwrap();
             let mut buf0 = self.devs[0].alloc_zeros::<u32>(result_share.len()).unwrap();
             let mut buf1 = self.devs[0].alloc_zeros::<u32>(result_share.len()).unwrap();
+            self.synchronize_streams(streams);
 
             result::group_start().unwrap();
             self.comms[0]
@@ -3048,6 +3049,7 @@ impl Circuits {
                 .receive(&mut buf0, self.prev_id, &streams[0])
                 .unwrap();
             result::group_end().unwrap();
+            self.synchronize_streams(streams);
             result::group_start().unwrap();
             self.comms[0]
                 .send(&result_share, self.prev_id, &streams[0])
@@ -3056,6 +3058,7 @@ impl Circuits {
                 .receive(&mut buf1, self.next_id, &streams[0])
                 .unwrap();
             result::group_end().unwrap();
+            self.synchronize_streams(streams);
             let mut buckets1 = dtoh_on_stream_sync(&buf0, &self.devs[0], &streams[0]).unwrap();
             let buckets2 = dtoh_on_stream_sync(&buf1, &self.devs[0], &streams[0]).unwrap();
 
