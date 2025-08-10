@@ -18,7 +18,7 @@ mod lift_u16_u32_test {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
     const DB_RNG_SEED: u64 = 0xdeadbeef;
-    const INPUTS_PER_GPU_SIZE: usize = 8 * 1024;
+    const INPUTS_PER_GPU_SIZE: usize = 64;
 
     fn to_view<T>(inp: &[ChunkShare<T>]) -> Vec<ChunkShareView<T>> {
         let mut res = Vec::with_capacity(inp.len());

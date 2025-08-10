@@ -453,8 +453,8 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
 // Corrects lifted values by subtracting the correction values
 extern "C" __global__ void shared_finalize_lift_u16_u32(U32 *share_a,
                                                         U32 *share_b,
-                                                        U16 *corr_a,
-                                                        U16 *corr_b, size_t n) {
+                                                        U32 *corr_a,
+                                                        U32 *corr_b, size_t n) {
   size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     share_a[i] -= (U32)(corr_a[i]) << 16;

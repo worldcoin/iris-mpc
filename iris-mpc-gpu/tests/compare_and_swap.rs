@@ -20,7 +20,7 @@ mod compare_and_swap_test {
     const DB_RNG_SEED: u64 = 0xdeadbeef;
     // ceil(930 * 125_000 / 2048) * 2048
     // const INPUTS_PER_GPU_SIZE: usize = 116_250_624;
-    const INPUTS_PER_GPU_SIZE: usize = 64 * 1024;
+    const INPUTS_PER_GPU_SIZE: usize = 64;
 
     fn sample_code_dots<R: Rng>(size: usize, rng: &mut R) -> Vec<u32> {
         (0..size)

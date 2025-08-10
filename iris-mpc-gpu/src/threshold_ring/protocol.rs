@@ -1832,7 +1832,7 @@ impl Circuits {
     fn finalize_lift_u16_u32(
         &mut self,
         lifted: &mut [ChunkShareView<u32>],
-        corrections: &[ChunkShareView<u16>],
+        corrections: &[ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
         assert!(self.n_devices >= lifted.len());
@@ -2039,14 +2039,16 @@ impl Circuits {
         out: &mut [ChunkShareView<u32>],
         streams: &[CudaStream],
     ) {
+        let buf: Vec<ChunkShare<u32>> = Buffers::allocate_buffer(128 * self.chunk_size, &self.devs);
+        self.synchronize_streams(streams);
         const K: usize = SHARE_RING_BITSIZE;
         let mut x1 = Vec::with_capacity(self.n_devices);
         let mut x2 = Vec::with_capacity(self.n_devices);
         let mut x3 = Vec::with_capacity(self.n_devices);
         let mut c = Vec::with_capacity(self.n_devices);
         // No subbuffer taken here, since we extract it manually
-        let buffer1 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result);
-        let buffer2 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let buffer1 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let buffer2 = Buffers::take_buffer(&mut self.buffers.lifted_shares_split1_result);
         for (b1, b2) in izip!(&buffer1, &buffer2) {
             let a = b1.get_offset(0, K * self.chunk_size);
             let b = b1.get_offset(1, K * self.chunk_size);
@@ -2057,18 +2059,35 @@ impl Circuits {
             x3.push(c_);
             c.push(d);
         }
-        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
-        let mut injected = Buffers::get_buffer_chunk(&corrections_, 64 * self.chunk_size);
 
         self.transpose_pack_u16_with_len(shares, &mut x1, K, streams);
         self.lift_split(shares, out, &mut x1, &mut x2, &mut x3, streams);
         self.binary_add_3_get_two_carries(&mut c, &mut x1, &mut x2, &mut x3, streams);
-        self.bit_inject_ot(&c, &mut injected, streams);
-        self.finalize_lift_u16_u32(out, &injected, streams);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer1);
 
-        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
-        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer1);
-        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, buffer2);
+        let corr1 = c
+            .iter()
+            .map(|x| x.get_offset(0, self.chunk_size))
+            .collect_vec();
+        let corr2 = c
+            .iter()
+            .map(|x| x.get_offset(1, self.chunk_size))
+            .collect_vec();
+        let mut inj1 = buf
+            .iter()
+            .map(|x| x.get_offset(0, 64 * self.chunk_size))
+            .collect_vec();
+        let mut inj2 = buf
+            .iter()
+            .map(|x| x.get_offset(1, 64 * self.chunk_size))
+            .collect_vec();
+        self.bit_inject_arithmetic_xor(&corr1, &mut inj1, streams);
+        self.bit_inject_arithmetic_xor(&corr2, &mut inj2, streams);
+
+        let buf_view = buf.iter().map(|x| x.as_view()).collect_vec();
+        self.finalize_lift_u16_u32(out, &buf_view, streams);
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, buffer2);
     }
 
     // K is 16 in our case

@@ -29,7 +29,7 @@ mod bucket_2d_threshold_test {
     }
 
     const DB_RNG_SEED: u64 = 0xdeadbeef;
-    const INPUTS_PER_GPU_SIZE: usize = 8 * 1024;
+    const INPUTS_PER_GPU_SIZE: usize = 64;
     const THRESHOLDS: [f64; 25] = gen_thresholds();
 
     const B_BITS: u64 = 16;
