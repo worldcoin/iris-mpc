@@ -201,10 +201,38 @@ mod bucket_2d_aggregation_test {
             })
             .collect()
     }
+    fn real_result_2(inputs: &[(u32, u32, u32, u32)]) -> Vec<u32> {
+        let mod_ = 1u64 << (16 + B_BITS);
+        let mut result = Vec::with_capacity(THRESHOLDS.len() * THRESHOLDS.len());
+
+        for t_l in THRESHOLDS {
+            for t_r in THRESHOLDS {
+                let a_l = Circuits::translate_threshold_a(t_l);
+                let a_r = Circuits::translate_threshold_a(t_r);
+
+                let mut count = 0;
+                for &(c_l, m_l, c_r, m_r) in inputs.iter() {
+                    let left = (((m_l as u64) * a_l)
+                        .wrapping_sub((c_l as u64) << B_BITS)
+                        .wrapping_sub(1))
+                        % mod_;
+                    let msb_l = (left >> (B_BITS + 16 - 1)) & 1 == 1;
+                    let right = (((m_r as u64) * a_r)
+                        .wrapping_sub((c_r as u64) << B_BITS)
+                        .wrapping_sub(1))
+                        % mod_;
+                    let msb_r = (right >> (B_BITS + 16 - 1)) & 1 == 1;
+                    count += (msb_l && msb_r) as u32;
+                }
+                result.push(count);
+            }
+        }
+        result
+    }
 
     fn open(
         party: &mut Circuits,
-        min_distance_cache: TwoSidedMinDistanceCache,
+        min_distance_cache: &TwoSidedMinDistanceCache,
         streams: &[CudaStream],
     ) -> Vec<(u32, u32, u32, u32)> {
         let device = party.get_devices()[0].clone();
@@ -270,6 +298,7 @@ mod bucket_2d_aggregation_test {
         mut party: Circuits,
         distances: TwoSidedDistanceCache,
         real_result: Vec<(u32, u32, u32, u32)>,
+        real_result2: Vec<u32>,
     ) {
         let id = party.peer_id();
 
@@ -303,15 +332,32 @@ mod bucket_2d_aggregation_test {
             tracing::info!("id: {}, compute time: {:?}", id, now.elapsed());
 
             tracing::info!("id: {}, opening", id);
-            let result = open(&mut party, min_distance_cache, &streams);
+            let result = open(&mut party, &min_distance_cache, &streams);
             tracing::info!("id: {}, opened", id);
+            party.synchronize_streams(&streams);
+
+            let buckets = min_distance_cache.compute_buckets(&mut party, &streams, &threshold);
 
             let mut correct = true;
             for (i, (r, r_)) in izip!(&result, &real_result).enumerate() {
                 if r != r_ {
                     correct = false;
                     tracing::error!(
-                        "id: {}, Test failed on index: {}: {:?} != {:?}",
+                        "id: {}, Test failed on index step1: {}: {:?} != {:?}",
+                        id,
+                        i,
+                        r,
+                        r_
+                    );
+                    error = true;
+                    break;
+                }
+            }
+            for (i, (r, r_)) in izip!(&buckets, &real_result2).enumerate() {
+                if r != r_ {
+                    correct = false;
+                    tracing::error!(
+                        "id: {}, Test failed on index step2: {}: {:?} != {:?}",
                         id,
                         i,
                         r,
@@ -369,8 +415,11 @@ mod bucket_2d_aggregation_test {
         tracing::info!("Random shared inputs generated!");
 
         let real_result = real_result(distances);
+        let real_result2 = real_result_2(&real_result);
         let real_result_ = real_result.to_owned();
         let real_result__ = real_result.to_owned();
+        let real_result2_ = real_result2.to_owned();
+        let real_result2__ = real_result2.to_owned();
 
         let task0 = tokio::task::spawn_blocking(move || {
             let comms0 = device_manager0
@@ -387,7 +436,7 @@ mod bucket_2d_aggregation_test {
                 comms0,
             );
 
-            testcase(party, distances_a, real_result);
+            testcase(party, distances_a, real_result, real_result2);
         });
 
         let task1 = tokio::task::spawn_blocking(move || {
@@ -405,7 +454,7 @@ mod bucket_2d_aggregation_test {
                 comms1,
             );
 
-            testcase(party, distances_b, real_result_);
+            testcase(party, distances_b, real_result_, real_result2_);
         });
 
         let task2 = tokio::task::spawn_blocking(move || {
@@ -423,7 +472,7 @@ mod bucket_2d_aggregation_test {
                 comms2,
             );
 
-            testcase(party, distances_c, real_result__);
+            testcase(party, distances_c, real_result__, real_result2__);
         });
 
         task0.await.unwrap();
