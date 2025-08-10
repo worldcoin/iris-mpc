@@ -244,11 +244,11 @@ impl DistanceCache {
 #[derive(Copy, Clone, Debug)]
 /// Represents a share of mask and code dot products, stored on the CPU.
 pub struct CpuDistanceShare {
-    idx: u64,
-    code_a: u16,
-    code_b: u16,
-    mask_a: u16,
-    mask_b: u16,
+    pub idx: u64,
+    pub code_a: u16,
+    pub code_b: u16,
+    pub mask_a: u16,
+    pub mask_b: u16,
 }
 
 pub struct CpuLiftedDistanceShare {
@@ -268,7 +268,7 @@ pub struct OneSidedDistanceCache {
 /// Represents a cache for match distances that matched on both sides.
 #[derive(Debug, Default, Clone)]
 pub struct TwoSidedDistanceCache {
-    map: HashMap<u64, (Vec<CpuDistanceShare>, Vec<CpuDistanceShare>)>,
+    pub map: HashMap<u64, (Vec<CpuDistanceShare>, Vec<CpuDistanceShare>)>,
 }
 
 impl TwoSidedDistanceCache {
@@ -366,7 +366,11 @@ impl TwoSidedDistanceCache {
             .collect();
 
         let devices = protocol.get_devices();
-        // TODO: actually call down to lifting step
+        tracing::info!(
+            "Flattened {} values for lifting, using {} devices",
+            flattened_a.len(),
+            devices.len()
+        );
         let (flattened_lifted_a, flattened_lifted_b) = {
             // the underlying protocol can only work on its chunk size, so we might need to call this multiple times
             let mut flattened_lifted_a = Vec::with_capacity(flattened_a.len());
@@ -395,11 +399,13 @@ impl TwoSidedDistanceCache {
                 };
                 let on_device = ChunkShare::new(on_device_a, on_device_b);
 
+                tracing::info!("calling down to lifting kernel");
                 protocol.lift_u16_to_u32(&[on_device.as_view()], &mut result, &streams[..1]);
                 let result_a = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
-                let result_b = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
+                let result_b = dtoh_on_stream_sync(&result[0].b, &devices[0], &streams[0]).unwrap();
+                tracing::info!("lifting done");
                 flattened_lifted_a.extend(result_a.into_iter().take(chunk_a.len()));
-                flattened_lifted_b.extend(result_b.into_iter().take(chunk_a.len()));
+                flattened_lifted_b.extend(result_b.into_iter().take(chunk_b.len()));
             }
             (flattened_lifted_a, flattened_lifted_b)
         };
@@ -413,8 +419,8 @@ impl TwoSidedDistanceCache {
                     .into_iter()
                     .map(|_| {
                         let code_a = flattened_lifted_a[idx];
-                        let code_b = flattened_lifted_b[idx + 1];
-                        let mask_a = flattened_lifted_a[idx];
+                        let code_b = flattened_lifted_b[idx];
+                        let mask_a = flattened_lifted_a[idx + 1];
                         let mask_b = flattened_lifted_b[idx + 1];
                         idx += 2;
                         CpuLiftedDistanceShare {
@@ -429,8 +435,8 @@ impl TwoSidedDistanceCache {
                     .into_iter()
                     .map(|_| {
                         let code_a = flattened_lifted_a[idx];
-                        let code_b = flattened_lifted_b[idx + 1];
-                        let mask_a = flattened_lifted_a[idx];
+                        let code_b = flattened_lifted_b[idx];
+                        let mask_a = flattened_lifted_a[idx + 1];
                         let mask_b = flattened_lifted_b[idx + 1];
                         idx += 2;
                         CpuLiftedDistanceShare {
@@ -463,6 +469,8 @@ impl TwoSidedDistanceCache {
             right_mask_a.push(right.mask_a);
             right_mask_b.push(right.mask_b);
         }
+
+        tracing::info!("lifted values, now reducing them to min distances");
 
         // While we have more than one rotation left, we will keep popping values from the rotations, comparing them and keeping the minimum one.
         // If a specific one does not have more rotations to pop, we will just compare against the current one (essentially creating a dummy operation).
@@ -587,14 +595,14 @@ impl TwoSidedDistanceCache {
 }
 
 pub struct TwoSidedMinDistanceCache {
-    left_code_a: Vec<u32>,
-    left_code_b: Vec<u32>,
-    left_mask_a: Vec<u32>,
-    left_mask_b: Vec<u32>,
-    right_code_a: Vec<u32>,
-    right_code_b: Vec<u32>,
-    right_mask_a: Vec<u32>,
-    right_mask_b: Vec<u32>,
+    pub left_code_a: Vec<u32>,
+    pub left_code_b: Vec<u32>,
+    pub left_mask_a: Vec<u32>,
+    pub left_mask_b: Vec<u32>,
+    pub right_code_a: Vec<u32>,
+    pub right_code_b: Vec<u32>,
+    pub right_mask_a: Vec<u32>,
+    pub right_mask_b: Vec<u32>,
 }
 
 impl TwoSidedMinDistanceCache {
@@ -604,6 +612,18 @@ impl TwoSidedMinDistanceCache {
         streams: &[CudaStream],
         thresholds: &[u16],
     ) -> Vec<u32> {
+        for v in [
+            &self.left_code_a,
+            &self.left_code_b,
+            &self.left_mask_a,
+            &self.left_mask_b,
+            &self.right_code_a,
+            &self.right_code_b,
+            &self.right_mask_a,
+            &self.right_mask_b,
+        ] {
+            assert_eq!(v.len(), protocol.chunk_size() * 64);
+        }
         let devices = protocol.get_devices();
 
         let left_code_a = htod_on_stream_sync(&self.left_code_a, &devices[0], &streams[0]).unwrap();
@@ -624,12 +644,13 @@ impl TwoSidedMinDistanceCache {
         let right_code = ChunkShare::new(right_code_a, right_code_b);
         let right_mask = ChunkShare::new(right_mask_a, right_mask_b);
 
+        tracing::info!("2D bucket inputs on device");
         let results = protocol.compare_multiple_thresholds_2d(
             &[left_code.as_view()],
             &[left_mask.as_view()],
             &[right_code.as_view()],
             &[right_mask.as_view()],
-            streams,
+            &streams[..1],
             thresholds,
         );
         protocol.synchronize_streams(streams);
