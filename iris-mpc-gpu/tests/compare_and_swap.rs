@@ -273,10 +273,7 @@ mod compare_and_swap_test {
         let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
-        const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
-            // Mod 16 for randomness, mod 64 for chunk size
-        );
+        const_assert!(INPUTS_PER_GPU_SIZE % (64) == 0,);
 
         let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
 
