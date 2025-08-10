@@ -1839,7 +1839,7 @@ impl Circuits {
         assert_eq!(corrections.len(), lifted.len());
 
         for (idx, (lift, corr)) in izip!(lifted, corrections).enumerate() {
-            assert_eq!(lift.len(), corr.len());
+            assert_eq!(2 * lift.len(), corr.len(), "Two correction values per lift");
             let len = lift.len();
             let cfg = launch_config_from_elements_and_threads(
                 len as u32,
