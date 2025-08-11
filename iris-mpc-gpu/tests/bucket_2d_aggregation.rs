@@ -1,4 +1,4 @@
-//#[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod bucket_2d_aggregation_test {
     use cudarc::{driver::CudaStream, nccl::Id};
     use eyre::Result;
