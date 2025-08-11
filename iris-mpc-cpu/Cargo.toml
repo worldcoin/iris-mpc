@@ -67,6 +67,7 @@ tokio-rustls = { version = "0.26.2" }
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
+metrics-logger = "0.22.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"

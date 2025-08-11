@@ -36,7 +36,7 @@ jobs:
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
         id: cache-rust
         with:
           path: |
@@ -76,7 +76,7 @@ jobs:
 
       - name: Run docker compose
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: hoverkraft-tech/compose-action@8be2d741e891ac9b8ac20825e6f3904149599925
+        uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
         with:
           compose-file: "./docker-compose.test.yaml"
 

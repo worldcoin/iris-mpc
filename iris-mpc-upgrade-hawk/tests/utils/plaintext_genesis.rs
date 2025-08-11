@@ -71,7 +71,7 @@ fn construct_initial_genesis_state(
     GenesisState {
         src_db: GenesisSrcDbState {
             irises: input,
-            modifications: (),
+            modifications: HashMap::new(),
         },
         dst_db: GenesisDstDbState {
             irises: HashMap::new(),
