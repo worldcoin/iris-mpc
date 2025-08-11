@@ -2383,6 +2383,7 @@ dependencies = [
  "iris-mpc-store",
  "itertools 0.13.0",
  "metrics 0.22.3",
+ "metrics-logger",
  "num-traits",
  "num_cpus",
  "num_enum",
@@ -2859,6 +2860,15 @@ dependencies = [
  "cadence",
  "metrics 0.23.0",
  "thiserror",
+]
+
+[[package]]
+name = "metrics-logger"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51842f541c2515cf93ee1a4ef97728816d5ca163d70cbc67d8605246725fec7d"
+dependencies = [
+ "metrics 0.22.3",
 ]
 
 [[package]]

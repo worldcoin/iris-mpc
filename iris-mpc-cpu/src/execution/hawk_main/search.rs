@@ -13,6 +13,7 @@ use crate::{
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<Aby3Query, ROT>>>>;
@@ -36,6 +37,7 @@ pub async fn search<ROT>(
 where
     ROT: Rotations,
 {
+    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -66,9 +68,10 @@ where
 
     parallelize(schedule.batches().into_iter().map(per_session)).await?;
 
-    let results = collect_results(rx).await?;
+    let results = schedule.organize_results(collect_results(rx).await?)?;
 
-    schedule.organize_results(results)
+    metrics::histogram!("search_duration").record(start.elapsed().as_secs_f64());
+    Ok(results)
 }
 
 async fn per_session<ROT>(
