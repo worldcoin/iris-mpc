@@ -151,6 +151,7 @@ impl DistanceCache {
         device_manager: &DeviceManager,
         eye: Eye,
         old_counters: Vec<usize>,
+        max_internal_buffer_size: usize,
         streams: &[CudaStream],
     ) -> Vec<OneSidedDistanceCache> {
         let (codes, masks, counters, indices) = self.get_buffers(eye);
@@ -217,6 +218,10 @@ impl DistanceCache {
             old_counters,
             counters
         ) {
+            if new >= max_internal_buffer_size {
+                tracing::info!("While saving distances for 2d stats, encountered a case of the internal buffer being full, skipping this one due to potentially lost entries");
+                continue;
+            }
             for (idx, c_a, c_b, m_a, m_b) in izip!(ind, code_a, code_b, mask_a, mask_b)
                 .skip(old)
                 .take(new - old)

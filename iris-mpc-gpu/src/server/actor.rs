@@ -2350,6 +2350,9 @@ impl ServerActor {
                     &self.device_manager,
                     eye_db,
                     counters,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
                     &self.streams[0],
                 );
                 tracing::warn!(
@@ -2703,6 +2706,9 @@ impl ServerActor {
                     &self.device_manager,
                     eye_db,
                     counters,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
                     &self.streams[0],
                 );
                 tracing::warn!(
