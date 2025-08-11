@@ -1598,7 +1598,6 @@ impl ServerActor {
             );
         }
 
-        tracing::warn!("Merging one-sided distance caches");
         let (one_sided_distance_cache_left, one_sided_distance_cache_right) =
             if self.full_scan_side == Eye::Left {
                 (
@@ -1617,25 +1616,24 @@ impl ServerActor {
             .map(|(left, right)| TwoSidedDistanceCache::merge(left, right))
             .collect::<Vec<_>>();
 
-        for (i, cache) in two_sided_match_distances.iter().enumerate() {
-            tracing::warn!("Got new matches in two-sided distance cache, device {i}: {cache:?}",);
-        }
         for (new, cache) in two_sided_match_distances
             .into_iter()
             .zip(self.both_side_match_distances_buffer.iter_mut())
         {
             cache.extend(new);
         }
-        tracing::warn!("Merging one-sided distance caches done");
 
         // check if we have enough results to calculate 2D bucket statistics
-        if self
+        let match_distance_2d_count = self
             .both_side_match_distances_buffer
             .iter()
             .map(|x| x.len())
-            .sum::<usize>()
-            >= self.match_distances_2d_buffer_size
-        {
+            .sum::<usize>();
+        tracing::info!(
+            "Match distance 2D count: {match_distance_2d_count}/{}",
+            self.match_distances_2d_buffer_size
+        );
+        if match_distance_2d_count >= self.match_distances_2d_buffer_size {
             tracing::info!("Calculating bucket statistics for both sides");
             let mut both_side_match_distances_buffer =
                 vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
@@ -1662,13 +1660,14 @@ impl ServerActor {
                 &self.streams[0],
                 &thresholds,
             );
-            tracing::warn!("Bucket statistics calculated");
+            tracing::info!("Bucket statistics calculated");
+            let mut buckets_2d_string = String::new();
             for (i, bucket) in buckets_2d.iter().enumerate() {
                 let left_idx = i / self.n_buckets;
                 let right_idx = i % self.n_buckets;
                 let step = 0.375 / self.n_buckets as f64;
-                tracing::warn!(
-                    "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}",
+                buckets_2d_string += &format!(
+                    "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}\n",
                     left_idx as f64 * step,
                     (left_idx + 1) as f64 * step,
                     right_idx as f64 * step,
@@ -1676,6 +1675,7 @@ impl ServerActor {
                     bucket
                 );
             }
+            tracing::info!("Bucket statistics calculated:\n{}", buckets_2d_string);
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -2344,22 +2344,15 @@ impl ServerActor {
             &self.streams[0],
         );
         let new_partial_match_buffer = match old_distance_cache_counters {
-            Some(counters) => {
-                tracing::warn!("Loading additions for this run");
-                let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
-                    &self.device_manager,
-                    eye_db,
-                    counters,
-                    self.match_distances_buffer_size
-                        * (100 + self.match_distances_buffer_size_extra_percent)
-                        / 100,
-                    &self.streams[0],
-                );
-                tracing::warn!(
-                    "Loading additions for this run done...\n{new_partial_match_buffer:?}"
-                );
-                new_partial_match_buffer
-            }
+            Some(counters) => self.match_distances_buffer.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+            ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
             }
@@ -2700,22 +2693,15 @@ impl ServerActor {
         }
 
         let new_partial_match_buffer = match old_distance_cache_counters {
-            Some(counters) => {
-                tracing::warn!("Loading additions for this run");
-                let new_partial_match_buffer = self.match_distances_buffer.load_additions_since(
-                    &self.device_manager,
-                    eye_db,
-                    counters,
-                    self.match_distances_buffer_size
-                        * (100 + self.match_distances_buffer_size_extra_percent)
-                        / 100,
-                    &self.streams[0],
-                );
-                tracing::warn!(
-                    "Loading additions for this run done...\n{new_partial_match_buffer:?}"
-                );
-                new_partial_match_buffer
-            }
+            Some(counters) => self.match_distances_buffer.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+            ),
             None => {
                 vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
             }

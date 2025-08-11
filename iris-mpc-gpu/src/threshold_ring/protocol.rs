@@ -3103,10 +3103,8 @@ impl Circuits {
         {
             let x = &mut xvec[..used_devices];
 
-            tracing::info!("Cross compare:");
             self.cross_mul(x, codes, masks, codes_2, masks_2, streams);
         }
-        tracing::info!("Extract MSB:");
         self.extract_msb(&mut xvec, streams);
         // Result is in the first bit of the result buffer
         let result = self.take_result_buffer();
@@ -3117,19 +3115,16 @@ impl Circuits {
             bits.push(r.get_offset(0, self.chunk_size));
         }
 
-        tracing::info!("Bit inject:");
         // Expand the result buffer to the x buffer and perform arithmetic xor
         self.bit_inject_arithmetic_xor(&bits, &mut xvec, streams);
         self.return_result_buffer(result);
 
         let x = &mut xvec[..used_devices];
 
-        tracing::info!("Conditionally select distance:");
         self.conditionally_select_distance(x, codes, masks, codes_2, masks_2, streams);
 
         Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
         self.buffers.check_buffers();
-        tracing::info!("Cross compare done.");
     }
 
     /// Computes the cross product of distances shares represented as a fraction (code_dist, mask_dist).

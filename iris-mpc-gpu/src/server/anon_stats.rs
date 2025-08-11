@@ -371,11 +371,6 @@ impl TwoSidedDistanceCache {
             .collect();
 
         let devices = protocol.get_devices();
-        tracing::info!(
-            "Flattened {} values for lifting, using {} devices",
-            flattened_a.len(),
-            devices.len()
-        );
         let (flattened_lifted_a, flattened_lifted_b) = {
             // the underlying protocol can only work on its chunk size, so we might need to call this multiple times
             let mut flattened_lifted_a = Vec::with_capacity(flattened_a.len());
@@ -404,11 +399,9 @@ impl TwoSidedDistanceCache {
                 };
                 let on_device = ChunkShare::new(on_device_a, on_device_b);
 
-                tracing::info!("calling down to lifting kernel");
                 protocol.lift_u16_to_u32(&[on_device.as_view()], &mut result, &streams[..1]);
                 let result_a = dtoh_on_stream_sync(&result[0].a, &devices[0], &streams[0]).unwrap();
                 let result_b = dtoh_on_stream_sync(&result[0].b, &devices[0], &streams[0]).unwrap();
-                tracing::info!("lifting done");
                 flattened_lifted_a.extend(result_a.into_iter().take(chunk_a.len()));
                 flattened_lifted_b.extend(result_b.into_iter().take(chunk_b.len()));
             }
@@ -649,7 +642,6 @@ impl TwoSidedMinDistanceCache {
         let right_code = ChunkShare::new(right_code_a, right_code_b);
         let right_mask = ChunkShare::new(right_mask_a, right_mask_b);
 
-        tracing::info!("2D bucket inputs on device");
         let results = protocol.compare_multiple_thresholds_2d(
             &[left_code.as_view()],
             &[left_mask.as_view()],
