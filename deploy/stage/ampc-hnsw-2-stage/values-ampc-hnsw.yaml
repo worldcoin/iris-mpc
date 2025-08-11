@@ -48,7 +48,7 @@ env:
     value: "64"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
