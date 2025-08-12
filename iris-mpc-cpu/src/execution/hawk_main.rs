@@ -1342,10 +1342,12 @@ impl HawkHandle {
         };
 
         let (search_results, match_result) = {
+            let start = Instant::now();
             let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
                 do_search(Orientation::Normal),
                 do_search(Orientation::Mirror),
             )?;
+            metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
             (search_normal, matches_normal.step3(matches_mirror))
         };
