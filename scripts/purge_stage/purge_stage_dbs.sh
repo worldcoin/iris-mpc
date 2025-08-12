@@ -101,7 +101,9 @@ clean_mpc_database() {
   echo "Cleaning Database for URL: $DATABASE_URL with Schema name suffix: $SCHEMA_NAME"
   
   # Execute database cleanup commands
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE sync RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE irises RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE results RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE persistent_state RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE modifications RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_entry RESTART IDENTITY;'"
