@@ -1,5 +1,6 @@
-use iris_mpc_common::helpers::smpc_request::{
-    REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+use iris_mpc_common::helpers::{
+    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+    sync::{MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
 };
 use serde::{Deserialize, Serialize};
 
@@ -53,8 +54,8 @@ impl ModificationInput {
 
     pub fn get_status(&self) -> &'static str {
         match self.completed {
-            true => "COMPLETED",
-            _ => "IN_PROGRESS",
+            true => MOD_STATUS_COMPLETED,
+            false => MOD_STATUS_IN_PROGRESS,
         }
     }
 }
