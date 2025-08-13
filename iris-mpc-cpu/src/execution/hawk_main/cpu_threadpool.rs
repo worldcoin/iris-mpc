@@ -49,7 +49,7 @@ pub fn init_workers(num_workers: usize) -> CpuWorkerHandle {
     // ensure the CPU workers don't context switch.
     let mut core_ids = core_affinity::get_core_ids().unwrap();
     core_ids.reverse();
-    assert!(core_ids.len() >= 1);
+    assert!(!core_ids.is_empty());
 
     // need to use at least one core
     let cores_to_use = std::cmp::max(

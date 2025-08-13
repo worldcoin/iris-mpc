@@ -30,7 +30,7 @@ use iris_mpc_cpu::{
         utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
         IndexationError, JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
@@ -46,7 +46,7 @@ use tokio::{
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
@@ -120,7 +120,7 @@ impl ExecutionContextInfo {
         max_modification_persist_id: i64,
     ) -> Self {
         Self {
-            args: args.clone(),
+            args: *args,
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
@@ -135,7 +135,7 @@ impl ExecutionContextInfo {
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
-/// an isolated database snapshot of previously validated unique iris shares.
+/// an isolated database snapshot of previously validated unique iris shares
 ///
 /// # Arguments
 ///
@@ -155,6 +155,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         graph_store,
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
+
     log_info(String::from("Setup complete."));
     log_info(format!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
@@ -239,7 +240,7 @@ async fn exec_setup(
     Arc<ShutdownHandler>,
     TaskMonitor,
     RDSClient,
-    Arc<BothEyes<SharedIrisesRef>>,
+    Arc<BothEyes<Aby3SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
     Arc<GraphPg<Aby3Store>>,
@@ -568,7 +569,7 @@ async fn exec_delta(
 ///
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
-    imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
@@ -1013,7 +1014,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
-    imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
+    imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
     graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,

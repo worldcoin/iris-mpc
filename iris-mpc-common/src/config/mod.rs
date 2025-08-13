@@ -407,8 +407,7 @@ fn default_full_scan_side_switching_enabled() -> bool {
 }
 
 fn default_tokio_threads() -> usize {
-    let logical_cores = num_cpus::get();
-    logical_cores
+    num_cpus::get()
 }
 
 fn default_cpu_threads() -> usize {
@@ -444,6 +443,46 @@ impl Config {
         if let Some(party_id) = opts.party_id {
             self.party_id = party_id;
         }
+    }
+}
+
+impl Config {
+    /// Returns the url for connecting to a node's gpu database.
+    pub fn get_gpu_db_url(&self) -> Option<String> {
+        self.database.as_ref().map(|x| x.url.clone())
+    }
+
+    /// Returns the url for connecting to a node's cpu database.
+    pub fn get_cpu_db_url(&self) -> Option<String> {
+        self.cpu_database.as_ref().map(|x| x.url.clone())
+    }
+
+    /// Returns the name of a database schema for connecting to a node's gpu dB.
+    pub fn get_gpu_db_schema(&self) -> String {
+        self.format_db_schema(&self.gpu_schema_name_suffix)
+    }
+
+    /// Returns the name of a database schema for connecting to a node's cpu dB.
+    pub fn get_cpu_db_schema(&self) -> String {
+        self.format_db_schema(&self.hnsw_schema_name_suffix)
+    }
+
+    /// Returns the name of a database schema for connecting to a node's dB.
+    ///
+    /// Value of `schema_suffix` should be one of `config.gpu_schema_name_suffix`
+    /// or `config.hnsw_schema_name_suffix`.
+    fn format_db_schema(&self, schema_suffix: &str) -> String {
+        let Self {
+            schema_name,
+            environment,
+            party_id,
+            ..
+        } = self;
+
+        format!(
+            "{}{}_{}_{}",
+            schema_name, schema_suffix, environment, party_id
+        )
     }
 }
 

@@ -8,7 +8,7 @@ use tokio_rustls::rustls::{
 };
 use tokio_rustls::{TlsConnector, TlsStream};
 
-use crate::network::tcp::Client;
+use crate::network::tcp::{networking::configure_tcp_stream, Client};
 
 #[derive(Clone)]
 pub struct TlsClient {
@@ -49,7 +49,7 @@ impl Client for TlsClient {
     type Output = TlsStream<TcpStream>;
     async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
         let stream = TcpStream::connect(addr).await?;
-        stream.set_nodelay(true)?;
+        configure_tcp_stream(&stream)?;
         let domain = ServerName::IpAddress(addr.ip().into());
         let tls_stream = self.tls_connector.connect(domain, stream).await?;
         Ok(TlsStream::Client(tls_stream))
@@ -61,7 +61,7 @@ impl Client for TcpClient {
     type Output = TcpStream;
     async fn connect(&self, addr: SocketAddr) -> Result<Self::Output> {
         let stream = TcpStream::connect(addr).await?;
-        stream.set_nodelay(true)?;
+        configure_tcp_stream(&stream)?;
         Ok(stream)
     }
 }

@@ -10,7 +10,7 @@ use tokio_rustls::rustls::{
 };
 use tokio_rustls::{TlsAcceptor, TlsStream};
 
-use crate::network::tcp::Server;
+use crate::network::tcp::{networking::configure_tcp_stream, Server};
 
 pub struct TlsServer {
     listener: TcpListener,
@@ -61,7 +61,7 @@ impl Server for TlsServer {
     type Output = TlsStream<TcpStream>;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
-        tcp_stream.set_nodelay(true)?;
+        configure_tcp_stream(&tcp_stream)?;
         let tls_stream = self.tls_acceptor.accept(tcp_stream).await?;
         Ok((peer_addr, TlsStream::Server(tls_stream)))
     }
@@ -72,7 +72,7 @@ impl Server for TcpServer {
     type Output = TcpStream;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
-        tcp_stream.set_nodelay(true)?;
+        configure_tcp_stream(&tcp_stream)?;
         Ok((peer_addr, tcp_stream))
     }
 }
