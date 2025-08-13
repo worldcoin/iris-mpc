@@ -296,7 +296,7 @@ impl<'a> BatchProcessor<'a> {
         let queue_url = &self.config.requests_queue_url;
 
         // Poll all messages at once to minimize timing differences
-        let messages_per_request = std::cmp::min(10, num_to_poll); // SQS max is 10
+        const SQS_MAX_MESSAGES_PER_REQUEST: u32 = 10; // SQS hard limit
         let mut all_messages = Vec::new();
         let mut poll_attempts = 0;
         const MAX_POLL_ATTEMPTS: u32 = 10;
@@ -304,7 +304,7 @@ impl<'a> BatchProcessor<'a> {
         while all_messages.len() < num_to_poll as usize && poll_attempts < MAX_POLL_ATTEMPTS {
             poll_attempts += 1;
             let remaining = num_to_poll as usize - all_messages.len();
-            let to_poll = std::cmp::min(messages_per_request as usize, remaining);
+            let to_poll = std::cmp::min(SQS_MAX_MESSAGES_PER_REQUEST as usize, remaining);
 
             tracing::debug!(
                 "Batch ID: {}. Poll attempt {}/{}, requesting {} messages (have {}/{})",
@@ -344,6 +344,11 @@ impl<'a> BatchProcessor<'a> {
                     messages.len()
                 );
                 all_messages.extend(messages);
+
+                // If we got all the messages we need, break early
+                if all_messages.len() >= num_to_poll as usize {
+                    break;
+                }
             }
         }
 
