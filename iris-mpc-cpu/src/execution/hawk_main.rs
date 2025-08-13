@@ -1927,6 +1927,7 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
+            cpu_threads: 4,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,

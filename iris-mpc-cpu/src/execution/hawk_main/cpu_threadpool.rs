@@ -7,14 +7,14 @@ use crossbeam::channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 use crate::{
-    hawkers::aby3::aby3_store::QueryInput, protocol::ops::galois_ring_pairwise_distance,
+    protocol::{ops::galois_ring_pairwise_distance, shared_iris::ArcIris},
     shares::RingElement,
 };
 
 #[derive(Debug)]
 enum CpuTask {
     RingPairwiseDistance {
-        input: Vec<Option<(QueryInput, QueryInput)>>,
+        input: Vec<Option<(ArcIris, ArcIris)>>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
 }
@@ -28,7 +28,7 @@ pub struct CpuWorkerHandle {
 impl CpuWorkerHandle {
     pub async fn galois_ring_pairwise_distances(
         &self,
-        input: Vec<Option<(QueryInput, QueryInput)>>,
+        input: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Vec<RingElement<u16>> {
         let (tx, rx) = oneshot::channel();
         let task = CpuTask::RingPairwiseDistance { input, rsp: tx };

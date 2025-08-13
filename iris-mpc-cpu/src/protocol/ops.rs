@@ -4,12 +4,14 @@ use super::binary::{
 };
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
-    hawkers::aby3::aby3_store::QueryInput,
     network::value::{
         NetworkInt,
         NetworkValue::{self},
     },
-    protocol::prf::{Prf, PrfSeed},
+    protocol::{
+        prf::{Prf, PrfSeed},
+        shared_iris::ArcIris,
+    },
     shares::{
         bit::Bit,
         ring_impl::RingElement,
@@ -395,13 +397,11 @@ pub async fn cross_compare_and_swap(
 /// mask of the irises. We pack the dot products of the code and mask into one
 /// vector to be able to reshare it later.
 pub fn galois_ring_pairwise_distance(
-    pairs: Vec<Option<(QueryInput, QueryInput)>>,
+    pairs: Vec<Option<(ArcIris, ArcIris)>>,
 ) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
-            let x = x.get_iris();
-            let y = y.get_iris();
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
@@ -1019,12 +1019,7 @@ mod tests {
                 let mut player_session = session.lock().await;
                 let own_shares = own_shares
                     .drain(..)
-                    .map(|(x, y)| {
-                        Some((
-                            QueryInput::from_shared_iris(x),
-                            QueryInput::from_shared_iris(y),
-                        ))
-                    })
+                    .map(|(x, y)| Some((Arc::new(x), Arc::new(y))))
                     .collect_vec();
                 let x = galois_ring_pairwise_distance(own_shares);
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();

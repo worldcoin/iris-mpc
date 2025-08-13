@@ -4,9 +4,8 @@ use super::{
     BothEyes, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::parallelize,
-    hawkers::aby3::aby3_store::{Aby3Query, QueryInput},
-    hnsw::VectorStore,
+    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
+    hnsw::VectorStore, protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
@@ -66,7 +65,7 @@ async fn per_session(
         .collect_vec();
 
     // Compare the rotated and processed irises of one request, to the centered unprocessed iris of the other request.
-    let query_pairs: Vec<Option<(QueryInput, QueryInput)>> = pairs
+    let query_pairs: Vec<Option<(ArcIris, ArcIris)>> = pairs
         .iter()
         .map(|pair| {
             let iris1_proc =
@@ -74,10 +73,7 @@ async fn per_session(
             let iris2 = &search_queries[batch.i_eye][pair.earlier_request]
                 .center()
                 .iris;
-            Some((
-                QueryInput::from_iris_ref(iris1_proc.clone()),
-                QueryInput::from_iris_ref(iris2.clone()),
-            ))
+            Some((iris1_proc.clone(), iris2.clone()))
         })
         .collect_vec();
 

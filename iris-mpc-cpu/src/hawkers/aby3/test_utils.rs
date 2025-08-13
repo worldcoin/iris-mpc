@@ -14,7 +14,7 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, QueryInput},
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
         plaintext_store::PlaintextStore,
     },
     hnsw::{
@@ -137,10 +137,7 @@ pub async fn eval_vector_distance(
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = vec![Some((
-        QueryInput::from_iris_ref(point1.clone()),
-        QueryInput::from_shared_iris(point2),
-    ))];
+    let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
     let dist = store.eval_pairwise_distances(pairs).await?;
     Ok(store.lift_distances(dist).await?[0].clone())
 }

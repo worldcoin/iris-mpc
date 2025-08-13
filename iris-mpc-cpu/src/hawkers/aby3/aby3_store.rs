@@ -4,43 +4,17 @@ use crate::{
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{batch_signed_lift_vec, cross_compare, galois_ring_to_rep3, lte_threshold_and_open},
-        shared_iris::GaloisRingSharedIris,
+        shared_iris::{ArcIris, GaloisRingSharedIris},
     },
     shares::share::{DistanceShare, Share},
 };
 use eyre::Result;
+use iris_mpc_common::vector_id::VectorId;
 use itertools::{izip, Itertools};
 use metrics::{counter, histogram};
 use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
-
-use iris_mpc_common::vector_id::VectorId;
-
-/// Some parts of the codebase want to call galois_ring_pairwise_distance() on a Query.query, others on
-/// a Query.processed_query, and yet others on a GaloisRingSharedIris. galois_ring_pairwise_distance()
-/// spawns work on a thread which takes a closure that must be 'static - which references are not.
-/// also, it is desirable to avoid cloning a GaloisRingSharedIris retrieved from an Arc<Query> (QueryRef)
-#[derive(Clone, Debug)]
-pub enum QueryInput {
-    SharedIris(Arc<GaloisRingSharedIris>),
-}
-
-impl QueryInput {
-    pub fn from_shared_iris(iris: GaloisRingSharedIris) -> Self {
-        Self::SharedIris(Arc::new(iris))
-    }
-
-    pub fn from_iris_ref(iris: Arc<GaloisRingSharedIris>) -> Self {
-        Self::SharedIris(iris)
-    }
-
-    pub fn get_iris(&self) -> &GaloisRingSharedIris {
-        match self {
-            QueryInput::SharedIris(iris) => iris,
-        }
-    }
-}
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -49,16 +23,16 @@ impl QueryInput {
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub struct Aby3Query {
     /// Iris in the Shamir secret shared form over a Galois ring.
-    pub iris: Arc<GaloisRingSharedIris>,
+    pub iris: ArcIris,
 
     /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub iris_proc: Arc<GaloisRingSharedIris>,
+    pub iris_proc: ArcIris,
 }
 
 impl Aby3Query {
     /// Creates a new query from a secret shared iris. The input iris is preprocessed for
     /// faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub fn new(iris_ref: &Arc<GaloisRingSharedIris>) -> Self {
+    pub fn new(iris_ref: &ArcIris) -> Self {
         let iris = iris_ref.clone();
 
         let mut preprocessed = (**iris_ref).clone();
@@ -82,10 +56,8 @@ impl Aby3Query {
     }
 }
 
-pub type Aby3StoredIris = Arc<GaloisRingSharedIris>;
-
-pub type Aby3SharedIrises = SharedIrises<Aby3StoredIris>;
-pub type Aby3SharedIrisesRef = SharedIrisesRef<Aby3StoredIris>;
+pub type Aby3SharedIrises = SharedIrises<ArcIris>;
+pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
@@ -128,7 +100,7 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
-        pairs: Vec<Option<(QueryInput, QueryInput)>>,
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<Share<u16>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
@@ -149,7 +121,7 @@ impl Aby3Store {
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
-    pub fn new_storage(points: Option<HashMap<VectorId, Aby3StoredIris>>) -> Aby3SharedIrises {
+    pub fn new_storage(points: Option<HashMap<VectorId, ArcIris>>) -> Aby3SharedIrises {
         SharedIrises::new(
             points.unwrap_or_default(),
             Arc::new(GaloisRingSharedIris::default_for_party(0)),
@@ -191,10 +163,7 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            vec![Some((
-                QueryInput::from_iris_ref(query.iris_proc.clone()),
-                QueryInput::from_iris_ref(v.clone()),
-            ))]
+            vec![Some((query.iris_proc.clone(), v.clone()))]
         } else {
             vec![None]
         };
@@ -213,14 +182,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| {
-                vector.as_ref().map(|v| {
-                    (
-                        QueryInput::from_iris_ref(q.iris_proc.clone()),
-                        QueryInput::from_iris_ref(v.clone()),
-                    )
-                })
-            })
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (q.iris_proc.clone(), v.clone())))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(pairs).await?;
@@ -240,14 +202,9 @@ impl VectorStore for Aby3Store {
         let pairs = queries
             .iter()
             .flat_map(|q| {
-                vectors.iter().map(|vector| {
-                    vector.as_ref().map(|v| {
-                        (
-                            QueryInput::from_iris_ref(q.iris_proc.clone()),
-                            QueryInput::from_iris_ref(v.clone()),
-                        )
-                    })
-                })
+                vectors
+                    .iter()
+                    .map(|vector| vector.as_ref().map(|v| (q.iris_proc.clone(), v.clone())))
             })
             .collect::<Vec<_>>();
 
