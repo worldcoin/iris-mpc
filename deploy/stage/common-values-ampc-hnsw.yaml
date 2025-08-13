@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu@sha256:db14ce51185a457de41d97cf9ee677acb0ea9aa0456a3942b0b938bb262b3175"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:3c309f9a5e04ef5b7c10bac0d45c5e655b4f183a"
 
 environment: stage
 replicaCount: 1
@@ -122,7 +122,7 @@ nginxSidecar:
       # Run nginx as non-root user - use /tmp for PID file
       pid /tmp/nginx.pid;
       worker_processes  auto;
-
+  
       # Send error logs to stderr
       error_log /dev/stderr info;
 
