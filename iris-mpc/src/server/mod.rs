@@ -25,6 +25,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
     get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
     start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -69,13 +70,16 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Initialize shared current_batch_id
     let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
 
+    // Initialize shared batch sync state
+    let batch_sync_shared_state =
+        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
+
     let is_ready_flag = start_coordination_server(
         &config,
-        &aws_clients.sqs_client,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        current_batch_id_atomic.clone(),
+        batch_sync_shared_state.clone(),
     )
     .await;
 
@@ -164,6 +168,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         hawk_actor,
         tx_results,
         current_batch_id_atomic.clone(),
+        batch_sync_shared_state,
     )
     .await?;
 
@@ -536,6 +541,7 @@ async fn run_main_server_loop(
     hawk_actor: HawkActor,
     tx_results: Sender<ServerJobResult>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -570,6 +576,7 @@ async fn run_main_server_loop(
             reset_error_result_attributes.clone(),
             current_batch_id_atomic.clone(),
             iris_store.clone(),
+            batch_sync_shared_state.clone(),
         );
 
         loop {

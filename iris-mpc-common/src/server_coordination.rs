@@ -1,8 +1,7 @@
 use crate::config::Config;
-use crate::helpers::batch_sync::{get_own_batch_sync_entries, get_own_batch_sync_state};
+use crate::helpers::batch_sync::get_own_batch_sync_entries;
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
-use aws_sdk_sqs::Client as SQSClient;
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -15,10 +14,10 @@ use itertools::Itertools as _;
 use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReadyProbeResponse {
@@ -30,6 +29,12 @@ pub struct ReadyProbeResponse {
 #[derive(Debug, Deserialize)]
 struct BatchSyncQuery {
     batch_id: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BatchSyncSharedState {
+    pub batch_id: u64,
+    pub messages_to_poll: u32,
 }
 
 // Returns a new task monitor.
@@ -56,11 +61,10 @@ where
 /// be set to indicate to other MPC nodes that this server is ready for operation.
 pub async fn start_coordination_server<T>(
     config: &Config,
-    sqs_client: &SQSClient,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     my_state: &T,
-    current_batch_id: Arc<AtomicU64>,
+    batch_sync_shared_state: Arc<Mutex<BatchSyncSharedState>>,
 ) -> Arc<AtomicBool>
 where
     T: Serialize + DeserializeOwned + Clone + Send + 'static,
@@ -91,8 +95,6 @@ where
             .expect("Serialization to JSON to probe response failed");
         tracing::info!("Healthcheck probe response: {}", serialized_response);
         let my_state = my_state.clone();
-        let config = config.clone();
-        let sqs_client = sqs_client.clone();
         async move {
             // Generate a random UUID for each run.
             let app = Router::new()
@@ -129,46 +131,42 @@ where
                 )
                 .route(
                     "/batch-sync-state",
-                    get(move |Query(params): Query<BatchSyncQuery>| async move {
-                        let current_batch_id = current_batch_id.load(Ordering::SeqCst);
+                    get(move |Query(params): Query<BatchSyncQuery>| {
+                        let batch_sync_shared_state = batch_sync_shared_state.clone();
+                        async move {
+                            let shared_state = batch_sync_shared_state.lock().await;
 
-                        // Check if the requested batch_id matches our current batch_id
-                        if params.batch_id != current_batch_id {
-                            return (
-                                StatusCode::CONFLICT,
-                                format!(
-                                    "Batch ID mismatch: requested {}, current {}",
-                                    params.batch_id, current_batch_id
-                                ),
-                            )
-                                .into_response();
-                        }
-
-                        match get_own_batch_sync_state(&config, &sqs_client, current_batch_id).await
-                        {
-                            Ok(batch_sync_state) => {
-                                match serde_json::to_string(&batch_sync_state) {
-                                    Ok(body) => (StatusCode::OK, body).into_response(),
-                                    Err(e) => {
-                                        tracing::error!(
-                                            "Failed to serialize batch sync state: {:?}",
-                                            e
-                                        );
-                                        (
-                                            StatusCode::INTERNAL_SERVER_ERROR,
-                                            format!("Serialization error: {}", e),
-                                        )
-                                            .into_response()
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to fetch batch sync state: {:?}", e);
-                                (
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    format!("Error fetching batch sync state: {}", e),
+                            // Check if the requested batch_id matches our cached batch_id
+                            if params.batch_id != shared_state.batch_id {
+                                return (
+                                    StatusCode::CONFLICT,
+                                    format!(
+                                        "Batch ID mismatch: requested {}, current {}",
+                                        params.batch_id, shared_state.batch_id
+                                    ),
                                 )
-                                    .into_response()
+                                    .into_response();
+                            }
+
+                            // Return the cached state
+                            let batch_sync_state = crate::helpers::batch_sync::BatchSyncState {
+                                messages_to_poll: shared_state.messages_to_poll,
+                                batch_id: shared_state.batch_id,
+                            };
+
+                            match serde_json::to_string(&batch_sync_state) {
+                                Ok(body) => (StatusCode::OK, body).into_response(),
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to serialize batch sync state: {:?}",
+                                        e
+                                    );
+                                    (
+                                        StatusCode::INTERNAL_SERVER_ERROR,
+                                        format!("Serialization error: {}", e),
+                                    )
+                                        .into_response()
+                                }
                             }
                         }
                     }),

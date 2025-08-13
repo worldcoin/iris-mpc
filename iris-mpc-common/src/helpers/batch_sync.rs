@@ -4,14 +4,12 @@ use crate::job::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use crate::server_coordination::get_check_addresses;
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchSyncState {
     pub messages_to_poll: u32,
     pub batch_id: u64,
-    pub timestamp_millis: u64, // Add timestamp for synchronization
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,14 +88,6 @@ impl BatchSyncResult {
             .min()
             .unwrap_or(0)
     }
-
-    pub fn latest_timestamp(&self) -> u64 {
-        self.all_states
-            .iter()
-            .map(|s| s.timestamp_millis)
-            .max()
-            .unwrap_or(0)
-    }
 }
 
 pub async fn get_own_batch_sync_entries() -> BatchSyncEntries {
@@ -129,13 +119,9 @@ pub async fn get_own_batch_sync_state(
     let messages_to_poll =
         std::cmp::min(approximate_visible_messages, config.max_batch_size as u32);
 
-    // Get current timestamp in milliseconds
-    let timestamp_millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
-
     let batch_sync_state = BatchSyncState {
         messages_to_poll,
         batch_id: current_batch_id,
-        timestamp_millis,
     };
     Ok(batch_sync_state)
 }
