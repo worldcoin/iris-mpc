@@ -130,10 +130,7 @@ pub async fn get_own_batch_sync_state(
         std::cmp::min(approximate_visible_messages, config.max_batch_size as u32);
 
     // Get current timestamp in milliseconds
-    let timestamp_millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
+    let timestamp_millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
 
     let batch_sync_state = BatchSyncState {
         messages_to_poll,
@@ -180,7 +177,7 @@ pub async fn get_batch_sync_entries(
 
                 if !state.batch_sha.eq(&own_sync_state.batch_sha) {
                     tracing::info!(
-                        "Party {} (batch_hash {}) is differs own ({}). Retrying in 1 second...",
+                        "Party {} (batch_hash {}) differs from own ({}). Retrying in 1 second...",
                         host,
                         hex::encode(&state.batch_sha[0..4]),
                         hex::encode(&own_sync_state.batch_sha[0..4])
