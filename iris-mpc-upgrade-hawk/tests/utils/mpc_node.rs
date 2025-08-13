@@ -6,7 +6,6 @@ use crate::utils::{
 use eyre::Result;
 use iris_mpc_common::{
     config::Config,
-    helpers::smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE},
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
