@@ -1,3 +1,17 @@
+//! # Genesis Protocol Plaintext Reference Implementation
+//!
+//! This module provides a local, in-memory reference implementation of the
+//! genesis indexer protocol, which extracts the core application logic from the
+//! surrounding network services, MPC functionality, and parallel execution
+//! infrastructure.  The goal is to represent the intended logic of the genesis
+//! server application in as simple and understandable a package as possible, to
+//! make it clear what the complex server software is supposed to be doing.
+//!
+//! As an invariant, the outcome of successfully running the genesis server
+//! binary on MPC servers in the context of properly initialized network
+//! resources should logically match that produced by this plaintext
+//! implementation.  This equivalence is partially validated by e2e test cases.
+
 use std::{collections::HashMap, sync::Arc};
 
 use eyre::{bail, OptionExt, Result};
