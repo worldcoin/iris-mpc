@@ -35,6 +35,7 @@ use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
@@ -201,6 +202,21 @@ impl<'a> BatchProcessor<'a> {
 
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let messages_to_poll = batch_sync_result.messages_to_poll();
+            let sync_timestamp = batch_sync_result.latest_timestamp();
+
+            tracing::info!(
+                "BATCH SYNC RESULT BatchSyncResult:\n{}",
+                batch_sync_result
+                    .all_states
+                    .iter()
+                    .enumerate()
+                    .map(|(i, state)| format!(
+                        "  Node {}: batch_id: {}, messages_to_poll: {}, timestamp: {}",
+                        i, state.batch_id, state.messages_to_poll, state.timestamp_millis
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
 
             tracing::info!(
                 "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
@@ -211,7 +227,32 @@ impl<'a> BatchProcessor<'a> {
 
             // Poll the determined number of messages
             if messages_to_poll > 0 {
+                // Wait until the synchronized timestamp plus a small buffer
+                let current_time = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as u64;
+
+                // Reduce buffer to 50ms for faster synchronization
+                let target_poll_time = sync_timestamp + 50;
+
+                if current_time < target_poll_time {
+                    let wait_time = target_poll_time - current_time;
+                    tracing::info!(
+                        "Waiting {}ms before polling to synchronize with other nodes",
+                        wait_time
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(wait_time)).await;
+                }
+
+                let poll_start = std::time::Instant::now();
                 self.poll_exact_messages(messages_to_poll).await?;
+                tracing::info!(
+                    "Batch ID: {}. Polling {} messages took {:?}",
+                    current_batch_id,
+                    messages_to_poll,
+                    poll_start.elapsed()
+                );
                 break;
             } else {
                 tracing::info!(
@@ -224,7 +265,8 @@ impl<'a> BatchProcessor<'a> {
                     );
                     return Ok(None);
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                // Reduce sleep time when no messages are available
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         }
 
@@ -241,9 +283,6 @@ impl<'a> BatchProcessor<'a> {
                 .collect::<Vec<_>>()
         );
 
-        // Increment batch_id for the next batch
-        self.current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-
         Ok(Some(self.batch_query.clone()))
     }
 
@@ -256,21 +295,32 @@ impl<'a> BatchProcessor<'a> {
         );
         let queue_url = &self.config.requests_queue_url;
 
-        while self.msg_counter < num_to_poll as usize {
-            if self.shutdown_handler.is_shutting_down() {
-                tracing::info!(
-                    "Stopping batch receive during polling exact messages due to shutdown signal..."
-                );
-                return Ok(()); // Exit if shutdown is signaled
-            }
+        // Poll all messages at once to minimize timing differences
+        let messages_per_request = std::cmp::min(10, num_to_poll); // SQS max is 10
+        let mut all_messages = Vec::new();
+        let mut poll_attempts = 0;
+        const MAX_POLL_ATTEMPTS: u32 = 10;
+
+        while all_messages.len() < num_to_poll as usize && poll_attempts < MAX_POLL_ATTEMPTS {
+            poll_attempts += 1;
+            let remaining = num_to_poll as usize - all_messages.len();
+            let to_poll = std::cmp::min(messages_per_request as usize, remaining);
+
+            tracing::debug!(
+                "Batch ID: {}. Poll attempt {}/{}, requesting {} messages (have {}/{})",
+                current_batch_id,
+                poll_attempts,
+                MAX_POLL_ATTEMPTS,
+                to_poll,
+                all_messages.len(),
+                num_to_poll
+            );
 
             let rcv_message_output = self
                 .client
                 .receive_message()
-                // Set a short wait time to avoid busy-looping when the queue is temporarily empty
-                // but we still expect more messages for the current batch.
-                .wait_time_seconds(1) // Short poll to quickly check for messages
-                .max_number_of_messages(1) // Process one message at a time to respect num_to_poll accurately
+                .wait_time_seconds(1) // Use short long-polling for better responsiveness
+                .max_number_of_messages(to_poll as i32)
                 .queue_url(queue_url)
                 .send()
                 .await
@@ -278,34 +328,44 @@ impl<'a> BatchProcessor<'a> {
 
             if let Some(messages) = rcv_message_output.messages {
                 if messages.is_empty() {
-                    // If the queue is empty, short poll again until num_to_poll is met or shutdown.
-                    // This can happen if messages are arriving slower than we are polling.
-                    tracing::debug!(
-                        "Batch ID: {}. No message received in a polling attempt, will retry as {} out of {} messages have been processed.",
+                    tracing::warn!(
+                        "Batch ID: {}. No messages available in SQS on attempt {}. Collected {} out of {} messages.",
                         current_batch_id,
-                        self.msg_counter,
+                        poll_attempts,
+                        all_messages.len(),
                         num_to_poll
                     );
-                    // Add a small delay to prevent tight looping when queue is empty but we are still expecting messages
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    // Don't sleep here - the wait_time_seconds provides the delay
                     continue;
                 }
-
-                for sqs_message in messages {
-                    // Should be only one message due to max_number_of_messages(1)
-                    self.process_message(sqs_message).await?;
-                }
-            } else {
-                // This case should ideally not be hit often if wait_time_seconds > 0,
-                // as SQS long polling usually returns an empty messages array instead of None.
-                // However, handling it defensively.
                 tracing::debug!(
-                    "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
-                    current_batch_id
+                    "Batch ID: {}. Retrieved {} messages from SQS",
+                    current_batch_id,
+                    messages.len()
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                continue;
+                all_messages.extend(messages);
             }
+        }
+
+        if all_messages.len() < num_to_poll as usize {
+            tracing::error!(
+                "Batch ID: {}. Could only retrieve {} out of {} messages after {} attempts",
+                current_batch_id,
+                all_messages.len(),
+                num_to_poll,
+                poll_attempts
+            );
+        }
+
+        // Process all messages
+        for (idx, sqs_message) in all_messages.iter().enumerate() {
+            tracing::debug!(
+                "Batch ID: {}. Processing message {}/{}",
+                current_batch_id,
+                idx + 1,
+                all_messages.len()
+            );
+            self.process_message(sqs_message.clone()).await?;
         }
 
         tracing::info!(

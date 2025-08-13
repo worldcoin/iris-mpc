@@ -3,6 +3,7 @@ use crate::helpers::batch_sync::{get_own_batch_sync_entries, get_own_batch_sync_
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
 use aws_sdk_sqs::Client as SQSClient;
+use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -24,6 +25,11 @@ pub struct ReadyProbeResponse {
     pub image_name: String,
     pub uuid: String,
     pub shutting_down: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct BatchSyncQuery {
+    batch_id: u64,
 }
 
 // Returns a new task monitor.
@@ -123,8 +129,21 @@ where
                 )
                 .route(
                     "/batch-sync-state",
-                    get(move || async move {
+                    get(move |Query(params): Query<BatchSyncQuery>| async move {
                         let current_batch_id = current_batch_id.load(Ordering::SeqCst);
+
+                        // Check if the requested batch_id matches our current batch_id
+                        if params.batch_id != current_batch_id {
+                            return (
+                                StatusCode::CONFLICT,
+                                format!(
+                                    "Batch ID mismatch: requested {}, current {}",
+                                    params.batch_id, current_batch_id
+                                ),
+                            )
+                                .into_response();
+                        }
+
                         match get_own_batch_sync_state(&config, &sqs_client, current_batch_id).await
                         {
                             Ok(batch_sync_state) => {
@@ -344,7 +363,7 @@ pub async fn init_heartbeat_task(
                         );
                     }
                 } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
+                    tracing::debug!("Heartbeat: Node {} is healthy", host);
                 }
             }
 

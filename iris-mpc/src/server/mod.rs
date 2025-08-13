@@ -36,7 +36,7 @@ use iris_mpc_store::Store;
 use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -568,7 +568,7 @@ async fn run_main_server_loop(
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
             reset_error_result_attributes.clone(),
-            current_batch_id_atomic,
+            current_batch_id_atomic.clone(),
             iris_store.clone(),
         );
 
@@ -634,6 +634,9 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             tx_results.send(result).await?;
+
+            // Increment batch_id for the next batch
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
             shutdown_handler.increment_batches_pending_completion()
             // wrap up tracing span context
