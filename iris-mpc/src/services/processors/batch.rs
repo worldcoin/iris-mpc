@@ -200,22 +200,18 @@ impl<'a> BatchProcessor<'a> {
                     .map_err(ReceiveRequestError::BatchSyncError)?;
 
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
-            let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
-
-            let num_to_poll =
-                std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
+            let messages_to_poll = batch_sync_result.messages_to_poll();
 
             tracing::info!(
-                "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
+                "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
                 current_batch_id,
-                num_to_poll,
-                max_visible_messages,
+                messages_to_poll,
                 self.config.max_batch_size
             );
 
             // Poll the determined number of messages
-            if num_to_poll > 0 {
-                self.poll_exact_messages(num_to_poll).await?;
+            if messages_to_poll > 0 {
+                self.poll_exact_messages(messages_to_poll).await?;
                 break;
             } else {
                 tracing::info!(

@@ -8,7 +8,7 @@ use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchSyncState {
-    pub approximate_visible_messages: u32,
+    pub messages_to_poll: u32,
     pub batch_id: u64,
 }
 
@@ -81,11 +81,11 @@ impl BatchSyncResult {
         }
     }
 
-    pub fn max_approximate_visible_messages(&self) -> u32 {
+    pub fn messages_to_poll(&self) -> u32 {
         self.all_states
             .iter()
-            .map(|s| s.approximate_visible_messages)
-            .max()
+            .map(|s| s.messages_to_poll)
+            .min()
             .unwrap_or(0)
     }
 }
@@ -116,8 +116,11 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
+    let messages_to_poll =
+        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32);
+
     let batch_sync_state = BatchSyncState {
-        approximate_visible_messages,
+        messages_to_poll,
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
