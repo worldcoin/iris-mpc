@@ -146,7 +146,7 @@ env:
     value: "true"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "LeonidasHnswStats"
+    value: "LeonidasHnswStats1"
 
 initContainer:
   enabled: true
