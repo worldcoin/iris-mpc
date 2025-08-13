@@ -6,7 +6,6 @@ use crate::utils::{
 use eyre::Result;
 use iris_mpc_common::{
     config::Config,
-    helpers::smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE},
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
@@ -174,8 +173,7 @@ impl MpcNode {
         // increment version numbers of irises affected by update modifications
         for m in mods.iter() {
             let mut tx = self.gpu_iris_store.tx().await?;
-            if m.request_type.is_updating()
-            {
+            if m.request_type.is_updating() {
                 increment_iris_version(&mut tx, m.serial_id).await?;
             }
             tx.commit().await?;
