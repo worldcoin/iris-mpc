@@ -264,9 +264,7 @@ impl BatchGenerator {
         while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
             identifiers_for_copying.push(next_id);
-            println!("identifiers_for_copying={:?}", identifiers_for_copying);
             if !self.exclusions.contains(&next_id) {
-                println!("identifiers={:?}", identifiers);
                 identifiers.push(next_id);
             } else {
                 log_info(format!("Excluding deletion :: iris-serial-id={}", next_id));
