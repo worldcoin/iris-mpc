@@ -1,5 +1,5 @@
 use crate::{
-    execution::{hawk_main::cpu_threadpool::CpuWorkerHandle, session::Session},
+    execution::{hawk_main::iris_worker::IrisPoolHandle, session::Session},
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
@@ -69,8 +69,9 @@ pub struct Aby3Store {
 
     /// Session for the SMPC operations
     pub session: Session,
+
     /// used to spawn cpu bound tasks on a thread pool
-    pub workers: CpuWorkerHandle,
+    pub workers: IrisPoolHandle,
 }
 
 impl Aby3Store {
@@ -123,6 +124,10 @@ impl Aby3Store {
             points.unwrap_or_default(),
             Arc::new(GaloisRingSharedIris::default_for_party(0)),
         )
+    }
+
+    pub async fn checksum(&self) -> u64 {
+        self.storage.checksum().await
     }
 }
 

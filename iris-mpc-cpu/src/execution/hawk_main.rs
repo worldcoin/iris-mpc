@@ -1,10 +1,7 @@
 use super::player::Identity;
 use crate::{
     execution::{
-        hawk_main::{
-            cpu_threadpool::CpuWorkerHandle,
-            {insert::InsertPlanV, search::SearchIds},
-        },
+        hawk_main::{insert::InsertPlanV, iris_worker::IrisPoolHandle, search::SearchIds},
         local::generate_local_identities,
         player::{Role, RoleAssignment},
         session::{NetworkSession, Session, SessionId},
@@ -71,9 +68,9 @@ use tokio::{
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod cpu_threadpool;
 pub(crate) mod insert;
 mod intra_batch;
+pub(crate) mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
@@ -144,7 +141,7 @@ pub struct HawkActor {
     loader_db_size: usize,
     iris_store: BothEyes<Aby3SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
-    workers_handle: BothEyes<CpuWorkerHandle>,
+    workers_handle: BothEyes<IrisPoolHandle>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
     /// ---- Distances cache ----
@@ -331,7 +328,7 @@ impl HawkActor {
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT].map(|side| {
-            cpu_threadpool::init_workers(args.cpu_threads, side, iris_store[side].clone())
+            iris_worker::init_workers(args.cpu_threads, side, iris_store[side].clone())
         });
 
         let bucket_statistics_left = BucketStatistics::new(
@@ -375,7 +372,7 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
-    pub fn workers_handle(&self, store_id: StoreId) -> CpuWorkerHandle {
+    pub fn workers_handle(&self, store_id: StoreId) -> IrisPoolHandle {
         self.workers_handle[store_id as usize].clone()
     }
 
