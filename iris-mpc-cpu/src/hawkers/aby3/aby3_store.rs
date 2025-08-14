@@ -70,7 +70,7 @@ pub struct Aby3Store {
     /// Session for the SMPC operations
     pub session: Session,
     /// used to spawn cpu bound tasks on a thread pool
-    pub cpu_worker_handle: CpuWorkerHandle,
+    pub workers: CpuWorkerHandle,
 }
 
 impl Aby3Store {
@@ -107,10 +107,7 @@ impl Aby3Store {
         }
         histogram!("galois_ring_pairwise_distance.num_pairs").record(pairs.len() as f64);
         let start = Instant::now();
-        let ds_and_ts = self
-            .cpu_worker_handle
-            .galois_ring_pairwise_distances(pairs)
-            .await;
+        let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await;
 
         let elapsed = start.elapsed().as_micros();
 
@@ -367,8 +364,8 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.data.read().await.points,
-                premade_v.storage.data.read().await.points
+                v_from_scratch.storage.read().await.points,
+                premade_v.storage.read().await.points
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();

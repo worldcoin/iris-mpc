@@ -138,13 +138,13 @@ pub struct HawkActor {
     searcher: Arc<HnswSearcher>,
     prf_key: Option<Arc<[u8; 16]>>,
     role_assignments: Arc<HashMap<Role, Identity>>,
-    cpu_worker_handle: CpuWorkerHandle,
 
     // ---- My state ----
     /// A size used by the startup loader.
     loader_db_size: usize,
     iris_store: BothEyes<Aby3SharedIrisesRef>,
     graph_store: BothEyes<GraphRef>,
+    workers_handle: BothEyes<CpuWorkerHandle>,
     anonymized_bucket_statistics: BothEyes<BucketStatistics>,
 
     /// ---- Distances cache ----
@@ -330,6 +330,9 @@ impl HawkActor {
         let networking = build_network_handle(args, &identities).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
+        let workers_handle = [LEFT, RIGHT].map(|side| {
+            cpu_threadpool::init_workers(args.cpu_threads, side, iris_store[side].clone())
+        });
 
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
@@ -344,8 +347,6 @@ impl HawkActor {
             Eye::Right,
         );
 
-        let cpu_worker_handle = cpu_threadpool::init_workers(args.cpu_threads);
-
         Ok(HawkActor {
             args: args.clone(),
             searcher,
@@ -358,7 +359,7 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
-            cpu_worker_handle,
+            workers_handle,
         })
     }
 
@@ -372,6 +373,10 @@ impl HawkActor {
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
         self.graph_store[store_id as usize].clone()
+    }
+
+    pub fn workers_handle(&self, store_id: StoreId) -> CpuWorkerHandle {
+        self.workers_handle[store_id as usize].clone()
     }
 
     pub async fn db_size(&self) -> usize {
@@ -469,8 +474,8 @@ impl HawkActor {
     ) -> impl Future<Output = Result<HawkSession>> {
         let storage = self.iris_store(store_id);
         let graph_store = self.graph_store(store_id);
+        let workers = self.workers_handle(store_id);
         let hnsw_prf_key = hnsw_prf_key.clone();
-        let cpu_worker_handle = self.cpu_worker_handle.clone();
 
         async move {
             let my_session_seed = thread_rng().gen();
@@ -481,7 +486,7 @@ impl HawkActor {
                     prf,
                 },
                 storage,
-                cpu_worker_handle,
+                workers,
             };
 
             let hawk_session = HawkSession {

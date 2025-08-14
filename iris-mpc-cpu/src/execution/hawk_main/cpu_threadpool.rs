@@ -1,15 +1,17 @@
+use crossbeam::channel::{Receiver, Sender};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
 };
-
-use crossbeam::channel::{Receiver, Sender};
 use tokio::sync::oneshot;
 
 use crate::{
+    hawkers::shared_irises::SharedIrisesRef,
     protocol::{ops::galois_ring_pairwise_distance, shared_iris::ArcIris},
     shares::RingElement,
 };
+
+mod numa;
 
 #[derive(Debug)]
 enum CpuTask {
@@ -23,6 +25,8 @@ enum CpuTask {
 pub struct CpuWorkerHandle {
     workers: Arc<Vec<Sender<CpuTask>>>,
     next_counter: Arc<AtomicU64>,
+    // TODO: Refactor such that this is not needed.
+    iris_store: SharedIrisesRef<ArcIris>,
 }
 
 impl CpuWorkerHandle {
@@ -44,12 +48,14 @@ impl CpuWorkerHandle {
     }
 }
 
-pub fn init_workers(num_workers: usize) -> CpuWorkerHandle {
+pub fn init_workers(
+    num_workers: usize,
+    shard_index: usize,
+    iris_store: SharedIrisesRef<ArcIris>,
+) -> CpuWorkerHandle {
     // context switching is bad for CPU bound work because it invalidates the cache.
     // ensure the CPU workers don't context switch.
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.reverse();
-    assert!(!core_ids.is_empty());
+    let core_ids = numa::select_core_ids(shard_index);
 
     // need to use at least one core
     let cores_to_use = std::cmp::max(
@@ -72,6 +78,7 @@ pub fn init_workers(num_workers: usize) -> CpuWorkerHandle {
     CpuWorkerHandle {
         workers: Arc::new(channels),
         next_counter: Arc::new(AtomicU64::new(0)),
+        iris_store,
     }
 }
 
