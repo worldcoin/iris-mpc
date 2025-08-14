@@ -19,7 +19,7 @@ use tokio::sync::oneshot;
 #[derive(Debug)]
 enum IrisTask {
     EvalDistanceBatch {
-        queries: Vec<ArcIris>,
+        query: ArcIris,
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -40,12 +40,12 @@ pub struct IrisPoolHandle {
 impl IrisPoolHandle {
     pub async fn eval_distance_batch(
         &self,
-        queries: Vec<ArcIris>,
+        query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Vec<RingElement<u16>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::EvalDistanceBatch {
-            queries,
+            query,
             vector_ids,
             rsp: tx,
         };
@@ -108,24 +108,18 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
             IrisTask::EvalDistanceBatch {
-                queries,
+                query,
                 vector_ids,
                 rsp,
             } => {
-                let vectors = {
+                let pairs = {
                     let store = iris_store.data.blocking_read();
 
-                    vector_ids.iter().map(|v| store.get_vector(v)).collect_vec()
+                    vector_ids
+                        .iter()
+                        .map(|v| store.get_vector(v).map(|v| (query.clone(), v)))
+                        .collect_vec()
                 };
-
-                let pairs = queries
-                    .iter()
-                    .flat_map(|q| {
-                        vectors
-                            .iter()
-                            .map(|vector| vector.as_ref().map(|v| (q.clone(), v.clone())))
-                    })
-                    .collect::<Vec<_>>();
 
                 let r = galois_ring_pairwise_distance(pairs);
                 let _ = rsp.send(r);

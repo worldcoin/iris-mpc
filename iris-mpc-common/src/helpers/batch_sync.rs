@@ -8,7 +8,7 @@ use tokio::time::{timeout, Duration};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BatchSyncState {
-    pub approximate_visible_messages: u32,
+    pub messages_to_poll: u32,
     pub batch_id: u64,
 }
 
@@ -81,11 +81,11 @@ impl BatchSyncResult {
         }
     }
 
-    pub fn max_approximate_visible_messages(&self) -> u32 {
+    pub fn messages_to_poll(&self) -> u32 {
         self.all_states
             .iter()
-            .map(|s| s.approximate_visible_messages)
-            .max()
+            .map(|s| s.messages_to_poll)
+            .min()
             .unwrap_or(0)
     }
 }
@@ -116,8 +116,11 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
+    let messages_to_poll =
+        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32);
+
     let batch_sync_state = BatchSyncState {
-        approximate_visible_messages,
+        messages_to_poll,
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
@@ -160,7 +163,7 @@ pub async fn get_batch_sync_entries(
 
                 if !state.batch_sha.eq(&own_sync_state.batch_sha) {
                     tracing::info!(
-                        "Party {} (batch_hash {}) is differs own ({}). Retrying in 1 second...",
+                        "Party {} (batch_hash {}) differs from own ({}). Retrying in 1 second...",
                         host,
                         hex::encode(&state.batch_sha[0..4]),
                         hex::encode(&own_sync_state.batch_sha[0..4])
@@ -245,9 +248,44 @@ pub async fn get_batch_sync_states(
 
         match timeout(polling_timeout_duration, async {
             loop {
-                let res = reqwest::get(host.as_str()).await.with_context(|| {
+                // Add batch_id as query parameter
+                let url = format!("{}?batch_id={}", host.as_str(), reference_batch_id);
+                let res = reqwest::get(&url).await.with_context(|| {
                     format!("Failed to fetch batch sync state from party {}", host)
                 })?;
+
+                tracing::info!("Response Status: {}", res.status());
+
+                // Check if we got a 409 Conflict response (batch_id mismatch)
+                if res.status() == reqwest::StatusCode::CONFLICT {
+                    let error_body = res
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    tracing::info!(
+                        "Party {} returned batch ID mismatch: {}. Retrying in 1 second...",
+                        host,
+                        error_body
+                    );
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                }
+
+                // Handle other non-OK status codes
+                if !res.status().is_success() {
+                    let status = res.status();
+                    let error_body = res
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(eyre!(
+                        "Party {} returned error status {}: {}",
+                        host,
+                        status,
+                        error_body
+                    ));
+                }
+
                 let state: BatchSyncState = res.json().await.with_context(|| {
                     format!("Failed to parse batch sync state from party {}", host)
                 })?;
