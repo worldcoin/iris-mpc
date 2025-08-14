@@ -180,23 +180,19 @@ impl VectorStore for Aby3Store {
         self.lift_distances(dist).await
     }
 
-    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = queries.len(), batch_size = vectors.len()))]
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
     async fn eval_distance_batch(
         &mut self,
-        queries: &[Self::QueryRef],
+        query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
         let vectors = self.storage.get_vectors(vectors).await;
-        let pairs = queries
+        let pairs = vectors
             .iter()
-            .flat_map(|q| {
-                vectors
-                    .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
-            })
+            .map(|vector| vector.as_ref().map(|v| (&*query.iris_proc, &**v)))
             .collect::<Vec<_>>();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -554,16 +550,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(
-                &[Arc::new(plaintext_database[0].clone())],
-                &plaintext_inserts,
-            )
+            .eval_distance_batch(&Arc::new(plaintext_database[0].clone()), &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(
-                &[Arc::new(plaintext_database[1].clone())],
-                &plaintext_inserts,
-            )
+            .eval_distance_batch(&Arc::new(plaintext_database[1].clone()), &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -596,10 +586,10 @@ mod tests {
             jobs.spawn(async move {
                 let mut store_lock = store.lock().await;
                 let dist1_aby3 = store_lock
-                    .eval_distance_batch(&[player_preps[0].clone()], &player_inserts)
+                    .eval_distance_batch(&player_preps[0].clone(), &player_inserts)
                     .await?;
                 let dist2_aby3 = store_lock
-                    .eval_distance_batch(&[player_preps[1].clone()], &player_inserts)
+                    .eval_distance_batch(&player_preps[1].clone(), &player_inserts)
                     .await?;
                 let dist_aby3 = dist1_aby3
                     .into_iter()
@@ -684,7 +674,18 @@ mod tests {
                 let vectors = vec![a, b, none];
                 let n_vecs = vectors.len();
 
-                let distances = store.eval_distance_batch(&queries, &vectors).await.unwrap();
+                let distances = {
+                    let mut dist_a = store
+                        .eval_distance_batch(&queries[0], &vectors)
+                        .await
+                        .unwrap();
+                    let dist_b = store
+                        .eval_distance_batch(&queries[1], &vectors)
+                        .await
+                        .unwrap();
+                    dist_a.extend(dist_b);
+                    dist_a
+                };
 
                 let is_match = store.is_match_batch(&distances).await.unwrap();
                 assert_eq!(
