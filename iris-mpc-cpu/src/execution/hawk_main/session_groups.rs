@@ -1,4 +1,5 @@
 use super::{BothEyes, BothOrient, HawkSession, Orientation, LEFT, RIGHT};
+use iris_mpc_common::ROTATIONS;
 
 pub struct SessionGroups {
     pub for_search: BothOrient<BothEyes<Vec<HawkSession>>>,
@@ -6,16 +7,13 @@ pub struct SessionGroups {
 }
 
 impl SessionGroups {
-    // TODO: Request this from the networking module.
-    pub fn n_sessions(request_parallelism: usize) -> usize {
-        // *2 for both orientations.
-        // *2 for search + intra batch.
-        request_parallelism * 2 * 2
-    }
+    // For each request, we may use parallel sessions for:
+    // both orientations, both eyes, search+intra_batch, rotations.
+    pub const N_SESSIONS_PER_REQUEST: usize = 2 * 2 * 2 * ROTATIONS;
 
+    // Group the sessions per orientation, eye, and search+intra_batch.
     pub fn new(sessions: BothEyes<Vec<HawkSession>>) -> Self {
         let [left, right] = sessions;
-
         let [l0, l1, l2, l3] = split_in_four(left);
         let [r0, r1, r2, r3] = split_in_four(right);
         Self {

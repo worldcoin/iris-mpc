@@ -321,7 +321,8 @@ impl HawkActor {
 
         let my_index = args.party_index;
 
-        let networking = build_network_handle(args, &identities).await?;
+        let networking =
+            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
 
