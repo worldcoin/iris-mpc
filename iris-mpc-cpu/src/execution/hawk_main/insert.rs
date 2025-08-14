@@ -92,9 +92,7 @@ async fn add_batch_neighbors<V: VectorStore>(
 ) -> Result<Vec<SortedNeighborhoodV<V>>> {
     if let Some(bottom_layer) = links.first_mut() {
         if bottom_layer.len() < target_n_neighbors {
-            let distances = store
-                .eval_distance_batch(&[query.clone()], extra_ids)
-                .await?;
+            let distances = store.eval_distance_batch(query, extra_ids).await?;
 
             let ids_dists = izip!(extra_ids.iter().cloned(), distances)
                 .map(|(id, dist)| (id, dist))
