@@ -361,7 +361,7 @@ pub async fn init_heartbeat_task(
                         );
                     }
                 } else {
-                    tracing::debug!("Heartbeat: Node {} is healthy", host);
+                    tracing::info!("Heartbeat: Node {} is healthy", host);
                 }
             }
 

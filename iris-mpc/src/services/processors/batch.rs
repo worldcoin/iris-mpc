@@ -223,20 +223,6 @@ impl<'a> BatchProcessor<'a> {
             let messages_to_poll = batch_sync_result.messages_to_poll();
 
             tracing::info!(
-                "BATCH SYNC RESULT BatchSyncResult:\n{}",
-                batch_sync_result
-                    .all_states
-                    .iter()
-                    .enumerate()
-                    .map(|(i, state)| format!(
-                        "  Node {}: batch_id: {}, messages_to_poll: {}",
-                        i, state.batch_id, state.messages_to_poll
-                    ))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-
-            tracing::info!(
                 "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
                 current_batch_id,
                 messages_to_poll,
