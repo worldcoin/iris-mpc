@@ -299,7 +299,7 @@ async fn manage_connection<T: NetworkConnection>(
                     outbound_rx: rx,
                     rsp,
                 } => {
-                    metrics::counter!("network::new_sessions").increment(1);
+                    metrics::counter!("network.new_sessions").increment(1);
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     inbound_forwarder = tx;
                     outbound_rx = rx;
@@ -344,7 +344,7 @@ async fn reconnect_and_replace<T: NetworkConnection>(
     reader: &mut Option<BufReader<ReadHalf<T>>>,
     writer: &mut Option<WriteHalf<T>>,
 ) -> Result<(), eyre::Report> {
-    metrics::counter!("network::reconnect").increment(1);
+    metrics::counter!("network.reconnect").increment(1);
     reader.take();
     writer.take();
 
@@ -396,11 +396,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             if buf.len() >= BUFFER_CAPACITY {
-                metrics::counter!("network::flush_reason::buf_len").increment(1);
+                metrics::counter!("network.flush_reason.buf_len").increment(1);
             } else if buffered_msgs >= num_sessions {
-                metrics::counter!("network::flush_reason::msg_count").increment(1);
+                metrics::counter!("network.flush_reason.msg_count").increment(1);
             } else {
-                metrics::counter!("network::flush_reason::timeout").increment(1);
+                metrics::counter!("network.flush_reason.timeout").increment(1);
             }
         }
 
@@ -412,7 +412,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             let elapsed = _wakeup_time.elapsed().as_micros();
-            metrics::histogram!("network::outbound::tx_time_us").record(elapsed as f64);
+            metrics::histogram!("network.outbound.tx_time_us").record(elapsed as f64);
         }
     }
 
@@ -477,7 +477,7 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             let elapsed = _rx_start.elapsed().as_micros();
-            metrics::histogram!("network::inbound::rx_time_us").record(elapsed as f64);
+            metrics::histogram!("network.inbound.rx_time_us").record(elapsed as f64);
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
@@ -511,8 +511,8 @@ async fn write_buf<T: NetworkConnection>(
 ) -> io::Result<()> {
     #[cfg(feature = "networking_metrics")]
     {
-        metrics::histogram!("network::buffered_msgs").record(*buffered_msgs as f64);
-        metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
+        metrics::histogram!("network.buffered_msgs").record(*buffered_msgs as f64);
+        metrics::histogram!("network.bytes_flushed").record(buf.len() as f64);
     }
     *buffered_msgs = 0;
 
