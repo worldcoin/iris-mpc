@@ -157,7 +157,7 @@ impl<I: Clone> SharedIrises<I> {
 /// Reference to inserted irises.
 #[derive(Clone)]
 pub struct SharedIrisesRef<I: Clone> {
-    pub data: Arc<RwLock<SharedIrises<I>>>,
+    pub(crate) data: Arc<RwLock<SharedIrises<I>>>,
 }
 
 impl<I: Clone> std::fmt::Debug for SharedIrisesRef<I> {

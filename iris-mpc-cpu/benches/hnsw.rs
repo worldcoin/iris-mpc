@@ -171,8 +171,11 @@ fn bench_gr_primitives(c: &mut Criterion) {
                     y1.mask.preprocess_mask_code_query_share();
                     y2.code.preprocess_iris_code_query_share();
                     y2.mask.preprocess_mask_code_query_share();
-                    let pairs = [Some((&x1, &y1)), Some((&x2, &y2))];
-                    let ds_and_ts = galois_ring_pairwise_distance(&pairs);
+                    let pairs = vec![
+                        Some((Arc::new(x1), Arc::new(y1))),
+                        Some((Arc::new(x2), Arc::new(y2))),
+                    ];
+                    let ds_and_ts = galois_ring_pairwise_distance(pairs);
                     let ds_and_ts = galois_ring_to_rep3(&mut player_session, ds_and_ts)
                         .await
                         .unwrap();
