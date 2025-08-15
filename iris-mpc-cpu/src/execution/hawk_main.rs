@@ -15,7 +15,7 @@ use crate::{
         searcher::ConnectPlanV,
         GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
-    network::tcp::{build_network_handle, NetworkHandle},
+    network::grpc::{build_network_handle, GrpcHandle},
     protocol::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::GaloisRingSharedIris,
@@ -144,7 +144,7 @@ pub struct HawkActor {
     distances_cache: BothEyes<Vec<DistanceShare<u32>>>,
 
     // ---- My network setup ----
-    networking: Box<dyn NetworkHandle>,
+    networking: GrpcHandle,
     party_id: usize,
 }
 

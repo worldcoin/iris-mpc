@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::mpsc::UnboundedReceiver;
-use tonic::transport::{Channel, Server};
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Server, Uri};
 
 use super::handle::GrpcHandle;
 use super::{GrpcConfig, InStream, InStreams, OutStream, OutStreams};
@@ -68,7 +68,12 @@ impl GrpcNetworking {
             .with_max_times(27) // about 60 seconds overall delay
     }
 
-    pub async fn connect_to_party(&mut self, party_id: Identity, address: &str) -> Result<()> {
+    pub async fn connect_to_party(
+        &mut self,
+        party_id: Identity,
+        address: &str,
+        root_cert: Option<String>,
+    ) -> Result<()> {
         if self.clients.contains_key(&party_id) {
             bail!(
                 "{:?} has already connected to {:?}",
@@ -76,10 +81,46 @@ impl GrpcNetworking {
                 party_id
             );
         }
+
+        // hacks to build a PartyNodeClient with backoff, retry, and TLS
+        // adding TLS requires access to the underlying Channel
+        async fn get_party_node(
+            endpoint: Endpoint,
+        ) -> std::result::Result<PartyNodeClient<Channel>, tonic::transport::Error> {
+            let channel = endpoint.connect().await?;
+            Ok(PartyNodeClient::new(channel))
+        }
+
+        // Use https for TLS
+        let uri = if root_cert.is_some() {
+            Uri::from_maybe_shared(format!("https://{}", address))?
+        } else {
+            Uri::from_maybe_shared(format!("http://{}", address))?
+        };
+
+        let domain_name = address
+            .split(':')
+            .next()
+            .ok_or(eyre!("failed to get domain_name"))?;
+
+        let endpoint = match root_cert {
+            Some(cert) => {
+                let cert = std::fs::read_to_string(cert)?;
+                let server_ca = Certificate::from_pem(cert);
+                let tls_config = ClientTlsConfig::new()
+                    .ca_certificate(server_ca)
+                    .domain_name(domain_name);
+
+                Channel::builder(uri).tls_config(tls_config)?
+            }
+            None => Channel::builder(uri),
+        };
+
         let clients = (0..self.config.connection_parallelism.max(1))
             .map(|_| {
-                let address = address.to_string();
-                (move || PartyNodeClient::connect(address.clone()))
+                // hacks to make the closure be FnMut, as needed for retry()
+                let endpoint = endpoint.clone();
+                (move || get_party_node(endpoint.clone()))
                     .retry(self.backoff())
                     .sleep(tokio::time::sleep)
             })
@@ -199,6 +240,7 @@ pub async fn setup_local_grpc_networking(
         timeout_duration: Duration::from_secs(5),
         connection_parallelism,
         stream_parallelism,
+        request_parallelism: connection_parallelism * stream_parallelism,
     };
 
     let nets = parties
@@ -241,7 +283,7 @@ pub async fn setup_local_grpc_networking(
             if addr != other_addr {
                 let other_addr = format!("http://{}", other_addr);
                 player
-                    .connect_to_party(other_player.party_id(), &other_addr)
+                    .connect_to_party(other_player.party_id(), &other_addr, None)
                     .await
                     .unwrap();
             }
