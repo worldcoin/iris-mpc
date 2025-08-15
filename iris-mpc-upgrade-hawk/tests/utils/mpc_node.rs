@@ -1,5 +1,8 @@
 use super::constants::COUNT_OF_PARTIES;
-use crate::utils::{modifications::ModificationInput, GaloisRingSharedIrisPair, HawkConfigs};
+use crate::utils::{
+    modifications::{increment_iris_version, ModificationInput},
+    GaloisRingSharedIrisPair, HawkConfigs,
+};
 use eyre::Result;
 use iris_mpc_common::{
     config::Config,
@@ -154,7 +157,7 @@ impl MpcNode {
         for m in mods {
             let mut m2 = self
                 .gpu_iris_store
-                .insert_modification(Some(m.serial_id), m.request_type.to_str(), None)
+                .insert_modification(Some(m.serial_id), &m.request_type.to_string(), None)
                 .await?;
             m2.status = m.get_status().to_string();
             m2.persisted = m.persisted;
@@ -166,6 +169,16 @@ impl MpcNode {
             .update_modifications(&mut tx, updates.iter().collect::<Vec<_>>().as_slice())
             .await?;
         tx.commit().await?;
+
+        // increment version numbers of irises affected by update modifications
+        for m in mods.iter() {
+            let mut tx = self.gpu_iris_store.tx().await?;
+            if m.request_type.is_updating() {
+                increment_iris_version(&mut tx, m.serial_id).await?;
+            }
+            tx.commit().await?;
+        }
+
         Ok(())
     }
 

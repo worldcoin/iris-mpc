@@ -1,17 +1,20 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
     modifications::{ModificationInput, ModificationType},
     mpc_node::{MpcNode, MpcNodes},
-    plaintext_genesis::PlaintextGenesis,
+    plaintext_genesis,
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
+use iris_mpc_cpu::genesis::{
+    get_iris_deletions,
+    plaintext::{run_plaintext_genesis, GenesisArgs, GenesisState},
+};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
@@ -87,14 +90,16 @@ impl TestRun for Test {
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        let config = &self.configs[0];
-        let plaintext_irises = get_irises();
-        let expected = Arc::new(
-            PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
-                .run()
-                .await
-                .unwrap(),
-        );
+        // Simulate genesis execution in plaintext
+        let mut state_0 = GenesisState::default();
+        state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
+        state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
+        plaintext_genesis::apply_src_modifications(&mut state_0.src_db, &MODIFICATIONS)?;
+        state_0.args = DEFAULT_GENESIS_ARGS;
+
+        let expected = run_plaintext_genesis(state_0)
+            .await
+            .expect("Plaintext genesis execution failed");
 
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
