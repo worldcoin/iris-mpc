@@ -50,6 +50,7 @@ pub trait Server: Send {
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)>;
 }
 
+#[allow(dead_code)]
 pub async fn build_network_handle(
     args: &HawkArgs,
     identities: &[Identity],

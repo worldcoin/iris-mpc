@@ -22,7 +22,7 @@ pub struct GrpcSession {
 
 impl GrpcSession {
     pub fn id(&self) -> SessionId {
-        self.session_id.clone()
+        self.session_id
     }
 }
 

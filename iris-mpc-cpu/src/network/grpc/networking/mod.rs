@@ -110,13 +110,10 @@ impl GrpcNetworking {
                 let tls_config = ClientTlsConfig::new()
                     .ca_certificate(server_ca)
                     .domain_name(domain_name);
-                let endpoint = Channel::builder(uri).tls_config(tls_config)?;
-                endpoint
+
+                Channel::builder(uri).tls_config(tls_config)?
             }
-            None => {
-                let endpoint = Channel::builder(uri);
-                endpoint
-            }
+            None => Channel::builder(uri),
         };
 
         let clients = (0..self.config.connection_parallelism.max(1))
