@@ -167,11 +167,8 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         .modifications
         .iter()
         .filter(
-            |(mod_id, (serial_id, _request_type, completed, persisted))| {
-                **mod_id > last_indexed_modification_id
-                    && *serial_id < last_indexed_iris_id
-                    && *completed
-                    && *persisted
+            |(mod_id, (_serial_id, _request_type, completed, persisted))| {
+                **mod_id > last_indexed_modification_id && *completed && *persisted
             },
         )
         .map(|(mod_id, (serial_id, request_type, _status, _persisted))| {
@@ -186,74 +183,68 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             "modification: {:?}",
             (mod_id, serial_id, request_type.clone())
         );
-        match request_type.as_str() {
-            smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
-                let (vector_id, left_iris, right_iris) = state
-                    .src_db
-                    .irises
-                    .get(&serial_id)
-                    .map(|(version, left_iris, right_iris)| {
-                        (
-                            IrisVectorId::new(serial_id, *version),
-                            left_iris.clone(),
-                            right_iris.clone(),
+        if serial_id < last_indexed_iris_id {
+            println!("processing mod: {mod_id}, {serial_id}, {request_type}");
+            match request_type.as_str() {
+                smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
+                    let (vector_id, left_iris, right_iris) = state
+                        .src_db
+                        .irises
+                        .get(&serial_id)
+                        .map(|(version, left_iris, right_iris)| {
+                            (
+                                IrisVectorId::new(serial_id, *version),
+                                left_iris.clone(),
+                                right_iris.clone(),
+                            )
+                        })
+                        .ok_or_eyre(format!(
+                            "Modified iris serial id {serial_id} not found in src_db"
+                        ))?;
+
+                    for (side, store, graph, iris) in izip!(
+                        STORE_IDS,
+                        [&mut left_store, &mut right_store],
+                        &mut state.dst_db.graphs,
+                        vec![left_iris, right_iris]
+                    ) {
+                        let query = Arc::new(iris);
+
+                        let identifier = (vector_id, side);
+                        let insertion_layer = searcher.select_layer_prf(&prf_key, &identifier)?;
+
+                        let (links, set_ep) = searcher
+                            .search_to_insert(store, graph, &query, insertion_layer)
+                            .await?;
+                        let insert_plan = InsertPlanV {
+                            query,
+                            links,
+                            set_ep,
+                        };
+
+                        insert::insert(
+                            store,
+                            graph,
+                            &searcher,
+                            vec![Some(insert_plan)],
+                            &vec![Some(vector_id)],
                         )
-                    })
-                    .ok_or_eyre(format!(
-                        "Modified iris serial id {serial_id} not found in src_db"
-                    ))?;
-
-                for (side, store, graph, iris) in izip!(
-                    STORE_IDS,
-                    [&mut left_store, &mut right_store],
-                    &mut state.dst_db.graphs,
-                    vec![left_iris, right_iris]
-                ) {
-                    let query = Arc::new(iris);
-
-                    let identifier = (vector_id, side);
-                    let insertion_layer = searcher.select_layer_prf(&prf_key, &identifier)?;
-
-                    let (links, set_ep) = searcher
-                        .search_to_insert(store, graph, &query, insertion_layer)
                         .await?;
-                    let insert_plan = InsertPlanV {
-                        query,
-                        links,
-                        set_ep,
-                    };
+                    }
 
-                    insert::insert(
-                        store,
-                        graph,
-                        &searcher,
-                        vec![Some(insert_plan)],
-                        &vec![Some(vector_id)],
-                    )
-                    .await?;
+                    // Insert modified iris into destination db
+                    let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
+                    state.dst_db.irises.insert(serial_id, irises);
                 }
-
-                // Insert modified iris into destination db
-                let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
-                state.dst_db.irises.insert(serial_id, irises);
-
-                // Update last_indexed_modification_id in destination db
-                state.dst_db.persistent_state.last_indexed_modification_id = Some(mod_id);
-            }
-            _ => {
-                bail!("Genesis does not support modifications of type {request_type}")
+                _ => {
+                    bail!("Genesis does not support modifications of type {request_type}")
+                }
             }
         }
-    }
 
-    let max_mod_id = state
-        .src_db
-        .modifications
-        .keys()
-        .max()
-        .cloned()
-        .unwrap_or(0);
-    state.dst_db.persistent_state.last_indexed_modification_id = Some(max_mod_id);
+        // Update last_indexed_modification_id in destination db
+        state.dst_db.persistent_state.last_indexed_modification_id = Some(mod_id);
+    }
 
     // ⚓ Start: Genesis indexing
 

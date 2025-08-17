@@ -1,6 +1,6 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
-    modifications::{increment_iris_version, ModificationInput},
+    modifications::{increment_iris_version, persist_modification, ModificationInput},
     GaloisRingSharedIrisPair, HawkConfigs,
 };
 use eyre::Result;
@@ -178,6 +178,22 @@ impl MpcNode {
             }
             tx.commit().await?;
         }
+
+        Ok(())
+    }
+
+    pub async fn persist_modification(&self, id: i64) -> Result<()> {
+        let mut tx = self.gpu_iris_store.tx().await?;
+        persist_modification(&mut tx, id).await?;
+        tx.commit().await?;
+
+        Ok(())
+    } // TODO need better representation of modification id associated with iris serial id
+
+    pub async fn increment_iris_version(&self, serial_id: i64) -> Result<()> {
+        let mut tx = self.gpu_iris_store.tx().await?;
+        increment_iris_version(&mut tx, serial_id).await?;
+        tx.commit().await?;
 
         Ok(())
     }
