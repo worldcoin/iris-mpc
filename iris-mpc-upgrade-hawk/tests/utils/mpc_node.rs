@@ -7,7 +7,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config,
     postgres::{AccessMode, PostgresClient},
-    IrisSerialId,
+    IrisSerialId, IrisVectorId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::StoreId,
@@ -300,5 +300,9 @@ impl MpcNode {
         }
 
         Ok(())
+    }
+
+    pub async fn get_cpu_iris_vector_ids(&self, max_serial_id: i64) -> Result<Vec<IrisVectorId>> {
+        modifications::get_iris_vector_ids(&self.cpu_iris_store, max_serial_id).await
     }
 }

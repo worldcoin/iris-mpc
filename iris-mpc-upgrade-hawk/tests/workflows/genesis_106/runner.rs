@@ -39,6 +39,8 @@ const MODIFICATIONS_END: [ModificationInput; 9] = [
     ModificationInput::new(9, 30, ResetUpdate, false, false),
 ];
 
+const DELETIONS: [u32; 5] = [7, 12, 39, 77, 100];
+
 pub struct Test {
     configs: HawkConfigs,
 }
@@ -153,6 +155,7 @@ impl TestRun for Test {
         state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
         state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
         plaintext_genesis::apply_modifications(&mut state_0.src_db, &[], &MODIFICATIONS_START)?;
+        state_0.s3_deletions = DELETIONS.into();
         state_0.args = DEFAULT_GENESIS_ARGS;
         state_0.args.max_indexation_id = 50;
 
@@ -211,7 +214,7 @@ impl TestRun for Test {
                 // New graph entries are created for modified iris codes
                 assert_eq!(
                     expected.dst_db.graphs[0].layers[0].links.len(),
-                    max_indexation_id + num_updating_modifications
+                    max_indexation_id + num_updating_modifications - DELETIONS.len()
                 );
             });
         }
@@ -242,10 +245,9 @@ impl TestRun for Test {
         // any config file is sufficient to connect to S3
         let config = &self.configs[0];
 
-        let deleted_serial_ids = vec![];
         let aws_clients = get_aws_clients(config).await.unwrap();
         upload_iris_deletions(
-            &deleted_serial_ids,
+            &DELETIONS.into(),
             &aws_clients.s3_client,
             &config.environment,
         )
@@ -286,7 +288,7 @@ impl TestRun for Test {
         let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
             .await
             .unwrap();
-        assert_eq!(deletions.len(), 0);
+        assert_eq!(deletions.len(), DELETIONS.len());
 
         Ok(())
     }
