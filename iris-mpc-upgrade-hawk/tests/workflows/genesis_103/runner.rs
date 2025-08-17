@@ -6,7 +6,7 @@ use crate::utils::{
         ModificationType::{Reauth, ResetUpdate, Uniqueness},
     },
     mpc_node::{MpcNode, MpcNodes},
-    plaintext_genesis,
+    plaintext_genesis::{self, get_vector_ids},
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
@@ -108,6 +108,10 @@ impl TestRun for Test {
 
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
+
+                let cpu_vector_ids = node.get_cpu_iris_vector_ids(1000).await.unwrap();
+                let expected_vector_ids = get_vector_ids(&expected.dst_db.irises);
+                assert_eq!(cpu_vector_ids, expected_vector_ids);
 
                 let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), MODIFICATIONS.len());
