@@ -201,10 +201,7 @@ impl TestRun for Test {
                 node.init_tables(&shares).await.unwrap();
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         // any config file is sufficient to connect to S3
         let config = &self.configs[0];
@@ -244,10 +241,7 @@ impl TestRun for Test {
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         // Assert localstack.
 
