@@ -37,16 +37,24 @@ pub trait TestRun {
     async fn exec_assert(&mut self) -> Result<(), TestError>;
 
     /// Setup phase of a test's workflow.
-    async fn setup(&mut self, ctx: &TestRunContextInfo) -> Result<(), TestError>;
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
+        Ok(())
+    }
 
     /// Asserts that a test workflow's setup phase was successful.
-    async fn setup_assert(&mut self) -> Result<(), TestError>;
+    async fn setup_assert(&mut self) -> Result<(), TestError> {
+        Ok(())
+    }
 
     /// Teardown phase of a test's workflow.
-    async fn teardown(&mut self) -> Result<(), TestError>;
+    async fn teardown(&mut self) -> Result<(), TestError> {
+        Ok(())
+    }
 
     /// Asserts that a test workflow's teardown phase was successful.
-    async fn teardown_assert(&mut self) -> Result<(), TestError>;
+    async fn teardown_assert(&mut self) -> Result<(), TestError> {
+        Ok(())
+    }
 }
 
 /// Metadata associated with a test run.

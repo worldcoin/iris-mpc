@@ -224,12 +224,4 @@ impl TestRun for Test {
 
         Ok(())
     }
-
-    async fn teardown(&mut self) -> Result<(), TestError> {
-        Ok(())
-    }
-
-    async fn teardown_assert(&mut self) -> Result<(), TestError> {
-        Ok(())
-    }
 }
