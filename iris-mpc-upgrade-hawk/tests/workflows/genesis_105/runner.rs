@@ -1,9 +1,10 @@
-use std::sync::LazyLock;
-
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
-    modifications::{ModificationInput, ModificationType},
+    modifications::{
+        self, ModificationInput,
+        ModificationType::{Reauth, ResetUpdate, Uniqueness},
+    },
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis,
     resources::{self},
@@ -19,24 +20,24 @@ use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
 
-static INIT_MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
-    ModificationInput::from_slice(&[
-        (5, ModificationType::ResetUpdate, true, true),
-        (15, ModificationType::Uniqueness, true, true),
-        (25, ModificationType::Reauth, false, false),
-        (55, ModificationType::Uniqueness, false, false),
-    ])
-});
+const MODIFICATIONS_START: [ModificationInput; 4] = [
+    ModificationInput::new(1, 5, ResetUpdate, true, true),
+    ModificationInput::new(2, 15, Uniqueness, true, true),
+    ModificationInput::new(3, 25, Reauth, false, false),
+    ModificationInput::new(4, 55, Uniqueness, false, false),
+];
 
-static ADDITIONAL_MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
-    ModificationInput::from_slice(&[
-        (60, ModificationType::ResetUpdate, true, true),
-        (70, ModificationType::Reauth, true, true),
-        (10, ModificationType::ResetUpdate, true, true),
-        (20, ModificationType::Reauth, true, true),
-        (30, ModificationType::ResetUpdate, false, false),
-    ])
-});
+const MODIFICATIONS_END: [ModificationInput; 9] = [
+    ModificationInput::new(1, 5, ResetUpdate, true, true),
+    ModificationInput::new(2, 15, Uniqueness, true, true),
+    ModificationInput::new(3, 25, Reauth, true, true),
+    ModificationInput::new(4, 55, Uniqueness, true, true),
+    ModificationInput::new(5, 60, ResetUpdate, true, true),
+    ModificationInput::new(6, 70, Reauth, true, true),
+    ModificationInput::new(7, 10, ResetUpdate, true, true),
+    ModificationInput::new(8, 20, Reauth, true, true),
+    ModificationInput::new(9, 30, ResetUpdate, false, false),
+];
 
 pub struct Test {
     configs: HawkConfigs,
@@ -80,7 +81,7 @@ impl TestRun for Test {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             join_set.spawn(async move {
-                node.insert_modifications(&INIT_MODIFICATIONS)
+                node.apply_modifications(&[], &MODIFICATIONS_START)
                     .await
                     .unwrap();
             });
@@ -111,10 +112,7 @@ impl TestRun for Test {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             join_set.spawn(async move {
-                node.persist_modification(3).await.unwrap();
-                node.persist_modification(4).await.unwrap();
-                node.increment_iris_version(25).await.unwrap();
-                node.insert_modifications(&ADDITIONAL_MODIFICATIONS)
+                node.apply_modifications(&MODIFICATIONS_START, &MODIFICATIONS_END)
                     .await
                     .unwrap();
             });
@@ -154,7 +152,7 @@ impl TestRun for Test {
         let mut state_0 = GenesisState::default();
         state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
         state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
-        plaintext_genesis::apply_src_modifications(&mut state_0.src_db, &INIT_MODIFICATIONS)?;
+        plaintext_genesis::apply_modifications(&mut state_0.src_db, &[], &MODIFICATIONS_START)?;
         state_0.args = DEFAULT_GENESIS_ARGS;
         state_0.args.max_indexation_id = 50;
 
@@ -162,15 +160,11 @@ impl TestRun for Test {
             .await
             .expect("Stage 1 of plaintext genesis execution failed");
 
-        for id in [3, 4] {
-            let m = state_1.src_db.modifications.get_mut(&id).unwrap();
-            m.2 = true;
-            m.3 = true;
-        }
-        let update_id = state_1.src_db.modifications.get(&3).unwrap().0;
-        state_1.src_db.irises.get_mut(&update_id).unwrap().0 += 1;
-
-        plaintext_genesis::apply_src_modifications(&mut state_1.src_db, &ADDITIONAL_MODIFICATIONS)?;
+        plaintext_genesis::apply_modifications(
+            &mut state_1.src_db,
+            &MODIFICATIONS_START,
+            &MODIFICATIONS_END,
+        )?;
         state_1.args.max_indexation_id = 100;
 
         let expected = run_plaintext_genesis(state_1)
@@ -178,7 +172,13 @@ impl TestRun for Test {
             .expect("Stage 2 of plaintext genesis execution failed");
 
         // Number of modifications on already-indexed irises which are processed by genesis delta
-        let num_updating_modifications = 3;
+        let num_updating_modifications = modifications::modifications_extension_updates(
+            &MODIFICATIONS_START,
+            &MODIFICATIONS_END,
+        )
+        .into_iter()
+        .filter(|serial_id| *serial_id <= 50)
+        .count();
 
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
@@ -196,10 +196,7 @@ impl TestRun for Test {
                 // TODO assert CPU iris database reflects irises updated by new modifications after the first run
 
                 let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
-                assert_eq!(
-                    num_modifications.len(),
-                    INIT_MODIFICATIONS.len() + ADDITIONAL_MODIFICATIONS.len()
-                );
+                assert_eq!(num_modifications.len(), MODIFICATIONS_END.len());
 
                 let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
@@ -216,10 +213,7 @@ impl TestRun for Test {
                 );
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         Ok(())
     }

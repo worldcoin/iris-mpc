@@ -179,12 +179,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
 
     // Process applicable modifications entries
     for (mod_id, serial_id, request_type) in applicable_modifications {
-        println!(
-            "modification: {:?}",
-            (mod_id, serial_id, request_type.clone())
-        );
         if serial_id < last_indexed_iris_id {
-            println!("processing mod: {mod_id}, {serial_id}, {request_type}");
             match request_type.as_str() {
                 smpc_request::RESET_UPDATE_MESSAGE_TYPE | smpc_request::REAUTH_MESSAGE_TYPE => {
                     let (vector_id, left_iris, right_iris) = state

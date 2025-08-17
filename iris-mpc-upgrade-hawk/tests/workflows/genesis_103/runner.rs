@@ -1,9 +1,10 @@
-use std::sync::LazyLock;
-
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
-    modifications::{ModificationInput, ModificationType},
+    modifications::{
+        ModificationInput,
+        ModificationType::{Reauth, ResetUpdate, Uniqueness},
+    },
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis,
     resources::{self},
@@ -29,13 +30,11 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_error_rate: 250,
 };
 
-static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
-    ModificationInput::from_slice(&[
-        (1, ModificationType::Uniqueness, true, true),
-        (2, ModificationType::ResetUpdate, true, true),
-        (3, ModificationType::Reauth, true, true),
-    ])
-});
+const MODIFICATIONS: [ModificationInput; 3] = [
+    ModificationInput::new(1, 1, Uniqueness, true, true),
+    ModificationInput::new(2, 2, ResetUpdate, true, true),
+    ModificationInput::new(3, 3, Reauth, true, true),
+];
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
@@ -81,10 +80,7 @@ impl TestRun for Test {
                 .await
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap()?;
-        }
+        join_set.join_all().await;
 
         Ok(())
     }
@@ -94,7 +90,7 @@ impl TestRun for Test {
         let mut state_0 = GenesisState::default();
         state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
         state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
-        plaintext_genesis::apply_src_modifications(&mut state_0.src_db, &MODIFICATIONS)?;
+        plaintext_genesis::apply_modifications(&mut state_0.src_db, &[], &MODIFICATIONS)?;
         state_0.args = DEFAULT_GENESIS_ARGS;
 
         let expected = run_plaintext_genesis(state_0)
@@ -130,10 +126,7 @@ impl TestRun for Test {
                 );
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         Ok(())
     }
