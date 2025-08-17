@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use crate::utils::{
-    constants::COUNT_OF_PARTIES,
-    irises,
+    genesis_runner, irises,
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis::PlaintextGenesis,
     resources::{self},
@@ -36,17 +35,9 @@ fn get_irises() -> Vec<IrisCodePair> {
 
 impl Test {
     pub fn new() -> Self {
-        let exec_env = TestRunContextInfo::new(0, 0);
-
-        let configs = (0..COUNT_OF_PARTIES)
-            .map(|idx| {
-                resources::read_node_config(&exec_env, format!("node-{idx}-genesis-0")).unwrap()
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-
-        Self { configs }
+        Self {
+            configs: genesis_runner::get_node_configs(),
+        }
     }
 
     async fn get_nodes(&self) -> impl Iterator<Item = MpcNode> {
