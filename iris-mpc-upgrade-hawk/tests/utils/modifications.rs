@@ -23,7 +23,7 @@ pub enum ModificationType {
 /// used as inputs to iris-mpc-store > insert_modification()
 /// note that s3_url, result_message_body, and graph_mutation (from the Modification struct) can all be None
 /// look for JobRequest::Modification in iris-mpc-cpu/src/genesis/hawk_handle.rs to see how these are handled
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModificationInput {
     /// needs to match an existing vector id
     pub serial_id: i64,
@@ -97,6 +97,22 @@ pub async fn increment_iris_version(
         "#,
     )
     .bind(serial_id);
+    query.execute(tx.deref_mut()).await?;
+
+    Ok(())
+}
+
+pub async fn persist_modification(
+    tx: &mut Transaction<'_, Postgres>,
+    modification_id: i64,
+) -> Result<()> {
+    let query = sqlx::query(
+        r#"
+        UPDATE modifications SET status = 'COMPLETED', persisted = true
+        WHERE id = $1;
+        "#,
+    )
+    .bind(modification_id);
     query.execute(tx.deref_mut()).await?;
 
     Ok(())
