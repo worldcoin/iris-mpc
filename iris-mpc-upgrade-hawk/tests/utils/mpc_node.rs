@@ -1,9 +1,9 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
-    modifications::{increment_iris_version, persist_modification, ModificationInput},
+    modifications::{self, increment_iris_version, persist_modification, ModificationInput},
     GaloisRingSharedIrisPair, HawkConfigs,
 };
-use eyre::Result;
+use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config,
     postgres::{AccessMode, PostgresClient},
@@ -182,17 +182,45 @@ impl MpcNode {
         Ok(())
     }
 
-    pub async fn persist_modification(&self, id: i64) -> Result<()> {
+    pub async fn apply_modifications(
+        &self,
+        last_mods: &[ModificationInput],
+        cur_mods: &[ModificationInput],
+    ) -> Result<()> {
+        if !modifications::modifications_extension_is_valid(last_mods, cur_mods) {
+            bail!("Specified modifications are not a valid extension of the last modifications state.")
+        }
+
         let mut tx = self.gpu_iris_store.tx().await?;
-        persist_modification(&mut tx, id).await?;
+
+        let mods: Vec<_> = cur_mods.iter().cloned().map(|m| m.into()).collect();
+        for m in mods.iter() {
+            modifications::write_modification(&mut tx, m).await?;
+        }
+
+        let update_serial_ids = modifications::modifications_extension_updates(last_mods, cur_mods);
+        for serial_id in update_serial_ids {
+            modifications::increment_iris_version(&mut tx, serial_id).await?;
+        }
+
         tx.commit().await?;
 
         Ok(())
-    } // TODO need better representation of modification id associated with iris serial id
+    }
 
+    #[allow(dead_code)]
     pub async fn increment_iris_version(&self, serial_id: i64) -> Result<()> {
         let mut tx = self.gpu_iris_store.tx().await?;
         increment_iris_version(&mut tx, serial_id).await?;
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn persist_modification(&self, id: i64) -> Result<()> {
+        let mut tx = self.gpu_iris_store.tx().await?;
+        persist_modification(&mut tx, id).await?;
         tx.commit().await?;
 
         Ok(())
