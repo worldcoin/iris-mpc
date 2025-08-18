@@ -179,40 +179,36 @@ impl MpcNode {
     }
 
     async fn clear_all_tables(&self) -> Result<()> {
-        let mut graph_tx = self.cpu_stores.graph.tx().await?;
-        graph_tx
-            .with_graph(StoreId::Left)
-            .clear_tables()
-            .await
-            .expect("Could not clear left graph");
-        graph_tx
-            .with_graph(StoreId::Right)
-            .clear_tables()
-            .await
-            .expect("Could not clear right graph");
+        for stores in [&self.gpu_stores, &self.cpu_stores] {
+            // delete irises
+            stores.iris.rollback(0).await?;
 
-        unset_last_indexed_iris_id(&mut graph_tx.tx).await?;
-        unset_last_indexed_modification_id(&mut graph_tx.tx).await?;
-        graph_tx.tx.commit().await?;
+            let mut graph_tx = stores.graph.tx().await?;
 
-        // delete irises
-        self.gpu_stores.iris.rollback(0).await?;
-        self.cpu_stores.iris.rollback(0).await?;
+            // clear graphs
+            graph_tx
+                .with_graph(StoreId::Left)
+                .clear_tables()
+                .await
+                .expect("Could not clear left graph");
+            graph_tx
+                .with_graph(StoreId::Right)
+                .clear_tables()
+                .await
+                .expect("Could not clear right graph");
 
-        // clear modifications tables
-        let mut tx = self.cpu_stores.iris.tx().await?;
-        self.cpu_stores
-            .iris
-            .clear_modifications_table(&mut tx)
-            .await?;
-        tx.commit().await?;
+            let mut tx = graph_tx.tx;
 
-        let mut tx = self.gpu_stores.iris.tx().await?;
-        self.gpu_stores
-            .iris
-            .clear_modifications_table(&mut tx)
-            .await?;
-        tx.commit().await?;
+            // clear modifications tables
+            stores.iris.clear_modifications_table(&mut tx).await?;
+
+            // clear persistent state
+            unset_last_indexed_iris_id(&mut tx).await?;
+            unset_last_indexed_modification_id(&mut tx).await?;
+
+            tx.commit().await?;
+        }
+
         Ok(())
     }
 

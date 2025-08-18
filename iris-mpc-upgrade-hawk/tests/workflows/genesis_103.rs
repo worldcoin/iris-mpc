@@ -19,9 +19,9 @@ pub struct Test {
 }
 
 const MODIFICATIONS: [ModificationInput; 3] = [
-    ModificationInput::new(1, 1, Uniqueness, true, true),
-    ModificationInput::new(2, 2, ResetUpdate, true, true),
-    ModificationInput::new(3, 3, Reauth, true, true),
+    ModificationInput::new(1, 5, ResetUpdate, true, true),
+    ModificationInput::new(2, 15, Reauth, true, true),
+    ModificationInput::new(3, 25, Uniqueness, true, true),
 ];
 
 impl Test {

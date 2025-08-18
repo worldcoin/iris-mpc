@@ -15,8 +15,8 @@ use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
 
 const MODIFICATIONS: [ModificationInput; 2] = [
-    ModificationInput::new(1, 3, Reauth, true, true),
-    ModificationInput::new(2, 5, ResetUpdate, true, true),
+    ModificationInput::new(1, 5, ResetUpdate, true, true),
+    ModificationInput::new(2, 15, Reauth, true, true),
 ];
 
 pub struct Test {
