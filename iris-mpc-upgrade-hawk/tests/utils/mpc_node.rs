@@ -13,10 +13,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
-    genesis::{
-        plaintext::GenesisState,
-        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
-    },
+    genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
@@ -132,55 +129,6 @@ impl MpcNode {
         self.clear_all_tables().await?;
         self.insert_into_gpu_iris_store(shares).await?;
         Ok(())
-    }
-}
-
-// utilities for unit testing, such as assertions
-impl MpcNode {
-    pub async fn assert_graphs_match(&self, expected: &GenesisState) {
-        let graph_left = {
-            let mut graph_tx = self.cpu_stores.graph.tx().await.unwrap();
-            graph_tx
-                .with_graph(StoreId::Left)
-                .load_to_mem(self.cpu_stores.graph.pool(), 2)
-                .await
-        }
-        .expect("Could not load left graph");
-        let graph_right = {
-            let mut graph_tx = self.cpu_stores.graph.tx().await.unwrap();
-            graph_tx
-                .with_graph(StoreId::Right)
-                .load_to_mem(self.cpu_stores.graph.pool(), 2)
-                .await
-        }
-        .expect("Could not load right graph");
-
-        assert!(graph_left == expected.dst_db.graphs[0]);
-        assert!(graph_right == expected.dst_db.graphs[1]);
-    }
-
-    pub async fn get_last_indexed_iris_id(&self) -> IrisSerialId {
-        self.cpu_stores
-            .graph
-            .get_persistent_state(
-                constants::STATE_DOMAIN,
-                constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
-            )
-            .await
-            .unwrap()
-            .unwrap_or_default()
-    }
-
-    pub async fn get_last_indexed_modification_id(&self) -> i64 {
-        self.cpu_stores
-            .graph
-            .get_persistent_state(
-                constants::STATE_DOMAIN,
-                constants::STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
-            )
-            .await
-            .unwrap()
-            .unwrap_or_default()
     }
 }
 
@@ -308,10 +256,6 @@ impl MpcNode {
 
         Ok(())
     }
-
-    pub async fn get_cpu_iris_vector_ids(&self) -> Result<Vec<IrisVectorId>> {
-        db_ops::get_iris_vector_ids(&self.cpu_stores.iris).await
-    }
 }
 
 #[derive(Default, Clone)]
@@ -321,6 +265,7 @@ pub struct DbAssertions {
     pub num_modifications: Option<usize>,
     pub last_indexed_iris_id: Option<IrisSerialId>,
     pub last_indexed_modification_id: Option<i64>,
+    pub layer_0_size: Option<usize>,
     pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextStore>>>,
 }
 
@@ -351,6 +296,11 @@ impl DbAssertions {
 
     pub fn assert_last_indexed_modification_id(mut self, id: i64) -> Self {
         self.last_indexed_modification_id = Some(id);
+        self
+    }
+
+    pub fn assert_hnsw_layer_0_size(mut self, size: usize) -> Self {
+        self.layer_0_size = Some(size);
         self
     }
 
@@ -402,7 +352,7 @@ impl DbAssertions {
             );
         }
 
-        if let Some(hnsw_graphs) = &self.hnsw_graphs {
+        if self.layer_0_size.is_some() || self.hnsw_graphs.is_some() {
             let store_graph_left = {
                 let mut graph_tx = stores.graph.tx().await.unwrap();
                 graph_tx
@@ -411,6 +361,7 @@ impl DbAssertions {
                     .await
             }
             .expect("Could not load left graph");
+
             let store_graph_right = {
                 let mut graph_tx = stores.graph.tx().await.unwrap();
                 graph_tx
@@ -420,8 +371,19 @@ impl DbAssertions {
             }
             .expect("Could not load right graph");
 
-            assert_eq!(store_graph_left, hnsw_graphs[0]);
-            assert_eq!(store_graph_right, hnsw_graphs[1]);
+            if let Some(layer_0_size) = self.layer_0_size {
+                let store_layer_0_size_left =
+                    store_graph_left.get_layers().first().unwrap().links.len();
+                let store_layer_0_size_right =
+                    store_graph_right.get_layers().first().unwrap().links.len();
+                assert_eq!(store_layer_0_size_left, layer_0_size);
+                assert_eq!(store_layer_0_size_right, layer_0_size);
+            }
+
+            if let Some(hnsw_graphs) = &self.hnsw_graphs {
+                assert_eq!(store_graph_left, hnsw_graphs[0]);
+                assert_eq!(store_graph_right, hnsw_graphs[1]);
+            }
         }
 
         Ok(())

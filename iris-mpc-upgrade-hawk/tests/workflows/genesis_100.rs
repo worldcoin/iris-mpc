@@ -1,24 +1,16 @@
 use crate::utils::{
-    genesis_runner,
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
     mpc_node::{DbAssertions, MpcNodes},
     plaintext_genesis::PlaintextGenesis,
-    s3_deletions::get_aws_clients,
     HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
 
 pub struct Test {
     configs: HawkConfigs,
 }
-
-const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
-    max_indexation_id: 100,
-    batch_size: 1,
-    batch_size_error_rate: 250,
-};
 
 impl Test {
     pub fn new() -> Self {
@@ -33,13 +25,12 @@ impl TestRun for Test {
         // Execute genesis
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        DEFAULT_GENESIS_ARGS.max_indexation_id,
                         false,
                         false,
                     ),
@@ -64,11 +55,11 @@ impl TestRun for Test {
 
         // Assert databases
         let gpu_asserts = DbAssertions::new()
-            .assert_num_irises(DEFAULT_GENESIS_ARGS.max_indexation_id as usize)
+            .assert_num_irises(MAX_INDEXATION_ID)
             .assert_num_modifications(0);
 
         let cpu_asserts = DbAssertions::new()
-            .assert_num_irises(DEFAULT_GENESIS_ARGS.max_indexation_id as usize)
+            .assert_num_irises(MAX_INDEXATION_ID)
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
             .assert_last_indexed_modification_id(0)
@@ -86,28 +77,6 @@ impl TestRun for Test {
     }
 
     async fn setup_assert(&mut self) -> Result<()> {
-        // Assert databases
-        let gpu_asserts = DbAssertions::new()
-            .assert_num_irises(DEFAULT_GENESIS_ARGS.max_indexation_id as usize)
-            .assert_num_modifications(0);
-
-        let cpu_asserts = DbAssertions::new()
-            .assert_num_irises(0)
-            .assert_num_modifications(0)
-            .assert_last_indexed_iris_id(0)
-            .assert_last_indexed_modification_id(0);
-
-        let nodes = MpcNodes::new(&self.configs).await;
-        nodes.apply_assertions(gpu_asserts, cpu_asserts).await;
-
-        // Assert localstack
-        let config = &self.configs[0];
-        let aws_clients = get_aws_clients(config).await.unwrap();
-        let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
-            .await
-            .unwrap();
-        assert_eq!(deletions.len(), 0);
-
-        Ok(())
+        genesis_runner::base_genesis_e2e_init_assertions(&self.configs, 0).await
     }
 }
