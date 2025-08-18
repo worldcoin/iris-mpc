@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::utils::{
     genesis_runner, irises,
     modifications::{
@@ -7,8 +9,8 @@ use crate::utils::{
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis::{self, get_vector_ids},
     resources::{self},
-    s3_deletions::{get_aws_clients, upload_iris_deletions},
-    HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
+    s3_deletions::get_aws_clients,
+    HawkConfigs, IrisCodePair, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{
@@ -16,7 +18,6 @@ use iris_mpc_cpu::genesis::{
     plaintext::{run_plaintext_genesis, GenesisArgs, GenesisState},
 };
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use itertools::izip;
 use tokio::task::JoinSet;
 
 const MODIFICATIONS_START: [ModificationInput; 4] = [
@@ -61,13 +62,13 @@ impl Test {
         }
     }
 
-    async fn get_nodes(&self) -> impl Iterator<Item = MpcNode> {
+    async fn get_nodes(&self) -> impl Iterator<Item = Arc<MpcNode>> {
         MpcNodes::new(&self.configs).await.into_iter()
     }
 }
 
 impl TestRun for Test {
-    async fn exec(&mut self) -> Result<(), TestError> {
+    async fn exec(&mut self) -> Result<()> {
         // Insert initial modifications
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
@@ -138,7 +139,7 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn exec_assert(&mut self) -> Result<(), TestError> {
+    async fn exec_assert(&mut self) -> Result<()> {
         // Simulate genesis execution in plaintext
         let mut state_0 = GenesisState::default();
         state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
@@ -178,20 +179,20 @@ impl TestRun for Test {
 
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
-                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.gpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.cpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let cpu_vector_ids = node.get_cpu_iris_vector_ids(1000).await.unwrap();
+                let cpu_vector_ids = node.get_cpu_iris_vector_ids().await.unwrap();
                 let expected_vector_ids = get_vector_ids(&expected.dst_db.irises);
                 assert_eq!(cpu_vector_ids, expected_vector_ids);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                let num_modifications = node.gpu_stores.iris.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), MODIFICATIONS_END.len());
 
-                let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
+                let num_modifications = node.cpu_stores.iris.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
@@ -211,57 +212,27 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        let hawk_prf0 = self.configs[0].hawk_prf_key;
-        assert!(
-            self.configs.iter().all(|c| c.hawk_prf_key == hawk_prf0),
-            "All hawk_prf_key values in configs must be equal"
-        );
-
-        let plaintext_irises = get_irises();
-        let secret_shared_irises =
-            irises::share_irises_locally(&plaintext_irises, hawk_prf0.unwrap_or_default()).unwrap();
-
-        let mut join_set = JoinSet::new();
-        for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
-            join_set.spawn(async move {
-                node.init_tables(&shares).await.unwrap();
-            });
-        }
-        join_set.join_all().await;
-
-        // any config file is sufficient to connect to S3
-        let config = &self.configs[0];
-
-        let deleted_serial_ids = vec![];
-        let aws_clients = get_aws_clients(config).await.unwrap();
-        upload_iris_deletions(
-            &deleted_serial_ids,
-            &aws_clients.s3_client,
-            &config.environment,
-        )
-        .await
-        .unwrap();
-
-        Ok(())
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<()> {
+        let test_deletions = vec![];
+        genesis_runner::base_genesis_e2e_init(&self.configs, test_deletions).await
     }
 
-    async fn setup_assert(&mut self) -> Result<(), TestError> {
+    async fn setup_assert(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             let genesis_args = DEFAULT_GENESIS_ARGS;
             let max_indexation_id = genesis_args.max_indexation_id as usize;
             join_set.spawn(async move {
-                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.gpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.cpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, 0);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.gpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.cpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(0, node.get_last_indexed_iris_id().await);

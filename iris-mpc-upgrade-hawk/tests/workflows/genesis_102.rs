@@ -5,14 +5,12 @@ use crate::utils::{
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis::PlaintextGenesis,
     resources::{self},
-    s3_deletions::{get_aws_clients, upload_iris_deletions},
-    HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
+    s3_deletions::get_aws_clients,
+    HawkConfigs, IrisCodePair, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use itertools::izip;
-use std::sync::LazyLock;
 use tokio::task::JoinSet;
 
 pub struct Test {
@@ -25,7 +23,7 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_error_rate: 250,
 };
 
-pub static DELETED_SERIAL_IDS: LazyLock<Vec<u32>> = LazyLock::new(|| vec![1, 10, 20, 50, 100]);
+pub const DELETED_SERIAL_IDS: [u32; 5] = [1, 10, 20, 50, 100];
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
@@ -40,14 +38,14 @@ impl Test {
         }
     }
 
-    async fn get_nodes(&self) -> impl Iterator<Item = MpcNode> {
+    async fn get_nodes(&self) -> impl Iterator<Item = Arc<MpcNode>> {
         MpcNodes::new(&self.configs).await.into_iter()
     }
 }
 
 impl TestRun for Test {
     // run genesis with deletions
-    async fn exec(&mut self) -> Result<(), TestError> {
+    async fn exec(&mut self) -> Result<()> {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
@@ -73,12 +71,12 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn exec_assert(&mut self) -> Result<(), TestError> {
+    async fn exec_assert(&mut self) -> Result<()> {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
         let expected = Arc::new(
             PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
-                .with_deletions(DELETED_SERIAL_IDS.clone())
+                .with_deletions(DELETED_SERIAL_IDS.into())
                 .run()
                 .await
                 .unwrap(),
@@ -90,16 +88,16 @@ impl TestRun for Test {
             let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
-                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.gpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.cpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.gpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.cpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
@@ -122,58 +120,26 @@ impl TestRun for Test {
         Ok(())
     }
 
-    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
-        let hawk_prf0 = self.configs[0].hawk_prf_key;
-        assert!(
-            self.configs.iter().all(|c| c.hawk_prf_key == hawk_prf0),
-            "All hawk_prf_key values in configs must be equal"
-        );
-
-        let plaintext_irises = get_irises();
-        let secret_shared_irises =
-            irises::share_irises_locally(&plaintext_irises, hawk_prf0.unwrap_or_default()).unwrap();
-
-        let mut join_set = JoinSet::new();
-        for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
-            join_set.spawn(async move {
-                node.init_tables(&shares).await.unwrap();
-            });
-        }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
-
-        // any config file is sufficient to connect to S3
-        let config = &self.configs[0];
-
-        let aws_clients = get_aws_clients(config).await.unwrap();
-        upload_iris_deletions(
-            &DELETED_SERIAL_IDS,
-            &aws_clients.s3_client,
-            &config.environment,
-        )
-        .await
-        .unwrap();
-
-        Ok(())
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<()> {
+        let test_deletions = DELETED_SERIAL_IDS.into();
+        genesis_runner::base_genesis_e2e_init(&self.configs, test_deletions).await
     }
 
-    async fn setup_assert(&mut self) -> Result<(), TestError> {
+    async fn setup_assert(&mut self) -> Result<()> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
             join_set.spawn(async move {
-                let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.gpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
+                let num_irises = node.cpu_stores.iris.count_irises().await.unwrap();
                 assert_eq!(num_irises, 0);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.gpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.cpu_stores.iris.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(0, node.get_last_indexed_iris_id().await);

@@ -1,4 +1,5 @@
-use super::{errors::TestError, logger};
+use super::logger;
+use eyre::Result;
 use std::{
     fmt::{self, Debug},
     path::Path,
@@ -8,7 +9,7 @@ use std::{
 #[allow(async_fn_in_trait)]
 pub trait TestRun {
     /// Executes test workflow.
-    async fn run(&mut self, ctx: TestRunContextInfo) -> Result<(), TestError> {
+    async fn run(&mut self, ctx: TestRunContextInfo) -> Result<()> {
         ctx.log_info(format!("Phase 1.1: Setup (EXECUTION ENV = {:?})", ctx.env()).as_str());
         self.setup(&ctx).await?;
 
@@ -31,28 +32,28 @@ pub trait TestRun {
     }
 
     /// Execution phase of a test's workflow.
-    async fn exec(&mut self) -> Result<(), TestError>;
+    async fn exec(&mut self) -> Result<()>;
 
     /// Asserts that a test workflow's execution phase was successful.
-    async fn exec_assert(&mut self) -> Result<(), TestError>;
+    async fn exec_assert(&mut self) -> Result<()>;
 
     /// Setup phase of a test's workflow.
-    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<(), TestError> {
+    async fn setup(&mut self, _ctx: &TestRunContextInfo) -> Result<()> {
         Ok(())
     }
 
     /// Asserts that a test workflow's setup phase was successful.
-    async fn setup_assert(&mut self) -> Result<(), TestError> {
+    async fn setup_assert(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Teardown phase of a test's workflow.
-    async fn teardown(&mut self) -> Result<(), TestError> {
+    async fn teardown(&mut self) -> Result<()> {
         Ok(())
     }
 
     /// Asserts that a test workflow's teardown phase was successful.
-    async fn teardown_assert(&mut self) -> Result<(), TestError> {
+    async fn teardown_assert(&mut self) -> Result<()> {
         Ok(())
     }
 }
