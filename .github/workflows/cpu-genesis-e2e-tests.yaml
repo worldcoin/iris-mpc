@@ -1,4 +1,4 @@
-name: CPU E2E Tests
+name: CPU Genesis E2E Tests
 
 on:
   pull_request:
@@ -32,7 +32,6 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
-#              - .github/workflows/cpu-tests-e2e.yaml -- bring this back after Canonical incident
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -87,21 +86,6 @@ jobs:
         uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
         with:
           compose-file: "./docker-compose.test.hnsw.e2e.yaml"
-        
-      - name: Save compose logs if failed
-        if: steps.compose_up.outcome == 'failure'
-        run: docker compose -f docker-compose.test.hnsw.e2e.yaml logs --no-color > compose.log
-
-      - name: Upload logs
-        if: steps.compose_up.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: compose-logs
-          path: compose.log
-        
-      - name: Re-fail the job if compose failed
-        if: steps.compose-up.outcome == 'failure'
-        run: exit 1
 
       - name: Execute end-to-end tests in running services
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
