@@ -69,7 +69,7 @@ Postconditions:
 - GPU iris database has 100 entries
 - CPU iris database has 100 entries
 - CPU modifications table is empty
-- CPU `persisted_state` table shows the max indexed modification is 3 and max indexed iris is 100
+- CPU `persisted_state` table shows the max indexed modification is 2 and max indexed iris is 100
 - CPU graph database matches the output of plaintext genesis
 - CPU graph database at layer zero has 100 nodes
 

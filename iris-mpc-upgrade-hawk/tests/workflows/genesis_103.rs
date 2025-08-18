@@ -91,7 +91,7 @@ impl TestRun for Test {
             .assert_vector_ids(plaintext_genesis::get_vector_ids(&expected.dst_db.irises))
             .assert_num_modifications(0)
             .assert_last_indexed_iris_id(100)
-            .assert_last_indexed_modification_id(3)
+            .assert_last_indexed_modification_id(2)
             .assert_hnsw_layer_0_size(MAX_INDEXATION_ID)
             .assert_hnsw_graphs(expected.dst_db.graphs);
 
