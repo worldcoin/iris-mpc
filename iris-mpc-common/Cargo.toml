@@ -7,13 +7,26 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["helpers"]
+helpers = [
+  "dep:aws-config",
+  "dep:aws-sdk-kms",
+  "dep:aws-sdk-sns",
+  "dep:aws-sdk-sqs",
+  "dep:aws-sdk-s3",
+  "dep:aws-sdk-secretsmanager",
+  "dep:reqwest",
+]
+
 [dependencies]
-aws-config.workspace = true
-aws-sdk-kms.workspace = true
-aws-sdk-sns.workspace = true
-aws-sdk-sqs.workspace = true
-aws-sdk-s3.workspace = true
-aws-sdk-secretsmanager.workspace = true
+aws-config = { workspace = true, optional = true }
+aws-sdk-kms = { workspace = true, optional = true }
+aws-sdk-sns = { workspace = true, optional = true }
+aws-sdk-sqs = { workspace = true, optional = true }
+aws-sdk-s3 = { workspace = true, optional = true }
+aws-sdk-secretsmanager = { workspace = true, optional = true }
+dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -28,15 +41,18 @@ config = "0.14.0"
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+telemetry-batteries.workspace = true
+axum.workspace = true
 
-reqwest = { workspace = true, features = ["blocking", "json"] }
+chrono = { version = "0.4.38", features = ["serde"] }
+reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
 sodiumoxide = "0.2.7"
 hmac = "0.12"
 http = "1.1.0"
-telemetry-batteries.workspace = true
 percent-encoding = "2"
 sha2 = "0.10"
-tokio-retry = "0.3"
 time = { version = "^0.3.6", features = ["formatting", "macros"] }
 url = "2"
 hex.workspace = true
@@ -47,6 +63,10 @@ ring = "0.17.8"
 data-encoding = "2.6.0"
 bincode.workspace = true
 serde-big-array.workspace = true
+metrics = "0.22.1"
+metrics-exporter-statsd = "0.7"
+futures.workspace = true
+
 
 [dev-dependencies]
 float_eq = "1"
@@ -55,10 +75,15 @@ aws-credential-types = "1.2.1"
 [[bin]]
 name = "key-manager"
 path = "src/bin/key_manager.rs"
+required-features = ["helpers"]
 
 [[bin]]
 name = "shares-encoding"
 path = "src/bin/shares_encoding.rs"
+
+[[bin]]
+name = "migrator"
+path = "src/bin/migrator.rs"
 
 [[bin]]
 name = "e2e-input-transform"

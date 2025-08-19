@@ -1,6 +1,11 @@
 pub mod distance_comparator;
 pub mod share_db;
 
-pub const IRIS_CODE_LENGTH: usize = 12_800;
-pub const MASK_CODE_LENGTH: usize = 6_400;
-pub const ROTATIONS: usize = 31;
+use std::collections::HashMap;
+
+pub const IRIS_CODE_LENGTH: usize = iris_mpc_common::IRIS_CODE_LENGTH;
+pub const MASK_CODE_LENGTH: usize = iris_mpc_common::MASK_CODE_LENGTH;
+pub const ROTATIONS: usize = iris_mpc_common::ROTATIONS;
+
+/// Type alias for partial results with rotations: query_id -> db_id -> list of matching rotations
+pub type PartialResultsWithRotations = HashMap<u32, HashMap<u32, Vec<i8>>>;

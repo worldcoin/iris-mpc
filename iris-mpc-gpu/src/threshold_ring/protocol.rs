@@ -84,6 +84,7 @@ pub struct ChunkShareViewMut<'a, T> {
     pub b: CudaViewMut<'a, T>,
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl<'a, T> ChunkShareView<'a, T> {
     pub fn get_offset(&self, i: usize, chunk_size: usize) -> ChunkShareView<T> {
         ChunkShareView {
@@ -123,46 +124,70 @@ where
 }
 
 struct Kernels {
-    pub(crate) and:                   CudaFunction,
-    pub(crate) or_assign:             CudaFunction,
-    pub(crate) xor:                   CudaFunction,
-    pub(crate) xor_assign:            CudaFunction,
+    pub(crate) and: CudaFunction,
+    pub(crate) or_assign: CudaFunction,
+    pub(crate) xor: CudaFunction,
+    pub(crate) xor_assign: CudaFunction,
     pub(crate) single_xor_assign_u16: CudaFunction,
+    pub(crate) single_xor_assign_u32: CudaFunction,
     pub(crate) single_xor_assign_u64: CudaFunction,
-    pub(crate) split:                 CudaFunction,
-    pub(crate) lift_split:            CudaFunction,
-    pub(crate) lift_mul_sub:          CudaFunction,
-    pub(crate) transpose_32x64:       CudaFunction,
-    pub(crate) transpose_16x64:       CudaFunction,
-    pub(crate) ot_sender:             CudaFunction,
-    pub(crate) ot_receiver:           CudaFunction,
-    pub(crate) ot_helper:             CudaFunction,
-    pub(crate) assign:                CudaFunction,
-    pub(crate) collapse_u64_helper:   CudaFunction,
+    pub(crate) split: CudaFunction,
+    pub(crate) lift_split: CudaFunction,
+    pub(crate) lift_mul_sub: CudaFunction,
+    pub(crate) lifted_sub: CudaFunction,
+    pub(crate) finalize_lift: CudaFunction,
+    pub(crate) transpose_32x64: CudaFunction,
+    pub(crate) transpose_16x64: CudaFunction,
+    pub(crate) ot_sender: CudaFunction,
+    pub(crate) ot_receiver: CudaFunction,
+    pub(crate) ot_helper: CudaFunction,
+    pub(crate) split_arithmetic_xor: CudaFunction,
+    pub(crate) arithmetic_xor_assign: CudaFunction,
+    pub(crate) assign_u32: CudaFunction,
+    pub(crate) assign_u64: CudaFunction,
+    pub(crate) collapse_u64_helper: CudaFunction,
+    pub(crate) collapse_sum_assign: CudaFunction,
+    pub(crate) collapse_sum: CudaFunction,
+    pub(crate) rotate_bitvec: CudaFunction,
+    pub(crate) mask_bitvec: CudaFunction,
 }
 
 impl Kernels {
     const MOD_NAME: &'static str = "TComp";
 
     pub(crate) fn new(dev: Arc<CudaDevice>, ptx: Ptx) -> Kernels {
-        dev.load_ptx(ptx.clone(), Self::MOD_NAME, &[
-            "shared_xor",
-            "shared_xor_assign",
-            "xor_assign_u16",
-            "xor_assign_u64",
-            "shared_and_pre",
-            "shared_or_pre_assign",
-            "split",
-            "lift_split",
-            "shared_lift_mul_sub",
-            "shared_u32_transpose_pack_u64",
-            "shared_u16_transpose_pack_u64",
-            "packed_ot_sender",
-            "packed_ot_receiver",
-            "packed_ot_helper",
-            "shared_assign",
-            "collapse_u64_helper",
-        ])
+        dev.load_ptx(
+            ptx.clone(),
+            Self::MOD_NAME,
+            &[
+                "shared_xor",
+                "shared_xor_assign",
+                "xor_assign_u16",
+                "xor_assign_u32",
+                "xor_assign_u64",
+                "shared_and_pre",
+                "shared_or_pre_assign",
+                "split",
+                "lift_split",
+                "shared_lift_mul_sub",
+                "shared_finalize_lift",
+                "shared_lifted_sub",
+                "shared_u32_transpose_pack_u64",
+                "shared_u16_transpose_pack_u64",
+                "packed_ot_sender",
+                "packed_ot_receiver",
+                "packed_ot_helper",
+                "split_for_arithmetic_xor",
+                "shared_arithmetic_xor_pre_assign_u32",
+                "shared_assign",
+                "shared_assign_u32",
+                "collapse_u64_helper",
+                "collapse_sum_assign",
+                "collapse_sum",
+                "rotate_bitvec",
+                "mask_bitvec",
+            ],
+        )
         .unwrap();
         let and = dev.get_func(Self::MOD_NAME, "shared_and_pre").unwrap();
         let or_assign = dev
@@ -171,10 +196,15 @@ impl Kernels {
         let xor = dev.get_func(Self::MOD_NAME, "shared_xor").unwrap();
         let xor_assign = dev.get_func(Self::MOD_NAME, "shared_xor_assign").unwrap();
         let single_xor_assign_u16 = dev.get_func(Self::MOD_NAME, "xor_assign_u16").unwrap();
+        let single_xor_assign_u32 = dev.get_func(Self::MOD_NAME, "xor_assign_u32").unwrap();
         let single_xor_assign_u64 = dev.get_func(Self::MOD_NAME, "xor_assign_u64").unwrap();
         let split = dev.get_func(Self::MOD_NAME, "split").unwrap();
         let lift_split = dev.get_func(Self::MOD_NAME, "lift_split").unwrap();
         let lift_mul_sub = dev.get_func(Self::MOD_NAME, "shared_lift_mul_sub").unwrap();
+        let finalize_lift = dev
+            .get_func(Self::MOD_NAME, "shared_finalize_lift")
+            .unwrap();
+        let lifted_sub = dev.get_func(Self::MOD_NAME, "shared_lifted_sub").unwrap();
         let transpose_32x64 = dev
             .get_func(Self::MOD_NAME, "shared_u32_transpose_pack_u64")
             .unwrap();
@@ -184,8 +214,19 @@ impl Kernels {
         let ot_sender = dev.get_func(Self::MOD_NAME, "packed_ot_sender").unwrap();
         let ot_receiver = dev.get_func(Self::MOD_NAME, "packed_ot_receiver").unwrap();
         let ot_helper = dev.get_func(Self::MOD_NAME, "packed_ot_helper").unwrap();
-        let assign = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let split_arithmetic_xor = dev
+            .get_func(Self::MOD_NAME, "split_for_arithmetic_xor")
+            .unwrap();
+        let arithmetic_xor_assign = dev
+            .get_func(Self::MOD_NAME, "shared_arithmetic_xor_pre_assign_u32")
+            .unwrap();
+        let assign_u64 = dev.get_func(Self::MOD_NAME, "shared_assign").unwrap();
+        let assign_u32 = dev.get_func(Self::MOD_NAME, "shared_assign_u32").unwrap();
         let collapse_u64_helper = dev.get_func(Self::MOD_NAME, "collapse_u64_helper").unwrap();
+        let collapse_sum_assign = dev.get_func(Self::MOD_NAME, "collapse_sum_assign").unwrap();
+        let collapse_sum = dev.get_func(Self::MOD_NAME, "collapse_sum").unwrap();
+        let rotate_bitvec = dev.get_func(Self::MOD_NAME, "rotate_bitvec").unwrap();
+        let mask_bitvec = dev.get_func(Self::MOD_NAME, "mask_bitvec").unwrap();
 
         Kernels {
             and,
@@ -193,24 +234,37 @@ impl Kernels {
             xor,
             xor_assign,
             single_xor_assign_u16,
+            single_xor_assign_u32,
             single_xor_assign_u64,
             split,
             lift_split,
             lift_mul_sub,
+            lifted_sub,
+            finalize_lift,
             transpose_32x64,
             transpose_16x64,
             ot_sender,
             ot_receiver,
             ot_helper,
-            assign,
+            split_arithmetic_xor,
+            arithmetic_xor_assign,
+            assign_u32,
+            assign_u64,
             collapse_u64_helper,
+            collapse_sum_assign,
+            collapse_sum,
+            rotate_bitvec,
+            mask_bitvec,
         }
     }
 }
 
 struct Buffers {
     lifted_shares: Option<Vec<ChunkShare<u32>>>,
+    lifted_shares_buckets1: Option<Vec<ChunkShare<u32>>>,
+    lifted_shares_buckets2: Option<Vec<ChunkShare<u32>>>,
     lifting_corrections: Option<Vec<ChunkShare<u16>>>,
+    buckets_recv_buffer: Option<Vec<ChunkShare<u32>>>,
     // This is also the buffer where the result is stored:
     lifted_shares_split1_result: Option<Vec<ChunkShare<u64>>>,
     lifted_shares_split2: Option<Vec<ChunkShare<u64>>>,
@@ -224,8 +278,10 @@ struct Buffers {
 }
 
 impl Buffers {
-    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize) -> Self {
+    fn new(devices: &[Arc<CudaDevice>], chunk_size: usize, n_buckets: Option<usize>) -> Self {
         let lifted_shares = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares_buckets1 = Some(Self::allocate_buffer(chunk_size * 64, devices));
+        let lifted_shares_buckets2 = Some(Self::allocate_buffer(chunk_size * 64, devices));
         let lifted_shares_split1_result = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split2 = Some(Self::allocate_buffer(chunk_size * 32, devices));
         let lifted_shares_split3 = Some(Self::allocate_buffer(chunk_size * 32, devices));
@@ -239,12 +295,18 @@ impl Buffers {
         let ot_m1 = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
         let ot_wc = Some(Self::allocate_single_buffer(chunk_size * 128, devices));
 
+        let buckets_recv_buffer =
+            n_buckets.map(|n_buckets| Self::allocate_buffer(n_buckets, devices));
+
         Buffers {
             lifted_shares,
+            lifted_shares_buckets1,
+            lifted_shares_buckets2,
             lifting_corrections,
             lifted_shares_split1_result,
             lifted_shares_split2,
             lifted_shares_split3,
+            buckets_recv_buffer,
             binary_adder_s,
             binary_adder_c,
             ot_m0,
@@ -319,6 +381,8 @@ impl Buffers {
 
     fn check_buffers(&self) {
         assert!(self.lifted_shares.is_some());
+        assert!(self.lifted_shares_buckets1.is_some());
+        assert!(self.lifted_shares_buckets2.is_some());
         assert!(self.lifted_shares_split1_result.is_some());
         assert!(self.lifted_shares_split2.is_some());
         assert!(self.lifted_shares_split3.is_some());
@@ -332,16 +396,16 @@ impl Buffers {
 }
 
 pub struct Circuits {
-    peer_id:    usize,
-    next_id:    usize,
-    prev_id:    usize,
+    peer_id: usize,
+    next_id: usize,
+    prev_id: usize,
     chunk_size: usize,
-    n_devices:  usize,
-    devs:       Vec<Arc<CudaDevice>>,
-    comms:      Vec<Arc<NcclComm>>,
-    kernels:    Vec<Kernels>,
-    buffers:    Buffers,
-    rngs:       Vec<ChaChaCudaCorrRng>,
+    n_devices: usize,
+    devs: Vec<Arc<CudaDevice>>,
+    comms: Vec<Arc<NcclComm>>,
+    kernels: Vec<Kernels>,
+    buffers: Buffers,
+    rngs: Vec<ChaChaCudaCorrRng>,
 }
 
 impl Circuits {
@@ -365,6 +429,7 @@ impl Circuits {
         peer_id: usize,
         input_size: usize, // per GPU
         alloc_size: usize,
+        n_buckets: Option<usize>,
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
@@ -391,7 +456,7 @@ impl Circuits {
             rngs.push(rng);
         }
 
-        let buffers = Buffers::new(&devs, alloc_size);
+        let buffers = Buffers::new(&devs, alloc_size, n_buckets);
 
         Circuits {
             peer_id,
@@ -424,6 +489,10 @@ impl Circuits {
 
     pub fn return_result_buffer(&mut self, src: Vec<ChunkShare<u64>>) {
         Buffers::return_buffer(&mut self.buffers.lifted_shares_split1_result, src);
+    }
+
+    pub fn peer_id(&self) -> usize {
+        self.peer_id
     }
 
     pub fn next_id(&self) -> usize {
@@ -561,12 +630,39 @@ impl Circuits {
 
         unsafe {
             self.kernels[idx]
-                .assign
+                .assign_u64
                 .clone()
                 .launch_on_stream(
                     &streams[idx],
                     cfg,
-                    (&des.a, &des.b, &src.a, &src.b, src.len() as i32),
+                    (&des.a, &des.b, &src.a, &src.b, src.len()),
+                )
+                .unwrap();
+        }
+    }
+
+    fn assign_view_u32(
+        &mut self,
+        des: &mut ChunkShareView<u32>,
+        src: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(src.len(), des.len());
+        let cfg = launch_config_from_elements_and_threads(
+            src.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .assign_u32
+                .clone()
+                .launch_on_stream(
+                    &streams[idx],
+                    cfg,
+                    (&des.a, &des.b, &src.a, &src.b, src.len()),
                 )
                 .unwrap();
         }
@@ -632,6 +728,46 @@ impl Circuits {
                     &streams[idx],
                     cfg,
                     (&x1.a, &x1.b, &x2.a, &x2.b, &rand, x1.len()),
+                )
+                .unwrap();
+        }
+    }
+
+    fn arithmetic_xor_many_pre_assign(
+        &mut self,
+        x1: &mut ChunkShareView<u32>,
+        x2: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = launch_config_from_elements_and_threads(
+            x1.len() as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        let rng = &mut self.rngs[idx];
+        let stream = &streams[idx];
+        let dev = &self.devs[idx];
+
+        // SAFETY: Only unsafe because memory is not initialized. But, we fill
+        // afterwards.
+        let size = (x1.len() + 15) / 16;
+        let size = size * 16;
+        let mut my_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
+        let mut their_rand = unsafe { dev.alloc::<u32>(size).unwrap() };
+
+        rng.fill_my_rng_into(&mut my_rand.slice_mut(..), stream);
+        rng.fill_their_rng_into(&mut their_rand.slice_mut(..), stream);
+
+        unsafe {
+            self.kernels[idx]
+                .arithmetic_xor_assign
+                .clone()
+                .launch_on_stream(
+                    stream,
+                    cfg,
+                    (&x1.a, &x1.b, &x2.a, &x2.b, &my_rand, &their_rand, x1.len()),
                 )
                 .unwrap();
         }
@@ -736,6 +872,47 @@ impl Circuits {
         );
     }
 
+    // Encrypt using chacha in my_rng
+    fn chacha1_encrypt_u32(
+        &mut self,
+        input: &ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) -> CudaSlice<u32> {
+        let data_len = input.len();
+        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
+        self.rngs[idx].fill_my_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
+        self.single_xor_assign_u32(
+            &mut keystream.slice(..data_len),
+            &input.a,
+            idx,
+            data_len,
+            streams,
+        );
+        keystream
+    }
+
+    // Decrypt using chacha in their_rng
+    fn chacha2_decrypt_u32(
+        &mut self,
+        inout: &mut ChunkShareView<u32>,
+        idx: usize,
+        streams: &[CudaStream],
+    ) {
+        let data_len = inout.len();
+        let keystream_size = (data_len + 15) / 16; // Multiple of 16 u32
+        let mut keystream = unsafe { self.devs[idx].alloc::<u32>(keystream_size * 16).unwrap() };
+        self.rngs[idx].fill_their_rng_into(&mut keystream.slice_mut(..), &streams[idx]);
+        self.single_xor_assign_u32(
+            &mut inout.b,
+            &keystream.slice(..data_len),
+            idx,
+            data_len,
+            streams,
+        );
+    }
+
     fn packed_send_receive_view(
         &mut self,
         res: &mut [ChunkShareView<u64>],
@@ -757,7 +934,11 @@ impl Circuits {
 
         result::group_start().unwrap();
         self.comms[idx]
-            .send(&send_bufs, self.next_id, &streams[idx])
+            .send_view(
+                &send_bufs.slice(0..range.len()),
+                self.next_id,
+                &streams[idx],
+            )
             .unwrap();
         let mut rcv = res.b.slice(range.to_owned());
         self.comms[idx]
@@ -786,7 +967,7 @@ impl Circuits {
         result::group_start().unwrap();
         for (idx, res) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send(res, self.next_id, &streams[idx])
+                .send_view(&res.slice(0..range.len()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
@@ -811,9 +992,9 @@ impl Circuits {
             .collect_vec();
 
         result::group_start().unwrap();
-        for (idx, res) in send_bufs.iter().enumerate() {
+        for (idx, r) in send_bufs.iter().enumerate() {
             self.comms[idx]
-                .send(res, self.next_id, &streams[idx])
+                .send_view(&r.slice(0..res[idx].len()), self.next_id, &streams[idx])
                 .unwrap();
         }
         for (idx, res) in res.iter_mut().enumerate() {
@@ -827,6 +1008,32 @@ impl Circuits {
         }
     }
 
+    fn send_receive_view_u32(&mut self, res: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
+        assert_eq!(res.len(), self.n_devices);
+
+        let send_bufs = res
+            .iter()
+            .enumerate()
+            .map(|(idx, res)| self.chacha1_encrypt_u32(res, idx, streams))
+            .collect_vec();
+
+        result::group_start().unwrap();
+        for (idx, r) in send_bufs.iter().enumerate() {
+            self.comms[idx]
+                .send_view(&r.slice(0..res[idx].len()), self.next_id, &streams[idx])
+                .unwrap();
+        }
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.comms[idx]
+                .receive_view(&mut res.b, self.prev_id, &streams[idx])
+                .unwrap();
+        }
+        result::group_end().unwrap();
+        for (idx, res) in res.iter_mut().enumerate() {
+            self.chacha2_decrypt_u32(res, idx, streams);
+        }
+    }
+
     fn send_receive_view_single_gpu(
         &mut self,
         res: &mut ChunkShareView<u64>,
@@ -837,7 +1044,7 @@ impl Circuits {
 
         result::group_start().unwrap();
         self.comms[idx]
-            .send(&send_bufs, self.next_id, &streams[idx])
+            .send_view(&send_bufs.slice(0..res.len()), self.next_id, &streams[idx])
             .unwrap();
         self.comms[idx]
             .receive_view(&mut res.b, self.prev_id, &streams[idx])
@@ -863,6 +1070,29 @@ impl Circuits {
         unsafe {
             self.kernels[idx]
                 .single_xor_assign_u16
+                .clone()
+                .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
+                .unwrap();
+        }
+    }
+
+    fn single_xor_assign_u32(
+        &self,
+        x1: &mut CudaView<u32>,
+        x2: &CudaView<u32>,
+        idx: usize,
+        size: usize,
+        streams: &[CudaStream],
+    ) {
+        let cfg = launch_config_from_elements_and_threads(
+            size as u32,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[idx],
+        );
+
+        unsafe {
+            self.kernels[idx]
+                .single_xor_assign_u32
                 .clone()
                 .launch_on_stream(&streams[idx], cfg, (&*x1, x2, size))
                 .unwrap();
@@ -992,6 +1222,103 @@ impl Circuits {
         T: cudarc::driver::ValidAsZeroBits + cudarc::driver::DeviceRepr,
     {
         Buffers::allocate_buffer(size, &self.devs)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn split_for_arithmetic_xor(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        x1: &mut [ChunkShareView<u32>],
+        x2: &mut [ChunkShareView<u32>],
+        x3: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, x1.len());
+        debug_assert_eq!(self.n_devices, x2.len());
+        debug_assert_eq!(self.n_devices, x3.len());
+
+        for (idx, (inp, x1, x2, x3)) in izip!(inp, x1, x2, x3).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .split_arithmetic_xor
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &x1.a,
+                            &x1.b,
+                            &x2.a,
+                            &x2.b,
+                            &x3.a,
+                            &x3.b,
+                            &inp.a,
+                            &inp.b,
+                            self.chunk_size,
+                            self.peer_id as u32,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn bit_inject_arithmetic_xor(
+        &mut self,
+        inp: &[ChunkShareView<u64>],
+        outp: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        debug_assert_eq!(self.n_devices, inp.len());
+        debug_assert_eq!(self.n_devices, outp.len());
+
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_split3);
+
+        // Reuse the existing buffers to have less memory
+        // the transmute_mut is safe because we know that one u64 is 2 u32s, and the
+        // buffer is aligned properly for the transmute
+        let mut x1 = Vec::with_capacity(x1_.len());
+        for x in x1_.iter() {
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            x1.push(view);
+        }
+        let mut x2 = Vec::with_capacity(x2_.len());
+        for x in x2_.iter() {
+            let a: CudaView<u32> = unsafe { x.a.transmute(64 * self.chunk_size).unwrap() };
+            let b: CudaView<u32> = unsafe { x.b.transmute(64 * self.chunk_size).unwrap() };
+            let view = ChunkShareView { a, b };
+            x2.push(view);
+        }
+
+        // Split to x1, x2, x3
+        self.split_for_arithmetic_xor(inp, &mut x1, &mut x2, outp, streams);
+
+        // First arithmetic xor: x3 ^= x1
+        for (idx, (x3, x1)) in izip!(outp.iter_mut(), x1.iter()).enumerate() {
+            self.arithmetic_xor_many_pre_assign(x3, x1, idx, streams);
+        }
+        // Send/Receive
+        self.send_receive_view_u32(outp, streams);
+
+        // Second arithmetic xor: x3 ^= x2
+        for (idx, (x3, x2)) in izip!(outp.iter_mut(), x2.iter()).enumerate() {
+            self.arithmetic_xor_many_pre_assign(x3, x2, idx, streams);
+        }
+        // Send/Receive
+        self.send_receive_view_u32(outp, streams);
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_split3, x2_);
     }
 
     fn bit_inject_ot_sender(
@@ -1475,6 +1802,95 @@ impl Circuits {
         }
     }
 
+    pub fn finalize_lifts(
+        &mut self,
+        mask_lifted: &mut [ChunkShareView<u32>],
+        code_lifted: &mut [ChunkShareView<u32>],
+        mask_correction: &[ChunkShareView<u16>],
+        code: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, code_lifted.len());
+        assert_eq!(self.n_devices, mask_correction.len());
+        assert_eq!(self.n_devices, code.len());
+
+        for (idx, (m, cl, mc, c)) in
+            izip!(mask_lifted, code_lifted, mask_correction, code).enumerate()
+        {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .finalize_lift
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &cl.a,
+                            &cl.b,
+                            &mc.a,
+                            &mc.b,
+                            &c.a,
+                            &c.b,
+                            self.chunk_size * 64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    pub fn lifted_sub(
+        &mut self,
+        output: &mut [ChunkShareView<u32>],
+        mask_lifted: &[ChunkShareView<u32>],
+        code_lifted: &[ChunkShareView<u32>],
+        a: u32,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, mask_lifted.len());
+        assert_eq!(self.n_devices, code_lifted.len());
+        assert_eq!(self.n_devices, output.len());
+
+        for (idx, (m, c, o)) in izip!(mask_lifted, code_lifted, output).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32 * 64,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .lifted_sub
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (
+                            &m.a,
+                            &m.b,
+                            &c.a,
+                            &c.b,
+                            &o.a,
+                            &o.b,
+                            a,
+                            self.peer_id as u32,
+                            self.chunk_size * 64,
+                        ),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // input should be of size: n_devices * input_size
     // outputs the uncorrected lifted shares and the injected correction values
     pub fn lift_mpc(
@@ -1801,17 +2217,17 @@ impl Circuits {
         }
     }
 
-    fn collect_graphic_result(&mut self, bits: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
+    fn collect_graphic_result(&mut self, data: &mut [ChunkShareView<u64>], streams: &[CudaStream]) {
         assert!(self.n_devices <= self.chunk_size);
         let dev0 = &self.devs[0];
         let stream0 = &streams[0];
-        let bit0 = &bits[0];
+        let data0 = &data[0];
 
         // Get results onto CPU
         let mut a = Vec::with_capacity(self.n_devices - 1);
         let mut b = Vec::with_capacity(self.n_devices - 1);
-        for (dev, stream, bit) in izip!(self.get_devices(), streams, bits.iter()).skip(1) {
-            let src = bit.get_range(0, 1);
+        for (dev, stream, d) in izip!(self.get_devices(), streams, data.iter()).skip(1) {
+            let src = d.get_range(0, 1);
 
             let mut a_ = dtoh_on_stream_sync(&src.a, &dev, stream).unwrap();
             let mut b_ = dtoh_on_stream_sync(&src.b, &dev, stream).unwrap();
@@ -1821,12 +2237,44 @@ impl Circuits {
         }
 
         // Put results onto first GPU
-        let mut des = bit0.get_range(1, self.n_devices);
+        let mut des = data0.get_range(1, self.n_devices);
         let a = htod_on_stream_sync(&a, dev0, stream0).unwrap();
         let b = htod_on_stream_sync(&b, dev0, stream0).unwrap();
         let c = ChunkShare::new(a, b);
 
         self.assign_view(&mut des, &c.as_view(), 0, streams);
+    }
+
+    fn collect_graphic_result_u32(
+        &mut self,
+        data: &mut [ChunkShareView<u32>],
+        streams: &[CudaStream],
+    ) {
+        assert!(self.n_devices <= self.chunk_size);
+        let dev0 = &self.devs[0];
+        let stream0 = &streams[0];
+        let data0 = &data[0];
+
+        // Get results onto CPU
+        let mut a = Vec::with_capacity(self.n_devices - 1);
+        let mut b = Vec::with_capacity(self.n_devices - 1);
+        for (dev, stream, d) in izip!(self.get_devices(), streams, data.iter()).skip(1) {
+            let src = d.get_range(0, 1);
+
+            let mut a_ = dtoh_on_stream_sync(&src.a, &dev, stream).unwrap();
+            let mut b_ = dtoh_on_stream_sync(&src.b, &dev, stream).unwrap();
+
+            a.push(a_.pop().unwrap());
+            b.push(b_.pop().unwrap());
+        }
+
+        // Put results onto first GPU
+        let mut des = data0.get_range(1, self.n_devices);
+        let a = htod_on_stream_sync(&a, dev0, stream0).unwrap();
+        let b = htod_on_stream_sync(&b, dev0, stream0).unwrap();
+        let c = ChunkShare::new(a, b);
+
+        self.assign_view_u32(&mut des, &c.as_view(), 0, streams);
     }
 
     fn collapse_u64(&mut self, input: &mut ChunkShare<u64>, streams: &[CudaStream]) {
@@ -1873,6 +2321,75 @@ impl Circuits {
         }
     }
 
+    fn rotate_bitvec(
+        &mut self,
+        bitvec_out: &mut [ChunkShareView<u64>],
+        bitvec_in: &[ChunkShareView<u64>],
+        rotation: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, bitvec_out.len());
+        assert!(self.chunk_size <= bitvec_out[0].len());
+        assert_eq!(self.n_devices, bitvec_in.len());
+        assert_eq!(bitvec_in[0].len(), bitvec_out[0].len());
+
+        for (idx, (out, inp)) in bitvec_out.iter_mut().zip(bitvec_in.iter()).enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .rotate_bitvec
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&out.a, &out.b, &inp.a, &inp.b, rotation, out.len()),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    fn mask_bitvec(
+        &mut self,
+        bitvec_inout: &mut [ChunkShareView<u64>],
+        mask_in: &[Vec<Vec<u64>>],
+        mask_idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, bitvec_inout.len());
+        assert!(self.chunk_size <= bitvec_inout[0].len());
+        assert_eq!(self.n_devices, mask_in.len());
+        assert_eq!(mask_in[0][mask_idx].len(), bitvec_inout[0].len());
+
+        for (idx, (inout, inp)) in bitvec_inout.iter_mut().zip(mask_in.iter()).enumerate() {
+            let bitvec =
+                htod_on_stream_sync(&inp[mask_idx][..], &self.devs[idx], &streams[idx]).unwrap();
+
+            let cfg = launch_config_from_elements_and_threads(
+                self.chunk_size as u32,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .mask_bitvec
+                    .clone()
+                    .launch_on_stream(
+                        &streams[idx],
+                        cfg,
+                        (&inout.a, &inout.b, &bitvec, inout.len()),
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
     // Result is in the first bit of the first GPU
     pub fn or_reduce_result(&mut self, result: &mut [ChunkShare<u64>], streams: &[CudaStream]) {
         let mut bits = Vec::with_capacity(self.n_devices);
@@ -1891,6 +2408,62 @@ impl Circuits {
         // Result is in lowest u64 bits on the first GPU
         self.collapse_u64(&mut result[0], streams);
         // Result is in the first bit of the first GPU
+    }
+
+    fn collapse_sum(&mut self, injected_bits: &mut [ChunkShareView<u32>], streams: &[CudaStream]) {
+        for (idx, data) in injected_bits.iter_mut().enumerate() {
+            let cfg = launch_config_from_elements_and_threads(
+                2,
+                DEFAULT_LAUNCH_CONFIG_THREADS,
+                &self.devs[idx],
+            );
+
+            unsafe {
+                self.kernels[idx]
+                    .collapse_sum_assign
+                    .clone()
+                    .launch_on_stream(&streams[idx], cfg, (&data.a, &data.b, self.chunk_size * 64))
+                    .unwrap();
+            }
+        }
+    }
+
+    fn collapse_sum_on_gpu(
+        &mut self,
+        inout: &mut ChunkShare<u32>,
+        inputs: &[ChunkShareView<u32>],
+        size: usize,
+        inout_idx: usize,
+        inputs_idx: usize,
+        streams: &[CudaStream],
+    ) {
+        assert_eq!(self.n_devices, inputs.len());
+        assert!(size <= inputs[inputs_idx].len());
+
+        let cfg = launch_config_from_elements_and_threads(
+            2,
+            DEFAULT_LAUNCH_CONFIG_THREADS,
+            &self.devs[inputs_idx],
+        );
+
+        unsafe {
+            self.kernels[inputs_idx]
+                .collapse_sum
+                .clone()
+                .launch_on_stream(
+                    &streams[inputs_idx],
+                    cfg,
+                    (
+                        &inout.a,
+                        &inout.b,
+                        &inputs[inputs_idx].a,
+                        &inputs[inputs_idx].b,
+                        inout_idx,
+                        size,
+                    ),
+                )
+                .unwrap();
+        }
     }
 
     // input should be of size: n_devices * input_size
@@ -1923,6 +2496,50 @@ impl Circuits {
         // Result is in the first bit of the result buffer
     }
 
+    pub fn translate_threshold_a(a: f64) -> u64 {
+        ((1. - 2. * a) * ((1u64 << B_BITS) as f64)) as u64
+    }
+
+    // same as compare_threshold_masked_many, just via the functions used in the
+    // bucketing
+    // Just here for testing
+    pub fn compare_threshold_masked_many_bucket_functions(
+        &mut self,
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+    ) {
+        let a = Self::translate_threshold_a(iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO);
+
+        assert_eq!(self.n_devices, code_dots.len());
+        assert_eq!(self.n_devices, mask_dots.len());
+        for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            assert!(chunk.len() % 64 == 0);
+        }
+
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets1);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
+        let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut codes = Buffers::get_buffer_chunk(&x2_, 64 * self.chunk_size);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+        let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
+
+        self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
+        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
+        self.lifted_sub(&mut x, &masks, &codes, a as u32, streams);
+        self.extract_msb(&mut x, streams);
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
+        self.buffers.check_buffers();
+
+        // Result is in the first bit of the result buffer
+    }
+
     // input should be of size: n_devices * input_size
     // Result is in the lowest bit of the result buffer on the first gpu
     pub fn compare_threshold_masked_many_with_or_tree(
@@ -1940,5 +2557,220 @@ impl Circuits {
         self.buffers.check_buffers();
 
         // Result is in the lowest bit of the result buffer on the first gpu
+    }
+
+    pub fn compare_multiple_thresholds(
+        &mut self,
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
+        streams: &[CudaStream],
+        thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
+        buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
+    ) {
+        assert_eq!(self.n_devices, code_dots.len());
+        assert_eq!(self.n_devices, mask_dots.len());
+        assert_eq!(thresholds_a.len(), buckets.len());
+        for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            assert!(chunk.len() % 64 == 0);
+        }
+
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets1);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
+        let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut codes = Buffers::get_buffer_chunk(&x2_, 64 * self.chunk_size);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+        let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
+
+        // Start with lifting
+        self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
+        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
+
+        for (bucket_idx, a) in thresholds_a.iter().enumerate() {
+            // Continue with threshold comparison
+            self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
+            self.extract_msb(&mut x, streams);
+
+            // Result is in the first bit of the result buffer
+            let result = self.take_result_buffer();
+            let mut bits = Vec::with_capacity(self.n_devices);
+            for r in result.iter() {
+                // Result is in the first bit of the input
+                bits.push(r.get_offset(0, self.chunk_size));
+            }
+
+            // Expand the result buffer to the x buffer and perform arithmetic xor
+            self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+            // Sum all elements in x to get the result in the first 32 bit word on each GPU
+            self.collapse_sum(&mut x, streams);
+            // Get data onto the first GPU
+            if self.n_devices > 1 {
+                self.collect_graphic_result_u32(&mut x, streams);
+            }
+            // Accumulate first result onto bucket
+            self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
+            self.return_result_buffer(result);
+        }
+
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
+        self.buffers.check_buffers();
+    }
+
+    pub fn compare_multiple_thresholds_while_aggregating_per_query(
+        &mut self,
+        code_dots: &[ChunkShareView<u16>],
+        mask_dots: &[ChunkShareView<u16>],
+        bitmask: &[Vec<u64>],
+        streams: &[CudaStream],
+        thresholds_a: &[u16], // Thresholds are given as a/b, where b=2^16
+        buckets: &mut ChunkShare<u32>, // Each element in the chunkshares is one bucket
+    ) {
+        assert_eq!(self.n_devices, code_dots.len());
+        assert_eq!(self.n_devices, mask_dots.len());
+        assert_eq!(thresholds_a.len(), buckets.len());
+        assert_eq!(bitmask.len(), self.n_devices);
+        for chunk in code_dots.iter().chain(mask_dots.iter()) {
+            assert!(chunk.len() % 64 == 0);
+        }
+
+        // prepare bitmasks for rotations
+        let max_rotations_needed = 30;
+        // incoming bitmask looks like this for given query_indices:
+        // [1,1,2,3,3,3,4,4,5] -> [1,0,1,1,0,0,1,0,1]
+        // i.e., it is one if it is the first match for a given query index
+        // we negate it -> [0,1,0,0,1,1,0,1,0] this gives us the indices of the duplicates
+        // STEP i: We rotate the bitmask to the right by 1, so that we can use it as a mask
+        // -> [1,0,0,1,1,0,1,0,0], this is then used to MASK the OR of the original bit vector with the rotated one
+        // after the rotation, we AND the bitmask with the negated original bitmask, to clear the current bit for accumulation
+        // and then we repeat from STEP i
+        let mut bitmasks = vec![vec![]; self.n_devices];
+        for i in 0..self.n_devices {
+            bitmasks[i].push(bitmask[i].clone());
+            let mut bitmask_negated = bitmask[i].clone();
+            detail::negate_bitvec(&mut bitmask_negated);
+            let mut bitmask = bitmask_negated.clone();
+            for _ in 0..max_rotations_needed {
+                detail::rotate_bitvec_right(&mut bitmask);
+                bitmasks[i].push(bitmask.clone());
+                detail::bitvec_and(&mut bitmask, &bitmask_negated);
+            }
+        }
+
+        let x_ = Buffers::take_buffer(&mut self.buffers.lifted_shares);
+        let x1_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets1);
+        let x2_ = Buffers::take_buffer(&mut self.buffers.lifted_shares_buckets2);
+        let corrections_ = Buffers::take_buffer(&mut self.buffers.lifting_corrections);
+        let mut masks = Buffers::get_buffer_chunk(&x1_, 64 * self.chunk_size);
+        let mut codes = Buffers::get_buffer_chunk(&x2_, 64 * self.chunk_size);
+        let mut x = Buffers::get_buffer_chunk(&x_, 64 * self.chunk_size);
+        let mut corrections = Buffers::get_buffer_chunk(&corrections_, 128 * self.chunk_size);
+
+        // Start with lifting
+        self.lift_mpc(mask_dots, &mut masks, &mut corrections, streams);
+        self.finalize_lifts(&mut masks, &mut codes, &corrections, code_dots, streams);
+
+        for (bucket_idx, a) in thresholds_a.iter().enumerate() {
+            // Continue with threshold comparison
+            self.lifted_sub(&mut x, &masks, &codes, *a as u32, streams);
+            self.extract_msb(&mut x, streams);
+
+            // Result is in the first bit of the result buffer
+            let result = self.take_result_buffer();
+
+            let mut bits = Vec::with_capacity(self.n_devices);
+            for r in result.iter() {
+                // Result is in the first bit of the input
+                bits.push(r.get_offset(0, self.chunk_size));
+            }
+            let tmp_rotated = Buffers::take_buffer(&mut self.buffers.lifted_shares_split2);
+            let mut rotated = Buffers::get_buffer_chunk(&tmp_rotated, self.chunk_size);
+            // we now use the prepared bitmasks to aggregate the results with OR
+            for rotation in 0..max_rotations_needed {
+                // we need to rotate the bitvecs to the right by one
+                self.rotate_bitvec(&mut rotated, &bits, rotation + 1, streams);
+                self.mask_bitvec(&mut rotated, &bitmasks, rotation + 1, streams);
+                for idx in 0..self.n_devices {
+                    self.or_many_pre_assign(&mut bits[idx], &rotated[idx], idx, streams);
+                }
+                self.send_receive_view_with_offset(&mut bits, 0..self.chunk_size, streams);
+            }
+            Buffers::return_buffer(&mut self.buffers.lifted_shares_split2, tmp_rotated);
+            // finally, mask out all of the bits that are not the first match, where we have accumulated
+            self.mask_bitvec(&mut bits, &bitmasks, 0, streams);
+
+            // Expand the result buffer to the x buffer and perform arithmetic xor
+            self.bit_inject_arithmetic_xor(&bits, &mut x, streams);
+            // Sum all elements in x to get the result in the first 32 bit word on each GPU
+            self.collapse_sum(&mut x, streams);
+            // Get data onto the first GPU
+            if self.n_devices > 1 {
+                self.collect_graphic_result_u32(&mut x, streams);
+            }
+            // Accumulate first result onto bucket
+            self.collapse_sum_on_gpu(buckets, &x, self.n_devices, bucket_idx, 0, streams);
+            self.return_result_buffer(result);
+        }
+        Buffers::return_buffer(&mut self.buffers.lifted_shares, x_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets1, x1_);
+        Buffers::return_buffer(&mut self.buffers.lifted_shares_buckets2, x2_);
+        Buffers::return_buffer(&mut self.buffers.lifting_corrections, corrections_);
+        self.buffers.check_buffers();
+    }
+
+    pub fn open_buckets(&mut self, buckets: &ChunkShare<u32>, streams: &[CudaStream]) -> Vec<u32> {
+        let a = dtoh_on_stream_sync(&buckets.a, &self.devs[0], &streams[0]).unwrap();
+        let b = dtoh_on_stream_sync(&buckets.b, &self.devs[0], &streams[0]).unwrap();
+        let res = buckets.as_view();
+
+        let rcv_buffer_ = Buffers::take_buffer(&mut self.buffers.buckets_recv_buffer);
+        let mut rcv_buffer = rcv_buffer_[0].get_range(0, buckets.len());
+
+        result::group_start().unwrap();
+        self.comms[0]
+            .send_view(&res.b, self.next_id, &streams[0])
+            .unwrap();
+        self.comms[0]
+            .receive_view(&mut rcv_buffer.a, self.prev_id, &streams[0])
+            .unwrap();
+        result::group_end().unwrap();
+
+        let c = dtoh_on_stream_sync(&rcv_buffer.a, &self.devs[0], &streams[0]).unwrap();
+
+        Buffers::return_buffer(&mut self.buffers.buckets_recv_buffer, rcv_buffer_);
+        self.buffers.check_buffers();
+
+        a.iter()
+            .zip(b.iter())
+            .zip(c.iter())
+            .map(|((&a, &b), &c)| a.wrapping_add(b).wrapping_add(c))
+            .collect()
+    }
+}
+
+mod detail {
+    // rotate a bit vector to the right by one (bit 1 -> bit 0)
+    pub fn rotate_bitvec_right(vec: &mut [u64]) {
+        let mut last = vec[0] & 1;
+        for i in (0..vec.len()).rev() {
+            let tmp = vec[i] & 1;
+            vec[i] = (last << 63) | (vec[i] >> 1);
+            last = tmp;
+        }
+    }
+
+    pub fn negate_bitvec(vec: &mut [u64]) {
+        for i in 0..vec.len() {
+            vec[i] = !vec[i];
+        }
+    }
+    pub fn bitvec_and(vec: &mut [u64], vec2: &[u64]) {
+        assert!(vec.len() == vec2.len());
+        for i in 0..vec.len() {
+            vec[i] &= vec2[i];
+        }
     }
 }

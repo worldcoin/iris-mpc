@@ -1,5 +1,7 @@
 use clap::Parser;
+use eyre::Result;
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
@@ -15,7 +17,7 @@ use tonic::transport::Server;
 const APP_NAME: &str = "SMPC";
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     install_tracing();
     let config = ReShareServerConfig::parse();
 
@@ -36,7 +38,9 @@ async fn main() -> eyre::Result<()> {
     );
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-    let store = Store::new(&config.db_url, &schema_name).await?;
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
 
     let receiver_helper = IrisCodeReshareReceiverHelper::new(
         config.party_id as usize,

@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 pub struct ChaChaCudaCorrRng {
     fill_kernel: CudaFunction,
-    xor_kernel:  CudaFunction,
-    chacha1:     ChachaCommon,
-    chacha2:     ChachaCommon,
+    xor_kernel: CudaFunction,
+    chacha1: ChachaCommon,
+    chacha2: ChachaCommon,
 }
 
 impl ChaChaCudaCorrRng {
@@ -18,10 +18,14 @@ impl ChaChaCudaCorrRng {
     pub fn init(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8]) -> Self {
         let ptx = compile_ptx(ChachaCommon::CHACHA_PTX_SRC).unwrap();
 
-        dev.load_ptx(ptx.clone(), ChachaCommon::CHACHA_FILL_FUNCTION_NAME, &[
+        dev.load_ptx(
+            ptx.clone(),
             ChachaCommon::CHACHA_FILL_FUNCTION_NAME,
-            ChachaCommon::CHACHA_XOR_FUNCTION_NAME,
-        ])
+            &[
+                ChachaCommon::CHACHA_FILL_FUNCTION_NAME,
+                ChachaCommon::CHACHA_XOR_FUNCTION_NAME,
+            ],
+        )
         .unwrap();
         let fill_kernel = dev
             .get_func(

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 pub(super) struct ChachaCommon {
     /// the current state of the chacha rng
-    pub(super) chacha_ctx:    ChaChaCtx,
+    pub(super) chacha_ctx: ChaChaCtx,
     // the current state of the chacha rng on the device
     pub(super) state_gpu_buf: CudaSlice<u32>,
 }
@@ -77,11 +77,11 @@ impl ChachaCommon {
 }
 
 pub struct ChaChaCudaRng {
-    dev:           Arc<CudaDevice>,
-    fill_kernel:   CudaFunction,
-    rng_chunk:     Option<CudaSlice<u32>>,
+    dev: Arc<CudaDevice>,
+    fill_kernel: CudaFunction,
+    rng_chunk: Option<CudaSlice<u32>>,
     output_buffer: Option<Vec<u32>>,
-    chacha:        ChachaCommon,
+    chacha: ChachaCommon,
 }
 
 impl ChaChaCudaRng {
@@ -95,9 +95,11 @@ impl ChaChaCudaRng {
             "buf_size must be a multiple of 64 atm"
         );
 
-        dev.load_ptx(ptx.clone(), ChachaCommon::CHACHA_FILL_FUNCTION_NAME, &[
+        dev.load_ptx(
+            ptx.clone(),
             ChachaCommon::CHACHA_FILL_FUNCTION_NAME,
-        ])
+            &[ChachaCommon::CHACHA_FILL_FUNCTION_NAME],
+        )
         .unwrap();
         let fill_kernel = dev
             .get_func(

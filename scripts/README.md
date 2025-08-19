@@ -1,37 +1,40 @@
-## SMPCv2 Databases & Queues Purging
+# Scripts
 
-To make sure the scripts included in this repository are working properly, you need to have the following AWS profiles defined in your environment:
+This directory contains runtime scripts for local development and testing.
 
-### SMPCv2
-```yaml
-[profile worldcoin-iam]
-sso_start_url = https://worldcoin.awsapps.com/start
-sso_region = us-east-1
-sso_account_id = 033662022620
-sso_role_name = AssumeSMPCV2Role
+`tools` subdirectory has been introduced to isolate the fundamental scripts used for development and testing from some tooling / debug scripts.
 
-[profile worldcoin-smpcv-io-vpc]
-source_profile=wc-iam
-role_arn=arn:aws:iam::302263054573:role/smpcv2-cross-account-role
+## Cleanup of environment
 
-[profile worldcoin-smpcv-io-0]
-source_profile=wc-iam
-role_arn=arn:aws:iam::024848486749:role/smpcv2-cross-account-role
+Between running the server in different modes, it is recommended to clean up the environment. This can be done by running:
 
-[profile worldcoin-smpcv-io-1]
-source_profile=wc-iam
-role_arn=arn:aws:iam::024848486818:role/smpcv2-cross-account-role
-
-[profile worldcoin-smpcv-io-2]
-source_profile=wc-iam
-role_arn=arn:aws:iam::024848486770:role/smpcv2-cross-account-role
+```bash
+docker compose -f docker-compose.dev.yaml down
+docker compose -f docker-compose.dev.yaml up -d
 ```
 
-### Orb
-```yaml
-[profile worldcoin-stage]
-sso_start_url = https://worldcoin.awsapps.com/start
-sso_region = us-east-1
-sso_account_id = 510867353226
-sso_role_name = PowerUserAccess
+## Running server in different deployment modes
+
+### Standard
+
+This is used currently for local only. It is the default mode of operation, in which the server reads/writes data to the CPU database (both irises and graph data)
+
+### Genesis Local Testing
+
+First, you need to generate some test data for the Genesis mode. This is done by running the following command:
+
+```bash
+cargo run --bin --release generate_benchmark_data
+```
+
+```bash
+docker compose -f docker-compose.test.genesis.yaml up init_db
+```
+
+In another terminal, run:
+
+```shell
+SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw GENESIS_MAX_HEIGHT=100 ./scripts/run-server.sh 0 genesis
+SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw GENESIS_MAX_HEIGHT=100 ./scripts/run-server.sh 1 genesis
+SMPC__HNSW_SCHEMA_NAME_SUFFIX=_hnsw GENESIS_MAX_HEIGHT=100 ./scripts/run-server.sh 2 genesis
 ```

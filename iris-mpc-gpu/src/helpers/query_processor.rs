@@ -13,14 +13,15 @@ use cudarc::{
         CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
 };
+use eyre::Result;
 use iris_mpc_common::galois_engine::CompactGaloisRingShares;
 use std::marker::{Send, Sync};
 
 pub struct StreamAwareCudaSlice<T> {
     pub cu_device_ptr: CUdeviceptr,
-    pub len:           usize,
-    pub stream:        CUstream,
-    pub _phantom:      std::marker::PhantomData<T>,
+    pub len: usize,
+    pub stream: CUstream,
+    pub _phantom: std::marker::PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for StreamAwareCudaSlice<T> {}
@@ -45,10 +46,10 @@ impl<T> From<CudaSlice<T>> for StreamAwareCudaSlice<T> {
     fn from(value: CudaSlice<T>) -> Self {
         let res = {
             StreamAwareCudaSlice {
-                stream:        *value.device().cu_stream(),
+                stream: *value.device().cu_stream(),
                 cu_device_ptr: *value.device_ptr(),
-                len:           value.len(),
-                _phantom:      std::marker::PhantomData,
+                len: value.len(),
+                _phantom: std::marker::PhantomData,
             }
         };
         // forgetting the slice is ok since we are going to free up the memory using the
@@ -68,7 +69,7 @@ impl<T> Drop for StreamAwareCudaSlice<T> {
 
 /// Holds the raw memory pointers for the 2D slices.
 /// Memory is not freed when the struct is dropped, but must be freed manually.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CudaVec2DSlicerRawPointer {
     pub limb_0: Vec<u64>,
     pub limb_1: Vec<u64>,
@@ -102,8 +103,8 @@ pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
 
 pub struct CompactQuery {
-    pub code_query:        CompactGaloisRingShares,
-    pub mask_query:        CompactGaloisRingShares,
+    pub code_query: CompactGaloisRingShares,
+    pub mask_query: CompactGaloisRingShares,
     pub code_query_insert: CompactGaloisRingShares,
     pub mask_query_insert: CompactGaloisRingShares,
 }
@@ -114,15 +115,15 @@ impl CompactQuery {
         device: &DeviceManager,
         streams: &[CudaStream],
         batch_size: usize,
-    ) -> eyre::Result<DeviceCompactQuery> {
+    ) -> Result<DeviceCompactQuery> {
         Ok(DeviceCompactQuery {
-            code_query:        device.htod_transfer_query(
+            code_query: device.htod_transfer_query(
                 &self.code_query,
                 streams,
                 batch_size,
                 IRIS_CODE_LENGTH,
             )?,
-            mask_query:        device.htod_transfer_query(
+            mask_query: device.htod_transfer_query(
                 &self.mask_query,
                 streams,
                 batch_size,
@@ -145,8 +146,8 @@ impl CompactQuery {
 }
 
 pub struct DeviceCompactQuery {
-    code_query:            CudaVec2DSlicerU8,
-    mask_query:            CudaVec2DSlicerU8,
+    code_query: CudaVec2DSlicerU8,
+    mask_query: CudaVec2DSlicerU8,
     pub code_query_insert: CudaVec2DSlicerU8,
     pub mask_query_insert: CudaVec2DSlicerU8,
 }
@@ -158,10 +159,10 @@ impl DeviceCompactQuery {
         mask_engine: &ShareDB,
         streams: &[CudaStream],
         blass: &[CudaBlas],
-    ) -> eyre::Result<DeviceCompactSums> {
+    ) -> Result<DeviceCompactSums> {
         Ok(DeviceCompactSums {
-            code_query:        code_engine.query_sums(&self.code_query, streams, blass),
-            mask_query:        mask_engine.query_sums(&self.mask_query, streams, blass),
+            code_query: code_engine.query_sums(&self.code_query, streams, blass),
+            mask_query: mask_engine.query_sums(&self.mask_query, streams, blass),
             code_query_insert: code_engine.query_sums(&self.code_query_insert, streams, blass),
             mask_query_insert: mask_engine.query_sums(&self.mask_query_insert, streams, blass),
         })
@@ -196,7 +197,7 @@ impl DeviceCompactQuery {
     }
 
     // TODO(Dragos) function signature can be compressed if there's a large refactor
-    // of server.rs to place the 2 engines into one struct and DBs into a single
+    // of iris_mpc_gpu to place the 2 engines into one struct and DBs into a single
     // struct.
     #[allow(clippy::too_many_arguments)]
     pub fn dot_products_against_db(
@@ -229,8 +230,8 @@ impl DeviceCompactQuery {
     }
 }
 pub struct DeviceCompactSums {
-    code_query:            CudaVec2DSlicerU32,
-    mask_query:            CudaVec2DSlicerU32,
+    code_query: CudaVec2DSlicerU32,
+    mask_query: CudaVec2DSlicerU32,
     pub code_query_insert: CudaVec2DSlicerU32,
     pub mask_query_insert: CudaVec2DSlicerU32,
 }
@@ -284,6 +285,27 @@ impl DeviceCompactSums {
             &sliced_mask_db.code_sums_gr,
             database_sizes,
             offset,
+            streams,
+            2,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compute_dot_reducer_against_prepared_db(
+        &self,
+        code_engine: &mut ShareDB,
+        mask_engine: &mut ShareDB,
+        code_sums_gr: &CudaVec2DSlicer<u32>,
+        mask_sums_gr: &CudaVec2DSlicer<u32>,
+        database_sizes: &[usize],
+        streams: &[CudaStream],
+    ) {
+        code_engine.dot_reduce(&self.code_query, code_sums_gr, database_sizes, 0, streams);
+        mask_engine.dot_reduce_and_multiply(
+            &self.mask_query,
+            mask_sums_gr,
+            database_sizes,
+            0,
             streams,
             2,
         );

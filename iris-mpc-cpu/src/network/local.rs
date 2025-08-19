@@ -1,10 +1,10 @@
 use crate::{
-    execution::{player::Identity, session::SessionId},
-    network::Networking,
+    execution::player::Identity,
+    network::{value::NetworkValue, Networking},
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
-use eyre::eyre;
+use eyre::{eyre, Result};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -54,25 +54,20 @@ impl LocalNetworkingStore {
 #[derive(Debug)]
 pub struct LocalNetworking {
     p2p_channels: P2PChannels,
-    pub owner:    Identity,
+    pub owner: Identity,
 }
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(
-        &self,
-        val: Vec<u8>,
-        receiver: &Identity,
-        _session_id: &SessionId,
-    ) -> eyre::Result<(), eyre::Error> {
+    async fn send(&self, val: NetworkValue, receiver: &Identity) -> Result<()> {
+        let val = val.to_network();
         let (tx, _) = self
             .p2p_channels
             .get(&(self.owner.clone(), receiver.clone()))
             .ok_or_else(|| {
                 eyre!(format!(
-                    "p2p channel retrieve error when sending: owner: {:?}, receiver: {:?}. \
-                     session {:?}",
-                    self.owner, receiver, _session_id
+                    "p2p channel retrieve error when sending: owner: {:?}, receiver: {:?}",
+                    self.owner, receiver
                 ))
             })?
             .value()
@@ -82,7 +77,7 @@ impl Networking for LocalNetworking {
         tx.send(ready_to_send_value).await.map_err(|e| e.into())
     }
 
-    async fn receive(&self, sender: &Identity, _session_id: &SessionId) -> eyre::Result<Vec<u8>> {
+    async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue> {
         let (_, rx) = self
             .p2p_channels
             .get(&(sender.clone(), self.owner.clone()))
@@ -96,7 +91,7 @@ impl Networking for LocalNetworking {
             .clone();
 
         let received_value = rx.recv().await?;
-        Ok(received_value.value)
+        NetworkValue::deserialize(&received_value.value)
     }
 }
 
@@ -111,20 +106,15 @@ mod tests {
         let networking_store = LocalNetworkingStore::from_host_ids(&identities);
 
         let alice = networking_store.get_local_network("alice".into());
-        let bob = networking_store.get_local_network("bob".into());
+        let mut bob = networking_store.get_local_network("bob".into());
 
         let task1 = tokio::spawn(async move {
-            let recv = bob.receive(&"alice".into(), &1_u64.into()).await;
-            assert_eq!(
-                NetworkValue::from_network(recv).unwrap(),
-                NetworkValue::RingElement16(RingElement(777))
-            );
+            let recv = bob.receive(&"alice".into()).await;
+            assert_eq!(recv.unwrap(), NetworkValue::RingElement16(RingElement(777)));
         });
         let task2 = tokio::spawn(async move {
             let value = NetworkValue::RingElement16(RingElement(777));
-            alice
-                .send(value.to_network(), &"bob".into(), &1_u64.into())
-                .await
+            alice.send(value, &"bob".into()).await
         });
 
         let _ = tokio::try_join!(task1, task2).unwrap();

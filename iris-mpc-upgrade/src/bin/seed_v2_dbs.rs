@@ -1,4 +1,6 @@
 use clap::Parser;
+use eyre::Result;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,
 };
@@ -38,12 +40,31 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     let args = Args::parse();
 
-    let store1 = Store::new(&args.db_url_party1, &args.schema_name_party1).await?;
-    let store2 = Store::new(&args.db_url_party2, &args.schema_name_party2).await?;
-    let store3 = Store::new(&args.db_url_party3, &args.schema_name_party3).await?;
+    let party_1_pg_client = PostgresClient::new(
+        &args.db_url_party1,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+    let party_2_pg_client = PostgresClient::new(
+        &args.db_url_party2,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+    let party_3_pg_client = PostgresClient::new(
+        &args.db_url_party3,
+        &args.schema_name_party1,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+
+    let store1 = Store::new(&party_1_pg_client).await?;
+    let store2 = Store::new(&party_2_pg_client).await?;
+    let store3 = Store::new(&party_3_pg_client).await?;
 
     let mut rng = rand::thread_rng();
 
@@ -92,9 +113,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })
@@ -110,9 +131,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })
@@ -127,9 +148,9 @@ async fn main() -> eyre::Result<()> {
             .iter()
             .zip(range_chunk.iter())
             .map(|((left, right), id)| StoredIrisRef {
-                id:         *id as i64,
-                left_code:  &left.code.coefs,
-                left_mask:  &left.mask.coefs,
+                id: *id as i64,
+                left_code: &left.code.coefs,
+                left_mask: &left.mask.coefs,
                 right_code: &right.code.coefs,
                 right_mask: &right.mask.coefs,
             })

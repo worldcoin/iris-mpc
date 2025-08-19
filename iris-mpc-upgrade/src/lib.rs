@@ -1,40 +1,17 @@
 use eyre::{bail, Error, Result};
-use futures::Stream;
 use iris_mpc_common::{id::PartyID, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use itertools::izip;
-use mpc_uniqueness_check::{bits::Bits, distance::EncodedBits};
 use packets::{MaskShareMessage, TwoToThreeIrisCodeMessage};
 use std::{
     fs::File,
-    future::Future,
     io::{BufWriter, Write},
 };
 
 pub mod config;
-pub mod db;
 pub mod packets;
 pub mod proto;
 pub mod reshare;
 pub mod utils;
-
-pub trait OldIrisShareSource {
-    /// loads an 1-of-2 additive share of the iris code with id `share_id`
-    fn load_code_share(&self, share_id: u64) -> impl Future<Output = Result<EncodedBits>>;
-    /// loads the masks of the iris code with id `share_id`
-    fn load_mask(&self, share_id: u64) -> impl Future<Output = Result<Bits>>;
-
-    /// loads the masks of the iris code with id `share_id`
-    fn stream_shares(
-        &self,
-        share_id_range: std::ops::Range<u64>,
-    ) -> Result<impl Stream<Item = Result<(u64, EncodedBits)>> + Sized>;
-
-    /// loads the masks of the iris code with id `share_id`
-    fn stream_masks(
-        &self,
-        share_id_range: std::ops::Range<u64>,
-    ) -> Result<impl Stream<Item = Result<(u64, Bits)>> + Sized>;
-}
 
 #[allow(async_fn_in_trait)]
 pub trait NewIrisShareSink {
@@ -87,7 +64,7 @@ impl NewIrisShareSink for IrisShareTestFileSink {
 
 #[derive(Clone)]
 pub struct IrisCodeUpgrader<S> {
-    party_id:  PartyID,
+    party_id: PartyID,
     iris_sink: S,
 }
 

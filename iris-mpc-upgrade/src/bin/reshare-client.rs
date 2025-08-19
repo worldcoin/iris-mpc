@@ -1,6 +1,8 @@
 use clap::Parser;
+use eyre::Result;
 use futures::StreamExt;
 use hkdf::Hkdf;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::kms_dh::derive_shared_secret,
@@ -22,7 +24,7 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig};
 
 const APP_NAME: &str = "SMPC";
 
-async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 32]> {
+async fn derive_common_seed(config: &ReShareClientConfig) -> Result<[u8; 32]> {
     let shared_secret = if config.environment == "testing" {
         // TODO: remove once localstack fixes KMS bug that returns different shared
         // secrets
@@ -44,7 +46,7 @@ async fn derive_common_seed(config: &ReShareClientConfig) -> eyre::Result<[u8; 3
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     install_tracing();
     rustls::crypto::ring::default_provider()
         .install_default()
@@ -55,7 +57,9 @@ async fn main() -> eyre::Result<()> {
     let common_seed = derive_common_seed(&config).await?;
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-    let store = Store::new(&config.db_url, &schema_name).await?;
+    let postgres_client =
+        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    let store = Store::new(&postgres_client).await?;
 
     let iris_stream = store.stream_irises_in_range(config.db_start..config.db_end);
     let mut iris_stream_chunks = iris_stream.chunks(config.batch_size as usize);
@@ -126,19 +130,19 @@ async fn main() -> eyre::Result<()> {
             iris_reshare_helper.add_reshare_iris_to_batch(
                 iris_code.id(),
                 GaloisRingIrisCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.left_code().try_into().unwrap(),
                 },
                 GaloisRingTrimmedMaskCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.left_mask().try_into().unwrap(),
                 },
                 GaloisRingIrisCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.right_code().try_into().unwrap(),
                 },
                 GaloisRingTrimmedMaskCodeShare {
-                    id:    config.party_id as usize + 1,
+                    id: config.party_id as usize + 1,
                     coefs: iris_code.right_mask().try_into().unwrap(),
                 },
             );
