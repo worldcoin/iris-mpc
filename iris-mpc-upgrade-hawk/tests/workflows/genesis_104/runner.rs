@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
+    modifications::{ModificationInput, ModificationType},
     mpc_node::{MpcNode, MpcNodes},
-    plaintext_genesis::PlaintextGenesis,
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
@@ -14,6 +14,13 @@ use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
+
+static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
+    ModificationInput::from_slice(&[
+        (3, ModificationType::Reauth, true, true),
+        (5, ModificationType::ResetUpdate, true, true),
+    ])
+});
 
 pub struct Test {
     configs: HawkConfigs,
@@ -51,30 +58,67 @@ impl Test {
     }
 }
 
-/// Trait: TestRun.
 impl TestRun for Test {
+    // index 50 irises
+    // then insert modifications
+    // then run genesis again
     async fn exec(&mut self) -> Result<(), TestError> {
-        // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        50,
                         false,
                         false,
                     ),
                     config,
                 )
                 .await
+                .unwrap()
             });
         }
 
         while let Some(r) = join_set.join_next().await {
-            r.unwrap()?;
+            r.unwrap();
+        }
+
+        for node in self.get_nodes().await {
+            join_set.spawn(async move {
+                node.insert_modifications(&MODIFICATIONS).await.unwrap();
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
+        }
+
+        // hack to get around an "address already in use" error, emitted by HawkHandle
+        let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
+
+        for mut config in self.configs.iter().cloned() {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            config.service_ports = service_ports.clone();
+            join_set.spawn(async move {
+                exec_genesis(
+                    ExecutionArgs::new(
+                        genesis_args.batch_size,
+                        genesis_args.batch_size_error_rate,
+                        100,
+                        false,
+                        false,
+                    ),
+                    config,
+                )
+                .await
+                .unwrap()
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap();
         }
 
         Ok(())
@@ -83,6 +127,7 @@ impl TestRun for Test {
     async fn exec_assert(&mut self) -> Result<(), TestError> {
         let config = &self.configs[0];
         let plaintext_irises = get_irises();
+        todo!("add modifications to the genesis simulation");
         let expected = Arc::new(
             PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
                 .run()
@@ -102,16 +147,23 @@ impl TestRun for Test {
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                // TODO assert CPU iris database reflects irises updated by new modifications after the first run
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
+
+                let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
-                assert_eq!(0, node.get_last_indexed_modification_id().await);
+                assert_eq!(2, node.get_last_indexed_modification_id().await);
 
                 node.assert_graphs_match(&expected).await;
+
+                assert_eq!(
+                    expected.dst_db.graphs[0].layers[0].links.len(),
+                    DEFAULT_GENESIS_ARGS.max_indexation_id as usize
+                );
             });
         }
 

@@ -1,8 +1,9 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
+    modifications::{ModificationInput, ModificationType},
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis::PlaintextGenesis,
     resources::{self},
@@ -24,6 +25,14 @@ const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size: 1,
     batch_size_error_rate: 250,
 };
+
+static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
+    ModificationInput::from_slice(&[
+        (1, ModificationType::Uniqueness, true, true),
+        (2, ModificationType::ResetUpdate, true, true),
+        (3, ModificationType::Reauth, true, true),
+    ])
+});
 
 fn get_irises() -> Vec<IrisCodePair> {
     let irises_path =
@@ -51,19 +60,16 @@ impl Test {
     }
 }
 
-/// Trait: TestRun.
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<(), TestError> {
-        // these need to be on separate tasks
         let mut join_set = JoinSet::new();
         for config in self.configs.iter().cloned() {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
             join_set.spawn(async move {
                 exec_genesis(
                     ExecutionArgs::new(
-                        genesis_args.batch_size,
-                        genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        DEFAULT_GENESIS_ARGS.batch_size,
+                        DEFAULT_GENESIS_ARGS.batch_size_error_rate,
+                        DEFAULT_GENESIS_ARGS.max_indexation_id,
                         false,
                         false,
                     ),
@@ -102,16 +108,21 @@ impl TestRun for Test {
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, max_indexation_id);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
-                let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
+                let num_modifications = node.cpu_iris_store.last_modifications(100).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);
 
                 assert_eq!(100, node.get_last_indexed_iris_id().await);
-                assert_eq!(0, node.get_last_indexed_modification_id().await);
+                assert_eq!(3, node.get_last_indexed_modification_id().await);
 
                 node.assert_graphs_match(&expected).await;
+
+                assert_eq!(
+                    expected.dst_db.graphs[0].layers[0].links.len(),
+                    DEFAULT_GENESIS_ARGS.max_indexation_id as usize
+                );
             });
         }
 
@@ -137,6 +148,7 @@ impl TestRun for Test {
         for (node, shares) in izip!(self.get_nodes().await, secret_shared_irises.into_iter()) {
             join_set.spawn(async move {
                 node.init_tables(&shares).await.unwrap();
+                node.insert_modifications(&MODIFICATIONS).await.unwrap();
             });
         }
 
@@ -163,17 +175,15 @@ impl TestRun for Test {
     async fn setup_assert(&mut self) -> Result<(), TestError> {
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
-            let genesis_args = DEFAULT_GENESIS_ARGS;
-            let max_indexation_id = genesis_args.max_indexation_id as usize;
             join_set.spawn(async move {
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
-                assert_eq!(num_irises, max_indexation_id);
+                assert_eq!(num_irises, DEFAULT_GENESIS_ARGS.max_indexation_id as usize);
 
                 let num_irises = node.cpu_iris_store.count_irises().await.unwrap();
                 assert_eq!(num_irises, 0);
 
-                let num_modifications = node.gpu_iris_store.last_modifications(1).await.unwrap();
-                assert_eq!(num_modifications.len(), 0);
+                let num_modifications = node.gpu_iris_store.last_modifications(100).await.unwrap();
+                assert_eq!(num_modifications.len(), MODIFICATIONS.len());
 
                 let num_modifications = node.cpu_iris_store.last_modifications(1).await.unwrap();
                 assert_eq!(num_modifications.len(), 0);

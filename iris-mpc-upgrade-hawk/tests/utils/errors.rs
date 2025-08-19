@@ -11,3 +11,9 @@ pub enum TestError {
     #[allow(dead_code)]
     SetupError(String),
 }
+
+impl From<eyre::Report> for TestError {
+    fn from(err: eyre::Report) -> Self {
+        TestError::SetupError(err.to_string())
+    }
+}

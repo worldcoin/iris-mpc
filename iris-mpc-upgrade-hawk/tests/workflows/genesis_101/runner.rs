@@ -51,8 +51,8 @@ impl Test {
     }
 }
 
-/// Trait: TestRun.
 impl TestRun for Test {
+    // run genesis twice - first indexing 50 and then up to 100
     async fn exec(&mut self) -> Result<(), TestError> {
         // these need to be on separate tasks
         let mut join_set = JoinSet::new();
@@ -63,7 +63,33 @@ impl TestRun for Test {
                     ExecutionArgs::new(
                         genesis_args.batch_size,
                         genesis_args.batch_size_error_rate,
-                        genesis_args.max_indexation_id,
+                        50,
+                        false,
+                        false,
+                    ),
+                    config,
+                )
+                .await
+            });
+        }
+
+        while let Some(r) = join_set.join_next().await {
+            r.unwrap()?;
+        }
+
+        // hack to get around an "address already in use" error, emitted by HawkHandle
+        let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
+
+        let mut join_set = JoinSet::new();
+        for mut config in self.configs.iter().cloned() {
+            let genesis_args = DEFAULT_GENESIS_ARGS;
+            config.service_ports = service_ports.clone();
+            join_set.spawn(async move {
+                exec_genesis(
+                    ExecutionArgs::new(
+                        genesis_args.batch_size,
+                        genesis_args.batch_size_error_rate,
+                        100,
                         false,
                         false,
                     ),

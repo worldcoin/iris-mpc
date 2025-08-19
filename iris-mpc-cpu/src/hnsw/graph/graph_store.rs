@@ -403,6 +403,23 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
 
         Ok(())
     }
+
+    /// Ensures that graph_entry and graph_links table are empty. For testing only
+    pub async fn clear_tables(&mut self) -> Result<()> {
+        let entry_table = self.entry_table();
+        let links_table = self.links_table();
+
+        sqlx::query(&format!("DELETE FROM {entry_table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await?;
+        sqlx::query(&format!("DELETE FROM {links_table} WHERE graph_id = $1"))
+            .bind(self.graph_id())
+            .execute(self.tx())
+            .await?;
+
+        Ok(())
+    }
 }
 
 impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V>

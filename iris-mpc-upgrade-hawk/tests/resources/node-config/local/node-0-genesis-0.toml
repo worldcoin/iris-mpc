@@ -51,6 +51,7 @@ hawk_server_healthcheck_port = 3000
 hnsw_param_ef_constr = 320
 hnsw_param_M = 256
 hnsw_param_ef_search = 256
+hawk_prf_key = 0
 max_deletions_per_batch = 100
 enable_modifications_sync = false
 enable_modifications_replay = false

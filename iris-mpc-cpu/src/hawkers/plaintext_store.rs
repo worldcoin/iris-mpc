@@ -158,6 +158,14 @@ impl VectorStore for PlaintextStore {
         debug!(event_type = CompareDistance.id());
         Ok(fraction_less_than(distance1, distance2))
     }
+
+    async fn only_valid_vectors(
+        &mut self,
+        mut vectors: Vec<Self::VectorRef>,
+    ) -> Vec<Self::VectorRef> {
+        vectors.retain(|v| self.storage.contains(v));
+        vectors
+    }
 }
 
 impl VectorStoreMut for PlaintextStore {
@@ -240,6 +248,15 @@ impl VectorStore for SharedPlaintextStore {
     ) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
         Ok(fraction_less_than(distance1, distance2))
+    }
+
+    async fn only_valid_vectors(
+        &mut self,
+        mut vectors: Vec<Self::VectorRef>,
+    ) -> Vec<Self::VectorRef> {
+        let storage = self.storage.read().await;
+        vectors.retain(|v| storage.contains(v));
+        vectors
     }
 }
 

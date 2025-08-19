@@ -1,6 +1,7 @@
 use super::{TestRunContextInfo, TestRunEnvironment};
-use iris_mpc_common::config::Config as NodeConfig;
+use iris_mpc_common::config::Config;
 use std::io::Error;
+use std::path::{Path, PathBuf};
 
 impl TestRunEnvironment {
     /// Returns subdirectory name for current test run environment.
@@ -13,20 +14,22 @@ impl TestRunEnvironment {
 }
 
 /// Returns path to resources root directory.
-fn get_path_to_resources() -> String {
+pub fn get_resources_root() -> String {
     let crate_root = env!("CARGO_MANIFEST_DIR");
 
     format!("{crate_root}/tests/resources")
 }
 
+/// Returns the path in the source tree of a resource asset.
+pub fn get_resource_path(location: &str) -> PathBuf {
+    Path::new(&get_resources_root()).join(location)
+}
+
 /// Returns node configuration deserialized from a toml file.
-pub fn read_node_config(
-    ctx: &TestRunContextInfo,
-    config_fname: String,
-) -> Result<NodeConfig, Error> {
+pub fn read_node_config(ctx: &TestRunContextInfo, config_fname: String) -> Result<Config, Error> {
     let path_to_cfg = format!(
         "{}/node-config/{}/{}.toml",
-        get_path_to_resources(),
+        get_resources_root(),
         ctx.env().subdirectory(),
         config_fname
     );
