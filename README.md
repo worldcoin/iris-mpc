@@ -1,4 +1,33 @@
-# gpu-iris-mpc
+# iris-mpc
+
+## Contributing
+
+We welcome contributions to this project! Please follow these guidelines when contributing:
+
+### Pull Requests
+
+- Fork the repository and create a new branch for your changes
+- Make your changes and ensure all tests pass
+- Submit a pull request with a clear description of your changes
+- All pull requests will be reviewed before merging
+
+### Signed Commits
+
+- All commits must be signed with your SSH/GPG key
+- Configure Git to sign commits automatically:
+
+    ```bash
+    git config --global user.signingkey <SSH signing key path/your-gpg-key-id>
+    git config --global commit.gpgsign true
+    ```
+
+- Verify your commits are signed with `git log --show-signature`
+
+### Code Standards
+
+- Follow the existing code style and conventions
+- Include appropriate tests for new functionality
+- Update documentation as needed
 
 ## How to release
 
@@ -10,11 +39,13 @@ Release is created as draft, so you have to edit it manually and change it to fi
 
 After release creation the build image is starting with tag with release number.
 
-
 ## Setup
 
-- Node PoC implementation in `src/bin/server.rs`
+- GPU-based node implementation in `iris-mpc/src/bin/server.rs`
+- CPU-based node PoC in `iris-mpc/src/bin/server_hawk.rs`
 - Example client in `src/bin/client.rs`
+
+## GPU Implementation
 
 #### Running the E2E test binary (single machine)
 
@@ -27,19 +58,19 @@ cargo test --release e2e --no-run 2>&1 | grep "Executable tests/e2e.rs" | sed "s
 #### Running the server without config override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin server
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu
 ```
 
 #### Running the server with override
 
 ```
-AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin server -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
+AWS_REGION=eu-north-1 AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin iris-mpc-gpu -- --party-id {0,1,2} --queue https://sqs.eu-north-1.amazonaws.com/xxx/mpc1.fifo
 ```
 
 #### Running the client
 
 ```
-AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo --db-index 2 --n-repeat 32
+AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx cargo run --release --bin client -- --topic-arn arn:aws:sns:eu-north-1:xxx:mpc.fifo
 ```
 
 ### Server configuration
@@ -95,6 +126,7 @@ Some Linux distributions have a (lib)cuda package 12.2 which depends on earlier 
 It might not work.
 
 ### Direnv setup
+
 If you're running with libraries in non-standard paths you'll likely want to setup direnv to automatically load the env vars for configuration.
 
 [Make sure to install direnv](https://direnv.net/)
@@ -103,23 +135,112 @@ Then copy `.envrc.example` to `.envrc` and setup `$PRE_CARGO_LD_LIBRARY_PATH` en
 
 The example file contains a sample WSL env var.
 
-## Testing
+## CPU Implementation
 
-To run the tests:
+### Requirements
 
-```sh
-docker-compose up -d
-cargo test --release
-# Requires a significant amount of GPU memory
-cargo bench
+1. `direnv` installed on your machine
+2. Run `direnv allow` in the root of the project. This will enable you to load all required env variables from the .test.env and .envrc files
+
+#### Option 1: Locally run a single server without Docker (recommended for quick iteration)
+
+**Step 1: run ancillary services**
+
+```
+docker-compose -f docker-compose.dev.yaml up
 ```
 
-If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/gpu-iris-mpc/issues/25).
+**Step 2: run service with the init script for Party 0**
+
+```
+./scripts/run-server.sh 0 --init-servers # change to 1 or 2 for other parties
+```
+
+The script must run with `--init-servers` flag at least once. It will create some AWS resources, but after that it can run without it.
+
+```
+./scripts/run-server.sh 1
+./scripts/run-server.sh 2 # in a separate shell
+```
+
+#### Option 2: Run everything with docker
+
+Just run
+
+```bash
+docker build -f Dockerfile.dev.hawk -t hawk-server-local-build:latest .
+docker-compose -f docker-compose.test.yaml up
+```
+
+It will bring up the 3 parties plus all the needed AWS/DB resources
+
+### Running Requests Against the Local Servers
+
+In either option you can send batches of requests to the SNS topics that will then be forwarded to the SQS
+queues from which the servers can read. This can be done with the `client` binary. We provide a bash script to
+simplify its invocation:
+
+```bash
+./scripts/run-client.sh
+```
+
+This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
+Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
+
+### Running Requests with file data
+
+```bash
+cargo run --bin client -- \
+    --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
+    --requests-bucket-name wf-smpcv2-dev-sns-requests \
+    --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
+    --region us-east-1 \
+    --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo \
+    --data-from-file signup_sequence_shares_optin_both_sides.json \
+    --populate-file-data-limit 0
+```
+
+- 0 is to use all data in file otherwise one can specify a limit
+
+This will send a batch of requests to the SNS topic. You can also run the client by itself with the `--help` flag to see all the available options.
+Check out also the [client.rs](iris-mpc/src/client.rs) file for more details.
+
+#### Testing
+
+```
+cargo test --release -- --test-threads=1
+cargo test --release --features db_dependent -- --test-threads=1 # require a runnning postgres instance
+```
+
+If you are using `cargo test` with non-standard library paths, you might need [a workaround](https://github.com/worldcoin/iris-mpc/issues/25).
+
+## CPU Genesis
+1. Create the generated data (this will be generated to the `iris-mpc-cpu/data` folder)
+
+- note you can change the value of the benchmark data to generate less data (100 is required for local stack) in `iris-mpc-cpu/bin/generate_benchmark_data.rs`
+
+```bash
+cargo run --bin generate_benchmark_data
+```
+
+2. Build the hawk genesis binary
+
+```bash
+docker build -f Dockerfile.genesis.dev.hawk -t hawk-server-genesis:latest .
+```
+
+3. Run the upgrade server
+* note this also instantiates a shares database for Genesis to use (the default is 100). You can edit the value for this in `docker-compose.test.genesis.yaml`
+* by default genesis runs with a max index of 100. This can be edited in `scripts/run-sever-docker.sh`
+```bash
+docker-compose -f docker-compose.test.genesis.yaml up
+```
+
+Note: This also instantiates iris shares db with shares
 
 ## Architecture
 
 ![architecture](mpc-architecture-v2.png)
-
 
 ## How to run client in the prod-dev env
 
@@ -131,8 +252,7 @@ cargo run --release --bin client -- \
     --response-queue-region eu-north-1 \
     --requests-bucket-name wf-mpc-prod-smpcv2-sns-requests \
     --public-key-base-url https://d2k2ck8dyw4s60.cloudfront.net \
-    --requests-bucket-region eu-north-1 \
-    --random true
+    --requests-bucket-region eu-north-1
 ```
 
 ## License

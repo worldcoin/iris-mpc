@@ -36,7 +36,7 @@ env:
     value: "true"
 
   - name: SMPC__DATABASE__LOAD_PARALLELISM
-    value: "80"
+    value: "8"
 
   - name: SMPC__AWS__REGION
     value: "eu-north-1"
@@ -54,13 +54,13 @@ env:
         name: application
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "120"
+    value: "600"
 
   - name: SMPC__HEARTBEAT_INTERVAL_SECS
     value: "2"
 
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
-    value: "30"
+    value: "65"
 
   - name: SMPC__PATH
     value: "/data/"
@@ -77,8 +77,20 @@ env:
   - name: SMPC__PUBLIC_KEY_BASE_URL
     value: "https://pki-smpc.worldcoin.org"
 
+  - name: SMPC__ENABLE_S3_IMPORTER
+    value: "true"
+
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-1-prod-eu-north-1"
+    value: "iris-mpc-db-exporter-store-node-1-prod--eun1-az3--x-s3"
+
+  - name: SMPC__DB_CHUNKS_FOLDER_NAME
+    value: "even_odd_with_version_id_output_16k"
+
+  - name: SMPC__LOAD_CHUNKS_PARALLELISM
+    value: "64"
+
+  - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
+    value: "1024"
 
   - name: SMPC__CLEAR_DB_BEFORE_INIT
     value: "true"
@@ -87,13 +99,34 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "10000000"
+    value: "15000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
+
+  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
+    value: "true"
+
+  - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
+    value: "true"
+
+  - name: SMPC__ENABLE_RESET
+    value: "true"
+
+  - name: SMPC__ENABLE_REAUTH
+    value: "true"
+
+  - name: SMPC__LUC_ENABLED
+    value: "true"
+
+  - name: SMPC__LUC_LOOKBACK_RECORDS
+    value: "500"
+
+  - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
+    value: "true"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
@@ -123,6 +156,15 @@ env:
 
   - name: SMPC__IMAGE_NAME
     value: $(IMAGE_NAME)
+
+  - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT
+    value: "20"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_SYNC
+    value: "true"
+
+  - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
+    value: "true"
 
 initContainer:
   enabled: true

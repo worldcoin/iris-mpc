@@ -1,16 +1,26 @@
 use crate::{
     execution::{
         player::*,
-        session::{BootSession, Session, SessionHandles, SessionId},
+        session::{NetworkSession, Session, SessionId},
     },
-    network::{grpc::setup_local_grpc_networking, local::LocalNetworkingStore, NetworkType},
-    protocol::{ops::setup_replicated_prf, prf::PrfSeed},
+    network::{
+        grpc::setup_local_grpc_networking,
+        local::LocalNetworkingStore,
+        tcp::testing::{interleave_vecs, setup_local_tcp_networking},
+        NetworkType,
+    },
+    protocol::{
+        ops::setup_replicated_prf,
+        prf::{Prf, PrfSeed},
+    },
 };
+use eyre::Result;
+use futures::future::join_all;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::{Arc, LazyLock},
 };
-use tokio::{sync::Mutex, task::JoinSet};
+use tokio::{sync::Mutex, task::JoinHandle};
 
 pub fn generate_local_identities() -> Vec<Identity> {
     vec![
@@ -22,7 +32,7 @@ pub fn generate_local_identities() -> Vec<Identity> {
 
 static USED_PORTS: LazyLock<Mutex<HashSet<u16>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
-pub async fn get_free_local_addresses(num_ports: usize) -> eyre::Result<Vec<String>> {
+pub async fn get_free_local_addresses(num_ports: usize) -> Result<Vec<String>> {
     let mut addresses = vec![];
     let mut listeners = vec![];
     while addresses.len() < num_ports {
@@ -39,17 +49,16 @@ pub async fn get_free_local_addresses(num_ports: usize) -> eyre::Result<Vec<Stri
     Ok(addresses)
 }
 
-#[derive(Debug, Clone)]
+type SessionRef = Arc<Mutex<Session>>;
+
+#[derive(Debug)]
 pub struct LocalRuntime {
-    pub identities:       Vec<Identity>,
-    pub role_assignments: RoleAssignment,
-    pub seeds:            Vec<PrfSeed>,
     // only one session per player is created
-    pub sessions:         HashMap<Identity, Session>,
+    pub sessions: Vec<Session>,
 }
 
 impl LocalRuntime {
-    pub async fn mock_setup(network_t: NetworkType) -> eyre::Result<Self> {
+    pub(crate) async fn mock_setup(network_t: NetworkType) -> Result<Self> {
         let num_parties = 3;
         let identities = generate_local_identities();
         let mut seeds = Vec::new();
@@ -61,98 +70,195 @@ impl LocalRuntime {
         LocalRuntime::new_with_network_type(identities, seeds, network_t).await
     }
 
-    pub async fn mock_setup_with_channel() -> eyre::Result<Self> {
-        Self::mock_setup(NetworkType::LocalChannel).await
+    pub async fn mock_setup_with_channel() -> Result<Self> {
+        Self::mock_setup(NetworkType::Local).await
     }
 
-    pub async fn mock_setup_with_grpc() -> eyre::Result<Self> {
-        Self::mock_setup(NetworkType::GrpcChannel).await
+    pub async fn mock_setup_with_grpc(
+        connection_parallelism: usize,
+        stream_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Result<Self> {
+        Self::mock_setup(NetworkType::Grpc {
+            connection_parallelism,
+            stream_parallelism,
+            request_parallelism,
+        })
+        .await
     }
 
-    pub async fn new_with_network_type(
+    async fn new_with_network_type(
         identities: Vec<Identity>,
         seeds: Vec<PrfSeed>,
         network_type: NetworkType,
-    ) -> eyre::Result<Self> {
+    ) -> Result<Self> {
         let role_assignments: RoleAssignment = identities
             .iter()
             .enumerate()
             .map(|(index, id)| (Role::new(index), id.clone()))
             .collect();
-        let sess_id = SessionId::from(0_u64);
-        let boot_sessions = match network_type {
-            NetworkType::LocalChannel => {
+        let network_sessions = match network_type {
+            NetworkType::Local => {
+                let sess_id = SessionId::from(0_u32);
                 let network = LocalNetworkingStore::from_host_ids(&identities);
-                let boot_sessions: Vec<BootSession> = (0..seeds.len())
+                let network_sessions: Vec<NetworkSession> = (0..seeds.len())
                     .map(|i| {
                         let identity = identities[i].clone();
-                        BootSession {
-                            session_id:       sess_id,
+                        NetworkSession {
+                            session_id: sess_id,
                             role_assignments: Arc::new(role_assignments.clone()),
-                            networking:       Arc::new(network.get_local_network(identity.clone())),
-                            own_identity:     identity,
+                            networking: Box::new(network.get_local_network(identity.clone())),
+                            own_role: Role::new(i),
                         }
                     })
                     .collect();
-                boot_sessions
+                network_sessions
             }
-            NetworkType::GrpcChannel => {
-                let networks = setup_local_grpc_networking(identities.clone()).await?;
-                let mut jobs = JoinSet::new();
-                for player in networks.iter() {
-                    let player = player.clone();
-                    jobs.spawn(async move {
-                        player.create_session(sess_id).await.unwrap();
-                    });
+            NetworkType::Grpc {
+                connection_parallelism,
+                stream_parallelism,
+                request_parallelism,
+            } => {
+                let networks = setup_local_grpc_networking(
+                    identities.clone(),
+                    connection_parallelism,
+                    stream_parallelism,
+                )
+                .await?;
+                let mut jobs = vec![];
+                for idx in 0_u32..request_parallelism as _ {
+                    let sess_id = SessionId::from(idx);
+                    for player in networks.iter() {
+                        let player = player.clone();
+                        let task =
+                            tokio::spawn(async move { player.create_session(sess_id).await });
+                        jobs.push(task);
+                    }
                 }
-                jobs.join_all().await;
-                let boot_sessions: Vec<BootSession> = (0..seeds.len())
-                    .map(|i| {
-                        let identity = identities[i].clone();
-                        BootSession {
-                            session_id:       sess_id,
-                            role_assignments: Arc::new(role_assignments.clone()),
-                            networking:       Arc::new(networks[i].clone()),
-                            own_identity:     identity,
-                        }
+                let grpc_sessions = join_all(jobs)
+                    .await
+                    .into_iter()
+                    .map(|r| r.map_err(eyre::Report::new)?)
+                    .collect::<Result<Vec<_>>>()?;
+                let network_sessions: Vec<NetworkSession> = grpc_sessions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, session)| NetworkSession {
+                        session_id: session.session_id,
+                        role_assignments: Arc::new(role_assignments.clone()),
+                        networking: Box::new(session),
+                        own_role: Role::new(id % seeds.len()),
                     })
                     .collect();
-                boot_sessions
+                network_sessions
+            }
+            NetworkType::Tcp {
+                connection_parallelism,
+                request_parallelism,
+            } => {
+                let (handles, sessions) = setup_local_tcp_networking(
+                    identities.clone(),
+                    connection_parallelism,
+                    request_parallelism,
+                )
+                .await?;
+                // the TcpNetworkHandle needs to live as long as its sessions do. the GrpcHandle
+                // doesn't have to worry about this because each handle is also a gRPC server,
+                // which lives in another task.
+                //
+                // std::mem::forget will prevent drop from being called and the memory will be reclaimed
+                // when the process ends.
+                let h = Arc::new(handles);
+                std::mem::forget(h);
+
+                let interleaved = interleave_vecs(sessions);
+                let network_sessions: Vec<NetworkSession> = interleaved
+                    .into_iter()
+                    .enumerate()
+                    .map(|(id, session)| NetworkSession {
+                        session_id: session.id(),
+                        role_assignments: Arc::new(role_assignments.clone()),
+                        networking: Box::new(session),
+                        own_role: Role::new(id % seeds.len()),
+                    })
+                    .collect();
+                network_sessions
             }
         };
 
-        let mut jobs = JoinSet::new();
-        for (player_id, boot_session) in boot_sessions.iter().enumerate() {
-            let player_seed = seeds[player_id];
-            let sess = boot_session.clone();
-            jobs.spawn(async move {
-                let prf = setup_replicated_prf(&sess, player_seed).await.unwrap();
-                (sess, prf)
+        let mut jobs = vec![];
+        for (player_id, mut network_session) in network_sessions.into_iter().enumerate() {
+            let player_seed = seeds[player_id % seeds.len()];
+            let task: JoinHandle<Result<(NetworkSession, Prf)>> = tokio::spawn(async move {
+                let prf = setup_replicated_prf(&mut network_session, player_seed).await?;
+                Ok((network_session, prf))
             });
+            jobs.push(task);
         }
-        let mut sessions = HashMap::new();
-        while let Some(t) = jobs.join_next().await {
-            let (boot_session, prf) = t.unwrap();
-            sessions.insert(boot_session.own_identity(), Session {
-                boot_session,
-                setup: prf,
-            });
-        }
-        Ok(LocalRuntime {
-            identities,
-            role_assignments,
-            seeds,
-            sessions,
-        })
+        let sessions = join_all(jobs)
+            .await
+            .into_iter()
+            .map(|t| {
+                let (network_session, prf) = t??;
+                Ok(Session {
+                    network_session,
+                    prf,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(LocalRuntime { sessions })
     }
 
-    pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> eyre::Result<Self> {
-        Self::new_with_network_type(identities, seeds, NetworkType::LocalChannel).await
+    pub async fn new(identities: Vec<Identity>, seeds: Vec<PrfSeed>) -> Result<Self> {
+        Self::new_with_network_type(identities, seeds, NetworkType::Local).await
+    }
+
+    fn into_sessions(self) -> Vec<SessionRef> {
+        self.sessions
+            .into_iter()
+            .map(|s| Arc::new(Mutex::new(s)))
+            .collect()
+    }
+
+    async fn mock_sessions(network_type: NetworkType) -> Result<Vec<SessionRef>> {
+        Self::mock_setup(network_type)
+            .await
+            .map(|rt| rt.into_sessions())
+    }
+
+    pub async fn mock_sessions_with_channel() -> Result<Vec<SessionRef>> {
+        Self::mock_sessions(NetworkType::Local).await
+    }
+
+    pub async fn mock_sessions_with_grpc(
+        connection_parallelism: usize,
+        stream_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Result<Vec<SessionRef>> {
+        Self::mock_sessions(NetworkType::Grpc {
+            connection_parallelism,
+            stream_parallelism,
+            request_parallelism,
+        })
+        .await
+    }
+
+    pub async fn mock_sessions_with_tcp(
+        connection_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Result<Vec<SessionRef>> {
+        Self::mock_sessions(NetworkType::Tcp {
+            connection_parallelism,
+            request_parallelism,
+        })
+        .await
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use tokio::task::JoinSet;
+
     use super::*;
 
     #[tokio::test]

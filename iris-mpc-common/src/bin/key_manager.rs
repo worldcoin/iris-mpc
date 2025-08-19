@@ -9,15 +9,14 @@ use aws_sdk_secretsmanager::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
+use eyre::Result;
 use rand::{thread_rng, Rng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
 const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
-const REGION: &str = "eu-north-1";
 
-/// A fictional versioning CLI
 #[derive(Debug, Parser)] // requires `derive` feature
 #[command(name = "key-manager")]
 #[command(about = "Key manager CLI", long_about = None)]
@@ -30,8 +29,14 @@ struct KeyManagerCli {
     )]
     node_id: String,
 
-    #[arg(short, long, env, default_value = "stage")]
+    #[arg(long, env, default_value = "stage")]
     env: String,
+
+    #[arg(short, long, env, default_value = "eu-north-1")]
+    region: String,
+
+    #[arg(long, env, default_value = None)]
+    endpoint_url: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -63,12 +68,13 @@ enum Commands {
 }
 
 #[tokio::main]
-async fn main() -> eyre::Result<()> {
+async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
 
     let args = KeyManagerCli::parse();
+    let region = args.region;
 
-    let region_provider = S3Region::new(REGION);
+    let region_provider = S3Region::new(region.clone());
     let shared_config = aws_config::from_env().region(region_provider).load().await;
 
     let bucket_key_name = format!("{}-{}", PUBLIC_KEY_S3_KEY_NAME_PREFIX, args.node_id);
@@ -86,6 +92,7 @@ async fn main() -> eyre::Result<()> {
                 &private_key_secret_id,
                 dry_run,
                 public_key_bucket_name,
+                args.endpoint_url,
             )
             .await?;
         }
@@ -101,6 +108,8 @@ async fn main() -> eyre::Result<()> {
                 b64_pub_key,
                 &bucket_key_name,
                 public_key_bucket_name,
+                region.clone(),
+                args.endpoint_url,
             )
             .await?;
         }
@@ -108,6 +117,7 @@ async fn main() -> eyre::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_keys(
     sdk_config: &SdkConfig,
     secret_id: &str,
@@ -115,8 +125,16 @@ async fn validate_keys(
     b64_pub_key: Option<String>,
     bucket_key_name: &str,
     public_key_bucket_name: Option<String>,
-) -> eyre::Result<()> {
-    let sm_client = SecretsManagerClient::new(sdk_config);
+    region: String,
+    endpoint_url: Option<String>,
+) -> Result<()> {
+    let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        sm_config_builder = sm_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
         bucket_name
@@ -133,7 +151,7 @@ async fn validate_keys(
     } else {
         // Otherwise, get the latest one from S3 using HTTPS
         let user_pubkey_string =
-            download_key_from_s3(bucket_name.as_str(), bucket_key_name).await?;
+            download_key_from_s3(bucket_name.as_str(), bucket_key_name, region.clone()).await?;
         let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes()).unwrap();
         match PublicKey::from_slice(&user_pubkey) {
             Some(key) => key,
@@ -156,7 +174,8 @@ async fn rotate_keys(
     private_key_secret_id: &str,
     dry_run: Option<bool>,
     public_key_bucket_name: Option<String>,
-) -> eyre::Result<()> {
+    endpoint_url: Option<String>,
+) -> Result<()> {
     let mut rng = thread_rng();
 
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
@@ -169,8 +188,17 @@ async fn rotate_keys(
     rng.fill(&mut seedbuf);
     let pk_seed = Seed(seedbuf);
 
-    let s3_client = S3Client::new(sdk_config);
-    let sm_client = SecretsManagerClient::new(sdk_config);
+    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config);
+    let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+
+    if let Some(endpoint_url) = endpoint_url.as_ref() {
+        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
+        s3_config_builder = s3_config_builder.force_path_style(true);
+        sm_config_builder = sm_config_builder.endpoint_url(endpoint_url);
+    }
+
+    let s3_client = S3Client::from_conf(s3_config_builder.build());
+    let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     let (public_key, private_key) = generate_key_pairs(pk_seed);
     let pub_key_str = STANDARD.encode(public_key);
@@ -231,9 +259,13 @@ async fn rotate_keys(
     Ok(())
 }
 
-async fn download_key_from_s3(bucket: &str, key: &str) -> Result<String, reqwest::Error> {
+async fn download_key_from_s3(
+    bucket: &str,
+    key: &str,
+    region: String,
+) -> Result<String, reqwest::Error> {
     print!("Downloading key from S3 bucket: {} key: {}", bucket, key);
-    let s3_url = format!("https://{}.s3.{}.amazonaws.com/{}", bucket, REGION, key);
+    let s3_url = format!("https://{}.s3.{}.amazonaws.com/{}", bucket, region, key);
     let client = Client::new();
     let response = client.get(&s3_url).send().await?.text().await?;
     Ok(response)

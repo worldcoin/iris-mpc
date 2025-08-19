@@ -118,3 +118,40 @@ impl IntRing2k for u128 {
     const K: usize = Self::BITS as usize;
     const BYTES: usize = Self::K / 8;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
+
+    #[test]
+    fn test_aritmetic() {
+        let mut rand = rand::thread_rng();
+        let a: u8 = rand.gen();
+        let b: u8 = rand.gen();
+
+        let mut c = a;
+        c.wrapping_add_assign(&b);
+        assert_eq!(c, a.wrapping_add(b));
+
+        let mut c = a;
+        c.wrapping_sub_assign(&b);
+        assert_eq!(c, a.wrapping_sub(b));
+
+        let mut c = a;
+        c.wrapping_mul_assign(&b);
+        assert_eq!(c, a.wrapping_mul(b));
+
+        let mut c = a;
+        c.wrapping_neg_inplace();
+        assert_eq!(c, a.wrapping_neg());
+
+        let mut c = a;
+        c.wrapping_shl_assign(1);
+        assert_eq!(c, a.wrapping_shl(1));
+
+        let mut c = a;
+        c.wrapping_shr_assign(1);
+        assert_eq!(c, a.wrapping_shr(1));
+    }
+}

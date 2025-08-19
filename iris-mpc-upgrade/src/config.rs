@@ -13,7 +13,7 @@ pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Eye {
-    Left  = 0,
+    Left = 0,
     Right = 1,
 }
 
@@ -180,6 +180,10 @@ pub struct ReShareClientConfig {
     /// the common secret derived between the two parties
     #[clap(long)]
     pub reshare_run_session_id: String,
+
+    /// The path to the CA root file for the TLS connection
+    #[clap(long)]
+    pub ca_root_file_path: String,
 }
 
 #[derive(Parser)]

@@ -2,9 +2,17 @@ name: Release Drafter
 
 on:
   push:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
     branches:
       - main
   pull_request:
+    paths-ignore:
+      - 'adr/**'
+      - 'deploy/**'
+      - '.github/**'
     types: [opened, reopened, synchronize]
 
 permissions:
@@ -12,15 +20,16 @@ permissions:
 
 jobs:
   update_release_draft:
+    timeout-minutes: 20
     name: Update Release Draft
     runs-on:
-      labels: ubuntu-22.04-64core
+      labels: ubuntu-latest
 
     permissions:
       contents: write
       pull-requests: write
 
     steps:
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@b1476f6e6eb133afa41ed8589daba6dc69b4d3f5
         env:
           GITHUB_TOKEN: ${{ github.token }}

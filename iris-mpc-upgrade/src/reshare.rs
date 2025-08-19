@@ -4,13 +4,11 @@
 //! new party, producing a valid share for the new party, without leaking
 //! information about the individual shares of the sending parties.
 
-use crate::proto::{
-    self,
-    iris_mpc_reshare::{
-        iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
-        IrisCodeReShareStatus,
-    },
+use crate::proto::iris_mpc_reshare::{
+    iris_code_re_share_service_server, IrisCodeReShare, IrisCodeReShareRequest,
+    IrisCodeReShareResponse, IrisCodeReShareStatus,
 };
+use eyre::Result;
 use iris_mpc_common::{
     galois::degree4::{basis::Monomial, GaloisRingElement, ShamirGaloisRingShare},
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -24,12 +22,12 @@ use std::{collections::VecDeque, sync::Mutex};
 use tonic::Response;
 
 pub struct IrisCodeReshareSenderHelper {
-    my_party_id:     usize,
-    other_party_id:  usize,
+    my_party_id: usize,
+    other_party_id: usize,
     target_party_id: usize,
     lagrange_helper: GaloisRingElement<Monomial>,
-    common_seed:     [u8; 32],
-    current_packet:  Option<IrisCodeReShareRequest>,
+    common_seed: [u8; 32],
+    current_packet: Option<IrisCodeReShareRequest>,
 }
 
 impl IrisCodeReshareSenderHelper {
@@ -191,10 +189,10 @@ impl IrisCodeReshareSenderHelper {
         let right_reshared_mask = self.reshare_mask(right_mask_share, &mut rng);
 
         let reshare = IrisCodeReShare {
-            left_iris_code_share:  left_reshared_code,
-            left_mask_share:       left_reshared_mask,
+            left_iris_code_share: left_reshared_code,
+            left_mask_share: left_reshared_mask,
             right_iris_code_share: right_reshared_code,
-            right_mask_share:      right_reshared_mask,
+            right_mask_share: right_reshared_mask,
         };
         self.current_packet
             .as_mut()
@@ -231,19 +229,19 @@ pub enum IrisCodeReShareError {
          the other party ({other_party_id}"
     )]
     TooManyRequests {
-        party_id:       usize,
+        party_id: usize,
         other_party_id: usize,
     },
 }
 
 #[derive(Debug)]
 pub struct IrisCodeReshareReceiverHelper {
-    my_party_id:      usize,
+    my_party_id: usize,
     sender1_party_id: usize,
     sender2_party_id: usize,
-    max_buffer_size:  usize,
-    sender_1_buffer:  Mutex<VecDeque<IrisCodeReShareRequest>>,
-    sender_2_buffer:  Mutex<VecDeque<IrisCodeReShareRequest>>,
+    max_buffer_size: usize,
+    sender_1_buffer: Mutex<VecDeque<IrisCodeReShareRequest>>,
+    sender_2_buffer: Mutex<VecDeque<IrisCodeReShareRequest>>,
 }
 
 impl IrisCodeReshareReceiverHelper {
@@ -323,7 +321,7 @@ impl IrisCodeReshareReceiverHelper {
             let mut sender_1_buffer = self.sender_1_buffer.lock().unwrap();
             if sender_1_buffer.len() + 1 >= self.max_buffer_size {
                 return Err(IrisCodeReShareError::TooManyRequests {
-                    party_id:       self.sender1_party_id,
+                    party_id: self.sender1_party_id,
                     other_party_id: self.sender2_party_id,
                 });
             }
@@ -332,7 +330,7 @@ impl IrisCodeReshareReceiverHelper {
             let mut sender_2_buffer = self.sender_2_buffer.lock().unwrap();
             if sender_2_buffer.len() + 1 >= self.max_buffer_size {
                 return Err(IrisCodeReShareError::TooManyRequests {
-                    party_id:       self.sender2_party_id,
+                    party_id: self.sender2_party_id,
                     other_party_id: self.sender1_party_id,
                 });
             }
@@ -393,7 +391,7 @@ impl IrisCodeReshareReceiverHelper {
         {
             // build galois shares from the u8 Vecs
             let mut left_code_share1 = GaloisRingIrisCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare1
                     .left_iris_code_share
                     .chunks_exact(size_of::<u16>())
@@ -404,7 +402,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid iris code share length"),
             };
             let mut left_mask_share1 = GaloisRingTrimmedMaskCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare1
                     .left_mask_share
                     .chunks_exact(size_of::<u16>())
@@ -415,7 +413,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid mask share length"),
             };
             let left_code_share2 = GaloisRingIrisCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare2
                     .left_iris_code_share
                     .chunks_exact(size_of::<u16>())
@@ -426,7 +424,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid iris code share length"),
             };
             let left_mask_share2 = GaloisRingTrimmedMaskCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare2
                     .left_mask_share
                     .chunks_exact(size_of::<u16>())
@@ -459,7 +457,7 @@ impl IrisCodeReshareReceiverHelper {
             // now the right eye
             // build galois shares from the u8 Vecs
             let mut right_code_share1 = GaloisRingIrisCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare1
                     .right_iris_code_share
                     .chunks_exact(size_of::<u16>())
@@ -470,7 +468,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid iris code share length"),
             };
             let mut right_mask_share1 = GaloisRingTrimmedMaskCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare1
                     .right_mask_share
                     .chunks_exact(size_of::<u16>())
@@ -481,7 +479,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid mask share length"),
             };
             let right_code_share2 = GaloisRingIrisCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare2
                     .right_iris_code_share
                     .chunks_exact(size_of::<u16>())
@@ -492,7 +490,7 @@ impl IrisCodeReshareReceiverHelper {
                     .expect("Invalid iris code share length"),
             };
             let right_mask_share2 = GaloisRingTrimmedMaskCodeShare {
-                id:    self.my_party_id + 1,
+                id: self.my_party_id + 1,
                 coefs: reshare2
                     .right_mask_share
                     .chunks_exact(std::mem::size_of::<u16>())
@@ -525,11 +523,11 @@ impl IrisCodeReshareReceiverHelper {
 
         Ok(RecombinedIrisCodeBatch {
             range_start_inclusive: request1.id_range_start_inclusive,
-            range_end_exclusive:   request1.id_range_end_non_inclusive,
-            left_iris_codes:       left_code,
-            left_masks:            left_mask,
-            right_iris_codes:      right_code,
-            right_masks:           right_mask,
+            range_end_exclusive: request1.id_range_end_non_inclusive,
+            left_iris_codes: left_code,
+            left_masks: left_mask,
+            right_iris_codes: right_code,
+            right_masks: right_mask,
         })
     }
 
@@ -560,15 +558,15 @@ impl IrisCodeReshareReceiverHelper {
 pub struct RecombinedIrisCodeBatch {
     range_start_inclusive: i64,
     #[expect(unused)]
-    range_end_exclusive:   i64,
-    left_iris_codes:       Vec<GaloisRingIrisCodeShare>,
-    left_masks:            Vec<GaloisRingTrimmedMaskCodeShare>,
-    right_iris_codes:      Vec<GaloisRingIrisCodeShare>,
-    right_masks:           Vec<GaloisRingTrimmedMaskCodeShare>,
+    range_end_exclusive: i64,
+    left_iris_codes: Vec<GaloisRingIrisCodeShare>,
+    left_masks: Vec<GaloisRingTrimmedMaskCodeShare>,
+    right_iris_codes: Vec<GaloisRingIrisCodeShare>,
+    right_masks: Vec<GaloisRingTrimmedMaskCodeShare>,
 }
 
 impl RecombinedIrisCodeBatch {
-    pub async fn insert_into_store(self, store: &Store) -> eyre::Result<()> {
+    pub async fn insert_into_store(self, store: &Store) -> Result<()> {
         let to_be_inserted = izip!(
             &self.left_iris_codes,
             &self.left_masks,
@@ -597,7 +595,7 @@ impl RecombinedIrisCodeBatch {
 }
 
 pub struct GrpcReshareServer {
-    store:           Store,
+    store: Store,
     receiver_helper: IrisCodeReshareReceiverHelper,
 }
 
@@ -615,24 +613,24 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
     async fn re_share(
         &self,
         request: tonic::Request<IrisCodeReShareRequest>,
-    ) -> Result<Response<proto::iris_mpc_reshare::IrisCodeReShareResponse>, tonic::Status> {
+    ) -> Result<Response<IrisCodeReShareResponse>, tonic::Status> {
         match self.receiver_helper.add_request_batch(request.into_inner()) {
             Ok(()) => (),
             Err(err) => {
                 tracing::warn!(error = err.to_string(), "Error handling reshare request");
                 return match err {
-                    IrisCodeReShareError::InvalidRequest { reason } => Ok(Response::new(
-                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                            status:  IrisCodeReShareStatus::Error as i32,
+                    IrisCodeReShareError::InvalidRequest { reason } => {
+                        Ok(Response::new(IrisCodeReShareResponse {
+                            status: IrisCodeReShareStatus::Error as i32,
                             message: reason,
-                        },
-                    )),
-                    IrisCodeReShareError::TooManyRequests { .. } => Ok(Response::new(
-                        proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                            status:  IrisCodeReShareStatus::FullQueue as i32,
+                        }))
+                    }
+                    IrisCodeReShareError::TooManyRequests { .. } => {
+                        Ok(Response::new(IrisCodeReShareResponse {
+                            status: IrisCodeReShareStatus::FullQueue as i32,
                             message: err.to_string(),
-                        },
-                    )),
+                        }))
+                    }
                 };
             }
         }
@@ -653,21 +651,17 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
             Ok(None) => (),
             Err(err) => {
                 tracing::warn!(error = err.to_string(), "Error handling reshare request");
-                return Ok(Response::new(
-                    proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                        status:  IrisCodeReShareStatus::Error as i32,
-                        message: err.to_string(),
-                    },
-                ));
+                return Ok(Response::new(IrisCodeReShareResponse {
+                    status: IrisCodeReShareStatus::Error as i32,
+                    message: err.to_string(),
+                }));
             }
         }
 
-        Ok(Response::new(
-            proto::iris_mpc_reshare::IrisCodeReShareResponse {
-                status:  IrisCodeReShareStatus::Ok as i32,
-                message: Default::default(),
-            },
-        ))
+        Ok(Response::new(IrisCodeReShareResponse {
+            status: IrisCodeReShareStatus::Ok as i32,
+            message: Default::default(),
+        }))
     }
 }
 

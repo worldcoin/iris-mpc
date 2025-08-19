@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:v0.12.2"
+image: "ghcr.io/worldcoin/iris-mpc@sha256:32356dcc31c306823504e3571723ba8f3e6b939bff47b373ad28587a47d5bb05" #  v0.20.2
 
 environment: stage
 replicaCount: 1
@@ -27,7 +27,7 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 60
-  failureThreshold: 40
+  failureThreshold: 120
   periodSeconds: 30
   httpGet:
     path: /ready
@@ -82,4 +82,4 @@ preStop:
   sleepPeriod: 10
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
-terminationGracePeriodSeconds: 180 # 3x SMPC__PROCESSING_TIMEOUT_SECS
+terminationGracePeriodSeconds: 120

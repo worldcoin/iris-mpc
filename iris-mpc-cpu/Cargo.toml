@@ -8,48 +8,116 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display"}
+aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+ansiterm = "0.12.2"
 async-channel = "2.3.1"
 async-stream = "0.3.6"
 async-trait = "~0.1"
-backoff = {version="0.4.0", features = ["tokio"]}
+aws-config.workspace = true
+aws-sdk-rds.workspace = true
+aws-sdk-s3.workspace = true
 bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
 dashmap = "6.1.0"
+dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
-hawk-pack.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
+iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 num-traits.workspace = true
 prost = "0.13"
 rand.workspace = true
+rand_distr = "0.4.3"
 rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
+siphasher = "1"
+socket2 = { version = "0.6.0", features = ["all"] }
 static_assertions.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
+tokio-util = "0.7.15"
 tonic = "0.12.3"
+metrics = "0.22.1"
 tracing.workspace = true
+tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
+    "uuid",
+    "chrono",
+    "smallvec",
+    "tokio",
+    "serde",
+    "env-filter",
+] }
 tracing-subscriber.workspace = true
 tracing-test = "0.2.5"
 uuid.workspace = true
+backon = { version = "1.4.0", default-features = false, features = [
+    "tokio-sleep",
+] }
+rand_chacha = { version = "0.3", features = ["serde1"] }
+num_enum = "0.7.3"
+tokio-rustls = { version = "0.26.2" }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
+rayon.workspace = true
+num_cpus = "1.16.0"
 
 [build-dependencies]
 tonic-build = "0.12.3"
+
+[features]
+db_dependent = []
+networking_benchmark = []
+networking_metrics = []
 
 [[bench]]
 name = "hnsw"
 harness = false
 
+[[bench]]
+name = "networking"
+harness = false
+
+[[bench]]
+name = "set_hash"
+harness = false
+
+[[bench]]
+name = "dot"
+harness = false
+
 [[example]]
 name = "hnsw-ex"
+
+[[bin]]
+name = "generate_benchmark_data"
+path = "bin/generate_benchmark_data.rs"
+
+[[bin]]
+name = "hawk_main"
+path = "bin/hawk_main.rs"
+
+[[bin]]
+name = "hnsw_algorithm_metrics"
+path = "bin/hnsw_algorithm_metrics.rs"
+
+[[bin]]
+name = "hnsw_network_stats_example"
+path = "bin/hnsw_network_stats_example.rs"
+
+[[bin]]
+name = "init-test-dbs"
+path = "bin/init_test_dbs.rs"
+
+[[bin]]
+name = "graph-mem-cli"
+path = "bin/graph_mem_cli.rs"
 
 [[bin]]
 name = "local_hnsw"
