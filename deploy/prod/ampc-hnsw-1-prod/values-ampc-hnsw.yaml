@@ -78,7 +78,7 @@ env:
     value: '3000'
 
   - name: SMPC__NODE_HOSTNAMES
-    value: '["0.prod.hnsw.worldcoin.org", "0.0.0.0", "2.prod.hnsw.worldcoin.org"]'
+    value: '["node.0.prod.hnsw.worldcoin.org", "0.0.0.0", "node.2.prod.hnsw.worldcoin.org"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-mpc-prod-smpcv2-sns-requests"
@@ -171,7 +171,7 @@ initContainer:
           {
             "Action": "UPSERT",
             "ResourceRecordSet": {
-              "Name": "$PARTY_ID.prod.hnsw.worldcoin.org",
+              "Name": "node.$PARTY_ID.prod.hnsw.worldcoin.org",
               "TTL": 5,
               "Type": "A",
               "ResourceRecords": [{
