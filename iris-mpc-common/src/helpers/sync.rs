@@ -26,6 +26,9 @@ pub enum ModificationKey {
     RequestId(String),
 }
 
+pub const MOD_STATUS_IN_PROGRESS: &str = "IN_PROGRESS";
+pub const MOD_STATUS_COMPLETED: &str = "COMPLETED";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ModificationStatus {
     InProgress,
@@ -35,8 +38,8 @@ pub enum ModificationStatus {
 impl Display for ModificationStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ModificationStatus::InProgress => write!(f, "IN_PROGRESS"),
-            ModificationStatus::Completed => write!(f, "COMPLETED"),
+            ModificationStatus::InProgress => write!(f, "{MOD_STATUS_IN_PROGRESS}"),
+            ModificationStatus::Completed => write!(f, "{MOD_STATUS_COMPLETED}"),
         }
     }
 }
@@ -45,8 +48,8 @@ impl FromStr for ModificationStatus {
     type Err = ();
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "IN_PROGRESS" => Ok(ModificationStatus::InProgress),
-            "COMPLETED" => Ok(ModificationStatus::Completed),
+            MOD_STATUS_IN_PROGRESS => Ok(ModificationStatus::InProgress),
+            MOD_STATUS_COMPLETED => Ok(ModificationStatus::Completed),
             _ => Err(()),
         }
     }

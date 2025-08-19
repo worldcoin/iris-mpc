@@ -29,6 +29,7 @@ base64.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 sodiumoxide = "0.2.7"
+iris-mpc = { path = "../iris-mpc" }
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
@@ -45,6 +46,8 @@ async-trait.workspace = true
 [dev-dependencies]
 criterion = "0.5"
 thiserror.workspace = true
+tracing-test = "0.2.5"
+serial_test = "3.2.0"
 
 [features]
 default = []
