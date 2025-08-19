@@ -27,7 +27,7 @@ env:
     value: "32"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -81,7 +81,7 @@ env:
     value: '["node.0.prod.hnsw.worldcoin.org","node.1.prod.hnsw.worldcoin.org","0.0.0.0"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-prod-sns-requests"
+    value: "wf-mpc-prod-smpcv2-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
     value: "false"
