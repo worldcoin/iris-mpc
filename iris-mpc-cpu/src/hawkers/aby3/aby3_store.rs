@@ -11,8 +11,6 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 use itertools::Itertools;
-use metrics::{counter, histogram};
-use std::time::Instant;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
 
@@ -102,21 +100,13 @@ impl Aby3Store {
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Result<Vec<Share<u16>>> {
+    ) -> Result<Vec<DistanceShare<u32>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-
-        histogram!("galois_ring_pairwise_distance.num_pairs").record(pairs.len() as f64);
-        let start = Instant::now();
-        let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await;
-
-        let elapsed = start.elapsed().as_micros();
-
-        histogram!("galois_ring_pairwise_distance.avg_us").record(elapsed as f64);
-        counter!("galois_ring_pairwise_distance.total_us").increment(elapsed as u64);
-
-        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+        let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await?;
+        let distances = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        self.lift_distances(distances).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.

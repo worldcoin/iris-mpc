@@ -8,12 +8,14 @@ use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 use itertools::Itertools;
+use metrics::histogram;
 use std::{
     cmp,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
+    time::Instant,
 };
 use tokio::sync::oneshot;
 
@@ -47,8 +49,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::DotProductPairs { pairs, rsp: tx };
-        let _ = self.get_next_worker().send(task);
-        Ok(rx.await?)
+        self.submit(task, rx).await
     }
 
     pub async fn dot_product_batch(
@@ -62,18 +63,31 @@ impl IrisPoolHandle {
             vector_ids,
             rsp: tx,
         };
-        let _ = self.get_next_worker().send(task);
-        Ok(rx.await?)
+        self.submit(task, rx).await
     }
 
     pub async fn galois_ring_pairwise_distances(
         &self,
         input: Vec<Option<(ArcIris, ArcIris)>>,
-    ) -> Vec<RingElement<u16>> {
+    ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::RingPairwiseDistance { input, rsp: tx };
+        self.submit(task, rx).await
+    }
+
+    async fn submit(
+        &self,
+        task: IrisTask,
+        rx: oneshot::Receiver<Vec<RingElement<u16>>>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let start = Instant::now();
+
         let _ = self.get_next_worker().send(task);
-        rx.await.unwrap()
+        let res = rx.await?;
+
+        histogram!("iris_worker.latency", "histogram" => "histogram")
+            .record(start.elapsed().as_secs_f64());
+        Ok(res)
     }
 
     fn get_next_worker(&self) -> &Sender<IrisTask> {

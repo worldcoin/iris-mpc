@@ -84,7 +84,6 @@ async fn per_session(
     let mut store = session.aby3_store.write().await;
 
     let distances = store.eval_pairwise_distances(query_pairs).await?;
-    let distances = store.lift_distances(distances).await?;
     let is_matches = store.is_match_batch(&distances).await?;
 
     for (pair, is_match) in izip!(pairs, is_matches) {
