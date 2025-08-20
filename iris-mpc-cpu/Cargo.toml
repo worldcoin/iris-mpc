@@ -42,7 +42,7 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
 tokio-util = "0.7.15"
-tonic = { version = "0.12.3", features = ["tls"] }
+tonic = "0.12.3"
 metrics = "0.22.1"
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [

@@ -1,15 +1,8 @@
-use crate::{
-    execution::{hawk_main::HawkArgs, player::Identity},
-    proto_generated::party_node::{party_node_server::PartyNodeServer, SendRequest},
-};
+use crate::{execution::player::Identity, proto_generated::party_node::SendRequest};
 use eyre::Result;
-use itertools::izip;
-use std::{collections::HashMap, fs, net::SocketAddr, sync::Once, time::Duration};
-use tokio::{
-    sync::mpsc::{UnboundedReceiver, UnboundedSender},
-    task::JoinSet,
-};
-use tonic::{transport::Server, Status};
+use std::{collections::HashMap, time::Duration};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tonic::Status;
 
 mod handle;
 mod networking;
@@ -37,102 +30,8 @@ pub struct GrpcConfig {
     pub connection_parallelism: usize,
     // number of application level sessions per gRPC stream.
     pub stream_parallelism: usize,
-    // number of requests to handle at once
-    pub request_parallelism: usize,
 }
 
-pub async fn build_network_handle(args: &HawkArgs, identities: &[Identity]) -> Result<GrpcHandle> {
-    static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
-    INSTALL_CRYPTO_PROVIDER.call_once(|| {
-        if tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .is_err()
-        {
-            tracing::error!("failed to install CryptoProvider for rustls");
-        }
-    });
-
-    let my_index = args.party_index;
-    let my_identity = identities[my_index].clone();
-    let my_address = &args.addresses[my_index];
-    let my_addr = super::to_inaddr_any(my_address.parse::<SocketAddr>()?);
-
-    // 31 rotations * 4
-    let request_parallelism = args.request_parallelism * 124;
-
-    let grpc_config = GrpcConfig {
-        timeout_duration: Duration::from_secs(10),
-        connection_parallelism: args.connection_parallelism,
-        request_parallelism,
-        stream_parallelism: request_parallelism / args.connection_parallelism,
-    };
-
-    let networking = GrpcNetworking::new(my_identity.clone(), grpc_config);
-    let networking = GrpcHandle::new(networking).await?;
-
-    tracing::info!("Starting Hawk server on {}", my_addr);
-    let player = networking.clone();
-    match args.tls.as_ref() {
-        Some(config) => {
-            // using unwrap here is less than ideal but the config should always have a leaf cert and private key
-            let cert = fs::read_to_string(config.leaf_cert.as_ref().unwrap())?;
-            let key = fs::read_to_string(config.private_key.as_ref().unwrap())?;
-            let identity = tonic::transport::Identity::from_pem(cert, key);
-            let tls_config = tonic::transport::ServerTlsConfig::new().identity(identity);
-
-            // if this fails, return error instead of panicking from the task
-            let mut builder = Server::builder().tls_config(tls_config)?;
-
-            tokio::spawn(async move {
-                builder
-                    .add_service(PartyNodeServer::new(player))
-                    .serve(my_addr)
-                    .await
-                    .unwrap();
-            });
-        }
-        None => {
-            tokio::spawn(async move {
-                Server::builder()
-                    .add_service(PartyNodeServer::new(player))
-                    .serve(my_addr)
-                    .await
-                    .unwrap();
-            });
-        }
-    }
-
-    // hack to get the index of the correct root certificate
-    let idxs: Vec<_> = (0..identities.len()).collect();
-
-    izip!(identities, &args.addresses, &idxs)
-        .filter(|(_, address, _)| address != &my_address)
-        .map(|(identity, address, &idx)| {
-            let player = networking.clone();
-            let identity = identity.clone();
-            let address = address.clone();
-
-            let root_cert = args
-                .tls
-                .as_ref()
-                .map(|config| config.root_certs[idx].clone());
-            async move {
-                tracing::info!("Connecting to {}…", address);
-                player
-                    .connect_to_party(identity, &address, root_cert)
-                    .await?;
-                tracing::info!("_connected to {}!", address);
-                Ok(())
-            }
-        })
-        .collect::<JoinSet<_>>()
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<()>>()?;
-
-    Ok(networking)
-}
 #[cfg(test)]
 mod tests {
     use super::{session::GrpcSession, *};

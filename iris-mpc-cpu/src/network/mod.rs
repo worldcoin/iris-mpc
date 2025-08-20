@@ -1,5 +1,3 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-
 use crate::{
     execution::{
         player::Identity,
@@ -9,11 +7,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-
-pub mod grpc;
-pub mod local;
-pub mod tcp;
-pub mod value;
 
 /// Requirements for networking.
 #[async_trait]
@@ -59,11 +52,7 @@ impl NetworkType {
     }
 }
 
-fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
-    if socket.is_ipv4() {
-        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
-    } else {
-        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
-    }
-    socket
-}
+pub mod grpc;
+pub mod local;
+pub mod tcp;
+pub mod value;
