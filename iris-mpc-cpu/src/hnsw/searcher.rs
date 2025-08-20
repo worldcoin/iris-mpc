@@ -502,7 +502,10 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) -> Result<()> {
-        let metrics_labels = [("layer", lc.to_string())];
+        let metrics_labels = [
+            ("histogram", "histogram".to_string()), // Record max/avg/sum.
+            ("layer", lc.to_string()),              // Group metrics by layer.
+        ];
 
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
