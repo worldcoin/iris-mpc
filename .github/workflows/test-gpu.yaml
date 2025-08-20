@@ -10,7 +10,7 @@ concurrency:
 jobs:
   e2e:
     runs-on: arc-gpu-amd64-runner
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - name: Checkout code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -97,7 +97,7 @@ jobs:
 
       - name: GPU Dependent Tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        timeout-minutes: 25
+        timeout-minutes: 15
         run: cargo test -p iris-mpc-gpu --release --features gpu_dependent -- --test-threads=1
         shell: bash
         env:
