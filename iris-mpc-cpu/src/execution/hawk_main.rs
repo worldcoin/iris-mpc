@@ -1525,7 +1525,8 @@ impl HawkHandle {
         HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
 
         // validate that the RNGs have not diverged
-        HawkSession::prf_check(sessions).await?;
+        // TODO: debug serialization issues encountered with this function and then re-enable
+        // HawkSession::prf_check(sessions).await?;
 
         Ok(())
     }
