@@ -10,7 +10,7 @@ use crate::{
     },
     protocol::{
         prf::{Prf, PrfSeed},
-        shared_iris::GaloisRingSharedIris,
+        shared_iris::ArcIris,
     },
     shares::{
         bit::Bit,
@@ -397,7 +397,7 @@ pub async fn cross_compare_and_swap(
 /// mask of the irises. We pack the dot products of the code and mask into one
 /// vector to be able to reshare it later.
 pub fn galois_ring_pairwise_distance(
-    pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
+    pairs: Vec<Option<(ArcIris, ArcIris)>>,
 ) -> Vec<RingElement<u16>> {
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
     for pair in pairs.iter() {
@@ -1009,16 +1009,18 @@ mod tests {
 
         let mut jobs = JoinSet::new();
         for (index, session) in sessions.iter().enumerate() {
-            let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
-            own_shares.iter_mut().for_each(|(_x, y)| {
-                y.code.preprocess_iris_code_query_share();
-                y.mask.preprocess_mask_code_query_share();
-            });
+            let own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())]
+                .into_iter()
+                .map(|(x, mut y)| {
+                    y.code.preprocess_iris_code_query_share();
+                    y.mask.preprocess_mask_code_query_share();
+                    Some((Arc::new(x), Arc::new(y)))
+                })
+                .collect_vec();
             let session = session.clone();
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let own_shares = own_shares.iter().map(|(x, y)| Some((x, y))).collect_vec();
-                let x = galois_ring_pairwise_distance(&own_shares);
+                let x = galois_ring_pairwise_distance(own_shares);
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();
