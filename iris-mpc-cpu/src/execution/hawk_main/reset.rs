@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use super::{
     rot::WithoutRot,
@@ -25,6 +25,8 @@ pub async fn search_to_reset(
     sessions: &BothEyes<Vec<HawkSession>>,
     request: &HawkRequest,
 ) -> Result<ResetPlan> {
+    let start = Instant::now();
+
     // Get the reset updates from the request.
     let updates = {
         // The store to find vector ids (same left or right).
@@ -37,15 +39,18 @@ pub async fn search_to_reset(
         do_match: false,
     };
 
+    let search_results = search::search(
+        sessions,
+        &updates.queries,
+        &updates.request_ids,
+        search_params,
+    )
+    .await?;
+
+    metrics::histogram!("search_to_reset_duration").record(start.elapsed().as_secs_f64());
     Ok(ResetPlan {
         vector_ids: updates.vector_ids,
-        search_results: search::search(
-            sessions,
-            &updates.queries,
-            &updates.request_ids,
-            search_params,
-        )
-        .await?,
+        search_results,
     })
 }
 
