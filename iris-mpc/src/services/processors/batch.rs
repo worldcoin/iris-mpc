@@ -55,44 +55,62 @@ pub fn receive_batch_stream(
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
-) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
+) -> (
+    Receiver<Result<Option<BatchQuery>, ReceiveRequestError>>,
+    Arc<Semaphore>,
+) {
     let (tx, rx) = mpsc::channel(1);
+    let sem = Arc::new(Semaphore::new(1));
 
-    tokio::spawn(async move {
-        loop {
-            let permit = match tx.reserve().await {
-                Ok(p) => p,
-                Err(_) => break,
-            };
+    tokio::spawn({
+        let sem = sem.clone();
+        async move {
+            loop {
+                match sem.acquire().await {
+                    // We successfully acquired the semaphore, proceed with receiving a batch
+                    // However, we forget the permit here to avoid giving it back
+                    // The main server loop will add new permits when allowed
+                    Ok(p) => p.forget(),
+                    Err(_) => {
+                        break;
+                    }
+                };
+                let permit = match tx.reserve().await {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        break;
+                    }
+                };
 
-            let batch = receive_batch(
-                party_id,
-                &client,
-                &sns_client,
-                &s3_client,
-                &config,
-                shares_encryption_key_pairs.clone(),
-                &shutdown_handler,
-                &uniqueness_error_result_attributes,
-                &reauth_error_result_attributes,
-                &reset_error_result_attributes,
-                current_batch_id_atomic.clone(),
-                &iris_store,
-                batch_sync_shared_state.clone(),
-            )
-            .await;
+                let batch = receive_batch(
+                    party_id,
+                    &client,
+                    &sns_client,
+                    &s3_client,
+                    &config,
+                    shares_encryption_key_pairs.clone(),
+                    &shutdown_handler,
+                    &uniqueness_error_result_attributes,
+                    &reauth_error_result_attributes,
+                    &reset_error_result_attributes,
+                    current_batch_id_atomic.clone(),
+                    &iris_store,
+                    batch_sync_shared_state.clone(),
+                )
+                .await;
 
-            let stop = matches!(batch, Err(_) | Ok(None));
-            permit.send(batch);
+                let stop = matches!(batch, Err(_) | Ok(None));
+                permit.send(batch);
 
-            if stop {
-                break;
+                if stop {
+                    break;
+                }
             }
+            tracing::info!("Stopping batch receiver.");
         }
-        tracing::info!("Stopping batch receiver.");
     });
 
-    rx
+    (rx, sem)
 }
 
 #[allow(clippy::too_many_arguments)]
