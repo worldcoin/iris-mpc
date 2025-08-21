@@ -21,6 +21,11 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 enum IrisTask {
+    Insert {
+        vector_id: VectorId,
+        iris: ArcIris,
+        rsp: oneshot::Sender<VectorId>,
+    },
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -43,6 +48,17 @@ pub struct IrisPoolHandle {
 }
 
 impl IrisPoolHandle {
+    pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Insert {
+            vector_id,
+            iris,
+            rsp: tx,
+        };
+        self.get_next_worker().send(task)?;
+        Ok(rx.await?)
+    }
+
     pub async fn dot_product_pairs(
         &self,
         pairs: Vec<(ArcIris, VectorId)>,
@@ -82,7 +98,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let _ = self.get_next_worker().send(task);
+        self.get_next_worker().send(task)?;
         let res = rx.await?;
 
         histogram!("iris_worker.latency", "histogram" => "histogram")
@@ -133,6 +149,15 @@ pub fn init_workers(
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
+            IrisTask::Insert {
+                vector_id,
+                iris,
+                rsp,
+            } => {
+                let mut store = iris_store.data.blocking_write();
+                let vector_id = store.insert(vector_id, iris);
+                let _ = rsp.send(vector_id);
+            }
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let pairs = {
                     let store = iris_store.data.blocking_read();
