@@ -789,9 +789,7 @@ impl HnswSearcher {
 
         let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
 
-        let distances = store
-            .eval_distance_batch(&[query.clone()], &valid_neighbors)
-            .await?;
+        let distances = store.eval_distance_batch(query, &valid_neighbors).await?;
 
         Ok(valid_neighbors
             .into_iter()
