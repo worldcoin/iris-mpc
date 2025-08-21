@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
     modifications::{self, ModificationInput},
@@ -10,16 +12,14 @@ use iris_mpc_common::{
     IrisSerialId, IrisVectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::StoreId,
-    genesis::{
-        plaintext::GenesisState,
-        state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
-    },
+    execution::hawk_main::{BothEyes, StoreId},
+    genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::graph::graph_store::GraphPg as GraphStore,
+    hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
-use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
+use tokio::task::JoinSet;
 
 // these constants were copied from genesis because genesis requires using an Aby3Store while the tests use a PlainTextStore
 mod constants {
@@ -30,36 +30,71 @@ mod constants {
     // Key for persistent state store entry for last indexed modification id
     pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 }
+
+/// Struct holds database references for iris and graph store functionality
+pub struct DbStores {
+    pub iris: Store,
+    pub graph: GraphStore<PlaintextStore>,
+}
+
+impl DbStores {
+    pub async fn new(url: &str, schema_name: &str, access_mode: AccessMode) -> Self {
+        let client = PostgresClient::new(url, schema_name, access_mode)
+            .await
+            .unwrap();
+        client.migrate().await;
+        let iris = Store::new(&client).await.unwrap();
+        let graph = GraphStore::new(&client).await.unwrap();
+
+        Self { iris, graph }
+    }
+}
+
 /// simulates a MPC node, complete with configuration (HAWK and Genesis) and database connections.
 /// a simulation consists of 3 MPC nodes; see MpcNodes
 pub struct MpcNode {
     // databases
-    pub gpu_iris_store: IrisStore,
-    pub cpu_iris_store: IrisStore,
-    pub graph_store: GraphStore<PlaintextStore>,
+    pub gpu_stores: DbStores,
+    pub cpu_stores: DbStores,
 }
 
 /// Simulates a 3 party multi party computation. Is intended to be built from a list of configurations in a way that
 /// allows the MpcNode instances to be passed to async move closures, for concurrent tasks.
 pub struct MpcNodes {
-    nodes: [MpcNode; COUNT_OF_PARTIES],
+    nodes: [Arc<MpcNode>; COUNT_OF_PARTIES],
 }
 
 impl MpcNodes {
-    pub async fn new(config: &HawkConfigs) -> Self {
+    pub async fn new(configs: &HawkConfigs) -> Self {
         Self {
             nodes: [
-                MpcNode::new(config[0].clone()).await,
-                MpcNode::new(config[1].clone()).await,
-                MpcNode::new(config[2].clone()).await,
+                Arc::new(MpcNode::new(configs[0].clone()).await),
+                Arc::new(MpcNode::new(configs[1].clone()).await),
+                Arc::new(MpcNode::new(configs[2].clone()).await),
             ],
         }
+    }
+
+    pub async fn apply_assertions(&self, gpu_asserts: DbAssertions, cpu_asserts: DbAssertions) {
+        let gpu_asserts = Arc::new(gpu_asserts);
+        let cpu_asserts = Arc::new(cpu_asserts);
+
+        let mut join_set = JoinSet::new();
+        for node in self.nodes.iter().cloned() {
+            let gpu_asserts = gpu_asserts.clone();
+            let cpu_asserts = cpu_asserts.clone();
+            join_set.spawn(async move {
+                gpu_asserts.assert(&node.gpu_stores).await.unwrap();
+                cpu_asserts.assert(&node.cpu_stores).await.unwrap();
+            });
+        }
+        join_set.join_all().await;
     }
 }
 
 impl IntoIterator for MpcNodes {
-    type Item = MpcNode;
-    type IntoIter = std::array::IntoIter<MpcNode, COUNT_OF_PARTIES>;
+    type Item = Arc<MpcNode>;
+    type IntoIter = std::array::IntoIter<Arc<MpcNode>, COUNT_OF_PARTIES>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.nodes.into_iter()
@@ -69,29 +104,23 @@ impl IntoIterator for MpcNodes {
 // entry points
 impl MpcNode {
     pub async fn new(config: Config) -> Self {
-        let cpu_client = PostgresClient::new(
-            &config.get_cpu_db_url().unwrap(),
-            &config.get_cpu_db_schema(),
-            AccessMode::ReadWrite,
-        )
-        .await
-        .unwrap();
-
-        let gpu_client = PostgresClient::new(
+        let gpu_stores = DbStores::new(
             &config.get_gpu_db_url().unwrap(),
             &config.get_gpu_db_schema(),
             AccessMode::ReadWrite,
         )
-        .await
-        .unwrap();
+        .await;
 
-        cpu_client.migrate().await;
-        gpu_client.migrate().await;
+        let cpu_stores = DbStores::new(
+            &config.get_cpu_db_url().unwrap(),
+            &config.get_cpu_db_schema(),
+            AccessMode::ReadWrite,
+        )
+        .await;
 
         Self {
-            gpu_iris_store: IrisStore::new(&gpu_client).await.unwrap(),
-            cpu_iris_store: IrisStore::new(&cpu_client).await.unwrap(),
-            graph_store: GraphStore::new(&cpu_client).await.unwrap(),
+            gpu_stores,
+            cpu_stores,
         }
     }
 
@@ -103,85 +132,8 @@ impl MpcNode {
     }
 }
 
-// utilities for unit testing, such as assertions
-impl MpcNode {
-    pub async fn assert_graphs_match(&self, expected: &GenesisState) {
-        let graph_left = {
-            let mut graph_tx = self.graph_store.tx().await.unwrap();
-            graph_tx
-                .with_graph(StoreId::Left)
-                .load_to_mem(self.graph_store.pool(), 2)
-                .await
-        }
-        .expect("Could not load left graph");
-        let graph_right = {
-            let mut graph_tx = self.graph_store.tx().await.unwrap();
-            graph_tx
-                .with_graph(StoreId::Right)
-                .load_to_mem(self.graph_store.pool(), 2)
-                .await
-        }
-        .expect("Could not load right graph");
-
-        assert!(graph_left == expected.dst_db.graphs[0]);
-        assert!(graph_right == expected.dst_db.graphs[1]);
-    }
-
-    pub async fn get_last_indexed_iris_id(&self) -> IrisSerialId {
-        self.graph_store
-            .get_persistent_state(
-                constants::STATE_DOMAIN,
-                constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
-            )
-            .await
-            .unwrap()
-            .unwrap_or_default()
-    }
-
-    pub async fn get_last_indexed_modification_id(&self) -> i64 {
-        self.graph_store
-            .get_persistent_state(
-                constants::STATE_DOMAIN,
-                constants::STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
-            )
-            .await
-            .unwrap()
-            .unwrap_or_default()
-    }
-}
-
 // misc
 impl MpcNode {
-    pub async fn insert_modifications(&self, mods: &[ModificationInput]) -> Result<()> {
-        let mut updates = vec![];
-        for m in mods {
-            let mut m2 = self
-                .gpu_iris_store
-                .insert_modification(Some(m.serial_id), &m.request_type.to_string(), None)
-                .await?;
-            m2.status = m.get_status().to_string();
-            m2.persisted = m.persisted;
-            updates.push(m2);
-        }
-
-        let mut tx = self.gpu_iris_store.tx().await?;
-        self.gpu_iris_store
-            .update_modifications(&mut tx, updates.iter().collect::<Vec<_>>().as_slice())
-            .await?;
-        tx.commit().await?;
-
-        // increment version numbers of irises affected by update modifications
-        for m in mods.iter() {
-            let mut tx = self.gpu_iris_store.tx().await?;
-            if m.request_type.is_updating() {
-                db_ops::increment_iris_version(&mut tx, m.serial_id).await?;
-            }
-            tx.commit().await?;
-        }
-
-        Ok(())
-    }
-
     pub async fn apply_modifications(
         &self,
         last_mods: &[ModificationInput],
@@ -191,7 +143,7 @@ impl MpcNode {
             bail!("Specified modifications are not a valid extension of the last modifications state.")
         }
 
-        let mut tx = self.gpu_iris_store.tx().await?;
+        let mut tx = self.gpu_stores.iris.tx().await?;
 
         let mods: Vec<_> = cur_mods.iter().cloned().map(|m| m.into()).collect();
         for m in mods.iter() {
@@ -210,7 +162,7 @@ impl MpcNode {
 
     #[allow(dead_code)]
     pub async fn increment_iris_version(&self, serial_id: i64) -> Result<()> {
-        let mut tx = self.gpu_iris_store.tx().await?;
+        let mut tx = self.gpu_stores.iris.tx().await?;
         db_ops::increment_iris_version(&mut tx, serial_id).await?;
         tx.commit().await?;
 
@@ -219,7 +171,7 @@ impl MpcNode {
 
     #[allow(dead_code)]
     pub async fn persist_modification(&self, id: i64) -> Result<()> {
-        let mut tx = self.gpu_iris_store.tx().await?;
+        let mut tx = self.gpu_stores.iris.tx().await?;
         db_ops::persist_modification(&mut tx, id).await?;
         tx.commit().await?;
 
@@ -227,38 +179,36 @@ impl MpcNode {
     }
 
     async fn clear_all_tables(&self) -> Result<()> {
-        let mut graph_tx = self.graph_store.tx().await?;
-        graph_tx
-            .with_graph(StoreId::Left)
-            .clear_tables()
-            .await
-            .expect("Could not clear left graph");
-        graph_tx
-            .with_graph(StoreId::Right)
-            .clear_tables()
-            .await
-            .expect("Could not clear right graph");
+        for stores in [&self.gpu_stores, &self.cpu_stores] {
+            // delete irises
+            stores.iris.rollback(0).await?;
 
-        unset_last_indexed_iris_id(&mut graph_tx.tx).await?;
-        unset_last_indexed_modification_id(&mut graph_tx.tx).await?;
-        graph_tx.tx.commit().await?;
+            let mut graph_tx = stores.graph.tx().await?;
 
-        // delete irises
-        self.gpu_iris_store.rollback(0).await?;
-        self.cpu_iris_store.rollback(0).await?;
+            // clear graphs
+            graph_tx
+                .with_graph(StoreId::Left)
+                .clear_tables()
+                .await
+                .expect("Could not clear left graph");
+            graph_tx
+                .with_graph(StoreId::Right)
+                .clear_tables()
+                .await
+                .expect("Could not clear right graph");
 
-        // clear modifications tables
-        let mut tx = self.cpu_iris_store.tx().await?;
-        self.cpu_iris_store
-            .clear_modifications_table(&mut tx)
-            .await?;
-        tx.commit().await?;
+            let mut tx = graph_tx.tx;
 
-        let mut tx = self.gpu_iris_store.tx().await?;
-        self.gpu_iris_store
-            .clear_modifications_table(&mut tx)
-            .await?;
-        tx.commit().await?;
+            // clear modifications tables
+            stores.iris.clear_modifications_table(&mut tx).await?;
+
+            // clear persistent state
+            unset_last_indexed_iris_id(&mut tx).await?;
+            unset_last_indexed_modification_id(&mut tx).await?;
+
+            tx.commit().await?;
+        }
+
         Ok(())
     }
 
@@ -267,8 +217,8 @@ impl MpcNode {
     async fn insert_into_gpu_iris_store(&self, shares: &[GaloisRingSharedIrisPair]) -> Result<()> {
         const SECRET_SHARING_PG_TX_SIZE: usize = 100;
 
-        let mut tx = self.gpu_iris_store.tx().await?;
-        let starting_len = self.gpu_iris_store.count_irises().await?;
+        let mut tx = self.gpu_stores.iris.tx().await?;
+        let starting_len = self.gpu_stores.iris.count_irises().await?;
 
         let chunks: Vec<Vec<_>> = shares
             .iter()
@@ -292,18 +242,147 @@ impl MpcNode {
                 })
                 .collect();
 
-            self.gpu_iris_store
+            self.gpu_stores
+                .iris
                 .insert_irises(&mut tx, &iris_refs)
                 .await?;
             tx.commit().await?;
-            tx = self.gpu_iris_store.tx().await?;
+            tx = self.gpu_stores.iris.tx().await?;
         }
 
         Ok(())
     }
+}
 
-    pub async fn get_cpu_iris_vector_ids(&self, max_serial_id: i64) -> Result<Vec<IrisVectorId>> {
-        db_ops::get_iris_vector_ids(&self.cpu_iris_store, max_serial_id).await
+#[derive(Default, Clone)]
+pub struct DbAssertions {
+    pub num_irises: Option<usize>,
+    pub vector_ids: Option<Vec<IrisVectorId>>,
+    pub num_modifications: Option<usize>,
+    pub last_indexed_iris_id: Option<IrisSerialId>,
+    pub last_indexed_modification_id: Option<i64>,
+    pub layer_0_size: Option<usize>,
+    pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextStore>>>,
+}
+
+impl DbAssertions {
+    pub fn new() -> Self {
+        Default::default()
+    }
+
+    pub fn assert_num_irises(mut self, num: usize) -> Self {
+        self.num_irises = Some(num);
+        self
+    }
+
+    pub fn assert_vector_ids(mut self, vector_ids: Vec<IrisVectorId>) -> Self {
+        self.vector_ids = Some(vector_ids);
+        self
+    }
+
+    pub fn assert_num_modifications(mut self, num: usize) -> Self {
+        self.num_modifications = Some(num);
+        self
+    }
+
+    pub fn assert_last_indexed_iris_id(mut self, id: IrisSerialId) -> Self {
+        self.last_indexed_iris_id = Some(id);
+        self
+    }
+
+    pub fn assert_last_indexed_modification_id(mut self, id: i64) -> Self {
+        self.last_indexed_modification_id = Some(id);
+        self
+    }
+
+    pub fn assert_hnsw_layer_0_size(mut self, size: usize) -> Self {
+        self.layer_0_size = Some(size);
+        self
+    }
+
+    pub fn assert_hnsw_graphs(mut self, graphs: BothEyes<GraphMem<PlaintextStore>>) -> Self {
+        self.hnsw_graphs = Some(graphs);
+        self
+    }
+
+    pub async fn assert(&self, stores: &DbStores) -> Result<()> {
+        if let Some(num_irises) = self.num_irises {
+            let store_num_irises = stores.iris.count_irises().await?;
+            assert_eq!(num_irises, store_num_irises);
+        }
+
+        if let Some(vector_ids) = &self.vector_ids {
+            let store_vector_ids = db_ops::get_iris_vector_ids(&stores.iris).await?;
+            assert_eq!(store_vector_ids, *vector_ids);
+        }
+
+        if let Some(num_modifications) = self.num_modifications {
+            let store_num_modifications = stores.iris.last_modifications(1000).await?.len();
+            assert_eq!(store_num_modifications, num_modifications);
+        }
+
+        if let Some(last_indexed_iris_id) = self.last_indexed_iris_id {
+            let store_last_indexed_iris_id: u32 = stores
+                .graph
+                .get_persistent_state(
+                    constants::STATE_DOMAIN,
+                    constants::STATE_KEY_LAST_INDEXED_IRIS_ID,
+                )
+                .await?
+                .unwrap_or(0);
+            assert_eq!(store_last_indexed_iris_id, last_indexed_iris_id);
+        }
+
+        if let Some(last_indexed_modification_id) = self.last_indexed_modification_id {
+            let store_last_indexed_modification_id: i64 = stores
+                .graph
+                .get_persistent_state(
+                    constants::STATE_DOMAIN,
+                    constants::STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
+                )
+                .await?
+                .unwrap_or_default();
+            assert_eq!(
+                store_last_indexed_modification_id,
+                last_indexed_modification_id
+            );
+        }
+
+        if self.layer_0_size.is_some() || self.hnsw_graphs.is_some() {
+            let store_graph_left = {
+                let mut graph_tx = stores.graph.tx().await.unwrap();
+                graph_tx
+                    .with_graph(StoreId::Left)
+                    .load_to_mem(stores.graph.pool(), 2)
+                    .await
+            }
+            .expect("Could not load left graph");
+
+            let store_graph_right = {
+                let mut graph_tx = stores.graph.tx().await.unwrap();
+                graph_tx
+                    .with_graph(StoreId::Right)
+                    .load_to_mem(stores.graph.pool(), 2)
+                    .await
+            }
+            .expect("Could not load right graph");
+
+            if let Some(layer_0_size) = self.layer_0_size {
+                let store_layer_0_size_left =
+                    store_graph_left.get_layers().first().unwrap().links.len();
+                let store_layer_0_size_right =
+                    store_graph_right.get_layers().first().unwrap().links.len();
+                assert_eq!(store_layer_0_size_left, layer_0_size);
+                assert_eq!(store_layer_0_size_right, layer_0_size);
+            }
+
+            if let Some(hnsw_graphs) = &self.hnsw_graphs {
+                assert_eq!(store_graph_left, hnsw_graphs[0]);
+                assert_eq!(store_graph_right, hnsw_graphs[1]);
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -333,21 +412,16 @@ mod db_ops {
         Ok(())
     }
 
-    pub async fn get_iris_vector_ids(
-        store: &Store,
-        max_serial_id: i64,
-    ) -> Result<Vec<IrisVectorId>> {
+    pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<IrisVectorId>> {
         let ids: Vec<(i64, i16)> = sqlx::query_as(
             r#"
             SELECT
                 id,
                 version_id
             FROM irises
-            WHERE id <= $1
             ORDER BY id ASC;
             "#,
         )
-        .bind(max_serial_id)
         .fetch_all(&store.pool)
         .await?;
 
