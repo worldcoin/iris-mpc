@@ -29,6 +29,9 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "512"
 

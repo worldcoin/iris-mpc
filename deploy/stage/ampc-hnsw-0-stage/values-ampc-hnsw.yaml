@@ -26,6 +26,9 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "32"
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
