@@ -3,7 +3,9 @@ use crate::utils::{
     IrisCodePair,
 };
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{config::Config, iris_db::iris::IrisCode, IrisSerialId, IrisVersionId};
+use iris_mpc_common::{
+    config::Config, iris_db::iris::IrisCode, IrisSerialId, IrisVectorId, IrisVersionId,
+};
 use iris_mpc_cpu::{
     genesis::plaintext::{
         run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState,
@@ -149,4 +151,13 @@ pub fn init_plaintext_config(config: &Config) -> GenesisConfig {
         hnsw_ef_search: config.hnsw_param_ef_search,
         hawk_prf_key: config.hawk_prf_key,
     }
+}
+
+pub fn get_vector_ids(irises: &IrisesTable) -> Vec<IrisVectorId> {
+    let mut ids: Vec<_> = irises
+        .iter()
+        .map(|(serial_id, data)| IrisVectorId::new(*serial_id, data.0))
+        .collect();
+    ids.sort_by_key(|id| id.serial_id());
+    ids
 }

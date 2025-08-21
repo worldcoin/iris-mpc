@@ -1,10 +1,14 @@
 use std::{fmt::Display, ops::DerefMut};
 
 use eyre::Result;
-use iris_mpc_common::helpers::{
-    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-    sync::{Modification, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
+use iris_mpc_common::{
+    helpers::{
+        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+        sync::{Modification, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
+    },
+    IrisVectorId,
 };
+use iris_mpc_store::Store;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 
@@ -168,6 +172,29 @@ pub async fn increment_iris_version(
     query.execute(tx.deref_mut()).await?;
 
     Ok(())
+}
+
+pub async fn get_iris_vector_ids(store: &Store, max_serial_id: i64) -> Result<Vec<IrisVectorId>> {
+    let ids: Vec<(i64, i16)> = sqlx::query_as(
+        r#"
+        SELECT
+            id,
+            version_id
+        FROM irises
+        WHERE id <= $1
+        ORDER BY id ASC;
+        "#,
+    )
+    .bind(max_serial_id)
+    .fetch_all(&store.pool)
+    .await?;
+
+    let ids = ids
+        .into_iter()
+        .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
+        .collect();
+
+    Ok(ids)
 }
 
 pub async fn persist_modification(

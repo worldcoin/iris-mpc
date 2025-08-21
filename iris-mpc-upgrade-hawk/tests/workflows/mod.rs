@@ -4,3 +4,4 @@ pub mod genesis_102;
 pub mod genesis_103;
 pub mod genesis_104;
 pub mod genesis_105;
+pub mod genesis_106;
