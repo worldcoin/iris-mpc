@@ -1,16 +1,20 @@
-use std::sync::{Arc, LazyLock};
+use std::sync::LazyLock;
 
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
     modifications::{ModificationInput, ModificationType},
     mpc_node::{MpcNode, MpcNodes},
+    plaintext_genesis,
     resources::{self},
     s3_deletions::{get_aws_clients, upload_iris_deletions},
     HawkConfigs, IrisCodePair, TestError, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_cpu::genesis::{get_iris_deletions, plaintext::GenesisArgs};
+use iris_mpc_cpu::genesis::{
+    get_iris_deletions,
+    plaintext::{run_plaintext_genesis, GenesisArgs, GenesisState},
+};
 use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
@@ -125,20 +129,32 @@ impl TestRun for Test {
     }
 
     async fn exec_assert(&mut self) -> Result<(), TestError> {
-        let config = &self.configs[0];
-        let plaintext_irises = get_irises();
-        todo!("add modifications to the genesis simulation");
-        let expected = Arc::new(
-            PlaintextGenesis::new(DEFAULT_GENESIS_ARGS, config, &plaintext_irises)
-                .run()
-                .await
-                .unwrap(),
-        );
+        // Simulate genesis execution in plaintext
+        let mut state_0 = GenesisState::default();
+        state_0.src_db.irises = plaintext_genesis::init_plaintext_irises_db(&get_irises());
+        state_0.config = plaintext_genesis::init_plaintext_config(&self.configs[0]);
+        state_0.args = DEFAULT_GENESIS_ARGS;
+        state_0.args.max_indexation_id = 50;
+
+        let mut state_1 = run_plaintext_genesis(state_0)
+            .await
+            .expect("Stage 1 of plaintext genesis execution failed");
+
+        plaintext_genesis::apply_src_modifications(&mut state_1.src_db, &MODIFICATIONS)?;
+        state_1.args.max_indexation_id = 100;
+
+        let expected = run_plaintext_genesis(state_1)
+            .await
+            .expect("Stage 2 of plaintext genesis execution failed");
 
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             let expected = expected.clone();
             let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
+            let num_update_modifications = MODIFICATIONS
+                .iter()
+                .filter(|m| m.request_type.is_updating())
+                .count();
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
@@ -160,9 +176,10 @@ impl TestRun for Test {
 
                 node.assert_graphs_match(&expected).await;
 
+                // New graph entries are created for modified iris codes
                 assert_eq!(
                     expected.dst_db.graphs[0].layers[0].links.len(),
-                    DEFAULT_GENESIS_ARGS.max_indexation_id as usize
+                    max_indexation_id + num_update_modifications
                 );
             });
         }
