@@ -63,6 +63,7 @@ use std::{
 use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
+    task::JoinSet,
 };
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
@@ -626,6 +627,8 @@ impl HawkActor {
                     self.iris_store[0].write().await,
                     self.iris_store[1].write().await,
                 ],
+                iris_pools: self.workers_handle.clone(),
+                tasks: JoinSet::new(),
             },
             GraphLoader([
                 self.graph_store[0].write().await,
@@ -648,6 +651,8 @@ pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
     irises: BothEyes<Aby3SharedIrisesMut<'a>>,
+    iris_pools: BothEyes<IrisPoolHandle>,
+    tasks: JoinSet<Result<VectorId>>,
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -661,14 +666,17 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (side, code, mask) in izip!(
+        for (side, pool, code, mask) in izip!(
             &mut self.irises,
+            self.iris_pools.clone(),
             [left_code, right_code],
             [left_mask, right_mask]
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-            side.insert(vector_id, iris);
+            // side.insert(vector_id, iris);
+            self.tasks
+                .spawn(async move { pool.insert(vector_id, iris).await });
         }
     }
 
