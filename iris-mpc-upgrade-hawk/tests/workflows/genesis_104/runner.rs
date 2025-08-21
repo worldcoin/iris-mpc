@@ -1,9 +1,10 @@
-use std::sync::LazyLock;
-
 use crate::utils::{
     constants::COUNT_OF_PARTIES,
     irises,
-    modifications::{ModificationInput, ModificationType},
+    modifications::{
+        self, ModificationInput,
+        ModificationType::{Reauth, ResetUpdate},
+    },
     mpc_node::{MpcNode, MpcNodes},
     plaintext_genesis,
     resources::{self},
@@ -19,12 +20,10 @@ use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use itertools::izip;
 use tokio::task::JoinSet;
 
-static MODIFICATIONS: LazyLock<Vec<ModificationInput>> = LazyLock::new(|| {
-    ModificationInput::from_slice(&[
-        (3, ModificationType::Reauth, true, true),
-        (5, ModificationType::ResetUpdate, true, true),
-    ])
-});
+const MODIFICATIONS: [ModificationInput; 2] = [
+    ModificationInput::new(1, 3, Reauth, true, true),
+    ModificationInput::new(2, 5, ResetUpdate, true, true),
+];
 
 pub struct Test {
     configs: HawkConfigs,
@@ -84,24 +83,20 @@ impl TestRun for Test {
                 .unwrap()
             });
         }
+        join_set.join_all().await;
 
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
-
+        let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             join_set.spawn(async move {
-                node.insert_modifications(&MODIFICATIONS).await.unwrap();
+                node.apply_modifications(&[], &MODIFICATIONS).await.unwrap();
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         // hack to get around an "address already in use" error, emitted by HawkHandle
         let service_ports = vec!["4003".into(), "4004".into(), "4005".into()];
 
+        let mut join_set = JoinSet::new();
         for mut config in self.configs.iter().cloned() {
             let genesis_args = DEFAULT_GENESIS_ARGS;
             config.service_ports = service_ports.clone();
@@ -120,10 +115,7 @@ impl TestRun for Test {
                 .unwrap()
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         Ok(())
     }
@@ -140,21 +132,25 @@ impl TestRun for Test {
             .await
             .expect("Stage 1 of plaintext genesis execution failed");
 
-        plaintext_genesis::apply_src_modifications(&mut state_1.src_db, &MODIFICATIONS)?;
+        plaintext_genesis::apply_modifications(&mut state_1.src_db, &[], &MODIFICATIONS)?;
         state_1.args.max_indexation_id = 100;
 
         let expected = run_plaintext_genesis(state_1)
             .await
             .expect("Stage 2 of plaintext genesis execution failed");
 
+        // Number of modifications on already-indexed irises which are processed by genesis delta
+        let num_updating_modifications =
+            modifications::modifications_extension_updates(&[], &MODIFICATIONS)
+                .into_iter()
+                .filter(|serial_id| *serial_id <= 50)
+                .count();
+
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
             let expected = expected.clone();
             let max_indexation_id = DEFAULT_GENESIS_ARGS.max_indexation_id as usize;
-            let num_update_modifications = MODIFICATIONS
-                .iter()
-                .filter(|m| m.request_type.is_updating())
-                .count();
+
             join_set.spawn(async move {
                 // inspect the postgres tables - iris counts, modifications, and persisted_state
                 let num_irises = node.gpu_iris_store.count_irises().await.unwrap();
@@ -179,14 +175,11 @@ impl TestRun for Test {
                 // New graph entries are created for modified iris codes
                 assert_eq!(
                     expected.dst_db.graphs[0].layers[0].links.len(),
-                    max_indexation_id + num_update_modifications
+                    max_indexation_id + num_updating_modifications
                 );
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         Ok(())
     }
@@ -208,10 +201,7 @@ impl TestRun for Test {
                 node.init_tables(&shares).await.unwrap();
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         // any config file is sufficient to connect to S3
         let config = &self.configs[0];
@@ -251,10 +241,7 @@ impl TestRun for Test {
                 assert_eq!(0, node.get_last_indexed_modification_id().await);
             });
         }
-
-        while let Some(r) = join_set.join_next().await {
-            r.unwrap();
-        }
+        join_set.join_all().await;
 
         // Assert localstack.
 

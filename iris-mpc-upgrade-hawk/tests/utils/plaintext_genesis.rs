@@ -1,8 +1,8 @@
 use crate::utils::{
-    modifications::{ModificationInput, ModificationType},
+    modifications::{self, ModificationInput},
     IrisCodePair,
 };
-use eyre::{OptionExt, Result};
+use eyre::{bail, OptionExt, Result};
 use iris_mpc_common::{config::Config, iris_db::iris::IrisCode, IrisSerialId, IrisVersionId};
 use iris_mpc_cpu::{
     genesis::plaintext::{
@@ -102,30 +102,23 @@ pub fn init_plaintext_irises_db(pairs: &[IrisCodePair]) -> IrisesTable {
 }
 
 /// Update plaintext genesis source database state to reflect application of the
-/// specified modification inputs.  Appends modifications to the `modifications`
-/// field, and increments the version number of the associated serial ids for
-/// modifications updating an iris in the database.  Makes no change to the
-/// iris database for a uniqueness modification entry.
-pub fn apply_src_modifications(
+/// specified modifications `cur_mods`, relative to prior state `last_mods`.
+/// Appends modifications to the `modifications` field, and increments the
+/// version number of the associated serial ids for modifications updating an
+/// iris in the database which took place after `last_mods`.  Makes no change to
+/// the iris database for a uniqueness modification entry.
+pub fn apply_modifications(
     src_db: &mut GenesisSrcDbState,
-    modifications: &[ModificationInput],
+    last_mods: &[ModificationInput],
+    cur_mods: &[ModificationInput],
 ) -> Result<()> {
-    let max_modification_id = src_db.modifications.keys().cloned().max().unwrap_or(0);
+    if !modifications::modifications_extension_is_valid(last_mods, cur_mods) {
+        bail!("Specified modifications are not a valid extension of the last modifications state.")
+    }
 
-    for (idx, m) in modifications.iter().enumerate() {
-        if matches!(
-            m.request_type,
-            ModificationType::ResetUpdate | ModificationType::Reauth
-        ) {
-            let entry = src_db
-                .irises
-                .get_mut(&(m.serial_id as u32))
-                .ok_or_eyre("Modified iris serial id missing from plaintext database")?;
-            entry.0 += 1;
-        }
-
+    for m in cur_mods.iter() {
         src_db.modifications.insert(
-            max_modification_id + (idx as i64) + 1,
+            m.mod_id,
             (
                 m.serial_id as u32,
                 m.request_type.to_string(),
@@ -133,6 +126,15 @@ pub fn apply_src_modifications(
                 m.persisted,
             ),
         );
+    }
+
+    let update_serial_ids = modifications::modifications_extension_updates(last_mods, cur_mods);
+    for serial_id in update_serial_ids {
+        src_db
+            .irises
+            .get_mut(&(serial_id as u32))
+            .ok_or_eyre("Modification specifies invalid iris serial id.")?
+            .0 += 1;
     }
 
     Ok(())
