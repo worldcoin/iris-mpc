@@ -1,4 +1,4 @@
-name: Branch - Hawk Build and push docker image 
+name: Branch - Hawk Build and push docker image
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - "chore/test-tls-in-stage"
 
 concurrency:
-  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 env:

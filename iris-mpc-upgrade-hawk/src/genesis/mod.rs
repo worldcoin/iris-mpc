@@ -4,9 +4,9 @@ use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
     Client as S3Client,
 };
-use aws_sdk_sqs::Client as SQSClient;
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
+use iris_mpc_common::server_coordination::BatchSyncSharedState;
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{
@@ -30,12 +30,12 @@ use iris_mpc_cpu::{
         utils, BatchGenerator, BatchIterator, BatchSize, Handle as GenesisHawkHandle,
         IndexationError, JobRequest, JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3Store, SharedIrisesRef},
+    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store},
     hnsw::graph::graph_store::GraphPg,
 };
 use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
 use std::{
-    sync::{atomic::AtomicU64, Arc},
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::{
@@ -46,7 +46,7 @@ use tokio::{
 const DEFAULT_REGION: &str = "eu-north-1";
 
 /// Process input arguments typically passed from command line.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct ExecutionArgs {
     // Serial idenitifer of maximum indexed Iris.
     max_indexation_id: IrisSerialId,
@@ -67,16 +67,16 @@ pub struct ExecutionArgs {
 /// Constructor.
 impl ExecutionArgs {
     pub fn new(
-        max_indexation_id: IrisSerialId,
         batch_size: usize,
         batch_size_error_rate: usize,
+        max_indexation_id: IrisSerialId,
         perform_snapshot: bool,
         use_backup_as_source: bool,
     ) -> Self {
         Self {
-            max_indexation_id,
             batch_size,
             batch_size_error_rate,
+            max_indexation_id,
             perform_snapshot,
             use_backup_as_source,
         }
@@ -120,7 +120,7 @@ impl ExecutionContextInfo {
         max_modification_persist_id: i64,
     ) -> Self {
         Self {
-            args: args.clone(),
+            args: *args,
             config: config.clone(),
             excluded_serial_ids,
             last_indexed_id,
@@ -135,7 +135,7 @@ impl ExecutionContextInfo {
 /// indexing.  This setup builds a new HNSW graph via MPC insertion of secret
 /// shared iris codes in a database snapshot.  In particular, this indexer
 /// mode does not make use of AWS services, instead processing entries from
-/// an isolated database snapshot of previously validated unique iris shares.
+/// an isolated database snapshot of previously validated unique iris shares
 ///
 /// # Arguments
 ///
@@ -155,6 +155,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         graph_store,
         hnsw_iris_store,
     ) = exec_setup(&args, &config).await?;
+
     log_info(String::from("Setup complete."));
     log_info(format!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size: {}\n  Batch size error rate: {}\n  Perform snapshot: {}\n  User backup as source: {}",
@@ -239,7 +240,7 @@ async fn exec_setup(
     Arc<ShutdownHandler>,
     TaskMonitor,
     RDSClient,
-    Arc<BothEyes<SharedIrisesRef>>,
+    Arc<BothEyes<Aby3SharedIrisesRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
     Arc<GraphPg<Aby3Store>>,
@@ -255,10 +256,8 @@ async fn exec_setup(
     let mut task_monitor_bg = coordinator::init_task_monitor();
 
     // Set service clients.
-    let (
-        (aws_s3_client, aws_sqs_client, aws_rds_client),
-        (iris_store, (hnsw_iris_store, graph_store)),
-    ) = get_service_clients(config).await?;
+    let ((aws_s3_client, aws_rds_client), (iris_store, (hnsw_iris_store, graph_store))) =
+        get_service_clients(config).await?;
     log_info(String::from("Service clients instantiated"));
     let graph_store_arc = Arc::new(graph_store);
 
@@ -310,15 +309,16 @@ async fn exec_setup(
     let my_state = get_sync_state(config, genesis_config).await?;
     log_info(String::from("Synchronization state initialised"));
 
+    let batch_sync_shared_state =
+        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
+
     // Coordinator: await server start.
-    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
     let is_ready_flag = coordinator::start_coordination_server(
         config,
-        &aws_sqs_client,
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
-        current_batch_id_atomic,
+        batch_sync_shared_state,
     )
     .await;
     task_monitor_bg.check_tasks();
@@ -568,7 +568,7 @@ async fn exec_delta(
 ///
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
-    imem_iris_stores: &BothEyes<SharedIrisesRef>,
+    imem_iris_stores: &BothEyes<Aby3SharedIrisesRef>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     mut task_monitor_bg: TaskMonitor,
@@ -908,13 +908,13 @@ async fn get_service_clients(
     config: &Config,
 ) -> Result<
     (
-        (S3Client, SQSClient, RDSClient),
+        (S3Client, RDSClient),
         (IrisStore, (IrisStore, GraphPg<Aby3Store>)),
     ),
     Report,
 > {
     /// Returns an S3 client with retry configuration.
-    async fn get_aws_clients(config: &Config) -> Result<(S3Client, SQSClient, RDSClient)> {
+    async fn get_aws_clients(config: &Config) -> Result<(S3Client, RDSClient)> {
         let region = config
             .clone()
             .aws
@@ -931,7 +931,6 @@ async fn get_service_clients(
 
         Ok((
             S3Client::from_conf(s3_config),
-            SQSClient::new(&shared_config),
             RDSClient::new(&shared_config),
         ))
     }
@@ -1012,7 +1011,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
-    imem_iris_stores: Arc<BothEyes<SharedIrisesRef>>,
+    imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
     hnsw_iris_store: IrisStore,
     graph_store: Arc<GraphPg<Aby3Store>>,
     task_monitor: &mut TaskMonitor,

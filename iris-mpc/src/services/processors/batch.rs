@@ -31,6 +31,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
+use iris_mpc_common::server_coordination::BatchSyncSharedState;
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -53,6 +54,7 @@ pub fn receive_batch_stream(
     reset_error_result_attributes: HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: Store,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 ) -> Receiver<Result<Option<BatchQuery>, ReceiveRequestError>> {
     let (tx, rx) = mpsc::channel(1);
 
@@ -76,6 +78,7 @@ pub fn receive_batch_stream(
                 &reset_error_result_attributes,
                 current_batch_id_atomic.clone(),
                 &iris_store,
+                batch_sync_shared_state.clone(),
             )
             .await;
 
@@ -106,6 +109,7 @@ async fn receive_batch(
     reset_error_result_attributes: &HashMap<String, MessageAttributeValue>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &Store,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
@@ -120,6 +124,7 @@ async fn receive_batch(
         reset_error_result_attributes,
         current_batch_id_atomic,
         iris_store,
+        batch_sync_shared_state,
     );
 
     processor.receive_batch().await
@@ -142,6 +147,7 @@ pub struct BatchProcessor<'a> {
     msg_counter: usize,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &'a Store,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -159,6 +165,7 @@ impl<'a> BatchProcessor<'a> {
         reset_error_result_attributes: &'a HashMap<String, MessageAttributeValue>,
         current_batch_id_atomic: Arc<AtomicU64>,
         iris_store: &'a Store,
+        batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
     ) -> Self {
         Self {
             party_id,
@@ -177,6 +184,7 @@ impl<'a> BatchProcessor<'a> {
             msg_counter: 0,
             current_batch_id_atomic,
             iris_store,
+            batch_sync_shared_state,
         }
     }
 
@@ -194,28 +202,36 @@ impl<'a> BatchProcessor<'a> {
                 .await
                 .map_err(ReceiveRequestError::BatchSyncError)?;
 
+            // Update the shared state with our current state
+            {
+                let mut shared_state = self.batch_sync_shared_state.lock().await;
+                shared_state.batch_id = own_state.batch_id;
+                shared_state.messages_to_poll = own_state.messages_to_poll;
+                tracing::info!(
+                    "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
+                    shared_state.batch_id,
+                    shared_state.messages_to_poll,
+                );
+            }
+
             let all_states =
                 get_batch_sync_states(self.config, self.client, Some(&own_state), current_batch_id)
                     .await
                     .map_err(ReceiveRequestError::BatchSyncError)?;
 
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
-            let max_visible_messages = batch_sync_result.max_approximate_visible_messages();
-
-            let num_to_poll =
-                std::cmp::min(max_visible_messages, self.config.max_batch_size as u32);
+            let messages_to_poll = batch_sync_result.messages_to_poll();
 
             tracing::info!(
-                "Batch ID: {}. Agreed to poll {} messages (max_visible: {}, max_batch_size: {}).",
+                "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
                 current_batch_id,
-                num_to_poll,
-                max_visible_messages,
+                messages_to_poll,
                 self.config.max_batch_size
             );
 
             // Poll the determined number of messages
-            if num_to_poll > 0 {
-                self.poll_exact_messages(num_to_poll).await?;
+            if messages_to_poll > 0 {
+                self.poll_exact_messages(messages_to_poll).await?;
                 break;
             } else {
                 tracing::info!(
@@ -228,6 +244,7 @@ impl<'a> BatchProcessor<'a> {
                     );
                     return Ok(None);
                 }
+                // Reduce sleep time when no messages are available
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
             }
         }
@@ -244,9 +261,6 @@ impl<'a> BatchProcessor<'a> {
                 .zip(self.batch_query.request_types.iter())
                 .collect::<Vec<_>>()
         );
-
-        // Increment batch_id for the next batch
-        self.current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
         Ok(Some(self.batch_query.clone()))
     }
@@ -304,14 +318,13 @@ impl<'a> BatchProcessor<'a> {
                 // as SQS long polling usually returns an empty messages array instead of None.
                 // However, handling it defensively.
                 tracing::debug!(
-                    "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
+                  "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
                     current_batch_id
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 continue;
             }
         }
-
         tracing::info!(
             "Batch ID: {}. Finished polling SQS. Processed {} messages for this batch attempt (target: {}).",
             current_batch_id,
@@ -679,7 +692,7 @@ impl<'a> BatchProcessor<'a> {
             self.iris_store,
             Some(reset_update_request.serial_id as i64),
             RESET_UPDATE_MESSAGE_TYPE,
-            Some(reset_update_request.s3_key.as_str()),
+            Some(reset_update_request.s3_key.as_ref()),
         )
         .await;
 
@@ -714,17 +727,17 @@ impl<'a> BatchProcessor<'a> {
 
             match result {
                 Ok((share_left, share_right)) => {
-                    self.batch_query.valid_entries.push(true);
-                    self.add_shares_to_batch_query(share_left, share_right);
+                    self.batch_query
+                        .push_matching_request_shares(share_left, share_right, true);
                 }
                 Err(e) => {
                     tracing::error!("Failed to process iris shares: {:?}", e);
                     self.handle_share_processing_error(index).await?;
 
                     // Create dummy shares for invalid entry
-                    let ((dummy_left, dummy_right), valid) = self.create_dummy_shares();
-                    self.batch_query.valid_entries.push(valid);
-                    self.add_shares_to_batch_query(dummy_left, dummy_right);
+                    let (dummy_left, dummy_right) = self.create_dummy_shares();
+                    self.batch_query
+                        .push_matching_request_shares(dummy_left, dummy_right, false);
                 }
             }
         }
@@ -867,7 +880,7 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
-    fn create_dummy_shares(&self) -> ((GaloisShares, GaloisShares), bool) {
+    fn create_dummy_shares(&self) -> (GaloisShares, GaloisShares) {
         let dummy_code_share = GaloisRingIrisCodeShare::default_for_party(self.party_id);
         let dummy_mask_share = GaloisRingTrimmedMaskCodeShare::default_for_party(self.party_id);
 
@@ -882,76 +895,7 @@ impl<'a> BatchProcessor<'a> {
             mask_mirrored: dummy_mask_share.all_rotations(),
         };
 
-        ((dummy.clone(), dummy), false)
-    }
-
-    fn add_shares_to_batch_query(&mut self, share_left: GaloisShares, share_right: GaloisShares) {
-        self.batch_query
-            .left_iris_requests
-            .code
-            .push(share_left.code);
-        self.batch_query
-            .left_iris_requests
-            .mask
-            .push(share_left.mask);
-        self.batch_query
-            .left_iris_rotated_requests
-            .code
-            .extend(share_left.code_rotated);
-        self.batch_query
-            .left_iris_rotated_requests
-            .mask
-            .extend(share_left.mask_rotated);
-        self.batch_query
-            .left_iris_interpolated_requests
-            .code
-            .extend(share_left.code_interpolated);
-        self.batch_query
-            .left_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_interpolated);
-
-        self.batch_query
-            .right_iris_requests
-            .code
-            .push(share_right.code);
-        self.batch_query
-            .right_iris_requests
-            .mask
-            .push(share_right.mask);
-        self.batch_query
-            .right_iris_rotated_requests
-            .code
-            .extend(share_right.code_rotated);
-        self.batch_query
-            .right_iris_rotated_requests
-            .mask
-            .extend(share_right.mask_rotated);
-        self.batch_query
-            .right_iris_interpolated_requests
-            .code
-            .extend(share_right.code_interpolated);
-        self.batch_query
-            .right_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_interpolated);
-
-        self.batch_query
-            .left_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_left.code_mirrored);
-        self.batch_query
-            .left_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_left.mask_mirrored);
-        self.batch_query
-            .right_mirrored_iris_interpolated_requests
-            .code
-            .extend(share_right.code_mirrored);
-        self.batch_query
-            .right_mirrored_iris_interpolated_requests
-            .mask
-            .extend(share_right.mask_mirrored);
+        (dummy.clone(), dummy)
     }
 }
 

@@ -9,6 +9,8 @@ strategy:
 datadog:
   enabled: true
 
+hostNetwork: false
+
 ports:
   - containerPort: 3000
     name: health
@@ -31,8 +33,6 @@ ports:
   - containerPort: 4102
     name: tcp-4102
     protocol: TCP
-
-hostNetwork: false
 
 livenessProbe:
   httpGet:

@@ -1,5 +1,6 @@
 use crate::{
-    execution::{hawk_main::state_check::SetHash, session::Session},
+    execution::session::Session,
+    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
         ops::{
@@ -11,317 +12,56 @@ use crate::{
     shares::share::{DistanceShare, Share},
 };
 use eyre::Result;
-use iris_mpc_common::vector_id::{SerialId, VersionId};
 use itertools::{izip, Itertools};
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use tracing::instrument;
 
-pub use iris_mpc_common::vector_id::VectorId;
-
-/// Reference to an iris in the Shamir secret shared form over a Galois ring.
-pub type IrisRef = Arc<GaloisRingSharedIris>;
+use iris_mpc_common::vector_id::VectorId;
 
 /// Iris to be searcher or inserted into the store.
-#[derive(Clone, Serialize, Deserialize, Hash, Eq, PartialEq, Debug)]
-pub struct Query {
+///
+/// This is an iris reference along with cached preprocessed version, used for
+/// efficient Galois ring MPC comparison.
+#[derive(Clone, Hash, Eq, PartialEq, Debug)]
+pub struct Aby3Query {
     /// Iris in the Shamir secret shared form over a Galois ring.
-    pub query: GaloisRingSharedIris,
-    /// Preprocessed iris for faster evaluation of distances, see [Aby3Store::eval_distance].
-    pub processed_query: GaloisRingSharedIris,
+    pub iris: Arc<GaloisRingSharedIris>,
+
+    /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
+    pub iris_proc: Arc<GaloisRingSharedIris>,
 }
 
-/// Reference to a query.
-pub type QueryRef = Arc<Query>;
+impl Aby3Query {
+    /// Creates a new query from a secret shared iris. The input iris is preprocessed for
+    /// faster evaluation of distances; see [Aby3Store::eval_distance].
+    pub fn new(iris_ref: &Arc<GaloisRingSharedIris>) -> Self {
+        let iris = iris_ref.clone();
 
-impl Query {
-    pub fn from_processed(
-        query: GaloisRingSharedIris,
-        processed_query: GaloisRingSharedIris,
-    ) -> QueryRef {
-        Arc::new(Query {
-            query,
-            processed_query,
-        })
+        let mut preprocessed = (**iris_ref).clone();
+        preprocessed.code.preprocess_iris_code_query_share();
+        preprocessed.mask.preprocess_mask_code_query_share();
+        let iris_proc = Arc::new(preprocessed);
+
+        Self { iris, iris_proc }
     }
 
-    fn iris(&self) -> IrisRef {
-        Arc::new(self.query.clone())
+    pub fn new_from_raw(iris: GaloisRingSharedIris) -> Self {
+        let iris = Arc::new(iris);
+        Self::new(&iris)
     }
-}
 
-/// Creates a new query from a secret shared iris.
-/// The input iris is preprocessed for faster evaluation of distances, see [Aby3Store::eval_distance].
-pub fn prepare_query(raw_query: GaloisRingSharedIris) -> QueryRef {
-    let mut preprocessed_query = raw_query.clone();
-    preprocessed_query.code.preprocess_iris_code_query_share();
-    preprocessed_query.mask.preprocess_mask_code_query_share();
-
-    Arc::new(Query {
-        query: raw_query,
-        processed_query: preprocessed_query,
-    })
-}
-
-/// Storage of inserted irises.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SharedIrises {
-    points: HashMap<SerialId, (VersionId, IrisRef)>,
-    next_id: u32,
-    empty_iris: IrisRef,
-    set_hash: SetHash,
-}
-
-impl Default for SharedIrises {
-    fn default() -> Self {
-        SharedIrises::new(HashMap::new())
-    }
-}
-
-impl SharedIrises {
-    pub fn new(points: HashMap<VectorId, IrisRef>) -> Self {
-        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
-
-        let points = points
-            .into_iter()
-            .map(|(v, iris)| (v.serial_id(), (v.version_id(), iris)))
-            .collect::<HashMap<_, _>>();
-
-        SharedIrises {
-            points,
-            next_id,
-            empty_iris: Arc::new(GaloisRingSharedIris::default_for_party(0)),
-            set_hash: SetHash::default(),
+    pub fn from_processed(iris: GaloisRingSharedIris, iris_proc: GaloisRingSharedIris) -> Self {
+        Self {
+            iris: Arc::new(iris),
+            iris_proc: Arc::new(iris_proc),
         }
     }
-
-    /// Inserts the given iris into the database with the specified id.  If an
-    /// entry is already present with the given id, the iris is overwritten by `iris`.
-    ///
-    /// Updates the checksum hash to reflect the new or replaced entry for the
-    /// associated serial id, and updates the `next_id` field to be the next
-    /// value after the inserted serial id if this value is larger than the
-    /// current value of `next_id`.
-    pub fn insert(&mut self, vector_id: VectorId, iris: IrisRef) -> VectorId {
-        let prev_entry = self
-            .points
-            .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
-
-        self.next_id = self.next_id.max(vector_id.serial_id() + 1);
-
-        // If overwriting entry, remove previous vector id from set_hash
-        if let Some((version, _)) = prev_entry {
-            let prev_vector_id = VectorId::new(vector_id.serial_id(), version);
-            self.set_hash.remove(prev_vector_id);
-        }
-        self.set_hash.add_unordered(vector_id);
-
-        vector_id
-    }
-
-    /// Insert the given iris at the next unused serial ID, with version
-    /// initialized to 0.
-    pub fn append(&mut self, iris: IrisRef) -> VectorId {
-        let new_id = self.next_id();
-        self.insert(new_id, iris);
-        new_id
-    }
-
-    /// Insert the given iris at ID given by `original_id.next_version()`, i.e.
-    /// with identical serial number, and one higher version number.
-    pub fn update(&mut self, original_id: VectorId, iris: IrisRef) -> VectorId {
-        let new_id = original_id.next_version();
-        self.insert(new_id, iris);
-        new_id
-    }
-
-    pub fn db_size(&self) -> usize {
-        self.points.len()
-    }
-
-    /// Return the next id for new insertions, which should have the serial id
-    /// following the largest previously inserted serial id, and version 0.
-    fn next_id(&self) -> VectorId {
-        VectorId::from_serial_id(self.next_id)
-    }
-
-    pub fn reserve(&mut self, additional: usize) {
-        self.points.reserve(additional);
-    }
-
-    pub fn get_current_version(&self, serial_id: SerialId) -> Option<VersionId> {
-        self.points.get(&serial_id).map(|(version, _iris)| *version)
-    }
-
-    fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
-        match self.points.get(&vector.serial_id()) {
-            Some((version, iris)) if vector.version_matches(*version) => Arc::clone(iris),
-            _ => Arc::clone(&self.empty_iris),
-        }
-    }
-
-    fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
-        match self.points.get(&vector.serial_id()) {
-            Some((version, iris)) if vector.version_matches(*version) => Some(Arc::clone(iris)),
-            _ => None,
-        }
-    }
-
-    fn contains(&self, vector: &VectorId) -> bool {
-        matches!(self.points.get(&vector.serial_id()),
-            Some((version, _)) if vector.version_matches(*version))
-    }
-
-    pub fn to_arc(self) -> SharedIrisesRef {
-        SharedIrisesRef {
-            data: Arc::new(RwLock::new(self)),
-        }
-    }
-
-    pub fn last_vector_ids(&self, n: usize) -> Vec<VectorId> {
-        (1..self.next_id)
-            .rev()
-            .take(n)
-            .filter_map(|serial_id| {
-                self.points
-                    .get(&serial_id)
-                    .map(|(version, _)| VectorId::new(serial_id, *version))
-            })
-            .collect_vec()
-    }
-
-    pub fn from_0_indices(&self, indices: &[u32]) -> Vec<VectorId> {
-        indices
-            .iter()
-            .map(|index| {
-                let v = VectorId::from_0_index(*index);
-                if let Some((version, _)) = self.points.get(&v.serial_id()) {
-                    VectorId::new(v.serial_id(), *version)
-                } else {
-                    v
-                }
-            })
-            .collect_vec()
-    }
 }
 
-/// Reference to inserted irises.
-#[derive(Clone)]
-pub struct SharedIrisesRef {
-    data: Arc<RwLock<SharedIrises>>,
-}
+pub type Aby3StoredIris = Arc<GaloisRingSharedIris>;
 
-/// Mutable reference to inserted irises.
-pub type SharedIrisesMut<'a> = RwLockWriteGuard<'a, SharedIrises>;
-
-impl std::fmt::Debug for SharedIrisesRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt("SharedIrisesRef", f)
-    }
-}
-
-// Getters, iterators and mutators of the iris storage.
-impl SharedIrisesRef {
-    pub async fn write(&self) -> SharedIrisesMut {
-        self.data.write().await
-    }
-
-    pub async fn read(&self) -> RwLockReadGuard<'_, SharedIrises> {
-        self.data.read().await
-    }
-
-    pub async fn get_vector_id(&self, serial_id: SerialId) -> Option<VectorId> {
-        *self.get_vector_ids(&[serial_id]).await.first().unwrap()
-    }
-
-    pub async fn get_vector_or_empty(&self, vector: &VectorId) -> IrisRef {
-        self.data.read().await.get_vector_or_empty(vector)
-    }
-
-    pub async fn get_vector(&self, vector: &VectorId) -> Option<IrisRef> {
-        self.data.read().await.get_vector(vector)
-    }
-
-    pub async fn get_query(&self, vector_id: &VectorId) -> QueryRef {
-        let vector_ref = self.get_vector_or_empty(vector_id).await.clone();
-        prepare_query((*vector_ref).clone())
-    }
-
-    pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
-        let body = self.data.read().await;
-
-        serial_ids
-            .iter()
-            .map(|serial_id| {
-                body.get_current_version(*serial_id)
-                    .map(|version_id| VectorId::new(*serial_id, version_id))
-            })
-            .collect()
-    }
-
-    pub async fn get_vectors(
-        &self,
-        vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<Option<IrisRef>> {
-        let body = self.data.read().await;
-        vector_ids
-            .into_iter()
-            .map(|v| body.get_vector(v))
-            .collect_vec()
-    }
-
-    pub async fn get_vectors_or_empty(
-        &self,
-        vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<IrisRef> {
-        let body = self.data.read().await;
-        vector_ids
-            .into_iter()
-            .map(|v| body.get_vector_or_empty(v))
-            .collect_vec()
-    }
-
-    pub async fn get_queries(
-        &self,
-        vector_ids: impl IntoIterator<Item = &VectorId>,
-    ) -> Vec<QueryRef> {
-        self.get_vectors_or_empty(vector_ids)
-            .await
-            .into_iter()
-            .map(|v| prepare_query((*v).clone()))
-            .collect()
-    }
-
-    /// Obtain a write lock for the underlying irises data, and insert the given
-    /// `query` iris at the specified `id`.
-    ///
-    /// Returns the `VectorId` at which the query is inserted.
-    pub async fn insert(&mut self, id: VectorId, query: &QueryRef) -> VectorId {
-        self.data.write().await.insert(id, query.iris())
-    }
-
-    /// Obtain a write lock for the underlying irises data, and insert the given
-    /// `query` iris at the next unused `VectorId` serial number, with version 0.
-    ///
-    /// Returns the `VectorId` at which the query is inserted.
-    pub async fn append(&mut self, query: &QueryRef) -> VectorId {
-        self.data.write().await.append(query.iris())
-    }
-
-    /// Obtain a write lock for the underlying irises data, and insert the given
-    /// `query` iris at the id `original_id.next_version()`, that is, the `VectorId`
-    /// with equal serial id and incremented version number.
-    ///
-    /// Returns the `VectorId` at which the query is inserted.
-    pub async fn update(&mut self, original_id: VectorId, query: &QueryRef) -> VectorId {
-        self.data.write().await.update(original_id, query.iris())
-    }
-
-    pub async fn checksum(&self) -> u64 {
-        self.data.read().await.set_hash.checksum()
-    }
-}
+pub type Aby3SharedIrises = SharedIrises<Aby3StoredIris>;
+pub type Aby3SharedIrisesRef = SharedIrisesRef<Aby3StoredIris>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
@@ -329,7 +69,8 @@ impl SharedIrisesRef {
 #[derive(Debug)]
 pub struct Aby3Store {
     /// Reference to the shared irises
-    pub storage: SharedIrisesRef,
+    pub storage: Aby3SharedIrisesRef,
+
     /// Session for the SMPC operations
     pub session: Session,
 }
@@ -366,21 +107,34 @@ impl Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(&mut self.session, pairs).await;
+        let ds_and_ts = galois_ring_pairwise_distance(pairs);
         galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+    }
+
+    /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
+    pub fn new_storage(points: Option<HashMap<VectorId, Aby3StoredIris>>) -> Aby3SharedIrises {
+        SharedIrises::new(
+            points.unwrap_or_default(),
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+        )
     }
 }
 
 impl VectorStore for Aby3Store {
     /// Arc ref to a query.
-    type QueryRef = QueryRef;
+    type QueryRef = Aby3Query;
     /// Point ID of an inserted iris.
     type VectorRef = VectorId;
     /// Distance represented as a pair of u32 shares.
     type DistanceRef = DistanceShare<u32>;
 
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
-        self.storage.get_queries(&vectors).await
+        self.storage
+            .get_vectors_or_empty(&vectors)
+            .await
+            .iter()
+            .map(Aby3Query::new)
+            .collect_vec()
     }
 
     async fn only_valid_vectors(
@@ -400,7 +154,7 @@ impl VectorStore for Aby3Store {
     ) -> Result<Self::DistanceRef> {
         let vector_point = self.storage.get_vector(vector).await;
         let pairs = if let Some(v) = &vector_point {
-            &[Some((&query.processed_query, &**v))]
+            &[Some((&*query.iris_proc, &**v))]
         } else {
             &[None]
         };
@@ -419,7 +173,7 @@ impl VectorStore for Aby3Store {
         let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
         let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
             .collect_vec();
 
         let dist = self.eval_pairwise_distances(&pairs).await?;
@@ -441,7 +195,7 @@ impl VectorStore for Aby3Store {
             .flat_map(|q| {
                 vectors
                     .iter()
-                    .map(|vector| vector.as_ref().map(|v| (&q.processed_query, &**v)))
+                    .map(|vector| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
             })
             .collect::<Vec<_>>();
 
@@ -484,7 +238,15 @@ impl VectorStore for Aby3Store {
 
 impl VectorStoreMut for Aby3Store {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
-        self.storage.append(query).await
+        self.storage.append(&query.iris).await
+    }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, &query.iris).await)
     }
 }
 
@@ -529,7 +291,7 @@ mod tests {
         for store in stores.iter() {
             let player_index = get_owner_index(store).await?;
             let queries = (0..database_size)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect::<Vec<_>>();
             let mut rng = rng.clone();
             let store = store.clone();
@@ -552,8 +314,8 @@ mod tests {
                 // Search for the same codes and find matches.
                 let mut matching_results = vec![];
                 for v in inserted.into_iter() {
-                    let query = store.storage.get_vector_or_empty(&v).await;
-                    let query = prepare_query((*query).clone());
+                    let iris = store.storage.get_vector_or_empty(&v).await;
+                    let query = Aby3Query::new(&iris);
                     let neighbors = db
                         .search(&mut *store, &aby3_graph, &query, 1)
                         .await
@@ -606,8 +368,8 @@ mod tests {
             let vector_id = VectorId::from_0_index(i as u32);
             let query = cleartext_data
                 .0
-                .points
-                .get(&vector_id.serial_id())
+                .storage
+                .get_vector(&vector_id)
                 .unwrap()
                 .clone();
             let cleartext_neighbors = hawk_searcher
@@ -625,7 +387,7 @@ mod tests {
                 let v_lock = v.lock().await;
                 let g = g.clone();
                 let q = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                let q = prepare_query((*q).clone());
+                let q = Aby3Query::new(&q);
                 let v = v.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
@@ -646,8 +408,8 @@ mod tests {
                 let g = g.clone();
                 jobs.spawn(async move {
                     let mut v_lock = v.lock().await;
-                    let query = v_lock.storage.get_vector_or_empty(&vector_id).await;
-                    let query = prepare_query((*query).clone());
+                    let iris = v_lock.storage.get_vector_or_empty(&vector_id).await;
+                    let query = Aby3Query::new(&iris);
                     let secret_neighbors = hawk_searcher
                         .search(&mut *v_lock, &g, &query, 1)
                         .await
@@ -716,12 +478,12 @@ mod tests {
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_dim)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect();
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for p in player_preps.iter() {
-                player_inserts.push(store_lock.storage.append(p).await);
+                player_inserts.push(store_lock.storage.append(&p.iris).await);
             }
             aby3_inserts.push(player_inserts);
         }
@@ -792,10 +554,16 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[0].clone()], &plaintext_inserts)
+            .eval_distance_batch(
+                &[Arc::new(plaintext_database[0].clone())],
+                &plaintext_inserts,
+            )
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&[plaintext_database[1].clone()], &plaintext_inserts)
+            .eval_distance_batch(
+                &[Arc::new(plaintext_database[1].clone())],
+                &plaintext_inserts,
+            )
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -808,7 +576,7 @@ mod tests {
         for store in local_stores.iter_mut() {
             let player_index = get_owner_index(store).await?;
             let player_preps: Vec<_> = (0..db_size)
-                .map(|id| prepare_query(shared_irises[id][player_index].clone()))
+                .map(|id| Aby3Query::new_from_raw(shared_irises[id][player_index].clone()))
                 .collect();
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
@@ -876,7 +644,7 @@ mod tests {
                     .storage
                     .get_vector_or_empty(&vector_id)
                     .await;
-                let q = prepare_query((*q).clone());
+                let q = Aby3Query::new(&q);
                 let store = store.clone();
                 jobs.spawn(async move {
                     let mut store = store.lock().await;

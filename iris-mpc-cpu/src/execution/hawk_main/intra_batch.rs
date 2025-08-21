@@ -1,15 +1,15 @@
 use super::{
     rot::VecRots,
     scheduler::{Batch, Schedule, Task},
-    BothEyes, HawkSession, HawkSessionRef, VecRequests, LEFT, RIGHT,
+    BothEyes, HawkSession, VecRequests, LEFT, RIGHT,
 };
 use crate::{
-    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::QueryRef,
+    execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
     hnsw::VectorStore,
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{collections::HashMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -19,9 +19,10 @@ pub struct IntraMatch {
 }
 
 pub async fn intra_batch_is_match(
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
-    search_queries: &Arc<BothEyes<VecRequests<VecRots<QueryRef>>>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
+    search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
+    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -36,20 +37,20 @@ pub async fn intra_batch_is_match(
         let session = sessions[batch.i_eye][batch.i_session].clone();
         let search_queries = search_queries.clone();
         let tx = tx.clone();
-        async move {
-            let mut session = session.write().await;
-            per_session(&search_queries, &mut session, batch, tx).await
-        }
+        async move { per_session(&search_queries, &session, batch, tx).await }
     };
 
     parallelize(batches.into_iter().map(per_session)).await?;
 
-    aggregate_results(n_requests, rx).await
+    let res = aggregate_results(n_requests, rx).await?;
+
+    metrics::histogram!("intra_batch_duration").record(start.elapsed().as_secs_f64());
+    Ok(res)
 }
 
 async fn per_session(
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    session: &mut HawkSession,
+    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
+    session: &HawkSession,
     batch: Batch,
     tx: UnboundedSender<IsMatch>,
 ) -> Result<()> {
@@ -71,22 +72,20 @@ async fn per_session(
     let query_pairs = pairs
         .iter()
         .map(|pair| {
-            Some((
-                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation]
-                    .processed_query,
-                &search_queries[batch.i_eye][pair.earlier_request]
-                    .center()
-                    .query,
-            ))
+            let iris1_proc =
+                &*search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
+            let iris2 = &*search_queries[batch.i_eye][pair.earlier_request]
+                .center()
+                .iris;
+            Some((iris1_proc, iris2))
         })
         .collect_vec();
 
-    let distances = session
-        .aby3_store
-        .eval_pairwise_distances(&query_pairs)
-        .await?;
-    let distances = session.aby3_store.lift_distances(distances).await?;
-    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
+    let mut store = session.aby3_store.write().await;
+
+    let distances = store.eval_pairwise_distances(&query_pairs).await?;
+    let distances = store.lift_distances(distances).await?;
+    let is_matches = store.is_match_batch(&distances).await?;
 
     for (pair, is_match) in izip!(pairs, is_matches) {
         if is_match {

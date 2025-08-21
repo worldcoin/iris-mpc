@@ -29,6 +29,7 @@ base64.workspace = true
 uuid.workspace = true
 reqwest.workspace = true
 sodiumoxide = "0.2.7"
+iris-mpc = { path = "../iris-mpc" }
 iris-mpc-gpu = { path = "../iris-mpc-gpu" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
@@ -39,13 +40,23 @@ serde = { version = "1.0.214", features = ["derive"] }
 iris-mpc-cpu.workspace = true
 chrono = "0.4.38"
 sqlx.workspace = true
+toml = { version = "0.8.23", features = ["preserve_order"] }
+async-trait.workspace = true
 
 [dev-dependencies]
 criterion = "0.5"
+thiserror.workspace = true
+tracing-test = "0.2.5"
+serial_test = "3.2.0"
 
 [features]
 default = []
+db_dependent = []
 
 [[bin]]
 name = "iris-mpc-hawk-genesis"
 path = "bin/iris_mpc_hawk_genesis.rs"
+
+[[bin]]
+name = "write-node-config-toml"
+path = "bin/write_node_config_toml.rs"

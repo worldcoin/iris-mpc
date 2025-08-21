@@ -1,13 +1,13 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use super::{
     rot::WithoutRot,
     search::{self, SearchParams, SearchQueries, SearchResults},
-    BothEyes, HawkActor, HawkRequest, HawkSessionRef, LEFT, RIGHT,
+    BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-pub use crate::hawkers::aby3::aby3_store::VectorId;
 use crate::{execution::hawk_main::search::SearchIds, protocol::shared_iris::GaloisRingSharedIris};
 use eyre::Result;
+use iris_mpc_common::vector_id::VectorId;
 
 pub struct ResetRequests {
     pub vector_ids: Vec<VectorId>,
@@ -22,9 +22,11 @@ pub struct ResetPlan {
 
 pub async fn search_to_reset(
     hawk_actor: &mut HawkActor,
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
     request: &HawkRequest,
 ) -> Result<ResetPlan> {
+    let start = Instant::now();
+
     // Get the reset updates from the request.
     let updates = {
         // The store to find vector ids (same left or right).
@@ -37,15 +39,18 @@ pub async fn search_to_reset(
         do_match: false,
     };
 
+    let search_results = search::search(
+        sessions,
+        &updates.queries,
+        &updates.request_ids,
+        search_params,
+    )
+    .await?;
+
+    metrics::histogram!("search_to_reset_duration").record(start.elapsed().as_secs_f64());
     Ok(ResetPlan {
         vector_ids: updates.vector_ids,
-        search_results: search::search(
-            sessions,
-            &updates.queries,
-            &updates.request_ids,
-            search_params,
-        )
-        .await?,
+        search_results,
     })
 }
 
