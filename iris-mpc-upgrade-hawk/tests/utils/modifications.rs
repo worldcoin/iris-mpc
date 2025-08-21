@@ -1,8 +1,12 @@
+use std::{fmt::Display, ops::DerefMut};
+
+use eyre::Result;
 use iris_mpc_common::helpers::{
     smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
     sync::{MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 
 // from iris-mpc-common/helpers/smpc_request.rs
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,11 +65,39 @@ impl ModificationInput {
 }
 
 impl ModificationType {
-    pub fn to_str(&self) -> &'static str {
-        match self {
+    pub fn is_updating(&self) -> bool {
+        matches!(
+            self,
+            ModificationType::ResetUpdate | ModificationType::Reauth
+        )
+    }
+}
+
+impl Display for ModificationType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let variant = match self {
             ModificationType::ResetUpdate => RESET_UPDATE_MESSAGE_TYPE,
             ModificationType::Reauth => REAUTH_MESSAGE_TYPE,
             ModificationType::Uniqueness => UNIQUENESS_MESSAGE_TYPE,
-        }
+        };
+        write!(f, "{}", variant)
     }
+}
+
+/// Test functionality which updates an iris only by incrementing its version,
+/// without changing the underlying iris code.
+pub async fn increment_iris_version(
+    tx: &mut Transaction<'_, Postgres>,
+    serial_id: i64,
+) -> Result<()> {
+    let query = sqlx::query(
+        r#"
+        UPDATE irises SET version_id = version_id + 1
+        WHERE id = $1;
+        "#,
+    )
+    .bind(serial_id);
+    query.execute(tx.deref_mut()).await?;
+
+    Ok(())
 }
