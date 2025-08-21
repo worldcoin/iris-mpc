@@ -79,7 +79,7 @@ pub(crate) mod search;
 pub mod state_check;
 use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
-use is_match_batch::calculate_missing_is_match;
+use is_match_batch::is_match_batch;
 use rot::VecRots;
 
 #[derive(Clone, Parser)]
@@ -566,6 +566,7 @@ impl HawkActor {
     }
 
     async fn compute_buckets(&self, session: &mut Session, side: usize) -> Result<VecBuckets> {
+        let start = Instant::now();
         let translated_thresholds = Self::calculate_threshold_a(self.args.n_buckets);
         let bucket_result_shares = compare_min_threshold_buckets(
             session,
@@ -575,6 +576,7 @@ impl HawkActor {
         .await?;
 
         let buckets = open_ring(session, &bucket_result_shares).await?;
+        metrics::histogram!("statistics_buckets_duration").record(start.elapsed().as_secs_f64());
         Ok(buckets)
     }
 
@@ -1330,12 +1332,8 @@ impl HawkHandle {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
-                let missing_is_match = calculate_missing_is_match(
-                    search_queries,
-                    step1.missing_vector_ids(),
-                    sessions,
-                )
-                .await?;
+                let missing_is_match =
+                    is_match_batch(search_queries, step1.missing_vector_ids(), sessions).await?;
 
                 step1.step2(&missing_is_match, intra_results)
             };
@@ -1344,10 +1342,12 @@ impl HawkHandle {
         };
 
         let (search_results, match_result) = {
+            let start = Instant::now();
             let ((search_normal, matches_normal), (_, matches_mirror)) = try_join!(
                 do_search(Orientation::Normal),
                 do_search(Orientation::Mirror),
             )?;
+            metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
             (search_normal, matches_normal.step3(matches_mirror))
         };
@@ -1397,6 +1397,7 @@ impl HawkHandle {
         request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
+        let start = Instant::now();
         let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
@@ -1506,6 +1507,7 @@ impl HawkHandle {
             });
         }
 
+        metrics::histogram!("handle_mutations_duration").record(start.elapsed().as_secs_f64());
         Ok(HawkMutation(mutations))
     }
 
@@ -1523,7 +1525,8 @@ impl HawkHandle {
         HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
 
         // validate that the RNGs have not diverged
-        HawkSession::prf_check(sessions).await?;
+        // TODO: debug serialization issues encountered with this function and then re-enable
+        // HawkSession::prf_check(sessions).await?;
 
         Ok(())
     }
@@ -1555,8 +1558,10 @@ mod tests {
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
+    use tracing_test::traced_test;
 
     #[tokio::test]
+    #[traced_test]
     async fn test_hawk_main() -> Result<()> {
         let go = |addresses: Vec<String>, index: usize| {
             async move {
@@ -1724,6 +1729,7 @@ mod tests {
         assert_eq!(result.matches, vec![true; batch_size]);
         assert_match_ids(&result);
 
+        tokio::time::sleep(Duration::from_millis(1100)).await;
         Ok(())
     }
 

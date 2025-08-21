@@ -9,25 +9,24 @@ use eyre::Result;
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
 
-pub async fn calculate_missing_is_match(
+pub async fn is_match_batch(
     search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
-    missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
+    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
     sessions: &BothEyes<Vec<HawkSession>>,
 ) -> Result<BothEyes<VecRequests<MapEdges<bool>>>> {
-    let [missing_vectors_left, missing_vectors_right] = missing_vector_ids;
+    let start = Instant::now();
+    let [vectors_left, vectors_right] = vector_ids;
 
     // Parallelize left and right sessions (IO only).
     let (out_l, out_r) = futures::join!(
-        per_side(&search_queries[LEFT], missing_vectors_left, &sessions[LEFT]),
-        per_side(
-            &search_queries[RIGHT],
-            missing_vectors_right,
-            &sessions[RIGHT]
-        ),
+        per_side(&search_queries[LEFT], vectors_left, &sessions[LEFT]),
+        per_side(&search_queries[RIGHT], vectors_right, &sessions[RIGHT]),
     );
+
+    metrics::histogram!("is_match_batch_duration").record(start.elapsed().as_secs_f64());
     Ok([out_l?, out_r?])
 }
 
@@ -106,7 +105,7 @@ async fn per_query(
     vector_ids: &[VectorId],
     store: &mut Aby3Store,
 ) -> Result<MapEdges<bool>> {
-    let distances = store.eval_distance_batch(&[query], vector_ids).await?;
+    let distances = store.eval_distance_batch(&query, vector_ids).await?;
 
     let is_matches = store.is_match_batch(&distances).await?;
 
@@ -208,9 +207,7 @@ mod test {
             ],
         ];
 
-        let result =
-            calculate_missing_is_match(search_queries, missing_vector_ids.clone(), &sessions)
-                .await?;
+        let result = is_match_batch(search_queries, missing_vector_ids.clone(), &sessions).await?;
 
         assert_eq!(
             result,

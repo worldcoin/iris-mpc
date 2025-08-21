@@ -9,7 +9,7 @@ use crate::{
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc, vec};
+use std::{collections::HashMap, sync::Arc, time::Instant, vec};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -22,6 +22,7 @@ pub async fn intra_batch_is_match(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &Arc<BothEyes<VecRequests<VecRots<Aby3Query>>>>,
 ) -> Result<VecRequests<Vec<IntraMatch>>> {
+    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -41,7 +42,10 @@ pub async fn intra_batch_is_match(
 
     parallelize(batches.into_iter().map(per_session)).await?;
 
-    aggregate_results(n_requests, rx).await
+    let res = aggregate_results(n_requests, rx).await?;
+
+    metrics::histogram!("intra_batch_duration").record(start.elapsed().as_secs_f64());
+    Ok(res)
 }
 
 async fn per_session(
