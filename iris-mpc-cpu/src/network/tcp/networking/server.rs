@@ -11,7 +11,6 @@ use tokio_rustls::rustls::{
 };
 use tokio_rustls::{TlsAcceptor, TlsStream};
 
-
 pub struct TlsServer {
     listener: TcpListener,
     tls_acceptor: TlsAcceptor,

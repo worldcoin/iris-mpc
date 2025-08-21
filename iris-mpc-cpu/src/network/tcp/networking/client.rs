@@ -1,16 +1,11 @@
 use crate::network::tcp::{networking::configure_tcp_stream, Client, NetworkConnection};
 use async_trait::async_trait;
 use eyre::{eyre, Result};
-use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tokio::net::TcpStream;
-use tokio_rustls::rustls::client::danger::{
-    HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier,
-};
-use tokio_rustls::rustls::pki_types::UnixTime;
 use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, ServerName},
-    ClientConfig, DigitallySignedStruct, Error, RootCertStore, SignatureScheme,
+    ClientConfig, RootCertStore,
 };
 use tokio_rustls::{TlsConnector, TlsStream};
 
@@ -21,69 +16,6 @@ pub struct TlsClient {
 
 #[derive(Clone)]
 pub struct TcpClient {}
-
-/// A `ServerCertVerifier` that blindly accepts **any** certificate.
-pub struct NoCertificateVerification;
-
-impl Debug for NoCertificateVerification {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("NoCertificateVerification")
-    }
-}
-
-impl ServerCertVerifier for NoCertificateVerification {
-    #[allow(clippy::too_many_arguments)]
-    fn verify_server_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, Error> {
-        // Simply say “everything is fine”.
-        Ok(ServerCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
-    ) -> std::result::Result<HandshakeSignatureValid, Error> {
-        Ok(HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        vec![
-            SignatureScheme::RSA_PKCS1_SHA1,
-            SignatureScheme::ECDSA_NISTP256_SHA256,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::RSA_PKCS1_SHA384,
-            SignatureScheme::ECDSA_NISTP384_SHA384,
-            SignatureScheme::RSA_PKCS1_SHA512,
-            SignatureScheme::ECDSA_NISTP521_SHA512,
-            SignatureScheme::RSA_PSS_SHA256,
-            SignatureScheme::RSA_PSS_SHA384,
-            SignatureScheme::RSA_PSS_SHA512,
-            SignatureScheme::ED25519,
-            SignatureScheme::ED448,
-        ]
-    }
-}
 
 impl TlsClient {
     /// Create a client that trusts the given CAs
