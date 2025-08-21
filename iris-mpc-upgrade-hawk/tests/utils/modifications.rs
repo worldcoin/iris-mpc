@@ -1,16 +1,10 @@
-use std::{fmt::Display, ops::DerefMut};
+use std::fmt::Display;
 
-use eyre::Result;
-use iris_mpc_common::{
-    helpers::{
-        smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        sync::{Modification, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
-    },
-    IrisVectorId,
+use iris_mpc_common::helpers::{
+    smpc_request::{REAUTH_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
+    sync::{Modification, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS},
 };
-use iris_mpc_store::Store;
 use serde::{Deserialize, Serialize};
-use sqlx::{Postgres, Transaction};
 
 // from iris-mpc-common/helpers/smpc_request.rs
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -154,90 +148,4 @@ pub fn modifications_extension_updates(
             }
         })
         .collect()
-}
-
-/// Test functionality which updates an iris only by incrementing its version,
-/// without changing the underlying iris code.
-pub async fn increment_iris_version(
-    tx: &mut Transaction<'_, Postgres>,
-    serial_id: i64,
-) -> Result<()> {
-    let query = sqlx::query(
-        r#"
-        UPDATE irises SET version_id = version_id + 1
-        WHERE id = $1;
-        "#,
-    )
-    .bind(serial_id);
-    query.execute(tx.deref_mut()).await?;
-
-    Ok(())
-}
-
-pub async fn get_iris_vector_ids(store: &Store, max_serial_id: i64) -> Result<Vec<IrisVectorId>> {
-    let ids: Vec<(i64, i16)> = sqlx::query_as(
-        r#"
-        SELECT
-            id,
-            version_id
-        FROM irises
-        WHERE id <= $1
-        ORDER BY id ASC;
-        "#,
-    )
-    .bind(max_serial_id)
-    .fetch_all(&store.pool)
-    .await?;
-
-    let ids = ids
-        .into_iter()
-        .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
-        .collect();
-
-    Ok(ids)
-}
-
-pub async fn persist_modification(
-    tx: &mut Transaction<'_, Postgres>,
-    modification_id: i64,
-) -> Result<()> {
-    let query = sqlx::query(
-        r#"
-        UPDATE modifications SET status = 'COMPLETED', persisted = true
-        WHERE id = $1;
-        "#,
-    )
-    .bind(modification_id);
-    query.execute(tx.deref_mut()).await?;
-
-    Ok(())
-}
-
-/// Writes a modification to the modifications table, overwriting fields if the specified
-/// modification id already exists.
-pub async fn write_modification(
-    tx: &mut Transaction<'_, Postgres>,
-    m: &Modification,
-) -> Result<()> {
-    let query = sqlx::query(
-        r#"
-        INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        ON CONFLICT (id) DO UPDATE
-        SET serial_id = EXCLUDED.serial_id,
-            request_type = EXCLUDED.request_type,
-            s3_url = EXCLUDED.s3_url,
-            status = EXCLUDED.status,
-            persisted = EXCLUDED.persisted;
-        "#,
-    )
-    .bind(m.id)
-    .bind(m.serial_id)
-    .bind(m.request_type.as_str())
-    .bind(m.s3_url.as_ref())
-    .bind(m.status.as_str())
-    .bind(m.persisted);
-    query.execute(tx.deref_mut()).await?;
-
-    Ok(())
 }

@@ -1,6 +1,6 @@
 use super::constants::COUNT_OF_PARTIES;
 use crate::utils::{
-    modifications::{self, increment_iris_version, persist_modification, ModificationInput},
+    modifications::{self, ModificationInput},
     GaloisRingSharedIrisPair, HawkConfigs,
 };
 use eyre::{bail, Result};
@@ -174,7 +174,7 @@ impl MpcNode {
         for m in mods.iter() {
             let mut tx = self.gpu_iris_store.tx().await?;
             if m.request_type.is_updating() {
-                increment_iris_version(&mut tx, m.serial_id).await?;
+                db_ops::increment_iris_version(&mut tx, m.serial_id).await?;
             }
             tx.commit().await?;
         }
@@ -195,12 +195,12 @@ impl MpcNode {
 
         let mods: Vec<_> = cur_mods.iter().cloned().map(|m| m.into()).collect();
         for m in mods.iter() {
-            modifications::write_modification(&mut tx, m).await?;
+            db_ops::write_modification(&mut tx, m).await?;
         }
 
         let update_serial_ids = modifications::modifications_extension_updates(last_mods, cur_mods);
         for serial_id in update_serial_ids {
-            modifications::increment_iris_version(&mut tx, serial_id).await?;
+            db_ops::increment_iris_version(&mut tx, serial_id).await?;
         }
 
         tx.commit().await?;
@@ -211,7 +211,7 @@ impl MpcNode {
     #[allow(dead_code)]
     pub async fn increment_iris_version(&self, serial_id: i64) -> Result<()> {
         let mut tx = self.gpu_iris_store.tx().await?;
-        increment_iris_version(&mut tx, serial_id).await?;
+        db_ops::increment_iris_version(&mut tx, serial_id).await?;
         tx.commit().await?;
 
         Ok(())
@@ -220,7 +220,7 @@ impl MpcNode {
     #[allow(dead_code)]
     pub async fn persist_modification(&self, id: i64) -> Result<()> {
         let mut tx = self.gpu_iris_store.tx().await?;
-        persist_modification(&mut tx, id).await?;
+        db_ops::persist_modification(&mut tx, id).await?;
         tx.commit().await?;
 
         Ok(())
@@ -303,6 +303,104 @@ impl MpcNode {
     }
 
     pub async fn get_cpu_iris_vector_ids(&self, max_serial_id: i64) -> Result<Vec<IrisVectorId>> {
-        modifications::get_iris_vector_ids(&self.cpu_iris_store, max_serial_id).await
+        db_ops::get_iris_vector_ids(&self.cpu_iris_store, max_serial_id).await
+    }
+}
+
+mod db_ops {
+    use std::ops::DerefMut;
+
+    use eyre::Result;
+    use iris_mpc_common::{helpers::sync::Modification, IrisVectorId};
+    use iris_mpc_store::Store;
+    use sqlx::{Postgres, Transaction};
+
+    /// Test functionality which updates an iris only by incrementing its version,
+    /// without changing the underlying iris code.
+    pub async fn increment_iris_version(
+        tx: &mut Transaction<'_, Postgres>,
+        serial_id: i64,
+    ) -> Result<()> {
+        let query = sqlx::query(
+            r#"
+            UPDATE irises SET version_id = version_id + 1
+            WHERE id = $1;
+            "#,
+        )
+        .bind(serial_id);
+        query.execute(tx.deref_mut()).await?;
+
+        Ok(())
+    }
+
+    pub async fn get_iris_vector_ids(
+        store: &Store,
+        max_serial_id: i64,
+    ) -> Result<Vec<IrisVectorId>> {
+        let ids: Vec<(i64, i16)> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                version_id
+            FROM irises
+            WHERE id <= $1
+            ORDER BY id ASC;
+            "#,
+        )
+        .bind(max_serial_id)
+        .fetch_all(&store.pool)
+        .await?;
+
+        let ids = ids
+            .into_iter()
+            .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
+            .collect();
+
+        Ok(ids)
+    }
+
+    pub async fn persist_modification(
+        tx: &mut Transaction<'_, Postgres>,
+        modification_id: i64,
+    ) -> Result<()> {
+        let query = sqlx::query(
+            r#"
+            UPDATE modifications SET status = 'COMPLETED', persisted = true
+            WHERE id = $1;
+            "#,
+        )
+        .bind(modification_id);
+        query.execute(tx.deref_mut()).await?;
+
+        Ok(())
+    }
+
+    /// Writes a modification to the modifications table, overwriting fields if the specified
+    /// modification id already exists.
+    pub async fn write_modification(
+        tx: &mut Transaction<'_, Postgres>,
+        m: &Modification,
+    ) -> Result<()> {
+        let query = sqlx::query(
+            r#"
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (id) DO UPDATE
+            SET serial_id = EXCLUDED.serial_id,
+                request_type = EXCLUDED.request_type,
+                s3_url = EXCLUDED.s3_url,
+                status = EXCLUDED.status,
+                persisted = EXCLUDED.persisted;
+            "#,
+        )
+        .bind(m.id)
+        .bind(m.serial_id)
+        .bind(m.request_type.as_str())
+        .bind(m.s3_url.as_ref())
+        .bind(m.status.as_str())
+        .bind(m.persisted);
+        query.execute(tx.deref_mut()).await?;
+
+        Ok(())
     }
 }
