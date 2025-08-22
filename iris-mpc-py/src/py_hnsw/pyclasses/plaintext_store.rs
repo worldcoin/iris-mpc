@@ -19,6 +19,16 @@ impl PyPlaintextStore {
         (*self.0.storage.points[&id].1).clone().into()
     }
 
+    pub fn eval_distance_to_id(&self, lhs: PyIrisCode, rhs: u32) -> (u16, u16) {
+        let iris_rhs = self.get(rhs);
+        lhs.get_distance_fraction(iris_rhs)
+    }
+
+    pub fn eval_distance(&self, lhs: u32, rhs: u32) -> (u16, u16) {
+        let iris_lhs = self.get(lhs);
+        self.eval_distance_to_id(iris_lhs, rhs)
+    }
+
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
         self.0.storage.append(Arc::new(iris.0)).serial_id()
     }

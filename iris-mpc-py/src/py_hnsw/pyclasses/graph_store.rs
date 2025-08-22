@@ -5,18 +5,6 @@ use iris_mpc_cpu::{
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
-#[derive(Clone)]
-pub struct PyIrisVectorId(pub IrisVectorId);
-
-#[pymethods]
-impl PyIrisVectorId {
-    #[staticmethod]
-    pub fn from_serial_id(serial_id: usize) -> Self {
-        Self(IrisVectorId::from_serial_id(serial_id.try_into().unwrap()))
-    }
-}
-
-#[pyclass]
 #[derive(Clone, Default)]
 pub struct PyGraphStore(pub GraphMem<PlaintextStore>);
 
@@ -40,12 +28,9 @@ impl PyGraphStore {
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
 
-    pub fn get_links(
-        &self,
-        vector_id: PyIrisVectorId,
-        layer_index: usize,
-    ) -> PyResult<Option<Vec<u32>>> {
-        let raw_ret = self.0.layers[layer_index].get_links(&vector_id.0);
+    pub fn get_links(&self, vector_id: u32, layer_index: usize) -> PyResult<Option<Vec<u32>>> {
+        let raw_ret =
+            self.0.layers[layer_index].get_links(&IrisVectorId::from_serial_id(vector_id));
         Ok(raw_ret.map(|neighborhood| neighborhood.0.iter().map(|nb| nb.serial_id()).collect()))
     }
 }
