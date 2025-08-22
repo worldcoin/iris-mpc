@@ -52,11 +52,11 @@ dist_irises = vector2.get(1).get_distance_fraction(vector2.get(2))
 print(dist_indices, dist_iris_to_id, dist_irises)
 assert(dist_indices == dist_iris_to_id and dist_indices == dist_irises)
 
-print("For each layer, sample nodes randomly until we find one belonging to the layer")
-for layer in range(3):
-    while True:
-        vertex = random.randint(0, 9999)
-        ret = graph2.get_links(vertex, layer)
-        if ret is not None:
-            print(f"Neighborhood of vertex {vertex} in layer {layer}", ret)
-            break
+print("For each layer, sample one random node from it and print its neighborhood")
+for layer in range(graph2.get_max_layer()):
+    print(f"Layer {layer}:\n")
+    vertices = graph2.get_layer_nodes(layer)
+    i = random.randint(0, len(vertices))
+    ret = graph2.get_links(vertices[i], layer)
+    if ret is not None:
+        print(f"Neighborhood of vertex {vertices[i]} in layer {layer}", ret)

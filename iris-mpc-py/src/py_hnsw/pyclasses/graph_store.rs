@@ -28,6 +28,17 @@ impl PyGraphStore {
             .map_err(|_| PyIOError::new_err("Unable to write to file"))
     }
 
+    pub fn get_max_layer(&self) -> u32 {
+        self.0.layers.len().try_into().unwrap()
+    }
+
+    pub fn get_layer_nodes(&self, layer_index: usize) -> Option<Vec<u32>> {
+        self.0
+            .layers
+            .get(layer_index)
+            .map(|layer| layer.links.keys().map(|k| k.serial_id()).collect())
+    }
+
     pub fn get_links(&self, vector_id: u32, layer_index: usize) -> PyResult<Option<Vec<u32>>> {
         let raw_ret =
             self.0.layers[layer_index].get_links(&IrisVectorId::from_serial_id(vector_id));
