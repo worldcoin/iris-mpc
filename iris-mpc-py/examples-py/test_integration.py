@@ -1,5 +1,6 @@
 import os
-from iris_mpc_py import PyIrisCode, PyPlaintextStore, PyGraphStore, PyHnswSearcher
+import random
+from iris_mpc_py import PyIrisCode, PyPlaintextStore, PyGraphStore, PyHnswSearcher, PyIrisVectorId
 
 vector_filename = "./data/vector.ndjson"
 graph_filename = "./data/graph1.dat"
@@ -41,3 +42,12 @@ vector2 = PyPlaintextStore.read_from_ndjson(vector_filename, 10000)
 graph2 = PyGraphStore.read_from_bin(graph_filename)
 
 print("Search for random query iris code:", hnsw.search(query, vector2, graph2))
+
+# For each layer, sample nodes randomly until we find one belonging to the layer
+for layer in range(3):
+    while True:
+        vertex = random.randint(0, 9999)
+        ret = graph2.get_links(PyIrisVectorId.from_serial_id(vertex), layer)
+        if ret is not None:
+            print(f"Neighborhood of vertex {vertex} in layer {layer}", ret)
+            break
