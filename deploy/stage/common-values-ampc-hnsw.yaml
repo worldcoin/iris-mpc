@@ -55,11 +55,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 92
-    memory: 1400Gi
+    cpu: 186
+    memory: 2800Gi
   requests:
-    cpu: 92
-    memory: 1400Gi
+    cpu: 186
+    memory: 2800Gi
 
 imagePullSecrets:
   - name: github-secret
