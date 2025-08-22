@@ -16,7 +16,7 @@ impl PyPlaintextStore {
     }
 
     pub fn get(&self, id: u32) -> PyIrisCode {
-        (*self.0.storage.points[&(id + 1)].1).clone().into()
+        (*self.0.storage.points[&id].1).clone().into()
     }
 
     pub fn insert(&mut self, iris: PyIrisCode) -> u32 {
