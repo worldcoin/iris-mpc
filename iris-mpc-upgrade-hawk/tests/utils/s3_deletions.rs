@@ -1,6 +1,6 @@
-use crate::utils::{errors::TestError, logger};
+use crate::utils::logger;
 use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
-use eyre::Result;
+use eyre::{eyre, Result};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc_common::{config::Config, IrisSerialId};
 use serde::Serialize;
@@ -13,7 +13,7 @@ pub async fn upload_iris_deletions(
     data: &Vec<IrisSerialId>,
     s3: &S3_Client,
     environment: &str,
-) -> Result<(), TestError> {
+) -> Result<()> {
     // Set bucket/key based on environment.
     let s3_bucket = get_s3_bucket_for_iris_deletions(environment);
     let s3_key = get_s3_key_for_iris_deletions(environment);
@@ -44,7 +44,7 @@ pub async fn upload_iris_deletions(
         .await
         .map_err(|err| {
             logger::log_error(COMPONENT, format!("Failed to upload file to S3: {}", err));
-            TestError::SetupError("Failed to upload Iris deletions to S3".to_string())
+            eyre!("Failed to upload Iris deletions to S3")
         })?;
 
     Ok(())

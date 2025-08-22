@@ -105,7 +105,7 @@ async fn per_query(
     vector_ids: &[VectorId],
     store: &mut Aby3Store,
 ) -> Result<MapEdges<bool>> {
-    let distances = store.eval_distance_batch(&[query], vector_ids).await?;
+    let distances = store.eval_distance_batch(&query, vector_ids).await?;
 
     let is_matches = store.is_match_batch(&distances).await?;
 
