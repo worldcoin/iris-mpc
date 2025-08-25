@@ -106,6 +106,18 @@ hnsw-smpc-0:
     - name: RUST_BACKTRACE
       value: "full"
 
+    - name: AWS_REGION
+      value: "$AWS_REGION"
+
+    - name: AWS_ACCESS_KEY_ID
+      value: "access_key"
+
+    - name: AWS_SECRET_ACCESS_KEY
+      value: "secret_key"
+
+    - name: AWS_ENDPOINT_URL
+      value: "http://localstack:4566"
+
     - name: SMPC__ENVIRONMENT
       value: "$ENV"
 
