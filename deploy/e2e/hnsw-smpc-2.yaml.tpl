@@ -59,6 +59,10 @@ hnsw-smpc-2:
       path: /health
       port: health
 
+  podSecurityContext:
+    runAsUser: 0
+    runAsNonRoot: false
+
   resources:
     limits:
       cpu: 4
