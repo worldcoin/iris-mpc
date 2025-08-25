@@ -223,8 +223,14 @@ impl<'a> BatchProcessor<'a> {
             // Update the shared state with our current state
             {
                 let mut shared_state = self.batch_sync_shared_state.lock().await;
-                shared_state.batch_id = own_state.batch_id;
-                shared_state.messages_to_poll = own_state.messages_to_poll;
+                // we are here for the first time, set everything
+                if shared_state.batch_id != own_state.batch_id {
+                    shared_state.batch_id = own_state.batch_id;
+                    shared_state.messages_to_poll = own_state.messages_to_poll;
+                } else if shared_state.messages_to_poll == 0 {
+                    // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
+                    shared_state.messages_to_poll = own_state.messages_to_poll;
+                }
                 tracing::info!(
                     "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
                     shared_state.batch_id,
