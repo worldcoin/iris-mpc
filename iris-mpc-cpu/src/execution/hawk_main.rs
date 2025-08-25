@@ -50,6 +50,7 @@ use reset::{apply_deletions, search_to_reset, ResetPlan, ResetRequests};
 use scheduler::parallelize;
 use search::{SearchParams, SearchQueries};
 use serde::{Deserialize, Serialize};
+use session_groups::SessionGroups;
 use siphasher::sip::SipHasher13;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -76,6 +77,7 @@ mod reset;
 mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
+mod session_groups;
 pub mod state_check;
 use crate::protocol::ops::{open_ring, translate_threshold_a, MATCH_THRESHOLD_RATIO};
 use crate::shares::share::DistanceShare;
@@ -319,7 +321,8 @@ impl HawkActor {
 
         let my_index = args.party_index;
 
-        let networking = build_network_handle(args, &identities).await?;
+        let networking =
+            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
 
@@ -400,6 +403,11 @@ impl HawkActor {
         }
 
         Ok(self.prf_key.as_ref().unwrap().clone())
+    }
+
+    async fn new_session_groups(&mut self) -> Result<SessionGroups> {
+        let sessions = self.new_sessions().await?;
+        Ok(SessionGroups::new(sessions))
     }
 
     pub async fn new_sessions_orient(&mut self) -> Result<BothOrient<BothEyes<Vec<HawkSession>>>> {
@@ -1252,17 +1260,18 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        let mut sessions = hawk_actor.new_sessions_orient().await?;
+        let mut sessions = hawk_actor.new_session_groups().await?;
 
         // Validate the common state before starting.
-        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
+        HawkSession::state_check(sessions.for_state_check()).await?;
 
         let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
 
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result = Self::handle_job(&mut hawk_actor, &sessions, job.request).await;
+                let job_result =
+                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1287,7 +1296,7 @@ impl HawkHandle {
 
     async fn handle_job(
         hawk_actor: &mut HawkActor,
-        sessions_orient: &BothOrient<BothEyes<Vec<HawkSession>>>,
+        sessions: &mut SessionGroups,
         request: HawkRequest,
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
@@ -1305,7 +1314,6 @@ impl HawkHandle {
         );
 
         let do_search = async |orient| -> Result<_> {
-            let sessions = &sessions_orient[orient as usize];
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types) = {
                 // The store to find vector ids (same left or right).
@@ -1316,26 +1324,34 @@ impl HawkHandle {
                 )
             };
 
-            let intra_results = intra_batch_is_match(sessions, search_queries).await?;
+            let intra_results = {
+                let sessions_intra = sessions.for_intra_batch(orient);
+                let search_queries = search_queries.clone();
+                tokio::spawn(
+                    async move { intra_batch_is_match(&sessions_intra, &search_queries).await },
+                )
+            };
 
             // Search for nearest neighbors.
             // For both eyes, all requests, and rotations.
+            let sessions_search = &sessions.for_search(orient);
             let search_ids = &request.ids;
             let search_params = SearchParams {
                 hnsw: hawk_actor.searcher(),
                 do_match: true,
             };
             let search_results =
-                search::search(sessions, search_queries, search_ids, search_params).await?;
+                search::search(sessions_search, search_queries, search_ids, search_params).await?;
 
             let match_result = {
                 let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
 
                 // Go fetch the missing vector IDs and calculate their is_match.
                 let missing_is_match =
-                    is_match_batch(search_queries, step1.missing_vector_ids(), sessions).await?;
+                    is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
+                        .await?;
 
-                step1.step2(&missing_is_match, intra_results)
+                step1.step2(&missing_is_match, intra_results.await??)
             };
 
             Ok((search_results, match_result))
@@ -1351,20 +1367,20 @@ impl HawkHandle {
 
             (search_normal, matches_normal.step3(matches_mirror))
         };
-        let sessions = &sessions_orient[Orientation::Normal as usize];
+        let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
         hawk_actor
-            .update_anon_stats(sessions, &search_results)
+            .update_anon_stats(sessions_mutations, &search_results)
             .await?;
         tracing::info!("Updated anonymized statistics.");
 
         // Reset Updates. Find how to insert the new irises into the graph.
-        let resets = search_to_reset(hawk_actor, sessions, &request).await?;
+        let resets = search_to_reset(hawk_actor, sessions_mutations, &request).await?;
 
         // Insert into the in memory stores.
         let mutations = Self::handle_mutations(
             hawk_actor,
-            sessions,
+            sessions_mutations,
             search_results,
             &match_result,
             resets,
@@ -1513,20 +1529,20 @@ impl HawkHandle {
 
     async fn health_check(
         hawk_actor: &mut HawkActor,
-        sessions: &mut BothOrient<BothEyes<Vec<HawkSession>>>,
+        sessions: &mut SessionGroups,
         job_failed: bool,
     ) -> Result<()> {
         if job_failed {
             // There is some error so the sessions may be somehow invalid. Make new ones.
-            *sessions = hawk_actor.new_sessions_orient().await?;
+            *sessions = hawk_actor.new_session_groups().await?;
         }
 
         // Validate the common state after processing the requests.
-        HawkSession::state_check([&sessions[0][LEFT][0], &sessions[0][RIGHT][0]]).await?;
+        HawkSession::state_check(sessions.for_state_check()).await?;
 
         // validate that the RNGs have not diverged
         // TODO: debug serialization issues encountered with this function and then re-enable
-        // HawkSession::prf_check(sessions).await?;
+        // HawkSession::prf_check(&sessions.for_search).await?;
 
         Ok(())
     }
