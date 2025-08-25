@@ -1,5 +1,5 @@
-ampc-hnsw-2:
-  fullnameOverride: "ampc-hnsw-2"
+hnsw-smpc-2:
+  fullnameOverride: "hnsw-smpc-2"
   image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
 
   environment: $ENV
