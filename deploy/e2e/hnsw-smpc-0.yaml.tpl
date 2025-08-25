@@ -243,7 +243,7 @@ hnsw-smpc-0:
   initContainer:
     enabled: true
     image: "amazon/aws-cli:2.17.62"
-    name: "hnsw-mpc-dns-records-updater"
+    name: "hnsw-mpc-dns-records-updater-0"
     env:
       - name: PARTY_ID
         value: "0"
