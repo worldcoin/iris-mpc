@@ -59,10 +59,6 @@ hnsw-smpc-1:
       path: /health
       port: health
 
-  podSecurityContext:
-    seccompProfile:
-      type: RuntimeDefault
-
   resources:
     limits:
       cpu: 4
@@ -89,10 +85,6 @@ hnsw-smpc-1:
       - "e2e.svc.cluster.local"
       - "svc.cluster.local"
       - "cluster.local"
-
-  keelPolling:
-    # -- Specifies whether keel should poll for container updates
-    enabled: true
 
   preStop:
     # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent

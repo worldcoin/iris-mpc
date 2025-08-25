@@ -59,10 +59,6 @@ hnsw-smpc-0:
       path: /health
       port: health
 
-  podSecurityContext:
-    seccompProfile:
-      type: RuntimeDefault
-
   resources:
     limits:
       cpu: 4
