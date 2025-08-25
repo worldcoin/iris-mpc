@@ -65,11 +65,11 @@ hnsw-smpc-0:
 
   resources:
     limits:
-      cpu: 32
-      memory: 50Gi
+      cpu: 4
+      memory: 4Gi
     requests:
-      cpu: 32
-      memory: 50Gi
+      cpu: 4
+      memory: 4Gi
 
   imagePullSecrets:
     - name: github-secret
@@ -77,7 +77,7 @@ hnsw-smpc-0:
   nodeSelector:
     kubernetes.io/arch: amd64
 
-  hostNetwork: true
+  hostNetwork: false
 
   dnsPolicy: None
   dnsConfig:
@@ -90,10 +90,6 @@ hnsw-smpc-0:
       - "svc.cluster.local"
       - "cluster.local"
 
-  keelPolling:
-    # -- Specifies whether keel should poll for container updates
-    enabled: true
-
   preStop:
     # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
     sleepPeriod: 10
@@ -103,10 +99,6 @@ hnsw-smpc-0:
   # single batch timeout in stage is 240 seconds
   terminationGracePeriodSeconds: 500
 
-  # mountSSLCerts:
-  #   enabled: true
-  #   mountPath: /etc/ssl/private
-
   env:
     - name: RUST_LOG
       value: "info"
@@ -115,7 +107,7 @@ hnsw-smpc-0:
       value: "full"
 
     - name: SMPC__ENVIRONMENT
-      value: "e2e"
+      value: "$ENV"
 
     - name: SMPC__SERVICE__SERVICE_NAME
       value: "hnsw-service-0"
@@ -181,7 +173,7 @@ hnsw-smpc-0:
       value: "false"
 
     - name: SMPC__AWS__REGION
-      value: "eu-north-1"
+      value: "$AWS_REGION"
 
     - name: SMPC__SERVICE_PORTS
       value: '["4000","4001","4002"]'
@@ -255,10 +247,10 @@ hnsw-smpc-0:
     env:
       - name: PARTY_ID
         value: "0"
-      - name: MY_NODE_IP
+      - name: MY_POD_IP
         valueFrom:
           fieldRef:
-            fieldPath: status.hostIP
+            fieldPath: status.podIP
     configMap:
       init.sh: |
         #!/usr/bin/env bash
@@ -278,7 +270,7 @@ hnsw-smpc-0:
                 "TTL": 5,
                 "Type": "A",
                 "ResourceRecords": [{
-                  "Value": "$MY_NODE_IP"
+                  "Value": "$MY_POD_IP"
                 }]
               }
             }
