@@ -109,7 +109,7 @@ hnsw-smpc-2:
 
     - name: RUST_BACKTRACE
       value: "full"
-      
+
     - name: AWS_REGION
       value: "$AWS_REGION"
 
@@ -258,7 +258,7 @@ hnsw-smpc-2:
 
   initContainer:
     enabled: true
-    image: "amazon/aws-cli:2.17.62"
+    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "hnsw-mpc-dns-records-updater-2"
     env:
       - name: PARTY_ID
@@ -271,6 +271,10 @@ hnsw-smpc-2:
       name: "hnws-init-2"
       init.sh: |
         #!/usr/bin/env bash
+        set -e
+
+        key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+        key-manager --node-id 2 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
 
         # Set up environment variables
         HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region $AWS_REGION --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)
