@@ -260,6 +260,7 @@ hnsw-smpc-1:
           fieldRef:
             fieldPath: status.podIP
     configMap:
+      name: "hnws-init-1"
       init.sh: |
         #!/usr/bin/env bash
 
