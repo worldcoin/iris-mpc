@@ -34,6 +34,12 @@ hnsw-smpc-1:
       name: tcp-4102
       protocol: TCP
 
+  service:
+    additionalPorts:
+    - name: health
+      port: 3000
+      targetPort: 3000
+
   livenessProbe:
     httpGet:
       path: /health
@@ -283,8 +289,3 @@ hnsw-smpc-1:
 
         # Execute AWS CLI command with the generated JSON
         aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
-
-   # attachSecurityGroupPolicy:
-   #   enabled: true
-   #   groupIds:
-   #  - sg-009f4095359514cf3 # smpc0-stage ampc-hnsw pod sg
