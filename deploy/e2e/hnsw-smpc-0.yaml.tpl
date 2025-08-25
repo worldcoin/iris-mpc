@@ -194,7 +194,7 @@ hnsw-smpc-0:
       value: '3000'
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["0.0.0.0","hnsw-smpc-1.$ENV.svc.cluster.local","hnsw-smpc-2.$ENV.svc.cluster.local]'
+      value: '["0.0.0.0","hnsw-smpc-1.$ENV.svc.cluster.local","hnsw-smpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
