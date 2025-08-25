@@ -216,9 +216,10 @@ impl<'a> BatchProcessor<'a> {
             let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
             // Determine the number of messages to poll based on synchronized state
-            let own_state = get_own_batch_sync_state(self.config, self.client, current_batch_id)
-                .await
-                .map_err(ReceiveRequestError::BatchSyncError)?;
+            let mut own_state =
+                get_own_batch_sync_state(self.config, self.client, current_batch_id)
+                    .await
+                    .map_err(ReceiveRequestError::BatchSyncError)?;
 
             // Update the shared state with our current state
             {
@@ -230,6 +231,9 @@ impl<'a> BatchProcessor<'a> {
                 } else if shared_state.messages_to_poll == 0 {
                     // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
                     shared_state.messages_to_poll = own_state.messages_to_poll;
+                } else {
+                    // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
+                    own_state.messages_to_poll = shared_state.messages_to_poll;
                 }
                 tracing::info!(
                     "Updated shared batch sync state: batch_id={}, messages_to_poll={}",

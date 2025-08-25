@@ -579,9 +579,9 @@ async fn run_main_server_loop(
             batch_sync_shared_state.clone(),
         );
 
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
         loop {
             // Increment batch_id for the next batch, we start at 1, since the initial state for the batch sync is set to 0, which we consider to be invalid
-            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
             let now = Instant::now();
 
@@ -639,6 +639,7 @@ async fn run_main_server_loop(
 
             // we are done with the batch sync, so we can release the semaphore permit
             // This will allow the next batch to be received
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
             sem.add_permits(1);
 
             let result_future = hawk_handle.submit_batch_query(batch.clone());
