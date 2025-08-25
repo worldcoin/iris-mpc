@@ -20,4 +20,4 @@ jobs:
         uses: worldcoin/gh-actions-public/relyance@main
         # More information: https://github.com/worldcoin/gh-actions-public/tree/main/relyance
         with:
-          secrets-dpp-sci-key: $${{ secrets.DPP_SCI_KEY }}
+          secrets-dpp-sci-key: ${{ secrets.DPP_SCI_KEY }}
