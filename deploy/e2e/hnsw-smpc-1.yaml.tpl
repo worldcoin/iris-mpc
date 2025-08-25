@@ -190,7 +190,7 @@ hnsw-smpc-1:
       value: '3000'
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["node.0.$ENV.hnsw.worldcoin.dev","0.0.0.0","node.2.$ENV.hnsw.worldcoin.dev"]'
+      value: '["hnsw-smpc-0.$ENV.svc.cluster.local","0.0.0.0","hnsw-smpc-2.$ENV.svc.cluster.local"]'
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
@@ -274,7 +274,7 @@ hnsw-smpc-1:
             {
               "Action": "UPSERT",
               "ResourceRecordSet": {
-                "Name": "hnsw-mpc-1.orb.e2e.test",
+                "Name": "hnsw-smpc-1.orb.e2e.test",
                 "TTL": 5,
                 "Type": "A",
                 "ResourceRecords": [{

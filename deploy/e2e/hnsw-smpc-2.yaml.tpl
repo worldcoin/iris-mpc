@@ -39,7 +39,7 @@ hnsw-smpc-2:
     - name: health
       port: 3000
       targetPort: 3000
-      
+
   livenessProbe:
     httpGet:
       path: /health
@@ -190,7 +190,7 @@ hnsw-smpc-2:
       value: '3000'
 
     - name: SMPC__NODE_HOSTNAMES
-      value: '["node.0.$ENV.hnsw.worldcoin.dev","node.1.$ENV.hnsw.worldcoin.dev","0.0.0.0"]'
+      value: '["hnsw-smpc-0.$ENV.svc.cluster.local","hnsw-smpc-1.$ENV.svc.cluster.local","0.0.0.0"]'
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
@@ -274,7 +274,7 @@ hnsw-smpc-2:
             {
               "Action": "UPSERT",
               "ResourceRecordSet": {
-                "Name": "hnsw-mpc-2.orb.e2e.test",
+                "Name": "hnsw-smpc-2.orb.e2e.test",
                 "TTL": 5,
                 "Type": "A",
                 "ResourceRecords": [{
