@@ -175,7 +175,7 @@ ampc-hnsw-2:
       value: "false"
 
     - name: SMPC__AWS__REGION
-      value: "eu-north-1"
+      value: "eu-central-1"
 
     - name: SMPC__SERVICE_PORTS
       value: '["4000","4001","4002"]'
@@ -205,10 +205,10 @@ ampc-hnsw-2:
       value: "1024"
 
     - name: SMPC__REQUESTS_QUEUE_URL
-      value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/hnsw-mpc-request-2-e2e.fifo"
+      value: "http://sqs.$AWS_REGION.localhost.localstack.cloud:4566/000000000000/hnsw-smpc-request-2-e2e.fifo"
 
     - name: SMPC__RESULTS_TOPIC_ARN
-      value: "arn:aws:sns:$AWS_REGION:000000000000:hnsw-mpc-results.fifo"
+      value: "arn:aws:sns:$AWS_REGION:000000000000:hnsw-smpc-results.fifo"
 
     - name: SMPC__KMS_KEY_ARNS
       value: '["arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000000","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000001","arn:aws:kms:$AWS_REGION:000000000000:key/00000000-0000-0000-0000-000000000002"]'
@@ -234,7 +234,7 @@ ampc-hnsw-2:
       value: "hnsw-0"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_CPU_IMAGE_TAG"
+      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"
