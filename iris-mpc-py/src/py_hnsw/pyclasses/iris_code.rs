@@ -64,6 +64,10 @@ impl PyIrisCode {
             mask: mask.0,
         }))
     }
+
+    pub fn get_distance_fraction(&self, rhs: PyIrisCode) -> (u16, u16) {
+        self.0.get_distance_fraction(&rhs.0)
+    }
 }
 
 impl From<IrisCode> for PyIrisCode {
