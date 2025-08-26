@@ -51,6 +51,9 @@ RUN /opt/amazon/efa/bin/fi_info --version
 ENV PATH=/opt/amazon/openmpi5/bin:/opt/amazon/efa/bin:$PATH
 ENV LD_LIBRARY_PATH=/opt/amazon/openmpi5/lib:/opt/amazon/efa/lib:$LD_LIBRARY_PATH
 
+# Build deps for aws-ofi-nccl
+RUN apt-get update && apt-get install -y --no-install-recommends libhwloc-dev
+
 # ----- AWS-OFI-NCCL plugin build against system NCCL (/usr) -----
 RUN cd /tmp \
     && git clone https://github.com/aws/aws-ofi-nccl.git \
@@ -60,7 +63,6 @@ RUN cd /tmp \
     && ./configure --prefix=/opt/aws-ofi-nccl/install \
           --with-libfabric=/opt/amazon/efa \
           --with-cuda=/usr/local/cuda \
-          --with-nccl=/usr \
           --with-mpi=/opt/amazon/openmpi5 \
     && make -j && make install
 

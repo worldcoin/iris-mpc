@@ -3,7 +3,7 @@ name: Build and push base docker image (CUDA, NCCL)
 on:
   push:
     paths:
-      - Dockerfile.base
+      - ../../Base.dockerfile
       - .github/workflows/build-and-push-base.yaml
 
   workflow_dispatch:
