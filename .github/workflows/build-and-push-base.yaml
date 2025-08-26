@@ -11,8 +11,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}-base
-  CUDA_VERSION: 12_2
-  NCCL_VERSION: 2_22_3_1
+  CUDA_VERSION: 12_8
 jobs:
   docker:
     timeout-minutes: 40
@@ -42,7 +41,7 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ env.CUDA_VERSION }}-nccl${{ env.NCCL_VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ env.CUDA_VERSION }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

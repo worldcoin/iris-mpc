@@ -1,48 +1,67 @@
 FROM --platform=linux/amd64 ubuntu:22.04 as build-image
 
-RUN apt-get update && apt-get install -y pkg-config wget libssl-dev ca-certificates protobuf-compiler \
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Base build deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      pkg-config wget curl ca-certificates git build-essential debhelper \
+      libssl-dev protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+
+# Add NVIDIA CUDA repo & install CUDA 12.8 + NCCL from that repo
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb \
     && dpkg -i cuda-keyring_1.1-1_all.deb \
     && apt-get update \
-    && apt-get install -y cuda-toolkit-12-2 libnccl2=2.22.3-1+cuda12.2 libnccl-dev=2.22.3-1+cuda12.2 git curl build-essential debhelper
+    && apt-get install -y --no-install-recommends \
+         cuda-toolkit-12-8 \
+         libnccl2 libnccl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-ARG GDRCOPY_VERSION=v2.4.1
-ARG EFA_INSTALLER_VERSION=1.34.0
-ARG NCCL_INSTALL_VERSION=v2.22.3-1
-ARG AWS_OFI_NCCL_VERSION=aws
+# ---- Versions (override as needed) ----
+ARG GDRCOPY_VERSION=v2.5.1
+ARG EFA_INSTALLER_VERSION=1.43.1
+ARG AWS_OFI_NCCL_VERSION=v1.16.3
+# ---------------------------------------
 
-ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/opt/amazon/openmpi/lib:/opt/nccl/build/lib:/opt/amazon/efa/lib:/opt/aws-ofi-nccl/install/lib:/usr/local/lib:$LD_LIBRARY_PATH
-ENV PATH=/opt/amazon/openmpi/bin/:/opt/amazon/efa/bin:$PATH
+# Helpful envs (CUDA + CUPTI visible; prefer system NCCL in /usr)
+ENV LD_LIBRARY_PATH=/usr/local/cuda/extras/CUPTI/lib64:/usr/local/lib:/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+ENV PATH=/usr/local/cuda/bin:$PATH
 
+# ----- GDRCopy (optional but common with EFA) -----
 RUN git clone -b ${GDRCOPY_VERSION} https://github.com/NVIDIA/gdrcopy.git /tmp/gdrcopy \
-    && cd /tmp/gdrcopy \
-    && make prefix=/opt/gdrcopy install
-
-ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat:$LD_LIBRARY_PATH
-ENV LIBRARY_PATH=/opt/gdrcopy/lib:/usr/local/cuda/compat/:$LIBRARY_PATH
+    && make -C /tmp/gdrcopy prefix=/opt/gdrcopy install
+ENV LD_LIBRARY_PATH=/opt/gdrcopy/lib:$LD_LIBRARY_PATH
+ENV LIBRARY_PATH=/opt/gdrcopy/lib:$LIBRARY_PATH
 ENV CPATH=/opt/gdrcopy/include:$CPATH
 ENV PATH=/opt/gdrcopy/bin:$PATH
 
-# Install EFA installer
+# ----- EFA installer (userspace libfabric, Open MPI, etc.) -----
 RUN cd /tmp \
     && curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
-    && tar -xf /tmp/aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
-    && cd /tmp/aws-efa-installer \
+    && tar -xf aws-efa-installer-${EFA_INSTALLER_VERSION}.tar.gz \
+    && cd aws-efa-installer \
+    # --skip-kmod because kernel drivers come from the host on EKS
     && ./efa_installer.sh -y -d --skip-kmod --skip-limit-conf --no-verify | tee /tmp/aws-efa-installer/install.log
 
-# Test EFA installation
+# Confirm libfabric/fi_info presence
 RUN /opt/amazon/efa/bin/fi_info --version
 
-# Install AWS-OFI-NCCL plugin
+# EFA now installs Open MPI 5 under /opt/amazon/openmpi5 (update paths)
+ENV PATH=/opt/amazon/openmpi5/bin:/opt/amazon/efa/bin:$PATH
+ENV LD_LIBRARY_PATH=/opt/amazon/openmpi5/lib:/opt/amazon/efa/lib:$LD_LIBRARY_PATH
+
+# ----- AWS-OFI-NCCL plugin build against system NCCL (/usr) -----
 RUN cd /tmp \
     && git clone https://github.com/aws/aws-ofi-nccl.git \
-    && cd /tmp/aws-ofi-nccl \
+    && cd aws-ofi-nccl \
     && git checkout ${AWS_OFI_NCCL_VERSION} \
     && ./autogen.sh \
     && ./configure --prefix=/opt/aws-ofi-nccl/install \
-    --with-libfabric=/opt/amazon/efa/ \
-    --with-cuda=/usr/local/cuda \
-    --with-nccl=/tmp/nccl/build \
-    --with-mpi=/opt/amazon/openmpi/ \
-    && make && make install
+          --with-libfabric=/opt/amazon/efa \
+          --with-cuda=/usr/local/cuda \
+          --with-nccl=/usr \
+          --with-mpi=/opt/amazon/openmpi5 \
+    && make -j && make install
+
+# Final sanity: show NCCL and CUDA versions available to the linker
+RUN ldconfig -p | grep -E 'nccl|cuda' || true
