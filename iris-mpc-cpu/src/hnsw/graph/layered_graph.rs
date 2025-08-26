@@ -189,7 +189,7 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
+    pub fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
         self.links.get(from).cloned()
     }
 
