@@ -37,9 +37,9 @@ use iris_mpc_common::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
             ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
-            ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+            RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -892,6 +892,8 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
+    let anonymized_statistics_2d_attributes =
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
 
@@ -1885,8 +1887,8 @@ async fn server_main(config: Config) -> Result<()> {
                     &metadata,
                     &sns_client_bg,
                     &config_bg,
-                    &anonymized_statistics_attributes,
-                    ANONYMIZED_STATISTICS_MESSAGE_TYPE, // TODO: decide on the message type for 2D anonymized statistics
+                    &anonymized_statistics_2d_attributes,
+                    ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE,
                 )
                 .await?;
             }
