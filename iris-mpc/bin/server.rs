@@ -1403,6 +1403,7 @@ async fn server_main(config: Config) -> Result<()> {
             mut modifications,
             actor_data: _,
             full_face_mirror_attack_detected,
+            anonymized_bucket_statistics_2d,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1872,6 +1873,10 @@ async fn server_main(config: Config) -> Result<()> {
                 .await?;
             }
 
+            // Send 2D anonymized statistics if present with their own flag
+            // TODO: create a new message type for 2D anonymized statistics
+            // TODO: create new config flag for 2D anonymized statistics
+        
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 
