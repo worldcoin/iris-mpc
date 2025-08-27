@@ -13,6 +13,7 @@ use crate::{
 };
 use eyre::{OptionExt, Result};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 pub type SearchQueries<ROT = WithRot> = Arc<BothEyes<VecRequests<VecRots<Aby3Query, ROT>>>>;
@@ -36,6 +37,7 @@ pub async fn search<ROT>(
 where
     ROT: Rotations,
 {
+    let start = Instant::now();
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
@@ -66,9 +68,12 @@ where
 
     parallelize(schedule.batches().into_iter().map(per_session)).await?;
 
-    let results = collect_results(rx).await?;
+    let results = schedule.organize_results(collect_results(rx).await?)?;
 
-    schedule.organize_results(results)
+    if ROT::N_ROTATIONS > 1 {
+        metrics::histogram!("search_duration").record(start.elapsed().as_secs_f64());
+    }
+    Ok(results)
 }
 
 async fn per_session<ROT>(
@@ -117,6 +122,8 @@ async fn per_query(
     graph_store: &GraphMem<Aby3Store>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
+    let start = Instant::now();
+
     let (links, set_ep) = search_params
         .hnsw
         .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
@@ -128,6 +135,7 @@ async fn per_query(
         0
     };
 
+    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
     Ok(HawkInsertPlan {
         plan: InsertPlanV {
             query,

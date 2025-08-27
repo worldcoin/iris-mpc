@@ -36,11 +36,11 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 1;
+const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 5;
 const DEFAULT_BATCH_SIZE: usize = 10;
-const DEFAULT_N_BATCHES: usize = 3;
+const DEFAULT_N_BATCHES: usize = 5;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(0);
+const WAIT_AFTER_BATCH: Duration = Duration::from_secs(10);
 const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 

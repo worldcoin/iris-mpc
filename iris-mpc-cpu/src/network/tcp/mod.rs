@@ -54,6 +54,7 @@ pub trait Server: Send {
 pub async fn build_network_handle(
     args: &HawkArgs,
     identities: &[Identity],
+    sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
     static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
     INSTALL_CRYPTO_PROVIDER.call_once(|| {
@@ -73,7 +74,7 @@ pub async fn build_network_handle(
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
         args.connection_parallelism,
-        args.request_parallelism * 2 * 2 * iris_mpc_common::ROTATIONS, // x2 for both orientations and x2 for both eyes.
+        args.request_parallelism * sessions_per_request,
     );
 
     if let Some(tls) = args.tls.as_ref() {

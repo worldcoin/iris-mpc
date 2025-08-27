@@ -99,7 +99,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "15000000"
+    value: "18000000"
 
   - name: SMPC__FAKE_DB_SIZE
     value: "0"
@@ -114,6 +114,9 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_RESET
+    value: "true"
+
+  - name: SMPC__ENABLE_REAUTH
     value: "true"
 
   - name: SMPC__LUC_ENABLED
