@@ -1890,7 +1890,7 @@ async fn server_main(config: Config) -> Result<()> {
                 )
                 .await?;
             }
-        
+
             shutdown_handler_bg.decrement_batches_pending_completion();
         }
 
