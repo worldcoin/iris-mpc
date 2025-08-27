@@ -90,7 +90,3 @@ path = "src/bin/migrator.rs"
 name = "e2e-input-transform"
 path = "src/bin/e2e_input_transform.rs"
 
-[[bin]]
-name = "pprof-collector"
-path = "src/bin/pprof_collector.rs"
-required-features = ["helpers"]
