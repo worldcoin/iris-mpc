@@ -1874,8 +1874,22 @@ async fn server_main(config: Config) -> Result<()> {
             }
 
             // Send 2D anonymized statistics if present with their own flag
-            // TODO: create a new message type for 2D anonymized statistics
-            // TODO: create new config flag for 2D anonymized statistics
+            if config_bg.enable_sending_anonymized_stats_2d_message
+                && !anonymized_bucket_statistics_2d.buckets.is_empty()
+            {
+                tracing::info!("Sending 2D anonymized stats results");
+                let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d)
+                    .wrap_err("failed to serialize 2D anonymized statistics result")?;
+                send_results_to_sns(
+                    vec![serialized],
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE, // TODO: decide on the message type for 2D anonymized statistics
+                )
+                .await?;
+            }
         
             shutdown_handler_bg.decrement_batches_pending_completion();
         }

@@ -191,6 +191,9 @@ pub struct Config {
     pub enable_sending_mirror_anonymized_stats_message: bool,
 
     #[serde(default)]
+    pub enable_sending_anonymized_stats_2d_message: bool,
+
+    #[serde(default)]
     pub enable_reauth: bool,
 
     #[serde(default)]
@@ -596,6 +599,7 @@ pub struct CommonConfig {
     n_buckets: usize,
     enable_sending_anonymized_stats_message: bool,
     enable_sending_mirror_anonymized_stats_message: bool,
+    enable_sending_anonymized_stats_2d_message: bool,
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
@@ -674,6 +678,7 @@ impl From<Config> for CommonConfig {
             n_buckets,
             enable_sending_anonymized_stats_message,
             enable_sending_mirror_anonymized_stats_message,
+            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
@@ -728,6 +733,7 @@ impl From<Config> for CommonConfig {
             n_buckets,
             enable_sending_anonymized_stats_message,
             enable_sending_mirror_anonymized_stats_message,
+            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
