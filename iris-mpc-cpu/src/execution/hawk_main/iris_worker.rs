@@ -18,6 +18,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::oneshot;
+use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
@@ -114,23 +115,17 @@ impl IrisPoolHandle {
     }
 }
 
-pub fn init_workers(
-    num_workers: usize,
-    shard_index: usize,
-    iris_store: SharedIrisesRef<ArcIris>,
-) -> IrisPoolHandle {
+pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
-
-    // need to use at least one core
-    let cores_to_use = std::cmp::max(
-        1,
-        // minus one to leave core 0 alone.
-        // other stuff probably gets scheduled on core 0
-        std::cmp::min(num_workers, core_ids.len().saturating_sub(1)),
+    info!(
+        "Dot product shard {} running on {} cores ({:?})",
+        shard_index,
+        core_ids.len(),
+        core_ids
     );
 
     let mut channels = vec![];
-    for &core_id in core_ids.iter().take(cores_to_use) {
+    for core_id in core_ids {
         let (tx, rx) = crossbeam::channel::unbounded::<IrisTask>();
         channels.push(tx);
         let iris_store = iris_store.clone();
@@ -204,13 +199,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let shard_index = shard_index % SHARD_COUNT;
-
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.reverse();
+    let core_ids = core_affinity::get_core_ids().unwrap();
     assert!(!core_ids.is_empty());
 
-    let shard_size = core_ids.len() / SHARD_COUNT;
+    let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
+    let shard_index = shard_index % shard_count;
+
+    let shard_size = core_ids.len() / shard_count;
     let start = shard_index * shard_size;
     let end = cmp::min(start + shard_size, core_ids.len());
 

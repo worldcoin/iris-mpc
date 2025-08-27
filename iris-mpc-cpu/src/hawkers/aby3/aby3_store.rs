@@ -416,22 +416,8 @@ mod tests {
             let premade_results = jobs.join_all().await;
 
             for (premade_res, scratch_res) in izip!(scratch_results, premade_results) {
-                let premade_val = premade_res?;
-                let scratch_val = scratch_res?;
-                println!(
-                    "Vector {}: premade={}, scratch={}",
-                    i, premade_val, scratch_val
-                );
-                assert!(
-                    premade_val,
-                    "Premade result should be true for vector {}",
-                    i
-                );
-                assert!(
-                    scratch_val,
-                    "Scratch result should be true for vector {}",
-                    i
-                );
+                assert!(premade_res?);
+                assert!(scratch_res?);
             }
         }
 
