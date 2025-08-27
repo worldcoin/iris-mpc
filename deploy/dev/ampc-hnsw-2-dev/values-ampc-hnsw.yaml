@@ -193,4 +193,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-  - sg-06ee11b4d6a8ffe4f # smpc2-dev ampc-hnsw pod sg
+  - sg-0f4a0e8452af84495 # smpc2-dev ampc-hnsw pod sg
