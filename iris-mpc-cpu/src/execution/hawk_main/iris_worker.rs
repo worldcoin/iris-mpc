@@ -99,11 +99,7 @@ impl IrisPoolHandle {
     }
 }
 
-pub fn init_workers(
-    num_workers: usize,
-    shard_index: usize,
-    iris_store: SharedIrisesRef<ArcIris>,
-) -> IrisPoolHandle {
+pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
     info!(
         "Dot product shard {} running on {} cores ({:?})",
@@ -112,16 +108,8 @@ pub fn init_workers(
         core_ids
     );
 
-    // need to use at least one core
-    let cores_to_use = std::cmp::max(
-        1,
-        // minus one to leave core 0 alone.
-        // other stuff probably gets scheduled on core 0
-        std::cmp::min(num_workers, core_ids.len().saturating_sub(1)),
-    );
-
     let mut channels = vec![];
-    for &core_id in core_ids.iter().take(cores_to_use) {
+    for core_id in core_ids {
         let (tx, rx) = crossbeam::channel::unbounded::<IrisTask>();
         channels.push(tx);
         let iris_store = iris_store.clone();
@@ -186,8 +174,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.reverse();
+    let core_ids = core_affinity::get_core_ids().unwrap();
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());

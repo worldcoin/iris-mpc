@@ -258,10 +258,6 @@ pub struct Config {
 
     #[serde(default = "default_tokio_threads")]
     pub tokio_threads: usize,
-
-    // dedicated thread pool for CPU bound tasks
-    #[serde(default = "default_compute_threads")]
-    pub compute_threads: usize,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -408,11 +404,6 @@ fn default_full_scan_side_switching_enabled() -> bool {
 
 fn default_tokio_threads() -> usize {
     num_cpus::get()
-}
-
-fn default_compute_threads() -> usize {
-    let logical_cores = num_cpus::get();
-    std::cmp::max(1, logical_cores.saturating_sub(1))
 }
 
 impl Config {
@@ -705,7 +696,6 @@ impl From<Config> for CommonConfig {
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
             tokio_threads: _,
-            compute_threads: _,
         } = value;
 
         Self {

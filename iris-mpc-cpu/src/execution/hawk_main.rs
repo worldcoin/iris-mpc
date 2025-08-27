@@ -123,9 +123,6 @@ pub struct HawkArgs {
 
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
-
-    #[clap(short, long, default_value_t = 8)]
-    pub compute_threads: usize,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -330,9 +327,8 @@ impl HawkActor {
             build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
-        let workers_handle = [LEFT, RIGHT].map(|side| {
-            iris_worker::init_workers(args.compute_threads, side, iris_store[side].clone())
-        });
+        let workers_handle =
+            [LEFT, RIGHT].map(|side| iris_worker::init_workers(side, iris_store[side].clone()));
 
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,
@@ -1951,7 +1947,6 @@ mod tests_db {
             addresses: vec!["0.0.0.0:1234".to_string()],
             request_parallelism: 4,
             connection_parallelism: 2,
-            compute_threads: 8,
             hnsw_param_ef_constr: 320,
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
