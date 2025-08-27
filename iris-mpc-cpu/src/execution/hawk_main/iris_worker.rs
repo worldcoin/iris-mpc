@@ -18,6 +18,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::oneshot;
+use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
@@ -104,6 +105,12 @@ pub fn init_workers(
     iris_store: SharedIrisesRef<ArcIris>,
 ) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
+    info!(
+        "Dot product shard {} running on {} cores ({:?})",
+        shard_index,
+        core_ids.len(),
+        core_ids
+    );
 
     // need to use at least one core
     let cores_to_use = std::cmp::max(
@@ -179,13 +186,14 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let shard_index = shard_index % SHARD_COUNT;
-
     let mut core_ids = core_affinity::get_core_ids().unwrap();
     core_ids.reverse();
     assert!(!core_ids.is_empty());
 
-    let shard_size = core_ids.len() / SHARD_COUNT;
+    let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
+    let shard_index = shard_index % shard_count;
+
+    let shard_size = core_ids.len() / shard_count;
     let start = shard_index * shard_size;
     let end = cmp::min(start + shard_size, core_ids.len());
 
