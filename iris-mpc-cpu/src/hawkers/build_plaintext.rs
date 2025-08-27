@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use tokio::task::JoinSet;
 
 use crate::{
     execution::hawk_main::{
         insert::{self, InsertPlanV},
-        BothEyes, STORE_IDS,
+        BothEyes,
     },
-    genesis::BatchSize,
     hawkers::plaintext_store::SharedPlaintextStore,
     hnsw::{GraphMem, HnswSearcher},
 };
@@ -28,8 +27,8 @@ pub async fn plaintext_parallel_batch_insert(
 ) -> Result<(GraphMem<SharedPlaintextStore>, SharedPlaintextStore)> {
     // Checks for same option case, but otherwise assumes graphs and stores are in sync.
     assert!(graph.is_none() == store.is_none());
-    let graph = Arc::new(graph.unwrap_or_else(|| GraphMem::new()));
-    let mut store = store.unwrap_or_else(|| SharedPlaintextStore::new());
+    let graph = Arc::new(graph.unwrap_or_default());
+    let mut store = store.unwrap_or_default();
 
     let mut jobs: JoinSet<Result<_>> = JoinSet::new();
     let searcher = HnswSearcher { params };
