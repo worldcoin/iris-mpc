@@ -3,6 +3,7 @@ use crate::helpers::batch_sync::get_own_batch_sync_entries;
 use crate::helpers::shutdown_handler::ShutdownHandler;
 use crate::helpers::task_monitor::TaskMonitor;
 use axum::extract::Query;
+use axum::http::header;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -11,13 +12,17 @@ use eyre::{ensure, Error, OptionExt as _, Result, WrapErr};
 use futures::future::try_join_all;
 use futures::FutureExt as _;
 use itertools::Itertools as _;
+use pprof::protos::Message;
+use pprof::ProfilerGuardBuilder;
 use reqwest::Response;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Duration as StdDuration;
 use tokio::sync::{oneshot, Mutex};
+use tokio::time::sleep as tokio_sleep;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ReadyProbeResponse {
@@ -41,6 +46,73 @@ pub struct BatchSyncSharedState {
 pub fn init_task_monitor() -> TaskMonitor {
     tracing::info!("Preparing task monitor");
     TaskMonitor::new()
+}
+
+// ---- Optional pprof HTTP routes ----
+#[derive(Debug, Deserialize)]
+struct PprofQuery {
+    seconds: Option<u64>,
+    frequency: Option<i32>,
+}
+
+fn pprof_routes() -> Router {
+    Router::new()
+        .route(
+            "/pprof/flame",
+            get(|Query(q): Query<PprofQuery>| async move {
+                tracing::info!("Preparing pprof flame!!!!");
+                let seconds = q.seconds.unwrap_or(30).min(300);
+                let frequency = q.frequency.unwrap_or(99).clamp(1, 1000);
+                let guard = ProfilerGuardBuilder::default()
+                    .frequency(frequency)
+                    .build()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                tokio_sleep(StdDuration::from_secs(seconds)).await;
+                match guard.report().build() {
+                    Ok(report) => {
+                        let mut svg = Vec::new();
+                        if let Err(e) = report.flamegraph(&mut svg) {
+                            return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+                        }
+                        Ok((
+                            StatusCode::OK,
+                            [(header::CONTENT_TYPE, "image/svg+xml")],
+                            svg,
+                        ))
+                    }
+                    Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+                }
+            }),
+        )
+        .route(
+            "/pprof/profile",
+            get(|Query(q): Query<PprofQuery>| async move {
+                let seconds = q.seconds.unwrap_or(30).min(300);
+                let frequency = q.frequency.unwrap_or(99).clamp(1, 1000);
+                let guard = ProfilerGuardBuilder::default()
+                    .frequency(frequency)
+                    .build()
+                    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+                tokio_sleep(StdDuration::from_secs(seconds)).await;
+                match guard.report().build() {
+                    Ok(report) => match report.pprof() {
+                        Ok(profile) => {
+                            let mut buf = Vec::new();
+                            if let Err(e) = profile.encode(&mut buf) {
+                                return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()));
+                            }
+                            Ok((
+                                StatusCode::OK,
+                                [(header::CONTENT_TYPE, "application/octet-stream")],
+                                buf,
+                            ))
+                        }
+                        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+                    },
+                    Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+                }
+            }),
+        )
 }
 
 pub fn get_check_addresses<S>(hostnames: &[S], ports: &[S], endpoint: &str) -> Vec<String>
@@ -111,6 +183,10 @@ where
                         }
                     }),
                 )
+                // Optional: expose pprof endpoints when built with `profiling` feature
+                // - /pprof/flame?seconds=30&frequency=99 returns an SVG flamegraph collected on-demand
+                // - /pprof/profile?seconds=30&frequency=99 returns a pprof protobuf profile
+                .merge(pprof_routes())
                 .route(
                     "/ready",
                     get({
@@ -361,7 +437,7 @@ pub async fn init_heartbeat_task(
                         );
                     }
                 } else {
-                    tracing::info!("Heartbeat: Node {} is healthy", host);
+                    tracing::debug!("Heartbeat: Node {} is healthy", host);
                 }
             }
 

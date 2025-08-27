@@ -66,6 +66,7 @@ serde-big-array.workspace = true
 metrics = "0.22.1"
 metrics-exporter-statsd = "0.7"
 futures.workspace = true
+pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
 
 
 [dev-dependencies]
