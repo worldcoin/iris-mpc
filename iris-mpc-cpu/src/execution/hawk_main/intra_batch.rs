@@ -29,7 +29,7 @@ pub async fn intra_batch_is_match(
     assert_eq!(n_requests, search_queries[RIGHT].len());
     let n_rotations = search_queries[LEFT].first().map(|r| r.len()).unwrap_or(1);
 
-    let batches = Schedule::new(n_sessions, n_requests, n_rotations).batches();
+    let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
 
     let (tx, rx) = unbounded_channel::<IsMatch>();
 
