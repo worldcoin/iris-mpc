@@ -6,6 +6,7 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -18,6 +19,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
@@ -82,6 +84,9 @@ pub async fn server_main(config: Config) -> Result<()> {
         batch_sync_shared_state.clone(),
     )
     .await;
+
+    // Optionally start embedded pprof collector hitting our own /pprof endpoints
+    maybe_start_pprof_collector(&config, &aws_clients, &mut background_tasks).await;
 
     background_tasks.check_tasks();
 
@@ -173,6 +178,114 @@ pub async fn server_main(config: Config) -> Result<()> {
     .await?;
 
     Ok(())
+}
+
+/// Starts a background task that continuously collects pprof profiles from this
+/// process' own coordination server and uploads them to S3. No-op unless
+/// `enable_pprof_collector` is true in the config.
+async fn maybe_start_pprof_collector(
+    config: &Config,
+    aws_clients: &AwsClients,
+    monitor: &mut TaskMonitor,
+) {
+    if !config.enable_pprof_collector {
+        return;
+    }
+
+    let s3_client = aws_clients.s3_client.clone();
+    let bucket = config.pprof_s3_bucket.clone();
+    let prefix = config.pprof_prefix.clone();
+    let run_id = config
+        .pprof_run_id
+        .clone()
+        .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
+    let port = config.hawk_server_healthcheck_port;
+    let base_url = format!("http://localhost:{}", port);
+    let seconds = config.pprof_seconds;
+    let frequency = config.pprof_frequency;
+    let idle = Duration::from_secs(config.pprof_idle_interval_sec);
+    let do_flame = !config.pprof_profile_only;
+    let do_profile = !config.pprof_flame_only;
+    let target = format!("party{}", config.party_id);
+
+    tracing::info!(
+        bucket = %bucket,
+        prefix = %prefix,
+        run_id = %run_id,
+        seconds = seconds,
+        frequency = frequency,
+        idle_secs = idle.as_secs(),
+        base_url = %base_url,
+        target = %target,
+        "Starting embedded pprof collector"
+    );
+
+    monitor.spawn(async move {
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(seconds + 15))
+            .build()
+            .expect("failed to build reqwest client");
+
+        loop {
+            let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
+
+            if do_flame {
+                let url = format!(
+                    "{}/pprof/flame?seconds={}&frequency={}",
+                    &base_url, seconds, frequency
+                );
+                match http.get(&url).send().await.and_then(|r| r.error_for_status()) {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(bytes) => {
+                            let key = format!(
+                                "{}/{}/{}/{}_{}s_{}Hz.flame.svg",
+                                prefix, run_id, target, ts, seconds, frequency
+                            );
+                            let _ = upload_file_to_s3(&bucket, &key, s3_client.clone(), &bytes)
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(target = "pprof-collector", error = ?e, "reading flame body failed");
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(target = "pprof-collector", error = ?e, "flame request failed");
+                    }
+                }
+            }
+
+            if do_profile {
+                let url = format!(
+                    "{}/pprof/profile?seconds={}&frequency={}",
+                    &base_url, seconds, frequency
+                );
+                match http.get(&url).send().await.and_then(|r| r.error_for_status()) {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(bytes) => {
+                            let key = format!(
+                                "{}/{}/{}/{}_{}s_{}Hz.profile.pprof",
+                                prefix, run_id, target, ts, seconds, frequency
+                            );
+                            let _ = upload_file_to_s3(&bucket, &key, s3_client.clone(), &bytes)
+                                .await;
+                        }
+                        Err(e) => {
+                            tracing::warn!(target = "pprof-collector", error = ?e, "reading profile body failed");
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(target = "pprof-collector", error = ?e, "profile request failed");
+                    }
+                }
+            }
+
+            if !idle.is_zero() {
+                tokio::time::sleep(idle).await;
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok(())
+    });
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function

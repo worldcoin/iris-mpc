@@ -229,6 +229,34 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
+    // ---- pprof continuous collector (optional) ----
+    #[serde(default = "default_pprof_collector_enabled")]
+    pub enable_pprof_collector: bool,
+
+    #[serde(default = "default_pprof_s3_bucket")]
+    pub pprof_s3_bucket: String,
+
+    #[serde(default = "default_pprof_prefix")]
+    pub pprof_prefix: String,
+
+    #[serde(default)]
+    pub pprof_run_id: Option<String>,
+
+    #[serde(default = "default_pprof_seconds")]
+    pub pprof_seconds: u64,
+
+    #[serde(default = "default_pprof_frequency")]
+    pub pprof_frequency: i32,
+
+    #[serde(default = "default_pprof_idle_interval_sec")]
+    pub pprof_idle_interval_sec: u64,
+
+    #[serde(default)]
+    pub pprof_flame_only: bool,
+
+    #[serde(default)]
+    pub pprof_profile_only: bool,
+
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
@@ -397,6 +425,32 @@ fn default_batch_sync_polling_timeout_secs() -> u64 {
 
 fn default_full_scan_side_switching_enabled() -> bool {
     true
+}
+
+// ---- pprof collector defaults ----
+fn default_pprof_collector_enabled() -> bool {
+    false
+}
+
+fn default_pprof_s3_bucket() -> String {
+    // Stage default bucket; override in prod via env
+    "wf-smpcv2-stage-hnsw-performance-reports".to_string()
+}
+
+fn default_pprof_prefix() -> String {
+    "hnsw/pprof".to_string()
+}
+
+fn default_pprof_seconds() -> u64 {
+    30
+}
+
+fn default_pprof_frequency() -> i32 {
+    99
+}
+
+fn default_pprof_idle_interval_sec() -> u64 {
+    5
 }
 
 impl Config {
@@ -688,6 +742,16 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            // pprof collector (not part of common hash)
+            enable_pprof_collector: _,
+            pprof_s3_bucket: _,
+            pprof_prefix: _,
+            pprof_run_id: _,
+            pprof_seconds: _,
+            pprof_frequency: _,
+            pprof_idle_interval_sec: _,
+            pprof_flame_only: _,
+            pprof_profile_only: _,
         } = value;
 
         Self {
