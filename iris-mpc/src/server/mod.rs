@@ -564,7 +564,7 @@ async fn run_main_server_loop(
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
 
-        let mut batch_stream = receive_batch_stream(
+        let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
@@ -580,7 +580,10 @@ async fn run_main_server_loop(
             batch_sync_shared_state.clone(),
         );
 
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
         loop {
+            // Increment batch_id for the next batch, we start at 1, since the initial state for the batch sync is set to 0, which we consider to be invalid
+
             let now = Instant::now();
 
             let mut batch = match batch_stream.recv().await {
@@ -635,6 +638,11 @@ async fn run_main_server_loop(
 
             task_monitor.check_tasks();
 
+            // we are done with the batch sync, so we can release the semaphore permit
+            // This will allow the next batch to be received
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            sem.add_permits(1);
+
             let result_future = hawk_handle.submit_batch_query(batch.clone());
 
             // await the result
@@ -642,9 +650,6 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             tx_results.send(result).await?;
-
-            // Increment batch_id for the next batch
-            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
             shutdown_handler.increment_batches_pending_completion()
             // wrap up tracing span context
