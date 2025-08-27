@@ -22,6 +22,11 @@ use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
+    /// Allocate a new iris with NUMA-awareness.
+    Alloc {
+        iris: ArcIris,
+        rsp: oneshot::Sender<ArcIris>,
+    },
     Insert {
         vector_id: VectorId,
         iris: ArcIris,
@@ -49,6 +54,13 @@ pub struct IrisPoolHandle {
 }
 
 impl IrisPoolHandle {
+    pub fn realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Alloc { iris, rsp: tx };
+        self.get_next_worker().send(task)?;
+        Ok(rx)
+    }
+
     pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::Insert {
@@ -144,6 +156,12 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
+            IrisTask::Alloc { iris, rsp } => {
+                // Re-allocate from this thread.
+                // This attempts to use the NUMA-aware first-touch policy of the OS.
+                let new_iris = Arc::new((*iris).clone());
+                let _ = rsp.send(new_iris);
+            }
             IrisTask::Insert {
                 vector_id,
                 iris,
