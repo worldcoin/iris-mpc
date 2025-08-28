@@ -89,33 +89,37 @@ async fn per_session<ROT>(
 
     for task in batch.tasks {
         let query = search_queries[batch.i_eye][task.i_request][task.i_rotation].clone();
-        let mut insertion_layer = 0;
-        if task.is_central {
+        let result = if task.is_central {
+            // search_to_insert for centers
             let query_uuid = search_ids
                 .get(task.i_request)
                 .ok_or_eyre("Invalid request id for uuid lookup")?
                 .clone();
             let side: StoreId = batch.i_eye.try_into()?;
             let layer_selection_value = (query_uuid, side);
-            insertion_layer = search_params
+            let insertion_layer = search_params
                 .hnsw
-                .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?
-        }
-        let result = per_query(
-            query,
-            search_params,
-            &mut vector_store,
-            &graph_store,
-            insertion_layer,
-        )
-        .await?;
+                .select_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
+            per_insert_query(
+                query,
+                search_params,
+                &mut vector_store,
+                &graph_store,
+                insertion_layer,
+            )
+            .await?
+        } else {
+            // plain search for non-centers
+            per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+        };
+
         tx.send((task.id(), result))?;
     }
 
     Ok(())
 }
 
-async fn per_query(
+async fn per_insert_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
@@ -141,6 +145,38 @@ async fn per_query(
             query,
             links,
             set_ep,
+        },
+        match_count,
+    })
+}
+
+async fn per_search_query(
+    query: Aby3Query,
+    search_params: &SearchParams,
+    aby3_store: &mut Aby3Store,
+    graph_store: &GraphMem<Aby3Store>,
+) -> Result<HawkInsertPlan> {
+    let start = Instant::now();
+
+    let layer_0_neighbors = search_params
+        .hnsw
+        .search(aby3_store, graph_store, &query, 1)
+        .await?;
+
+    let links = vec![layer_0_neighbors];
+
+    let match_count = if search_params.do_match {
+        search_params.hnsw.match_count(aby3_store, &links).await?
+    } else {
+        0
+    };
+
+    metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
+    Ok(HawkInsertPlan {
+        plan: InsertPlanV {
+            query,
+            links,
+            set_ep: false,
         },
         match_count,
     })
