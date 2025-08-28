@@ -162,6 +162,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 let new_iris = Arc::new((*iris).clone());
                 let _ = rsp.send(new_iris);
             }
+
             IrisTask::Insert {
                 vector_id,
                 iris,
@@ -171,6 +172,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 let vector_id = store.insert(vector_id, iris);
                 let _ = rsp.send(vector_id);
             }
+
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let pairs = {
                     let store = iris_store.data.blocking_read();
