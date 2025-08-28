@@ -141,7 +141,7 @@ async fn start_hawk_node(
     Ok(handle)
 }
 
-#[ignore = "Expected to fail for now"]
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();

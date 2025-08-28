@@ -144,6 +144,7 @@ async fn start_hawk_node(
     Ok(handle)
 }
 
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[tokio::test]
 async fn e2e_anon_stats_test() -> Result<()> {
     install_tracing();
