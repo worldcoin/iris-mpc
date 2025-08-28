@@ -1,6 +1,6 @@
 image: "ghcr.io/worldcoin/iris-mpc-cpu:3c309f9a5e04ef5b7c10bac0d45c5e655b4f183a"
 
-environment: stage
+environment: dev
 replicaCount: 1
 
 strategy:
