@@ -257,6 +257,9 @@ pub struct Config {
     #[serde(default)]
     pub pprof_profile_only: bool,
 
+    #[serde(default = "default_pprof_per_batch_enabled")]
+    pub enable_pprof_per_batch: bool,
+
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
 
@@ -451,6 +454,10 @@ fn default_pprof_frequency() -> i32 {
 
 fn default_pprof_idle_interval_sec() -> u64 {
     5
+}
+
+fn default_pprof_per_batch_enabled() -> bool {
+    false
 }
 
 impl Config {
@@ -752,6 +759,7 @@ impl From<Config> for CommonConfig {
             pprof_idle_interval_sec: _,
             pprof_flame_only: _,
             pprof_profile_only: _,
+            enable_pprof_per_batch: _,
         } = value;
 
         Self {

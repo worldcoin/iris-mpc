@@ -6,6 +6,12 @@ env:
     value: "full"
 
   - name: SMPC__ENABLE_PPROF_COLLECTOR
+    value: "false"
+
+  - name: SMPC__PPROF_FLAME_ONLY
+    value: "true"
+
+  - name: SMPC__ENABLE_PPROF_PER_BATCH
     value: "true"
 
   # Optional overrides (uncomment/customize as needed)
@@ -16,7 +22,10 @@ env:
     value: "stage/hnsw"
 
   - name: SMPC__PPROF_SECONDS
-    value: "60"
+    value: "180"
+
+  - name: SMPC__PPROF_FREQUENCY
+    value: "49"
 
   # Use Pod annotation as run-id (set via `podAnnotations` above)
   - name: SMPC__PPROF_RUN_ID
