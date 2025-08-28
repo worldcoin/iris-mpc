@@ -852,10 +852,18 @@ impl From<BatchQuery> for HawkRequest {
 impl HawkRequest {
     async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
         // TODO: Result<Self>
+        let start = Instant::now();
+
+        let (queries, queries_mirror) = join!(
+            Self::numa_realloc_orient(self.queries, &workers),
+            Self::numa_realloc_orient(self.queries_mirror, &workers)
+        );
+
+        metrics::histogram!("numa_realloc_duration").record(start.elapsed().as_secs_f64());
         Self {
             batch: self.batch,
-            queries: Self::numa_realloc_orient(self.queries, &workers).await,
-            queries_mirror: Self::numa_realloc_orient(self.queries_mirror, &workers).await,
+            queries,
+            queries_mirror,
             ids: self.ids,
         }
     }
