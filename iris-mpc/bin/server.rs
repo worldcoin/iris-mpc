@@ -37,9 +37,9 @@ use iris_mpc_common::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, ReAuthRequest, ReceiveRequestError,
             ResetCheckRequest, ResetUpdateRequest, SQSMessage, UniquenessRequest,
-            ANONYMIZED_STATISTICS_MESSAGE_TYPE, CIRCUIT_BREAKER_MESSAGE_TYPE,
-            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-            RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+            CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
+            RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, ReAuthResult,
@@ -892,6 +892,8 @@ async fn server_main(config: Config) -> Result<()> {
         create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
     let anonymized_statistics_attributes =
         create_message_type_attribute_map(ANONYMIZED_STATISTICS_MESSAGE_TYPE);
+    let anonymized_statistics_2d_attributes =
+        create_message_type_attribute_map(ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE);
     let identity_deletion_result_attributes =
         create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
 
@@ -1403,6 +1405,7 @@ async fn server_main(config: Config) -> Result<()> {
             mut modifications,
             actor_data: _,
             full_face_mirror_attack_detected,
+            anonymized_bucket_statistics_2d,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1868,6 +1871,24 @@ async fn server_main(config: Config) -> Result<()> {
                     &config_bg,
                     &anonymized_statistics_attributes,
                     ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send 2D anonymized statistics if present with their own flag
+            if config_bg.enable_sending_anonymized_stats_2d_message
+                && !anonymized_bucket_statistics_2d.buckets.is_empty()
+            {
+                tracing::info!("Sending 2D anonymized stats results");
+                let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d)
+                    .wrap_err("failed to serialize 2D anonymized statistics result")?;
+                send_results_to_sns(
+                    vec![serialized],
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_2d_attributes,
+                    ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE,
                 )
                 .await?;
             }

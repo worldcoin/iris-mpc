@@ -38,7 +38,7 @@ use iris_mpc_common::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::BucketStatistics,
+        statistics::{BucketStatistics, BucketStatistics2D},
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     job::{Eye, JobSubmissionHandle, ServerJobResult},
@@ -178,6 +178,7 @@ pub struct ServerActor {
     anonymized_bucket_statistics_right_mirror: BucketStatistics,
     // 2D anon stats buffer
     both_side_match_distances_buffer: Vec<TwoSidedDistanceCache>,
+    anonymized_bucket_statistics_2d: BucketStatistics2D,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
 }
@@ -523,6 +524,9 @@ impl ServerActor {
         let both_side_match_distances_buffer =
             vec![TwoSidedDistanceCache::default(); device_manager.device_count()];
 
+        let anonymized_bucket_statistics_2d =
+            BucketStatistics2D::new(match_distances_2d_buffer_size, n_buckets, party_id);
+
         Ok(Self {
             party_id,
             job_queue,
@@ -576,6 +580,7 @@ impl ServerActor {
             full_scan_side,
             full_scan_side_switching_enabled,
             both_side_match_distances_buffer,
+            anonymized_bucket_statistics_2d,
         })
     }
 
@@ -633,6 +638,7 @@ impl ServerActor {
             self.anonymized_bucket_statistics_right_mirror
                 .buckets
                 .clear();
+            self.anonymized_bucket_statistics_2d.buckets.clear();
 
             tracing::info!(
                 "Full batch duration took:  {:?}",
@@ -1598,6 +1604,7 @@ impl ServerActor {
             );
         }
 
+        // Attempt for 2D anonymized bucket statistics calculation
         let (one_sided_distance_cache_left, one_sided_distance_cache_right) =
             if self.full_scan_side == Eye::Left {
                 (
@@ -1676,6 +1683,14 @@ impl ServerActor {
                 );
             }
             tracing::info!("Bucket statistics calculated:\n{}", buckets_2d_string);
+
+            // Fill the 2D anonymized statistics structure for propagation
+            self.anonymized_bucket_statistics_2d.fill_buckets(
+                &buckets_2d,
+                MATCH_THRESHOLD_RATIO,
+                self.anonymized_bucket_statistics_left
+                    .next_start_time_utc_timestamp,
+            );
         }
 
         // Instead of sending to return_channel, we'll return this at the end
@@ -1704,6 +1719,7 @@ impl ServerActor {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
             anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+            anonymized_bucket_statistics_2d: self.anonymized_bucket_statistics_2d.clone(),
             anonymized_bucket_statistics_left_mirror: self
                 .anonymized_bucket_statistics_left_mirror
                 .clone(),
