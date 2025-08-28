@@ -1,22 +1,18 @@
 use crate::{
-    execution::session::Session,
+    execution::{hawk_main::iris_worker::IrisPoolHandle, session::Session},
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
-        ops::{
-            batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,
-            galois_ring_to_rep3, lte_threshold_and_open,
-        },
-        shared_iris::GaloisRingSharedIris,
+        ops::{batch_signed_lift_vec, cross_compare, galois_ring_to_rep3, lte_threshold_and_open},
+        shared_iris::{ArcIris, GaloisRingSharedIris},
     },
     shares::share::{DistanceShare, Share},
 };
 use eyre::Result;
-use itertools::{izip, Itertools};
+use iris_mpc_common::vector_id::VectorId;
+use itertools::Itertools;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
-
-use iris_mpc_common::vector_id::VectorId;
 
 /// Iris to be searcher or inserted into the store.
 ///
@@ -25,16 +21,16 @@ use iris_mpc_common::vector_id::VectorId;
 #[derive(Clone, Hash, Eq, PartialEq, Debug)]
 pub struct Aby3Query {
     /// Iris in the Shamir secret shared form over a Galois ring.
-    pub iris: Arc<GaloisRingSharedIris>,
+    pub iris: ArcIris,
 
     /// Preprocessed iris for faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub iris_proc: Arc<GaloisRingSharedIris>,
+    pub iris_proc: ArcIris,
 }
 
 impl Aby3Query {
     /// Creates a new query from a secret shared iris. The input iris is preprocessed for
     /// faster evaluation of distances; see [Aby3Store::eval_distance].
-    pub fn new(iris_ref: &Arc<GaloisRingSharedIris>) -> Self {
+    pub fn new(iris_ref: &ArcIris) -> Self {
         let iris = iris_ref.clone();
 
         let mut preprocessed = (**iris_ref).clone();
@@ -58,10 +54,8 @@ impl Aby3Query {
     }
 }
 
-pub type Aby3StoredIris = Arc<GaloisRingSharedIris>;
-
-pub type Aby3SharedIrises = SharedIrises<Aby3StoredIris>;
-pub type Aby3SharedIrisesRef = SharedIrisesRef<Aby3StoredIris>;
+pub type Aby3SharedIrises = SharedIrises<ArcIris>;
+pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
@@ -73,6 +67,9 @@ pub struct Aby3Store {
 
     /// Session for the SMPC operations
     pub session: Session,
+
+    /// used to spawn cpu bound tasks on a thread pool
+    pub workers: IrisPoolHandle,
 }
 
 impl Aby3Store {
@@ -102,21 +99,26 @@ impl Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
-        pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
-    ) -> Result<Vec<Share<u16>>> {
+        pairs: Vec<Option<(ArcIris, ArcIris)>>,
+    ) -> Result<Vec<DistanceShare<u32>>> {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let ds_and_ts = galois_ring_pairwise_distance(pairs);
-        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+        let ds_and_ts = self.workers.galois_ring_pairwise_distances(pairs).await?;
+        let distances = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        self.lift_distances(distances).await
     }
 
     /// Create a new `Aby3SharedIrises` storage using the specified points mapping.
-    pub fn new_storage(points: Option<HashMap<VectorId, Aby3StoredIris>>) -> Aby3SharedIrises {
+    pub fn new_storage(points: Option<HashMap<VectorId, ArcIris>>) -> Aby3SharedIrises {
         SharedIrises::new(
             points.unwrap_or_default(),
             Arc::new(GaloisRingSharedIris::default_for_party(0)),
         )
+    }
+
+    pub async fn checksum(&self) -> u64 {
+        self.storage.checksum().await
     }
 }
 
@@ -152,14 +154,8 @@ impl VectorStore for Aby3Store {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
-        let vector_point = self.storage.get_vector(vector).await;
-        let pairs = if let Some(v) = &vector_point {
-            &[Some((&*query.iris_proc, &**v))]
-        } else {
-            &[None]
-        };
-        let dist = self.eval_pairwise_distances(pairs).await?;
-        Ok(self.lift_distances(dist).await?[0].clone())
+        let mut d = self.eval_distance_batch(query, &[*vector]).await?;
+        Ok(d.pop().unwrap())
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
@@ -170,13 +166,14 @@ impl VectorStore for Aby3Store {
         if pairs.is_empty() {
             return Ok(vec![]);
         }
-        let vectors = self.storage.get_vectors(pairs.iter().map(|(_, v)| v)).await;
 
-        let pairs = izip!(pairs, &vectors)
-            .map(|((q, _), vector)| vector.as_ref().map(|v| (&*q.iris_proc, &**v)))
+        let pairs = pairs
+            .iter()
+            .map(|(q, v)| (q.iris_proc.clone(), *v))
             .collect_vec();
+        let ds_and_ts = self.workers.dot_product_pairs(pairs).await?;
 
-        let dist = self.eval_pairwise_distances(&pairs).await?;
+        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
     }
 
@@ -189,13 +186,13 @@ impl VectorStore for Aby3Store {
         if vectors.is_empty() {
             return Ok(vec![]);
         }
-        let vectors = self.storage.get_vectors(vectors).await;
-        let pairs = vectors
-            .iter()
-            .map(|vector| vector.as_ref().map(|v| (&*query.iris_proc, &**v)))
-            .collect::<Vec<_>>();
 
-        let dist = self.eval_pairwise_distances(&pairs).await?;
+        let ds_and_ts = self
+            .workers
+            .dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+            .await?;
+
+        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
     }
 
@@ -266,7 +263,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
-    use itertools::Itertools;
+    use itertools::{izip, Itertools};
     use rand::SeedableRng;
     use tokio::task::JoinSet;
     use tracing_test::traced_test;
@@ -354,8 +351,8 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.data.read().await.points,
-                premade_v.storage.data.read().await.points
+                v_from_scratch.storage.read().await.points,
+                premade_v.storage.read().await.points
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
@@ -419,7 +416,8 @@ mod tests {
             let premade_results = jobs.join_all().await;
 
             for (premade_res, scratch_res) in izip!(scratch_results, premade_results) {
-                assert!(premade_res? && scratch_res?);
+                assert!(premade_res?);
+                assert!(scratch_res?);
             }
         }
 
