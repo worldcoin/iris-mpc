@@ -49,16 +49,20 @@ enum IrisTask {
 
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
-    workers: Arc<Vec<Sender<IrisTask>>>,
+    workers: Arc<[Sender<IrisTask>]>,
     next_counter: Arc<AtomicU64>,
 }
 
 impl IrisPoolHandle {
-    pub fn realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
+    pub fn numa_realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::Realloc { iris, rsp: tx };
         self.get_next_worker().send(task)?;
         Ok(rx)
+    }
+
+    pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
+        Ok(self.numa_realloc(iris)?.blocking_recv()?)
     }
 
     pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
@@ -148,7 +152,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     }
 
     IrisPoolHandle {
-        workers: Arc::new(channels),
+        workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
     }
 }

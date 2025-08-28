@@ -675,9 +675,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-
-            let iris = pool.realloc(iris).unwrap().blocking_recv().unwrap();
-
+            let iris = pool.numa_realloc_blocking(iris).unwrap();
             store.insert(vector_id, iris);
         }
     }
