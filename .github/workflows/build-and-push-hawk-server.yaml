@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - e2e/templates-for-hnsw-e2e
-      - "chore/make-hnsw-e2e-run-on-ref-update" # to be removed
   release:
     types:
       - 'published'

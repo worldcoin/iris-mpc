@@ -1,9 +1,6 @@
 name: Build and push docker image
 
 on:
-  push:
-    branches:
-      - "chore/make-hnsw-e2e-run-on-ref-update" # to be removed
   release:
     types:
       - 'published'
@@ -45,7 +42,9 @@ jobs:
           context: .
           push: true
           tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
