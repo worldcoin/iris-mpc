@@ -21,7 +21,7 @@ use crate::{
 };
 use clap::Parser;
 use eyre::{eyre, Report, Result};
-use futures::try_join;
+use futures::{future::try_join_all, try_join};
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::job::Eye;
 use iris_mpc_common::{
@@ -850,6 +850,62 @@ impl From<BatchQuery> for HawkRequest {
 }
 
 impl HawkRequest {
+    async fn numa_realloc(self, workers: BothEyes<IrisPoolHandle>) -> Self {
+        // TODO: Result<Self>
+        Self {
+            batch: self.batch,
+            queries: Self::numa_realloc_orient(self.queries, &workers).await,
+            queries_mirror: Self::numa_realloc_orient(self.queries_mirror, &workers).await,
+            ids: self.ids,
+        }
+    }
+
+    async fn numa_realloc_orient(
+        queries: SearchQueries,
+        workers: &BothEyes<IrisPoolHandle>,
+    ) -> SearchQueries {
+        let (left, right) = join!(
+            Self::numa_realloc_side(&queries[LEFT], &workers[LEFT]),
+            Self::numa_realloc_side(&queries[RIGHT], &workers[RIGHT])
+        );
+        Arc::new([left, right])
+    }
+
+    async fn numa_realloc_side(
+        requests: &VecRequests<VecRots<Aby3Query>>,
+        worker: &IrisPoolHandle,
+    ) -> VecRequests<VecRots<Aby3Query>> {
+        // Iterate over all the irises.
+        let all_irises_iter = requests.iter().flat_map(|rots| {
+            rots.iter()
+                .flat_map(|query| [&query.iris, &query.iris_proc])
+        });
+
+        // Go realloc the irises in parallel.
+        let tasks = all_irises_iter.map(|iris| worker.numa_realloc(iris.clone()).unwrap());
+
+        // Iterate over the results in the same order.
+        let mut new_irises_iter = try_join_all(tasks).await.unwrap().into_iter();
+
+        // Rebuild the same structure with the new irises.
+        let new_requests = requests
+            .iter()
+            .map(|rots| {
+                rots.iter()
+                    .map(|_old_query| {
+                        let iris = new_irises_iter.next().unwrap();
+                        let iris_proc = new_irises_iter.next().unwrap();
+                        Aby3Query { iris, iris_proc }
+                    })
+                    .collect_vec()
+                    .into()
+            })
+            .collect_vec();
+
+        assert!(new_irises_iter.next().is_none());
+        new_requests
+    }
+
     fn request_types(
         &self,
         iris_store: &Aby3SharedIrises,
@@ -1316,6 +1372,10 @@ impl HawkHandle {
     ) -> Result<HawkResult> {
         tracing::info!("Processing an Hawk job…");
         let now = Instant::now();
+
+        let request = request
+            .numa_realloc(hawk_actor.workers_handle.clone())
+            .await;
 
         // Deletions.
         apply_deletions(hawk_actor, &request).await?;

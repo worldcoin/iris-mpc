@@ -223,7 +223,8 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let core_ids = core_affinity::get_core_ids().unwrap();
+    let mut core_ids = core_affinity::get_core_ids().unwrap();
+    core_ids.sort();
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
