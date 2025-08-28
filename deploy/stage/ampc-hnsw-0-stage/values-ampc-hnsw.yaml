@@ -15,6 +15,9 @@ env:
   - name: SMPC__PPROF_PREFIX
     value: "stage/hnsw"
 
+  - name: SMPC__PPROF_SECONDS
+    value: "60"
+
   # Use Pod annotation as run-id (set via `podAnnotations` above)
   - name: SMPC__PPROF_RUN_ID
     valueFrom:

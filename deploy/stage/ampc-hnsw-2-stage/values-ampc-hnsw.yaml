@@ -21,6 +21,9 @@ env:
       fieldRef:
         fieldPath: metadata.annotations['loadtest/run-id']
 
+  - name: SMPC__PPROF_SECONDS
+    value: "60"
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
