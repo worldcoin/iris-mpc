@@ -7,8 +7,6 @@ use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
 use chrono::Utc;
-use pprof::protos::Message;
-use pprof::ProfilerGuardBuilder;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -38,6 +36,8 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
+use pprof::protos::Message;
+use pprof::ProfilerGuardBuilder;
 use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
