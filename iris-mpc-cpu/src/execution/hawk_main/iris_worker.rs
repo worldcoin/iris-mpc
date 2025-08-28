@@ -22,8 +22,8 @@ use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
-    /// Allocate a new iris with NUMA-awareness.
-    Alloc {
+    /// Move an iris code to memory closer to the pool (NUMA-awareness).
+    Realloc {
         iris: ArcIris,
         rsp: oneshot::Sender<ArcIris>,
     },
@@ -56,7 +56,7 @@ pub struct IrisPoolHandle {
 impl IrisPoolHandle {
     pub fn realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
         let (tx, rx) = oneshot::channel();
-        let task = IrisTask::Alloc { iris, rsp: tx };
+        let task = IrisTask::Realloc { iris, rsp: tx };
         self.get_next_worker().send(task)?;
         Ok(rx)
     }
@@ -156,7 +156,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
-            IrisTask::Alloc { iris, rsp } => {
+            IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
                 // This attempts to use the NUMA-aware first-touch policy of the OS.
                 let new_iris = Arc::new((*iris).clone());
