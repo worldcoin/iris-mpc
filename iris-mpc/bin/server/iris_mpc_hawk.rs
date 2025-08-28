@@ -14,15 +14,7 @@ fn main() -> Result<()> {
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    println!("Init tracing");
-    let _tracing_shutdown_handle = match initialize_tracing(&config) {
-        Ok(handle) => handle,
-        Err(e) => {
-            eprintln!("Failed to initialize tracing: {:?}", e);
-            return Err(e);
-        }
-    };
-
+    // Build the Tokio runtime first so any telemetry exporters that spawn tasks have a runtime.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(config.tokio_threads)
         .enable_all()
@@ -30,6 +22,15 @@ fn main() -> Result<()> {
         .unwrap();
 
     runtime.block_on(async {
+        println!("Init tracing");
+        let _tracing_shutdown_handle = match initialize_tracing(&config) {
+            Ok(handle) => handle,
+            Err(e) => {
+                eprintln!("Failed to initialize tracing: {:?}", e);
+                return Err(e);
+            }
+        };
+
         match server_main(config).await {
             Ok(_) => {
                 tracing::info!("Server exited normally");
