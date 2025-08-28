@@ -83,7 +83,7 @@ preStop:
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
 # long enough to allow for graceful shutdown to safely process 2 batches
 # single batch timeout in stage is 240 seconds
-terminationGracePeriodSeconds: 500
+terminationGracePeriodSeconds: 240
 #
 #mountSSLCerts:
 #  enabled: true
