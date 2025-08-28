@@ -25,7 +25,6 @@ pub async fn plaintext_parallel_batch_insert(
     batch_size: usize,
     prf_seed: &[u8; 16],
 ) -> Result<(GraphMem<SharedPlaintextStore>, SharedPlaintextStore)> {
-    // Checks for same option case, but otherwise assumes graphs and stores are in sync.
     assert!(graph.is_none() == store.is_none());
     let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
@@ -59,7 +58,6 @@ pub async fn plaintext_parallel_batch_insert(
             });
         }
 
-        // Flatten all results, sort by side and index to recover order
         let mut results: Vec<_> = jobs
             .join_all()
             .await
@@ -72,7 +70,7 @@ pub async fn plaintext_parallel_batch_insert(
         let ids = ids.into_iter().map(Some).collect_vec();
         let plans = plans.into_iter().map(Some).collect_vec();
 
-        // Unwrap Arc while inserting, than wrap again for the next batch
+        // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
         insert::insert(&mut store, &mut graph_temp, &searcher, plans, &ids).await?;
         graph = Arc::new(graph_temp);
@@ -92,8 +90,6 @@ mod tests {
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
 
-    /// Prepares the arguments for the `plaintext_parallel_batch_insert` function.
-    /// This now sets up a single graph and store.
     async fn setup_test_data(
         database_size: usize,
         to_insert: usize,
@@ -108,20 +104,16 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let prf_seed = [0u8; 16];
 
-        // Generate the initial database (graph and store)
         let mut ptxt_vector = PlaintextStore::new_random(&mut rng, database_size);
         let ptxt_graph = ptxt_vector
             .generate_graph(&mut rng, database_size, &searcher)
             .await?;
 
-        // Convert to the shared, thread-safe versions
         let shared_store = SharedPlaintextStore::from(ptxt_vector);
         let graph = migrate(ptxt_graph, |id| id);
 
-        // Generate the new iris codes to be inserted
         let irises_to_insert = IrisDB::new_random_rng(to_insert, &mut rng).db;
 
-        // Create unique IrisVectorIds for the new irises, ensuring they don't overlap
         let irises: Vec<(IrisVectorId, IrisCode)> = irises_to_insert
             .into_iter()
             .enumerate()
@@ -136,7 +128,6 @@ mod tests {
         Ok((searcher, graph, shared_store, irises, prf_seed))
     }
 
-    /// Verifies the state of the store after insertion and checks that searches work correctly.
     async fn check_results(
         mut store: SharedPlaintextStore,
         graph: GraphMem<SharedPlaintextStore>,
@@ -199,7 +190,6 @@ mod tests {
         let (searcher, graph, store, irises, prf_seed) =
             setup_test_data(database_size, to_insert).await?;
 
-        // Test the code path where graph and store are created from scratch
         let (final_graph, final_store) = plaintext_parallel_batch_insert(
             Some(graph),
             Some(store),
