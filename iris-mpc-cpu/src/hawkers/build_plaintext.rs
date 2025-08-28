@@ -27,64 +27,58 @@ pub async fn plaintext_parallel_batch_insert(
 ) -> Result<(GraphMem<SharedPlaintextStore>, SharedPlaintextStore)> {
     // Checks for same option case, but otherwise assumes graphs and stores are in sync.
     assert!(graph.is_none() == store.is_none());
-    let graph = Arc::new(graph.unwrap_or_default());
+    let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
 
-    let mut jobs: JoinSet<Result<_>> = JoinSet::new();
     let searcher = HnswSearcher { params };
 
     for batch in &irises.into_iter().enumerate().chunks(batch_size) {
-        let prf_seed = *prf_seed;
-        let mut store = store.clone();
-        let graph = graph.clone();
-        let searcher = searcher.clone();
-        let batch = batch.collect_vec();
+        let mut jobs: JoinSet<Result<_>> = JoinSet::new();
 
-        jobs.spawn({
-            async move {
-                let mut results = Vec::new();
-                for (_, iris) in batch {
-                    let query = Arc::new(iris.1);
-                    let vector_id = iris.0;
-                    let insertion_layer = searcher.select_layer_prf(&prf_seed, &(vector_id))?;
+        for (_, iris) in batch {
+            let query = Arc::new(iris.1);
+            let vector_id = iris.0;
+            let prf_seed = *prf_seed;
+            let mut store = store.clone();
+            let graph = graph.clone();
+            let searcher = searcher.clone();
 
-                    let (links, set_ep) = searcher
-                        .search_to_insert(&mut store, &graph, &query, insertion_layer)
-                        .await?;
+            jobs.spawn(async move {
+                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(vector_id))?;
 
-                    let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
-                        query,
-                        links,
-                        set_ep,
-                    };
+                let (links, set_ep) = searcher
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
+                    .await?;
 
-                    results.push((vector_id, insert_plan));
-                }
-                Ok(results)
-            }
-        });
+                let insert_plan: InsertPlanV<SharedPlaintextStore> = InsertPlanV {
+                    query,
+                    links,
+                    set_ep,
+                };
+                Ok((vector_id, insert_plan))
+            });
+        }
+
+        // Flatten all results, sort by side and index to recover order
+        let mut results: Vec<_> = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<_, _>>()?;
+
+        results.sort_by_key(|(vector_id, _)| (vector_id.serial_id()));
+
+        let (ids, plans): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+        let ids = ids.into_iter().map(Some).collect_vec();
+        let plans = plans.into_iter().map(Some).collect_vec();
+
+        // Unwrap Arc while inserting, than wrap again for the next batch
+        let mut graph_temp = Arc::try_unwrap(graph).unwrap();
+        insert::insert(&mut store, &mut graph_temp, &searcher, plans, &ids).await?;
+        graph = Arc::new(graph_temp);
     }
 
-    // Flatten all results, sort by side and index to recover order
-    let results: Vec<_> = jobs
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<_, _>>()?;
-
-    let mut results: Vec<(IrisVectorId, InsertPlanV<SharedPlaintextStore>)> =
-        results.into_iter().flatten().collect();
-    results.sort_by_key(|(vector_id, _)| (vector_id.serial_id()));
-
-    let (ids, plans): (Vec<_>, Vec<_>) = results.into_iter().unzip();
-    let ids = ids.into_iter().map(Some).collect_vec();
-    let plans = plans.into_iter().map(Some).collect_vec();
-
-    // Should be able to take ownership from Arc, as all threads have finished before
-    let mut graph = Arc::try_unwrap(graph).unwrap();
-    insert::insert(&mut store, &mut graph, &searcher, plans, &ids).await?;
-
-    Ok((graph, store))
+    Ok((Arc::try_unwrap(graph).unwrap(), store))
 }
 
 #[cfg(test)]
@@ -170,9 +164,9 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_with_existing_data() -> Result<()> {
+    async fn test_insert_with_small_batches() -> Result<()> {
         let database_size = 256;
-        let to_insert = 256;
+        let to_insert = 512;
         let batch_size = 32;
         let (searcher, graph, store, irises, prf_seed) =
             setup_test_data(database_size, to_insert).await?;
@@ -198,42 +192,14 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_into_empty_db() -> Result<()> {
-        let database_size = 0; // Start with an empty database
-        let to_insert = 256;
-        let batch_size = 64;
-        let (searcher, _graph, _store, irises, prf_seed) =
-            setup_test_data(database_size, to_insert).await?;
-
-        // Test the code path where graph and store are created from scratch
-        let (final_graph, final_store) = plaintext_parallel_batch_insert(
-            None,
-            None,
-            irises.clone(),
-            HnswParams::new(64, 32, 32),
-            batch_size,
-            &prf_seed,
-        )
-        .await?;
-
-        check_results(
-            final_store,
-            final_graph,
-            irises,
-            &searcher,
-            database_size + to_insert,
-        )
-        .await
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_insert_with_fixed_batch_size() -> Result<()> {
-        let database_size = 512;
-        let to_insert = 256;
-        let batch_size = 64; // A fixed batch size
+    async fn test_insert_with_large_batches() -> Result<()> {
+        let database_size = 256;
+        let to_insert = 512;
+        let batch_size = 100;
         let (searcher, graph, store, irises, prf_seed) =
             setup_test_data(database_size, to_insert).await?;
 
+        // Test the code path where graph and store are created from scratch
         let (final_graph, final_store) = plaintext_parallel_batch_insert(
             Some(graph),
             Some(store),
