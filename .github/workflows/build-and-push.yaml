@@ -1,6 +1,9 @@
 name: Build and push docker image
 
 on:
+  push:
+    branches:
+      - "chore/make-hnsw-e2e-run-on-ref-update" # to be removed
   release:
     types:
       - 'published'
