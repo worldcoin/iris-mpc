@@ -61,13 +61,13 @@ env:
     value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "512"
+    value: "64"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "48"
+    value: "8"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "32"
+    value: "1"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
