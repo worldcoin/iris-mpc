@@ -1,0 +1,53 @@
+FROM  ubuntu:22.04 AS build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME="/root/.rustup"
+ENV CARGO_HOME="/root/.cargo"
+RUN rustup toolchain install 1.85.0
+RUN rustup default 1.85.0
+RUN rustup component add cargo
+RUN cargo install cargo-edit --version 0.13.6
+
+FROM build-image AS build-app
+WORKDIR /src/iris-mpc
+COPY . .
+
+ENV RUSTFLAGS="-C force-frame-pointers=yes"
+RUN RUSTFLAGS="-Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse" cargo build --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk
+
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y ca-certificates awscli curl
+RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.pem
+
+RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_2.pem
+
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/iris-mpc-hawk /bin/iris-mpc-hawk
+
+USER 65534
+
+ENTRYPOINT ["/bin/iris-mpc-hawk"]
