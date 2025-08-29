@@ -28,8 +28,8 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-ENV RUSTFLAGS="-C force-frame-pointers=yes"
-RUN RUSTFLAGS="-Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse" cargo build --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk
+ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
+RUN cargo build --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk
 
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
