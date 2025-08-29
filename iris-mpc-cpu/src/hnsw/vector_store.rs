@@ -82,19 +82,17 @@ pub trait VectorStore: Debug {
         Ok(results)
     }
 
-    /// Evaluate the distances between all queries and all vectors (cartesian product).
+    /// Evaluate the distances between the query and a batch of vectors.
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.
     async fn eval_distance_batch(
         &mut self,
-        queries: &[Self::QueryRef],
+        query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
-        let mut results = Vec::with_capacity(queries.len() * vectors.len());
-        for query in queries {
-            for vector in vectors {
-                results.push(self.eval_distance(query, vector).await?);
-            }
+        let mut results = Vec::with_capacity(vectors.len());
+        for vector in vectors {
+            results.push(self.eval_distance(query, vector).await?);
         }
         Ok(results)
     }
@@ -129,18 +127,15 @@ pub trait VectorStore: Debug {
 /// The operations exposed by a vector store, including mutations.
 #[allow(async_fn_in_trait)]
 pub trait VectorStoreMut: VectorStore {
-    /// Persist a query as a new vector in the store, and return a reference to
-    /// it.
+    /// Persist a query as a new vector in the store, and return a reference to it.
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
 
-    /// Persist a batch of queries as new vectors in the store, and return
-    /// references to them. The default implementation is a loop over
-    /// `insert`. Override for more efficient batch insertions.
-    async fn insert_batch(&mut self, queries: &[Self::QueryRef]) -> Vec<Self::VectorRef> {
-        let mut results = Vec::with_capacity(queries.len());
-        for query in queries {
-            results.push(self.insert(query).await);
-        }
-        results
-    }
+    /// Persist a query as a vector in the store with specified vector reference.
+    ///
+    /// Returns an Err output when a specified insertion is not supported.
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef>;
 }

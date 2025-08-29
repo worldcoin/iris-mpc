@@ -502,6 +502,8 @@ impl HnswSearcher {
         ef: usize,
         lc: usize,
     ) -> Result<()> {
+        let metrics_labels = [("layer", lc.to_string())];
+
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
 
@@ -542,7 +544,9 @@ impl HnswSearcher {
         // Main graph traversal loop: continue until all graph nodes in the exploration
         // set W have been opened and none of the neighbors are closer to the
         // query than the nodes in W
+        let mut depth = 0;
         loop {
+            depth += 1;
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
             let mut c_links = HnswSearcher::open_node(store, graph, &c, lc, q, &mut visited)
@@ -550,6 +554,7 @@ impl HnswSearcher {
                 .await?;
             opened.insert(c.clone());
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
+            metrics::histogram!("search_edges", &metrics_labels).record(c_links.len() as f64);
 
             // If W is not filled to size ef, insert neighbors in batches until it is
             if W.len() < ef && !c_links.is_empty() {
@@ -709,7 +714,7 @@ impl HnswSearcher {
                 }
             }
         }
-
+        metrics::histogram!("search_depth", &metrics_labels).record(depth as f64);
         Ok(())
     }
 
@@ -784,9 +789,7 @@ impl HnswSearcher {
 
         let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
 
-        let distances = store
-            .eval_distance_batch(&[query.clone()], &valid_neighbors)
-            .await?;
+        let distances = store.eval_distance_batch(query, &valid_neighbors).await?;
 
         Ok(valid_neighbors
             .into_iter()

@@ -1,0 +1,93 @@
+name: CPU Genesis E2E Tests
+
+on:
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  e2e:
+    timeout-minutes: 20
+    runs-on:
+      labels: ubuntu-22.04-16core
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Get all test, doc and src files that have changed
+        id: changed-files-yaml
+        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c
+        with:
+          files_yaml: |
+            src:
+              - Dockerfile*
+              - Cargo.lock
+              - Cargo.toml
+              - deny.toml
+              - rust-toolchain.toml
+              - iris-*/**
+              - migrations/**
+              - scripts/**
+
+      - name: Cache Rust build
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
+        id: cache-rust
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            rust-build-${{ runner.os }}-
+      - name: Set up QEMU
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: docker/setup-qemu-action@29109295f81e9208d7d86ff1c6c12d2833863392
+
+      - name: Set up Docker Buildx
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Log in to the Container registry
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and export to Docker
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        with:
+          context: .
+          file: Dockerfile.hnsw.test.e2e
+          platforms: linux/amd64
+          load: true
+          tags: hnsw-tests-e2e-local:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Show disk space before compose
+        run: df -h && docker system df -v
+
+      - name: Run docker compose
+        id: compose_up
+        continue-on-error: true
+        env:
+          COMPOSE_PROGRESS: plain          # no fancy TTY bars
+          COMPOSE_HTTP_TIMEOUT: 600        # bump timeout
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        uses: hoverkraft-tech/compose-action@40041ff1b97dbf152cd2361138c2b03fa29139df
+        with:
+          compose-file: "./docker-compose.test.hnsw.e2e.yaml"
+
+      - name: Execute end-to-end tests in running services
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          docker compose -f "docker-compose.test.hnsw.e2e.yaml" exec "hnsw_tests_e2e" "/src/iris-mpc/scripts/run-tests-hnsw-e2e.sh"

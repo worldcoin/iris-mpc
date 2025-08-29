@@ -25,6 +25,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::server_coordination::{
     get_others_sync_state, init_heartbeat_task, init_task_monitor, set_node_ready,
     start_coordination_server, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState,
 };
 use iris_mpc_cpu::execution::hawk_main::{
     GraphStore, HawkActor, HawkArgs, HawkHandle, ServerJobResult,
@@ -36,7 +37,7 @@ use iris_mpc_store::Store;
 use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -69,13 +70,16 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Initialize shared current_batch_id
     let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
 
+    // Initialize shared batch sync state
+    let batch_sync_shared_state =
+        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
+
     let is_ready_flag = start_coordination_server(
         &config,
-        &aws_clients.sqs_client,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        current_batch_id_atomic.clone(),
+        batch_sync_shared_state.clone(),
     )
     .await;
 
@@ -164,6 +168,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         hawk_actor,
         tx_results,
         current_batch_id_atomic.clone(),
+        batch_sync_shared_state,
     )
     .await?;
 
@@ -536,6 +541,7 @@ async fn run_main_server_loop(
     hawk_actor: HawkActor,
     tx_results: Sender<ServerJobResult>,
     current_batch_id_atomic: Arc<AtomicU64>,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -557,7 +563,7 @@ async fn run_main_server_loop(
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
 
-        let mut batch_stream = receive_batch_stream(
+        let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
@@ -568,11 +574,15 @@ async fn run_main_server_loop(
             uniqueness_error_result_attribute.clone(),
             reauth_error_result_attribute.clone(),
             reset_error_result_attributes.clone(),
-            current_batch_id_atomic,
+            current_batch_id_atomic.clone(),
             iris_store.clone(),
+            batch_sync_shared_state.clone(),
         );
 
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
         loop {
+            // Increment batch_id for the next batch, we start at 1, since the initial state for the batch sync is set to 0, which we consider to be invalid
+
             let now = Instant::now();
 
             let mut batch = match batch_stream.recv().await {
@@ -585,6 +595,7 @@ async fn run_main_server_loop(
                 }
                 Some(Ok(Some(batch))) => batch,
             };
+            tracing::info!("SNS message IDs: {:?}", batch.sns_message_ids);
 
             let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
             let batch_valid_entries = batch.valid_entries.clone();
@@ -604,6 +615,7 @@ async fn run_main_server_loop(
             );
 
             batch.sync_batch_entries(config).await?;
+            batch.retain_valid_entries();
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
@@ -624,6 +636,11 @@ async fn run_main_server_loop(
             }
 
             task_monitor.check_tasks();
+
+            // we are done with the batch sync, so we can release the semaphore permit
+            // This will allow the next batch to be received
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            sem.add_permits(1);
 
             let result_future = hawk_handle.submit_batch_query(batch.clone());
 

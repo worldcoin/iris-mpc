@@ -320,6 +320,14 @@ mod tests {
             self.points.get_mut(query).unwrap().is_persistent = true;
             *query
         }
+
+        async fn insert_at(
+            &mut self,
+            _vector_ref: &Self::VectorRef,
+            _query: &Self::QueryRef,
+        ) -> Result<Self::VectorRef> {
+            unimplemented!()
+        }
     }
 
     #[tokio::test]

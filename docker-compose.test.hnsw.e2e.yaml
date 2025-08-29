@@ -1,0 +1,14 @@
+include:
+  - docker-compose.dev.yaml
+
+services:
+  hnsw_tests_e2e:
+    image: hnsw-tests-e2e-local:latest
+    env_file:
+      - .test.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    entrypoint: tail -f /dev/null

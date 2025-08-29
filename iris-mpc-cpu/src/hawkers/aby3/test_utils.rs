@@ -3,16 +3,20 @@ use std::{collections::HashMap, sync::Arc};
 use aes_prng::AesRng;
 use eyre::{bail, Result};
 use futures::future::join_all;
-use iris_mpc_common::iris_db::db::IrisDB;
+use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
+        hawk_main::iris_worker,
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
+        plaintext_store::PlaintextStore,
+    },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
         GraphMem, HnswSearcher, VectorStore,
@@ -23,36 +27,32 @@ use crate::{
     shares::{RingElement, Share},
 };
 
-use super::aby3_store::{
-    prepare_query, Aby3Store, IrisRef, SharedIrises, SharedIrisesRef, VectorId,
-};
+use super::aby3_store::Aby3Store;
 
 type Aby3StoreRef = Arc<Mutex<Aby3Store>>;
-
-pub fn setup_local_player_preloaded_db(database: HashMap<VectorId, IrisRef>) -> SharedIrisesRef {
-    SharedIrises::new(database).to_arc()
-}
 
 pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
     rng: &mut R,
     plain_store: &PlaintextStore,
-) -> Vec<SharedIrisesRef> {
+) -> Vec<Aby3SharedIrisesRef> {
     let identities = generate_local_identities();
 
     let mut shared_irises = vec![HashMap::new(); identities.len()];
 
     // sort the iris codes by their serial id
     // Collect and sort keys
-    let mut sorted_serial_ids: Vec<_> = plain_store.points.keys().cloned().collect();
+    let mut sorted_serial_ids: Vec<_> = plain_store.storage.points.keys().cloned().collect();
     sorted_serial_ids.sort();
 
     for serial_id in sorted_serial_ids {
-        let iris = plain_store
+        let iris = &plain_store
+            .storage
             .points
             .get(&serial_id)
-            .expect("Key not found in plain store");
+            .expect("Key not found in plain store")
+            .1;
         let vector_id = VectorId::from_serial_id(serial_id);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, iris.clone());
+        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -60,7 +60,7 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     shared_irises
         .into_iter()
-        .map(setup_local_player_preloaded_db)
+        .map(|db| Aby3Store::new_storage(Some(db)).to_arc())
         .collect()
 }
 
@@ -76,7 +76,14 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .sessions
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(session, storage)| Ok(Arc::new(Mutex::new(Aby3Store { session, storage }))))
+        .map(|(session, storage)| {
+            let workers = iris_worker::init_workers(0, storage.clone());
+            Ok(Arc::new(Mutex::new(Aby3Store {
+                session,
+                storage,
+                workers,
+            })))
+        })
         .collect()
 }
 
@@ -86,9 +93,13 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .sessions
         .into_iter()
         .map(|session| {
+            let storage = Aby3Store::new_storage(None).to_arc();
+            let workers = iris_worker::init_workers(0, storage.clone());
+
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
-                storage: SharedIrises::default().to_arc(),
+                storage: storage.clone(),
+                workers,
             })))
         })
         .collect()
@@ -128,9 +139,9 @@ pub async fn eval_vector_distance(
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = &[Some((&*point1, &point2))];
+    let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
     let dist = store.eval_pairwise_distances(pairs).await?;
-    Ok(store.lift_distances(dist).await?[0].clone())
+    Ok(dist[0].clone())
 }
 
 // TODO Since GraphMem no longer caches distances, this function is now just a
@@ -327,7 +338,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
         let role = get_owner_index(store).await?;
         let mut rng_searcher = rng_searcher.clone();
         let queries = (0..database_size)
-            .map(|id| prepare_query(shared_irises[id][role].clone()))
+            .map(|id| Aby3Query::new_from_raw(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         let store = store.clone();
         let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3Store>)>> =

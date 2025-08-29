@@ -1,38 +1,39 @@
 use super::{
-    rot::VecRots, BothEyes, HawkSession, HawkSessionRef, MapEdges, VecEdges, VecRequests, VectorId,
-    LEFT, RIGHT,
+    rot::VecRots, BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT,
 };
-use crate::{hawkers::aby3::aby3_store::QueryRef, hnsw::VectorStore};
+use crate::{
+    hawkers::aby3::aby3_store::{Aby3Query, Aby3Store},
+    hnsw::VectorStore,
+};
 use eyre::Result;
 use futures::future::JoinAll;
 use iris_mpc_common::ROTATIONS;
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::task::JoinError;
 
-pub async fn calculate_missing_is_match(
-    search_queries: &BothEyes<VecRequests<VecRots<QueryRef>>>,
-    missing_vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
-    sessions: &BothEyes<Vec<HawkSessionRef>>,
+pub async fn is_match_batch(
+    search_queries: &BothEyes<VecRequests<VecRots<Aby3Query>>>,
+    vector_ids: BothEyes<VecRequests<VecEdges<VectorId>>>,
+    sessions: &BothEyes<Vec<HawkSession>>,
 ) -> Result<BothEyes<VecRequests<MapEdges<bool>>>> {
-    let [missing_vectors_left, missing_vectors_right] = missing_vector_ids;
+    let start = Instant::now();
+    let [vectors_left, vectors_right] = vector_ids;
 
     // Parallelize left and right sessions (IO only).
     let (out_l, out_r) = futures::join!(
-        per_side(&search_queries[LEFT], missing_vectors_left, &sessions[LEFT]),
-        per_side(
-            &search_queries[RIGHT],
-            missing_vectors_right,
-            &sessions[RIGHT]
-        ),
+        per_side(&search_queries[LEFT], vectors_left, &sessions[LEFT]),
+        per_side(&search_queries[RIGHT], vectors_right, &sessions[RIGHT]),
     );
+
+    metrics::histogram!("is_match_batch_duration").record(start.elapsed().as_secs_f64());
     Ok([out_l?, out_r?])
 }
 
 async fn per_side(
-    queries: &VecRequests<VecRots<QueryRef>>,
+    queries: &VecRequests<VecRots<Aby3Query>>,
     missing_vector_ids: VecRequests<VecEdges<VectorId>>,
-    sessions: &Vec<HawkSessionRef>,
+    sessions: &Vec<HawkSession>,
 ) -> Result<VecRequests<MapEdges<bool>>> {
     // A request is to compare all rotations to a list of vectors - it is the length of the vector ids.
     let n_requests = missing_vector_ids.len();
@@ -86,30 +87,27 @@ async fn per_side(
 }
 
 async fn per_session(
-    tasks: VecRequests<(QueryRef, Arc<VecEdges<VectorId>>)>,
-    session: HawkSessionRef,
+    tasks: VecRequests<(Aby3Query, Arc<VecEdges<VectorId>>)>,
+    session: HawkSession,
 ) -> Result<VecRequests<MapEdges<bool>>> {
-    let mut session = session.write().await;
+    let mut store = session.aby3_store.write().await;
 
     let mut out = Vec::with_capacity(tasks.len());
     for (query, vectors) in tasks {
-        let matches = per_query(query, &vectors, &mut session).await?;
+        let matches = per_query(query, &vectors, &mut store).await?;
         out.push(matches);
     }
     Ok(out)
 }
 
 async fn per_query(
-    query: QueryRef,
+    query: Aby3Query,
     vector_ids: &[VectorId],
-    session: &mut HawkSession,
+    store: &mut Aby3Store,
 ) -> Result<MapEdges<bool>> {
-    let distances = session
-        .aby3_store
-        .eval_distance_batch(&[query], vector_ids)
-        .await?;
+    let distances = store.eval_distance_batch(&query, vector_ids).await?;
 
-    let is_matches = session.aby3_store.is_match_batch(&distances).await?;
+    let is_matches = store.is_match_batch(&distances).await?;
 
     Ok(izip!(vector_ids, is_matches)
         .map(|(v, m)| (*v, m))
@@ -209,9 +207,7 @@ mod test {
             ],
         ];
 
-        let result =
-            calculate_missing_is_match(search_queries, missing_vector_ids.clone(), &sessions)
-                .await?;
+        let result = is_match_batch(search_queries, missing_vector_ids.clone(), &sessions).await?;
 
         assert_eq!(
             result,

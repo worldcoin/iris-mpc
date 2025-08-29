@@ -1,7 +1,7 @@
 use super::Batch;
 use crate::{
     execution::hawk_main::{BothEyes, HawkMutation, VecRequests},
-    hawkers::aby3::aby3_store::QueryRef,
+    hawkers::aby3::aby3_store::Aby3Query,
 };
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
@@ -9,7 +9,7 @@ use std::{fmt, sync::Arc};
 use tokio::sync::oneshot;
 
 // Helper type: Aby3 store batch query.
-pub type Aby3BatchQuery = BothEyes<VecRequests<QueryRef>>;
+pub type Aby3BatchQuery = BothEyes<VecRequests<Aby3Query>>;
 
 // Helper type: Aby3 store batch query reference.
 pub type Aby3BatchQueryRef = Arc<Aby3BatchQuery>;

@@ -114,7 +114,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
     async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
         let num_connections = self.config.num_connections;
-        let request_parallelism = self.config.request_parallelism;
+        let num_sessions = self.config.num_sessions;
 
         // spawn the forwarders
         for peer_id in &self.peers {
@@ -141,7 +141,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
         // create the sessions
         let mut sessions = vec![];
-        for (idx, session_id) in (self.next_session_id..self.next_session_id + request_parallelism)
+        for (idx, session_id) in (self.next_session_id..self.next_session_id + num_sessions)
             .map(|x| SessionId::from(x as u32))
             .enumerate()
         {
@@ -174,11 +174,11 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
         // ensures that if new sessions are created, the setup process (which requires communication with peers) isn't
         // interfered with by communications from old sessions.
-        self.next_session_id = self.next_session_id.saturating_add(request_parallelism);
+        self.next_session_id = self.next_session_id.saturating_add(num_sessions);
         if self.next_session_id > 1 << 30 {
             self.next_session_id = 0;
         }
-        assert_eq!(self.config.request_parallelism, sessions.len());
+        assert_eq!(self.config.num_sessions, sessions.len());
         sessions
     }
 }
@@ -202,7 +202,7 @@ fn make_channels(
             outbound_rx.insert(stream_id, rx);
         }
 
-        for session_id in (next_session_id..next_session_id + config.request_parallelism)
+        for session_id in (next_session_id..next_session_id + config.num_sessions)
             .map(|x| SessionId::from(x as u32))
         {
             let (tx, rx) = mpsc::unbounded_channel::<NetworkValue>();
@@ -263,14 +263,14 @@ async fn manage_connection<T: NetworkConnection>(
         let r_outbound = &mut outbound_rx;
         let outbound_task = async move {
             let r = handle_outbound_traffic(r_writer, r_outbound, num_sessions).await;
-            tracing::debug!("handle_outbound_traffic exited: {r:?}");
+            tracing::warn!("handle_outbound_traffic exited: {r:?}");
         };
 
         let r_reader = reader.as_mut().expect("reader should be Some");
         let r_inbound = &inbound_forwarder;
         let inbound_task = async move {
             let r = handle_inbound_traffic(r_reader, r_inbound).await;
-            tracing::debug!("handle_inbound_traffic exited: {r:?}");
+            tracing::warn!("handle_inbound_traffic exited: {r:?}");
         };
 
         enum Evt {
@@ -282,7 +282,7 @@ async fn manage_connection<T: NetworkConnection>(
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::debug!("cmd channel closed");
+                        tracing::info!("cmd channel closed");
                         return;
                     }
                 }
@@ -299,6 +299,7 @@ async fn manage_connection<T: NetworkConnection>(
                     outbound_rx: rx,
                     rsp,
                 } => {
+                    metrics::counter!("network.new_sessions").increment(1);
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     inbound_forwarder = tx;
                     outbound_rx = rx;
@@ -343,6 +344,7 @@ async fn reconnect_and_replace<T: NetworkConnection>(
     reader: &mut Option<BufReader<ReadHalf<T>>>,
     writer: &mut Option<WriteHalf<T>>,
 ) -> Result<(), eyre::Report> {
+    metrics::counter!("network.reconnect").increment(1);
     reader.take();
     writer.take();
 
@@ -394,11 +396,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             if buf.len() >= BUFFER_CAPACITY {
-                metrics::counter!("network::flush_reason::buf_len").increment(1);
+                metrics::counter!("network.flush_reason.buf_len").increment(1);
             } else if buffered_msgs >= num_sessions {
-                metrics::counter!("network::flush_reason::msg_count").increment(1);
+                metrics::counter!("network.flush_reason.msg_count").increment(1);
             } else {
-                metrics::counter!("network::flush_reason::timeout").increment(1);
+                metrics::counter!("network.flush_reason.timeout").increment(1);
             }
         }
 
@@ -410,7 +412,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             let elapsed = _wakeup_time.elapsed().as_micros();
-            metrics::histogram!("network::outbound::tx_time_us").record(elapsed as f64);
+            metrics::histogram!("network.outbound.tx_time_us").record(elapsed as f64);
         }
     }
 
@@ -475,7 +477,7 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
         #[cfg(feature = "networking_metrics")]
         {
             let elapsed = _rx_start.elapsed().as_micros();
-            metrics::histogram!("network::inbound::rx_time_us").record(elapsed as f64);
+            metrics::histogram!("network.inbound.rx_time_us").record(elapsed as f64);
         }
         // forward the message to the correct session.
         if let Some(ch) = inbound_tx.get(&SessionId::from(session_id)) {
@@ -493,7 +495,7 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                 }
             };
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 "failed to forward message for {:?} - channel not found",
                 session_id
             );
@@ -509,8 +511,8 @@ async fn write_buf<T: NetworkConnection>(
 ) -> io::Result<()> {
     #[cfg(feature = "networking_metrics")]
     {
-        metrics::histogram!("network::buffered_msgs").record(*buffered_msgs as f64);
-        metrics::histogram!("network::bytes_flushed").record(buf.len() as f64);
+        metrics::histogram!("network.buffered_msgs").record(*buffered_msgs as f64);
+        metrics::histogram!("network.bytes_flushed").record(buf.len() as f64);
     }
     *buffered_msgs = 0;
 

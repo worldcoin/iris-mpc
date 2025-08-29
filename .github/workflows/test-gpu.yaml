@@ -43,8 +43,8 @@ jobs:
       - name: Update gcc to version 11
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
-          sudo apt-get install --reinstall ca-certificates
           sudo apt-get update
+          sudo apt-get install --reinstall ca-certificates
           sudo apt-get install -y build-essential manpages-dev software-properties-common
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update
@@ -74,7 +74,7 @@ jobs:
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809
         id: cache-rust
         with:
           path: |

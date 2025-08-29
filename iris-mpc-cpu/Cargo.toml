@@ -20,6 +20,8 @@ bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
+core_affinity = "0.8.3"
+crossbeam = "0.8.4"
 dashmap = "6.1.0"
 dotenvy.workspace = true
 eyre.workspace = true
@@ -35,6 +37,7 @@ rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
 siphasher = "1"
+socket2 = { version = "0.6.0", features = ["all"] }
 static_assertions.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
@@ -64,6 +67,9 @@ tokio-rustls = { version = "0.26.2" }
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
+rayon.workspace = true
+num_cpus = "1.16.0"
+metrics-logger = "0.22.1"
 
 [build-dependencies]
 tonic-build = "0.12.3"
@@ -83,6 +89,10 @@ harness = false
 
 [[bench]]
 name = "set_hash"
+harness = false
+
+[[bench]]
+name = "dot"
 harness = false
 
 [[example]]
