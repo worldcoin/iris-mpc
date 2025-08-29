@@ -61,7 +61,7 @@ impl PrivateKey {
 
     /// Derive the shared secret given the public keys of the other two parties.
     ///
-    /// The order of the two provided public keys does matter, and needs to be coordinated between the parties.
+    /// The order of the two provided public keys does not matter, as long as each party inputs the public keys of the other two parties.
     /// We suggest the following ordering:
     /// - Party A: (pk_B, pk_C)
     /// - Party B: (pk_C, pk_A)
