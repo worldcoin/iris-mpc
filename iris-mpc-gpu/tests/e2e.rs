@@ -20,6 +20,7 @@ mod e2e_test {
     const N_BUCKETS: usize = 10;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
+    const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
     const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
@@ -109,6 +110,7 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -143,6 +145,7 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -177,6 +180,7 @@ mod e2e_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,

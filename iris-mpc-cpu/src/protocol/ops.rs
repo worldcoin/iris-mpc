@@ -286,6 +286,8 @@ pub(crate) async fn cross_mul(
 }
 
 /// Conditionally selects the distance shares based on control bits.
+/// If the control bit is 1, it selects the first distance share (d1),
+/// otherwise it selects the second distance share (d2).
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn conditionally_select_distance(
