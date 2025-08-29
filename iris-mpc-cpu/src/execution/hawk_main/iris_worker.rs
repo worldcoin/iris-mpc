@@ -22,6 +22,16 @@ use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
+    /// Move an iris code to memory closer to the pool (NUMA-awareness).
+    Realloc {
+        iris: ArcIris,
+        rsp: oneshot::Sender<ArcIris>,
+    },
+    Insert {
+        vector_id: VectorId,
+        iris: ArcIris,
+        rsp: oneshot::Sender<VectorId>,
+    },
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -39,11 +49,33 @@ enum IrisTask {
 
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
-    workers: Arc<Vec<Sender<IrisTask>>>,
+    workers: Arc<[Sender<IrisTask>]>,
     next_counter: Arc<AtomicU64>,
 }
 
 impl IrisPoolHandle {
+    pub fn numa_realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Realloc { iris, rsp: tx };
+        self.get_next_worker().send(task)?;
+        Ok(rx)
+    }
+
+    pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
+        Ok(self.numa_realloc(iris)?.blocking_recv()?)
+    }
+
+    pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Insert {
+            vector_id,
+            iris,
+            rsp: tx,
+        };
+        self.get_next_worker().send(task)?;
+        Ok(rx.await?)
+    }
+
     pub async fn dot_product_pairs(
         &self,
         pairs: Vec<(ArcIris, VectorId)>,
@@ -83,7 +115,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let _ = self.get_next_worker().send(task);
+        self.get_next_worker().send(task)?;
         let res = rx.await?;
 
         histogram!("iris_worker.latency", "histogram" => "histogram")
@@ -120,7 +152,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     }
 
     IrisPoolHandle {
-        workers: Arc::new(channels),
+        workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
     }
 }
@@ -128,6 +160,23 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
+            IrisTask::Realloc { iris, rsp } => {
+                // Re-allocate from this thread.
+                // This attempts to use the NUMA-aware first-touch policy of the OS.
+                let new_iris = Arc::new((*iris).clone());
+                let _ = rsp.send(new_iris);
+            }
+
+            IrisTask::Insert {
+                vector_id,
+                iris,
+                rsp,
+            } => {
+                let mut store = iris_store.data.blocking_write();
+                let vector_id = store.insert(vector_id, iris);
+                let _ = rsp.send(vector_id);
+            }
+
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let pairs = {
                     let store = iris_store.data.blocking_read();
@@ -174,7 +223,8 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let core_ids = core_affinity::get_core_ids().unwrap();
+    let mut core_ids = core_affinity::get_core_ids().unwrap();
+    core_ids.sort();
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
