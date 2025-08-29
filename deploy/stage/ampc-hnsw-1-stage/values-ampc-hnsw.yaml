@@ -12,7 +12,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_PPROF_PER_BATCH
-    value: "false"
+    value: "true"
 
   # Optional overrides (uncomment/customize as needed)
   - name: SMPC__PPROF_S3_BUCKET
@@ -61,13 +61,13 @@ env:
     value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "64"
+    value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "8"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
-    value: "1"
+    value: "32"
 
   - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
     value: "false"
