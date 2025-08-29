@@ -1,0 +1,38 @@
+# Overlay values to enable embedded pprof collector in iris-mpc-hawk pods.
+# Apply with: `helm upgrade -f values-ampc-hnsw.yaml -f deploy/snippets/pprof-collector.values.yaml ...`
+
+podAnnotations:
+  loadtest/run-id: "run-2025-08-27T13-00Z"
+
+env:
+  - name: SMPC__ENABLE_PPROF_COLLECTOR
+    value: "true"
+
+  # Profile exactly while each batch runs
+  - name: SMPC__ENABLE_PPROF_PER_BATCH
+    value: "true"
+
+  # Optional overrides (uncomment/customize as needed)
+  - name: SMPC__PPROF_S3_BUCKET
+    value: "wf-smpcv2-stage-hnsw-performance-reports"
+
+  - name: SMPC__PPROF_PREFIX
+    value: "stage/hnsw"
+
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  - name: SMPC__PPROF_RUN_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+
+  # Defaults are sensible; override if needed:
+  # - name: SMPC__PPROF_SECONDS
+  #   value: "30"
+  # - name: SMPC__PPROF_FREQUENCY
+  #   value: "99"
+  # - name: SMPC__PPROF_IDLE_INTERVAL_SEC
+  #   value: "5"
+  # - name: SMPC__PPROF_FLAME_ONLY
+  #   value: "false"
+  # - name: SMPC__PPROF_PROFILE_ONLY
+  #   value: "false"
