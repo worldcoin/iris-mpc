@@ -188,19 +188,19 @@ fn randomize_iris(
 
     let (mut left_code, mut left_mask, mut right_code, mut right_mask) = (
         GaloisRingIrisCodeShare {
-            id: party_id as usize + 1,
+            id: party_id + 1,
             coefs: iris.left_code().try_into().unwrap(),
         },
         GaloisRingTrimmedMaskCodeShare {
-            id: party_id as usize + 1,
+            id: party_id + 1,
             coefs: iris.left_mask().try_into().unwrap(),
         },
         GaloisRingIrisCodeShare {
-            id: party_id as usize + 1,
+            id: party_id + 1,
             coefs: iris.right_code().try_into().unwrap(),
         },
         GaloisRingTrimmedMaskCodeShare {
-            id: party_id as usize + 1,
+            id: party_id + 1,
             coefs: iris.right_mask().try_into().unwrap(),
         },
     );
