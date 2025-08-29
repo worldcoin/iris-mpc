@@ -2721,6 +2721,7 @@ dependencies = [
  "prost",
  "rand",
  "rand_chacha",
+ "rayon",
  "rustls 0.23.28",
  "serde",
  "serde-big-array",
