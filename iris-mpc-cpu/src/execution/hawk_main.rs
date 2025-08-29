@@ -1994,7 +1994,8 @@ mod hawk_mutation_tests {
             inserted_vector: vector_id,
             layers: vec![ConnectPlanLayer {
                 neighbors: SortedEdgeIds::from_ascending_vec(vec![vector_id]),
-                nb_links: vec![SortedEdgeIds::from_ascending_vec(vec![vector_id])],
+                nb_links: vec![0],
+                max_links: 512,
             }],
             set_ep: false,
         }

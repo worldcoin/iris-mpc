@@ -279,7 +279,7 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
     ) -> Result<()> {
         // Connect all n -> q.
         for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(*n, links, lc).await?;
+            self.add_link(*n, links, lc).await?;
         }
 
         // Connect q -> all n.

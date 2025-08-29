@@ -208,8 +208,11 @@ pub struct ConnectPlanLayer<Vector> {
     /// The neighbors of the inserted vector
     pub neighbors: SortedEdgeIds<Vector>,
 
-    /// `nb_links[i]` is the updated neighborhood of node `neighbors[i]` after the insertion
-    pub nb_links: Vec<SortedEdgeIds<Vector>>,
+    /// `nb_links[i]` is the index of the inserted vector in `neighbors[i]` after insertion
+    pub nb_links: Vec<usize>,
+
+    // max number of links for this layer (forwarded from search)
+    pub max_links: usize,
 }
 
 #[allow(non_snake_case)]
@@ -952,8 +955,13 @@ impl HnswSearcher {
 
             let mut l_neighbors = Vec::with_capacity(l_links.len());
             for ((nb, nb_dist), nb_query) in izip!(l_links.iter(), nb_queries) {
-                let nb_links = graph.get_links(nb, lc).await;
-                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0).await);
+                let nb_links = graph.get_links_ref(nb, lc).await;
+                let empty = SortedEdgeIds(vec![]);
+                let nb_links = match nb_links {
+                    Some(nb_links) => nb_links,
+                    _ => &empty,
+                };
+                let nb_links = SortedEdgeIds(store.only_valid_vectors(nb_links.0.clone()).await);
                 let search = BinarySearch {
                     left: 0,
                     right: nb_links.len(),
@@ -1010,24 +1018,17 @@ impl HnswSearcher {
         }
 
         // Directly insert new vector into neighborhoods from search results
-        for (lc, l_neighbors) in neighbors.iter_mut().enumerate() {
-            let max_links = self.params.get_M_max(lc);
-            for n in l_neighbors.iter_mut() {
-                let insertion_idx = n.search.result().ok_or(eyre!("No insertion index found"))?;
-                n.nb_links.insert(insertion_idx, inserted_vector.clone());
-                n.nb_links.trim_to_k_nearest(max_links);
-            }
-        }
-
-        // Generate ConnectPlanLayer structs
-        plan.layers = links
-            .into_iter()
-            .zip(neighbors)
-            .map(|(l_links, l_neighbors)| ConnectPlanLayer {
+        for (lc, (l_links, l_neighbors)) in izip!(links, neighbors.iter_mut()).enumerate() {
+            let hints = l_neighbors
+                .iter()
+                .map(|n| n.search.result().ok_or(eyre!("No insertion index found")))
+                .collect::<Result<Vec<_>>>()?;
+            plan.layers.push(ConnectPlanLayer {
+                max_links: self.params.get_M_max(lc),
                 neighbors: l_links.edge_ids(),
-                nb_links: l_neighbors.into_iter().map(|n| n.nb_links).collect_vec(),
-            })
-            .collect();
+                nb_links: hints,
+            });
+        }
 
         Ok(plan)
     }

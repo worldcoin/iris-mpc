@@ -98,8 +98,8 @@ impl<V: VectorStore> GraphMem<V> {
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
     async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
         // Connect all n -> q.
-        for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
-            self.set_links(n.clone(), links, lc).await;
+        for (n, at) in izip!(plan.neighbors.iter(), plan.nb_links) {
+            self.add_link(n.clone(), lc, q.clone(), at, plan.max_links);
         }
 
         // Connect q -> all n.
@@ -136,6 +136,15 @@ impl<V: VectorStore> GraphMem<V> {
         layer.get_links(base).unwrap_or_default()
     }
 
+    pub async fn get_links_ref(
+        &self,
+        base: &<V as VectorStore>::VectorRef,
+        lc: usize,
+    ) -> Option<&SortedEdgeIds<V::VectorRef>> {
+        let layer = &self.layers[lc];
+        layer.get_links_ref(base)
+    }
+
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
     pub async fn set_links(
         &mut self,
@@ -148,6 +157,21 @@ impl<V: VectorStore> GraphMem<V> {
         }
         let layer = self.layers.get_mut(lc).unwrap();
         layer.set_links(base, links);
+    }
+
+    pub async fn add_link(
+        &mut self,
+        base: V::VectorRef,
+        lc: usize,
+        to_add: V::VectorRef,
+        at: usize,
+        max_links: usize,
+    ) {
+        if self.layers.len() < lc + 1 {
+            self.layers.resize(lc + 1, Layer::new());
+        }
+        let layer = self.layers.get_mut(lc).unwrap();
+        layer.add_link(base, to_add, at, max_links);
     }
 
     pub async fn num_layers(&self) -> usize {
@@ -193,6 +217,10 @@ impl<V: VectorStore> Layer<V> {
         self.links.get(from).cloned()
     }
 
+    fn get_links_ref(&self, from: &V::VectorRef) -> Option<&SortedEdgeIds<V::VectorRef>> {
+        self.links.get(from)
+    }
+
     pub fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
         self.set_hash.add_unordered((&from, &links));
 
@@ -201,6 +229,27 @@ impl<V: VectorStore> Layer<V> {
         if let Some(previous) = previous {
             self.set_hash.remove((&from, &previous))
         }
+    }
+
+    pub fn add_link(
+        &mut self,
+        from: V::VectorRef,
+        to_add: V::VectorRef,
+        at: usize,
+        max_links: usize,
+    ) {
+        let neighbors = match self.links.entry(from.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                self.set_hash.remove((&from, entry.get()));
+                entry.into_mut()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(SortedEdgeIds::from_ascending_vec(vec![]))
+            }
+        };
+        neighbors.0.insert(at, to_add);
+        neighbors.trim_to_k_nearest(max_links);
+        self.set_hash.add_unordered((&from, &neighbors));
     }
 
     pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>> {
