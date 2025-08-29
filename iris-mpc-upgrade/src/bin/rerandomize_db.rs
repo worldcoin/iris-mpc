@@ -217,7 +217,7 @@ fn randomize_galois_ring_coefs(coefs: &mut [u16], xof: &mut blake3::OutputReader
         assert!(coefs.len() == 4, "Expected 4 coefficients per chunk");
         let mut gr = GaloisRingElement::<Monomial>::from_coefs(coefs.try_into().unwrap());
         let mut r = [0u16; 4];
-        xof.read(bytemuck::cast_slice_mut(&mut r[..]))
+        xof.read_exact(bytemuck::cast_slice_mut(&mut r[..]))
             .expect("can read from xof");
         let mut r = GaloisRingElement::<Monomial>::from_coefs(r);
         r = r * GaloisRingElement::<Monomial>::EXCEPTIONAL_SEQUENCE[party_id];
