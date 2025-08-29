@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use iris_mpc_cpu::protocol::{
@@ -31,7 +29,6 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
             // Mash up the 3 party shares; ok for benchmarking.
             GaloisRingSharedIris::generate_shares_locally(rng, iris)
         })
-        .map(Arc::new)
         .collect_vec();
 
     g.bench_function("Compute-bound", |b| {
@@ -39,10 +36,10 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
             || {
                 // Generate *one* batch of *cacheable* iris pairs.
                 (0..batch_size)
-                    .map(|_| Some((shares[0].clone(), shares[1].clone())))
+                    .map(|_| Some((&shares[0], &shares[1])))
                     .collect_vec()
             },
-            |pairs| galois_ring_pairwise_distance(black_box(pairs)),
+            |pairs| galois_ring_pairwise_distance(black_box(&pairs)),
             BatchSize::SmallInput,
         )
     });
@@ -55,11 +52,11 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                     .map(|_| {
                         let a = rng.gen::<usize>() % shares.len();
                         let b = rng.gen::<usize>() % shares.len();
-                        Some((shares[a].clone(), shares[b].clone()))
+                        Some((&shares[a], &shares[b]))
                     })
                     .collect_vec()
             },
-            |pairs| galois_ring_pairwise_distance(black_box(pairs)),
+            |pairs| galois_ring_pairwise_distance(black_box(&pairs)),
             BatchSize::SmallInput,
         )
     });
@@ -87,14 +84,14 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                     (0..num_threads)
                         .map(|_| {
                             (0..batch_size)
-                                .map(|_| Some((shares[0].clone(), shares[1].clone())))
+                                .map(|_| Some((&shares[0], &shares[1])))
                                 .collect_vec()
                         })
                         .collect_vec()
                 },
                 |batches| {
                     batches
-                        .into_par_iter()
+                        .par_iter()
                         .map(|pairs| galois_ring_pairwise_distance(black_box(pairs)))
                         .collect::<Vec<_>>()
                 },
@@ -115,7 +112,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                                 .map(|_| {
                                     let a = rng.gen::<usize>() % shares.len();
                                     let b = rng.gen::<usize>() % shares.len();
-                                    Some((shares[a].clone(), shares[b].clone()))
+                                    Some((&shares[a], &shares[b]))
                                 })
                                 .collect_vec()
                         })
@@ -123,7 +120,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                 },
                 |batches| {
                     batches
-                        .into_par_iter()
+                        .par_iter()
                         .map(|pairs| galois_ring_pairwise_distance(black_box(pairs)))
                         .collect::<Vec<_>>()
                 },

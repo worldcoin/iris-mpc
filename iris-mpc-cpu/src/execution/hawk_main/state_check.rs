@@ -118,7 +118,7 @@ impl HawkSession {
 
     async fn checksum(&self) -> StateChecksum {
         StateChecksum {
-            irises: self.aby3_store.read().await.checksum().await,
+            irises: self.aby3_store.read().await.storage.checksum().await,
             graph: self.graph_store.read().await.checksum(),
         }
     }

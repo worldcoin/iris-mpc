@@ -286,9 +286,6 @@ pub struct Config {
 
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
-
-    #[serde(default = "default_tokio_threads")]
-    pub tokio_threads: usize,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -431,40 +428,6 @@ fn default_batch_sync_polling_timeout_secs() -> u64 {
 
 fn default_full_scan_side_switching_enabled() -> bool {
     true
-}
-
-// ---- pprof collector defaults ----
-fn default_pprof_collector_enabled() -> bool {
-    false
-}
-
-fn default_pprof_s3_bucket() -> String {
-    // Stage default bucket; override in prod via env
-    "wf-smpcv2-stage-hnsw-performance-reports".to_string()
-}
-
-fn default_pprof_prefix() -> String {
-    "hnsw/pprof".to_string()
-}
-
-fn default_pprof_seconds() -> u64 {
-    30
-}
-
-fn default_pprof_frequency() -> i32 {
-    99
-}
-
-fn default_pprof_idle_interval_sec() -> u64 {
-    5
-}
-
-fn default_pprof_per_batch_enabled() -> bool {
-    false
-}
-
-fn default_tokio_threads() -> usize {
-    num_cpus::get()
 }
 
 impl Config {
@@ -767,7 +730,6 @@ impl From<Config> for CommonConfig {
             pprof_flame_only: _,
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
-            tokio_threads: _,
         } = value;
 
         Self {

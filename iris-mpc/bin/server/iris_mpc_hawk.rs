@@ -7,7 +7,8 @@ use iris_mpc_common::config::{Config, Opt};
 use iris_mpc_common::tracing::initialize_tracing;
 use std::process::exit;
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     println!("Init config");
@@ -23,22 +24,14 @@ fn main() -> Result<()> {
         }
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(config.tokio_threads)
-        .enable_all()
-        .build()
-        .unwrap();
-
-    runtime.block_on(async {
-        match server_main(config).await {
-            Ok(_) => {
-                tracing::info!("Server exited normally");
-            }
-            Err(e) => {
-                tracing::error!("Server exited with error: {:?}", e);
-                exit(1);
-            }
+    match server_main(config).await {
+        Ok(_) => {
+            tracing::info!("Server exited normally");
         }
-        Ok(())
-    })
+        Err(e) => {
+            tracing::error!("Server exited with error: {:?}", e);
+            exit(1);
+        }
+    }
+    Ok(())
 }
