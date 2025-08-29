@@ -70,6 +70,7 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
+  topology.kubernetes.io/zone: eu-central-1a
   node.kubernetes.io/instance-type: "x8g.48xlarge"
 
 podSecurityContext:
