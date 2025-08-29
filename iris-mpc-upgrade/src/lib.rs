@@ -10,6 +10,7 @@ use std::{
 pub mod config;
 pub mod packets;
 pub mod proto;
+pub mod rerandomization;
 pub mod reshare;
 pub mod tripartite_dh;
 pub mod utils;

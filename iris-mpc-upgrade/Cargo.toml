@@ -43,6 +43,7 @@ blake3 = "1.8.2"
 
 [dev-dependencies]
 float_eq = "1"
+criterion = "0.5"
 
 
 [build-dependencies]
@@ -63,3 +64,7 @@ path = "src/bin/reshare-client.rs"
 [[bin]]
 name = "rerandomize-db"
 path = "src/bin/rerandomize_db.rs"
+
+[[bench]]
+name = "rerandomize"
+harness = false
