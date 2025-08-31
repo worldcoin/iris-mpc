@@ -1891,7 +1891,7 @@ async fn server_main(config: Config) -> Result<()> {
                 // with 2D stats we were exceeding the SNS message size limit
                 let now_ms = Utc::now().timestamp_millis();
                 let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
-                let content_hash =  hex::encode(&sha);
+                let content_hash =  hex::encode(sha);
                 let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
 
                 upload_file_to_s3(
