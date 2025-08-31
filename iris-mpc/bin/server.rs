@@ -5,6 +5,7 @@ use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
 use axum::{response::IntoResponse, routing::get, Router};
+use chrono::Utc;
 use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
@@ -47,6 +48,7 @@ use iris_mpc_common::{
             ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
             SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
+        sqs_s3_helper::upload_file_to_s3,
         sync::{Modification, ModificationKey, SyncResult, SyncState},
         task_monitor::TaskMonitor,
     },
@@ -63,6 +65,7 @@ use itertools::izip;
 use metrics_exporter_statsd::StatsdBuilder;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use sodiumoxide::hex;
 use std::process::exit;
 use std::{
     collections::{HashMap, HashSet},
@@ -1365,6 +1368,7 @@ async fn server_main(config: Config) -> Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
+    let s3_client_bg = aws_clients.s3_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
@@ -1882,8 +1886,29 @@ async fn server_main(config: Config) -> Result<()> {
                 tracing::info!("Sending 2D anonymized stats results");
                 let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d)
                     .wrap_err("failed to serialize 2D anonymized statistics result")?;
+
+                // offloading 2D anon stats file to s3 to avoid sending large messages to SNS
+                // with 2D stats we were exceeding the SNS message size limit
+                let now_ms = Utc::now().timestamp_millis();
+                let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
+                let content_hash =  hex::encode(&sha);
+                let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
+
+                upload_file_to_s3(
+                    &config_bg.shares_bucket_name,
+                    &s3_key,
+                    s3_client_bg.clone(),
+                    serialized.as_bytes(),
+                )
+                .await
+                .wrap_err("failed to upload 2D anonymized statistics to s3")?;
+
+                // Publish only the S3 key to SNS
+                let payload = serde_json::to_string(&serde_json::json!({
+                    "s3_key": s3_key,
+                }))?;
                 send_results_to_sns(
-                    vec![serialized],
+                    vec![payload],
                     &metadata,
                     &sns_client_bg,
                     &config_bg,
