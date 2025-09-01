@@ -27,6 +27,12 @@ enum IrisTask {
         iris: ArcIris,
         rsp: oneshot::Sender<ArcIris>,
     },
+    /// Same as Realloc, but responds on a blocking channel to allow use from
+    /// synchronous contexts without touching Tokio's blocking APIs.
+    ReallocSync {
+        iris: ArcIris,
+        rsp: Sender<ArcIris>,
+    },
     Insert {
         vector_id: VectorId,
         iris: ArcIris,
@@ -62,7 +68,16 @@ impl IrisPoolHandle {
     }
 
     pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
-        Ok(self.numa_realloc(iris)?.blocking_recv()?)
+        // Use a crossbeam oneshot to avoid Tokio's `blocking_recv()` inside a
+        // runtime worker thread. This runs during DB load (startup) and the
+        // worker thread completes quickly (first-touch clone).
+        let (tx, rx) = crossbeam::channel::bounded(1);
+        let task = IrisTask::ReallocSync { iris, rsp: tx };
+        self.get_next_worker().send(task)?;
+        match rx.recv() {
+            Ok(v) => Ok(v),
+            Err(e) => Err(eyre::eyre!("numa_realloc_blocking recv failed: {}", e)),
+        }
     }
 
     pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
@@ -163,6 +178,10 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
             IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
                 // This attempts to use the NUMA-aware first-touch policy of the OS.
+                let new_iris = Arc::new((*iris).clone());
+                let _ = rsp.send(new_iris);
+            }
+            IrisTask::ReallocSync { iris, rsp } => {
                 let new_iris = Arc::new((*iris).clone());
                 let _ = rsp.send(new_iris);
             }
