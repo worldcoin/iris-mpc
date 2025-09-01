@@ -46,17 +46,17 @@ impl Networking for TcpSession {
             self.session_id
         ))?;
         trace!(target: "searcher::network", action = "send", party = ?receiver, bytes = value.byte_len(), rounds = 1);
-        metrics::counter!(
-            "smpc.rounds",
-            "session_id" => self.session_id.0.to_string(),
-        )
-        .increment(1);
-        metrics::counter!(
-            "smpc.bytes",
-            "session_id" => self.session_id.0.to_string(),
-        )
-        .increment(value.byte_len() as u64);
         if cfg!(feature = "networking_benchmark") {
+            metrics::counter!(
+                "smpc.rounds",
+                "session_id" => self.session_id.0.to_string(),
+            )
+            .increment(1);
+            metrics::counter!(
+                "smpc.bytes",
+                "session_id" => self.session_id.0.to_string(),
+            )
+            .increment(value.byte_len() as u64);
             tokio::time::sleep(std::time::Duration::from_millis(30)).await;
         }
         outgoing_stream
