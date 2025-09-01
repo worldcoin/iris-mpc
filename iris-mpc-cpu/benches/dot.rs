@@ -176,6 +176,11 @@ fn generate_random_shared_irises(count: usize) -> Vec<Arc<GaloisRingSharedIris>>
         .collect()
 }
 
+// Simulate dot-products as they occur in search_layer:
+// DEPTH times we open a new candidate node, each contributing NEW_NODES_PER_LEVEL new nodes
+// which are batched to compute distance to the source
+// Constants are chosen according to staging runs as of late August 2025.
+
 pub fn search_layer_like_calls(c: &mut Criterion) {
     let mut g = c.benchmark_group("search_layer_like_calls");
     g.sample_size(10usize);
@@ -196,8 +201,7 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
             || {
                 let mut rng = StdRng::seed_from_u64(42);
                 let num_indices = DEPTH * NEW_NODES_PER_LEVEL;
-                let indices = sample(&mut rng, all_irises.len(), num_indices).into_vec();
-                indices
+                sample(&mut rng, all_irises.len(), num_indices).into_vec()
             },
             |mut indices| {
                 let initial_pairs: Vec<_> = initial_rhs_irises
@@ -231,9 +235,7 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
         num_threads
     ));
     g_parallel.sample_size(10);
-    g_parallel.throughput(Throughput::Elements(
-        (total_elements * num_threads as usize) as u64,
-    ));
+    g_parallel.throughput(Throughput::Elements((total_elements * num_threads) as u64));
 
     g_parallel.bench_function("identical order per thread", |b| {
         pool.install(|| {
@@ -264,7 +266,7 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
                             let mut indices = indices_for_thread.clone();
 
                             let initial_pairs: Vec<_> = initial_rhs_irises
-                                .into_iter()
+                                .iter()
                                 .map(|rhs| Some((source_iris.clone(), rhs.clone())))
                                 .collect();
                             black_box(galois_ring_pairwise_distance(black_box(initial_pairs)));
