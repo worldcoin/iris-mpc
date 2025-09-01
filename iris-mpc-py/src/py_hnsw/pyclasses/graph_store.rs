@@ -1,11 +1,11 @@
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore, hnsw::graph::layered_graph::GraphMem, py_bindings,
+    hawkers::plaintext_store::PlaintextStore, hnsw::graph::layered_graph::GraphMemOld, py_bindings,
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
 #[derive(Clone, Default)]
-pub struct PyGraphStore(pub GraphMem<PlaintextStore>);
+pub struct PyGraphStore(pub GraphMemOld<PlaintextStore>);
 
 #[pymethods]
 impl PyGraphStore {

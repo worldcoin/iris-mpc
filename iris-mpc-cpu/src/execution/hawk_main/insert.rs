@@ -38,7 +38,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// is to be inserted at the next available serial ID, with version 0.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
-    graph: &mut GraphMem<V>,
+    graph: &mut GraphMemOld<<V as VectorStore>::VectorRef>,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
     ids: &VecRequests<Option<V::VectorRef>>,

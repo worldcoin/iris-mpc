@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
         run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState,
         GenesisState, IrisesTable, PersistentState,
     },
-    hnsw::GraphMem,
+    hnsw::GraphMemOld,
 };
 use std::collections::HashMap;
 
@@ -80,7 +80,7 @@ fn construct_initial_genesis_state(
         },
         dst_db: GenesisDstDbState {
             irises: HashMap::new(),
-            graphs: [GraphMem::new(), GraphMem::new()],
+            graphs: [GraphMemOld::new(), GraphMemOld::new()],
             persistent_state: PersistentState {
                 last_indexed_iris_id: None,
                 last_indexed_modification_id: None,

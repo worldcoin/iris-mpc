@@ -18,8 +18,8 @@ use crate::{
         plaintext_store::PlaintextStore,
     },
     hnsw::{
-        graph::{layered_graph_new::Layer, neighborhood::SortedEdgeIds},
-        GraphMemNew as GraphMem, HnswSearcherNew as HnswSearcher, VectorStore,
+        graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
+        GraphMemNew as GraphMem, HnswSearcher, VectorStore,
     },
     network::NetworkType,
     protocol::shared_iris::GaloisRingSharedIris,

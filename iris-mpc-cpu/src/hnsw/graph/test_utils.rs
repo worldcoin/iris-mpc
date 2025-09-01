@@ -46,12 +46,12 @@ impl DbContext {
 
     pub async fn persist_graph_db(
         &self,
-        graph: GraphMem<PlaintextStore>,
+        graph: GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>,
         side: StoreId,
     ) -> Result<()> {
         let mut graph_tx = self.graph_pg.tx().await?;
 
-        let GraphMem {
+        let GraphMemOld {
             entry_point,
             layers,
         } = graph;
@@ -117,7 +117,7 @@ impl DbContext {
     pub async fn load_graph_to_mem(
         &self,
         side: StoreId,
-    ) -> Result<GraphMem<PlaintextStore>, eyre::Report> {
+    ) -> Result<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>, eyre::Report> {
         let mut graph_tx = self.graph_pg.tx().await?;
         let mut graph_ops = graph_tx.with_graph(side);
 
@@ -125,7 +125,9 @@ impl DbContext {
     }
 
     /// helper function to get a `BothEyes<GraphMem>`
-    pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextStore>>> {
+    pub async fn get_both_eyes(
+        &self,
+    ) -> Result<BothEyes<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>>> {
         Ok([
             self.load_graph_to_mem(StoreId::Left).await?,
             self.load_graph_to_mem(StoreId::Right).await?,
@@ -170,7 +172,8 @@ impl DbContext {
         serialize_graph(path, &stored_graph).await?;
 
         let data = tokio::fs::read(path).await?;
-        let loaded_graph: BothEyes<GraphMem<PlaintextStore>> = bincode::deserialize(&data)?;
+        let loaded_graph: BothEyes<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>> =
+            bincode::deserialize(&data)?;
         if dbg {
             println!("loaded graph:");
             println!("{:#?}", loaded_graph);
@@ -262,7 +265,10 @@ impl DbContext {
     }
 }
 
-async fn serialize_graph(path: &Path, value: &BothEyes<GraphMem<PlaintextStore>>) -> Result<()> {
+async fn serialize_graph(
+    path: &Path,
+    value: &BothEyes<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>>,
+) -> Result<()> {
     let serialized = bincode::serialize(value)?;
     let mut file = File::create(path).await?;
     file.write_all(&serialized).await?;
@@ -270,7 +276,9 @@ async fn serialize_graph(path: &Path, value: &BothEyes<GraphMem<PlaintextStore>>
     Ok(())
 }
 
-async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextStore>>> {
+async fn deserialize_graph(
+    path: &Path,
+) -> Result<BothEyes<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>>> {
     let data = tokio::fs::read(path).await?;
     Ok(bincode::deserialize(&data)?)
 }

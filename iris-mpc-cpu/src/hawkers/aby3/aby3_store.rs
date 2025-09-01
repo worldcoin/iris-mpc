@@ -54,6 +54,8 @@ impl Aby3Query {
     }
 }
 
+pub type Aby3Vector = <Aby3Store as VectorStore>::VectorRef;
+
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
@@ -257,7 +259,7 @@ mod tests {
             },
             plaintext_store::PlaintextStore,
         },
-        hnsw::{GraphMemNew as GraphMem, HnswSearcherNew as HnswSearcher},
+        hnsw::{GraphMemNew as GraphMem, HnswSearcher},
         network::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };

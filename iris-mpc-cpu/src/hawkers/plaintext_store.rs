@@ -5,7 +5,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMemNew as GraphMem, HnswSearcherNew as HnswSearcher, VectorStore,
+        GraphMemNew as GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -23,6 +23,7 @@ use tracing::debug;
 use eyre::{bail, Result};
 use std::collections::HashMap;
 
+pub type PlaintextVector = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
 
 pub type PlaintextSharedIrises = SharedIrises<PlaintextStoredIris>;
@@ -285,7 +286,7 @@ impl VectorStoreMut for SharedPlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::HnswSearcherNew as HnswSearcher;
+    use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;

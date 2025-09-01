@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
         },
         plaintext_store::PlaintextStore,
     },
-    hnsw::{GraphMemNew as GraphMem, HnswSearcherNew as HnswSearcher},
+    hnsw::{GraphMemNew as GraphMem, HnswSearcher},
     protocol::{
         ops::{
             batch_signed_lift_vec, cross_compare, galois_ring_pairwise_distance,

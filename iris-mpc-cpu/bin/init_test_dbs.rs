@@ -4,8 +4,8 @@ use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
-        HnswSearcher,
+        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem,
+        HnswParams, HnswSearcher, VectorStore,
     },
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
@@ -273,7 +273,7 @@ async fn main() -> Result<()> {
         [graph_l, graph_r]
     } else {
         // new graphs
-        [GraphMem::new(), GraphMem::new()]
+        [GraphMemOld::new(), GraphMemOld::new()]
     };
 
     let n_existing_irises = {
@@ -435,7 +435,9 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<PlaintextStore>) -> Option<u32> {
+fn get_max_serial_id(
+    graph: &GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>,
+) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()
