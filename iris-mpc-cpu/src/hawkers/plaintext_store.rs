@@ -5,7 +5,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMemNew as GraphMem, HnswSearcherNew as HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -80,7 +80,7 @@ impl PlaintextStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<Self>> {
+    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
@@ -285,7 +285,7 @@ impl VectorStoreMut for SharedPlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::{graph::layered_graph::migrate, HnswSearcher};
+    use crate::hnsw::HnswSearcherNew as HnswSearcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
@@ -396,7 +396,7 @@ mod tests {
             .await?;
 
         let mut shared_vector = SharedPlaintextStore::from(ptxt_vector);
-        let shared_graph = Arc::new(migrate(ptxt_graph, |id| id));
+        let shared_graph = Arc::new(ptxt_graph);
 
         for ids in (0..database_size)
             .map(|id| VectorId::from_0_index(id as u32))
