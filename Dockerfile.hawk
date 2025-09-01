@@ -35,8 +35,15 @@ RUN cargo build --release --bin iris-mpc-hawk
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y ca-certificates curl snapd
-RUN snap install aws-cli --classic
+ARG ARCHITECTURE
+ENV ARCHITECTURE=$ARCHITECTURE
+
+RUN apt-get update && apt-get install -y ca-certificates curl
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
+  unzip awscliv2.zip && \
+  ./aws/install && \
+  aws --version
 
 RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.pem && \
