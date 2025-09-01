@@ -46,5 +46,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
+          build-args: |
+            ARCHITECTURE=x86_64
           cache-from: type=gha
           cache-to: type=gha,mode=max
