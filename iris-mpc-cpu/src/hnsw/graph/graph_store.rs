@@ -450,7 +450,7 @@ where
         &mut self,
         pool: &sqlx::PgPool,
         parallelism: usize,
-    ) -> Result<GraphMem<V>> {
+    ) -> Result<GraphMem<<V as VectorStore>::VectorRef>> {
         let mut graph_mem = GraphMem::new();
         let schema_name = self.tx.schema_name.clone();
         let graph_id = self.graph_id();
