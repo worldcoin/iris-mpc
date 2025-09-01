@@ -255,6 +255,9 @@ pub struct Config {
 
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
+
+    #[serde(default = "default_tokio_threads")]
+    pub tokio_threads: usize,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -397,6 +400,10 @@ fn default_batch_sync_polling_timeout_secs() -> u64 {
 
 fn default_full_scan_side_switching_enabled() -> bool {
     true
+}
+
+fn default_tokio_threads() -> usize {
+    num_cpus::get()
 }
 
 impl Config {
@@ -688,6 +695,7 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            tokio_threads: _,
         } = value;
 
         Self {

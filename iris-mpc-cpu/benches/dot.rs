@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use iris_mpc_cpu::protocol::{
@@ -30,6 +32,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
             // Mash up the 3 party shares; ok for benchmarking.
             GaloisRingSharedIris::generate_shares_locally(rng, iris)
         })
+        .map(Arc::new)
         .collect_vec();
 
     g.bench_function("Compute-bound", |b| {
@@ -37,10 +40,10 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
             || {
                 // Generate *one* batch of *cacheable* iris pairs.
                 (0..batch_size)
-                    .map(|_| Some((&shares[0], &shares[1])))
+                    .map(|_| Some((shares[0].clone(), shares[1].clone())))
                     .collect_vec()
             },
-            |pairs| black_box(galois_ring_pairwise_distance(black_box(&pairs))),
+            |pairs| black_box(galois_ring_pairwise_distance(black_box(pairs))),
             BatchSize::SmallInput,
         )
     });
@@ -53,11 +56,11 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                     .map(|_| {
                         let a = rng.gen::<usize>() % shares.len();
                         let b = rng.gen::<usize>() % shares.len();
-                        Some((&shares[a], &shares[b]))
+                        Some((shares[a].clone(), shares[b].clone()))
                     })
                     .collect_vec()
             },
-            |pairs| black_box(galois_ring_pairwise_distance(black_box(&pairs))),
+            |pairs| black_box(galois_ring_pairwise_distance(black_box(pairs))),
             BatchSize::SmallInput,
         )
     });
@@ -85,14 +88,14 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                     (0..num_threads)
                         .map(|_| {
                             (0..batch_size)
-                                .map(|_| Some((&shares[0], &shares[1])))
+                                .map(|_| Some((shares[0].clone(), shares[1].clone())))
                                 .collect_vec()
                         })
                         .collect_vec()
                 },
                 |batches| {
                     batches
-                        .par_iter()
+                        .into_par_iter()
                         .map(|pairs| black_box(galois_ring_pairwise_distance(black_box(pairs))))
                         .collect::<Vec<_>>()
                 },
@@ -113,7 +116,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                                 .map(|_| {
                                     let a = rng.gen::<usize>() % shares.len();
                                     let b = rng.gen::<usize>() % shares.len();
-                                    Some((&shares[a], &shares[b]))
+                                    Some((shares[a].clone(), shares[b].clone()))
                                 })
                                 .collect_vec()
                         })
@@ -121,7 +124,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                 },
                 |batches| {
                     batches
-                        .par_iter()
+                        .into_par_iter()
                         .map(|pairs| black_box(galois_ring_pairwise_distance(black_box(pairs))))
                         .collect::<Vec<_>>()
                 },
@@ -142,7 +145,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                                 .map(|_| {
                                     let a = rng.gen::<usize>() % shares.len();
                                     let b = rng.gen::<usize>() % shares.len();
-                                    Some((&shares[a], &shares[b]))
+                                    Some((shares[a].clone(), shares[b].clone()))
                                 })
                                 .collect_vec()
                         })
@@ -150,7 +153,7 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
                 },
                 |batches| {
                     batches
-                        .par_iter()
+                        .into_par_iter()
                         .map(|pairs| black_box(galois_ring_pairwise_distance(black_box(pairs))))
                         .collect::<Vec<_>>()
                 },
@@ -162,13 +165,13 @@ pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
     g.finish();
 }
 
-fn generate_random_shared_irises(count: usize) -> Vec<GaloisRingSharedIris> {
+fn generate_random_shared_irises(count: usize) -> Vec<Arc<GaloisRingSharedIris>> {
     let mut rng = thread_rng();
     (0..count)
         .map(|_| {
             let iris = IrisCode::random_rng(&mut rng);
             // We only need one of the three shares for the benchmark structure.
-            GaloisRingSharedIris::generate_shares_locally(&mut rng, iris)[0].clone()
+            Arc::new(GaloisRingSharedIris::generate_shares_locally(&mut rng, iris)[0].clone())
         })
         .collect()
 }
@@ -199,17 +202,17 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
             |mut indices| {
                 let initial_pairs: Vec<_> = initial_rhs_irises
                     .iter()
-                    .map(|rhs| Some((&source_iris, rhs)))
+                    .map(|rhs| Some((source_iris.clone(), rhs.clone())))
                     .collect();
-                black_box(galois_ring_pairwise_distance(black_box(&initial_pairs)));
+                black_box(galois_ring_pairwise_distance(black_box(initial_pairs)));
 
                 for _ in 0..DEPTH {
                     let curr_indices = indices.drain(0..NEW_NODES_PER_LEVEL).collect_vec();
                     let pairs_on_level: Vec<_> = (0..NEW_NODES_PER_LEVEL)
-                        .map(|i| Some((&source_iris, &all_irises[curr_indices[i]])))
+                        .map(|i| Some((source_iris.clone(), all_irises[curr_indices[i]].clone())))
                         .collect();
 
-                    black_box(galois_ring_pairwise_distance(black_box(&pairs_on_level)));
+                    black_box(galois_ring_pairwise_distance(black_box(pairs_on_level)));
                 }
             },
             BatchSize::SmallInput,
@@ -261,21 +264,21 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
                             let mut indices = indices_for_thread.clone();
 
                             let initial_pairs: Vec<_> = initial_rhs_irises
-                                .iter()
-                                .map(|rhs| Some((source_iris, rhs)))
+                                .into_iter()
+                                .map(|rhs| Some((source_iris.clone(), rhs.clone())))
                                 .collect();
-                            black_box(galois_ring_pairwise_distance(black_box(&initial_pairs)));
+                            black_box(galois_ring_pairwise_distance(black_box(initial_pairs)));
 
                             for _ in 0..DEPTH {
                                 let curr_indices =
                                     indices.drain(0..NEW_NODES_PER_LEVEL).collect_vec();
                                 let pairs_on_level: Vec<_> = curr_indices
                                     .iter()
-                                    .map(|&index| Some((source_iris, &all_irises[index])))
+                                    .map(|&index| {
+                                        Some((source_iris.clone(), all_irises[index].clone()))
+                                    })
                                     .collect();
-                                black_box(galois_ring_pairwise_distance(black_box(
-                                    &pairs_on_level,
-                                )));
+                                black_box(galois_ring_pairwise_distance(black_box(pairs_on_level)));
                             }
                         });
                 },
@@ -315,20 +318,20 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
 
                             let initial_pairs: Vec<_> = initial_rhs_irises
                                 .iter()
-                                .map(|rhs| Some((source_iris, rhs)))
+                                .map(|rhs| Some((source_iris.clone(), rhs.clone())))
                                 .collect();
-                            black_box(galois_ring_pairwise_distance(black_box(&initial_pairs)));
+                            black_box(galois_ring_pairwise_distance(black_box(initial_pairs)));
 
                             for _ in 0..DEPTH {
                                 let curr_indices =
                                     indices.drain(0..NEW_NODES_PER_LEVEL).collect_vec();
                                 let pairs_on_level: Vec<_> = curr_indices
                                     .iter()
-                                    .map(|&index| Some((source_iris, &all_irises[index])))
+                                    .map(|&index| {
+                                        Some((source_iris.clone(), all_irises[index].clone()))
+                                    })
                                     .collect();
-                                black_box(galois_ring_pairwise_distance(black_box(
-                                    &pairs_on_level,
-                                )));
+                                black_box(galois_ring_pairwise_distance(black_box(pairs_on_level)));
                             }
                         });
                 },
