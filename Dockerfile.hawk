@@ -35,7 +35,7 @@ RUN cargo build --release --bin iris-mpc-hawk
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y ca-certificates curl
+RUN apt-get update && apt-get install -y ca-certificates curl snap
 RUN snap install aws-cli --classic
 
 RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
