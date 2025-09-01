@@ -49,6 +49,8 @@ jobs:
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
+          build-args: |
+            ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.hawk
