@@ -29,10 +29,7 @@ enum IrisTask {
     },
     /// Same as Realloc, but responds on a blocking channel to allow use from
     /// synchronous contexts without touching Tokio's blocking APIs.
-    ReallocSync {
-        iris: ArcIris,
-        rsp: Sender<ArcIris>,
-    },
+    ReallocSync { iris: ArcIris, rsp: Sender<ArcIris> },
     Insert {
         vector_id: VectorId,
         iris: ArcIris,
