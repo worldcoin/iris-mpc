@@ -259,7 +259,7 @@ mod tests {
             },
             plaintext_store::PlaintextStore,
         },
-        hnsw::{GraphMemNew as GraphMem, HnswSearcher},
+        hnsw::{GraphMem, HnswSearcher},
         network::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };

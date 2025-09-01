@@ -450,8 +450,8 @@ where
         &mut self,
         pool: &sqlx::PgPool,
         parallelism: usize,
-    ) -> Result<GraphMemOld<<V as VectorStore>::VectorRef>> {
-        let mut graph_mem = GraphMemOld::new();
+    ) -> Result<GraphMem<<V as VectorStore>::VectorRef>> {
+        let mut graph_mem = GraphMem::new();
         let schema_name = self.tx.schema_name.clone();
         let graph_id = self.graph_id();
 
@@ -645,8 +645,8 @@ mod tests {
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
         hnsw::{
-            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMemOld,
-            HnswSearcher, SortedNeighborhood,
+            graph::layered_graph::EntryPoint, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
+            SortedNeighborhood,
         },
     };
     use aes_prng::AesRng;
@@ -788,7 +788,7 @@ mod tests {
     #[tokio::test]
     async fn test_hnsw_db() -> Result<()> {
         let graph_pg = TestGraphPg::<PlaintextStore>::new().await?;
-        let graph_mem = &mut GraphMemOld::new();
+        let graph_mem = &mut GraphMem::new();
         let vector_store = &mut PlaintextStore::new();
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let db = HnswSearcher::new_with_test_parameters();

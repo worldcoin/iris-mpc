@@ -1,7 +1,7 @@
 use super::plaintext_store::Base64IrisCode;
 use crate::{
-    hawkers::plaintext_store::PlaintextStore,
-    hnsw::{GraphMemOld, HnswSearcher},
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVector},
+    hnsw::{GraphMem, HnswSearcher},
 };
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use rand::rngs::ThreadRng;
@@ -12,7 +12,7 @@ pub fn search(
     query: IrisCode,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMemOld<PlaintextStore>,
+    graph: &mut GraphMem<PlaintextVector>,
 ) -> (VectorId, f64) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -32,7 +32,7 @@ pub fn insert(
     iris: IrisCode,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMemOld<PlaintextStore>,
+    graph: &mut GraphMem<PlaintextVector>,
 ) -> VectorId {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -54,7 +54,7 @@ pub fn insert(
 pub fn insert_uniform_random(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMemOld<PlaintextStore>,
+    graph: &mut GraphMem<PlaintextVector>,
 ) -> VectorId {
     let mut rng = ThreadRng::default();
     let raw_query = IrisCode::random_rng(&mut rng);
@@ -66,7 +66,7 @@ pub fn fill_uniform_random(
     num: usize,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMemOld<PlaintextStore>,
+    graph: &mut GraphMem<PlaintextVector>,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -95,7 +95,7 @@ pub fn fill_from_ndjson_file(
     limit: Option<usize>,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMemOld<PlaintextStore>,
+    graph: &mut GraphMem<PlaintextVector>,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

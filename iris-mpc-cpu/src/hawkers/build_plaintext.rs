@@ -14,17 +14,17 @@ use crate::{
     hnsw::{GraphMem, HnswSearcher},
 };
 
-pub type SharedPlaintextGraphs = BothEyes<GraphMemOld<PlaintextVector>>;
+pub type SharedPlaintextGraphs = BothEyes<GraphMem<PlaintextVector>>;
 pub type SharedPlaintextStores = BothEyes<SharedPlaintextStore>;
 
 pub async fn plaintext_parallel_batch_insert(
-    graph: Option<GraphMemOld<PlaintextVector>>,
+    graph: Option<GraphMem<PlaintextVector>>,
     store: Option<SharedPlaintextStore>,
     irises: Vec<(IrisVectorId, IrisCode)>,
-    params: crate::hnsw::HnswParamsNew,
+    params: crate::hnsw::HnswParams,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMemOld<PlaintextVector>, SharedPlaintextStore)> {
+) -> Result<(GraphMem<PlaintextVector>, SharedPlaintextStore)> {
     assert!(graph.is_none() == store.is_none());
     let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
@@ -95,7 +95,7 @@ mod tests {
         to_insert: usize,
     ) -> Result<(
         HnswSearcher,
-        GraphMemOld<PlaintextVector>,
+        GraphMem<PlaintextVector>,
         SharedPlaintextStore,
         Vec<(IrisVectorId, IrisCode)>,
         [u8; 16],
@@ -130,7 +130,7 @@ mod tests {
 
     async fn check_results(
         mut store: SharedPlaintextStore,
-        graph: GraphMemOld<PlaintextVector>,
+        graph: GraphMem<PlaintextVector>,
         irises: Vec<(IrisVectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,

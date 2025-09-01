@@ -31,8 +31,8 @@ use crate::{
         BothEyes, STORE_IDS,
     },
     genesis::BatchSize,
-    hawkers::plaintext_store::PlaintextStore,
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher, VectorStore},
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVector},
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher},
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -43,7 +43,7 @@ pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)
 pub type ModificationsTable = HashMap<i64, (IrisSerialId, String, bool, bool)>;
 
 /// Represents a left/right pair of plaintext in-memory HNSW graphs.
-pub type PlaintextGraphs = BothEyes<GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>>;
+pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextVector>>;
 
 /// List of serial ids to treat as deleted enrollments in the source iris database.
 pub type GenesisDeletions = Vec<IrisSerialId>;
@@ -367,7 +367,7 @@ mod tests {
             },
             dst_db: GenesisDstDbState {
                 irises: HashMap::new(),
-                graphs: [GraphMemOld::new(), GraphMemOld::new()],
+                graphs: [GraphMem::new(), GraphMem::new()],
                 persistent_state: PersistentState {
                     last_indexed_iris_id: None,
                     last_indexed_modification_id: None,

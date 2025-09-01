@@ -2,10 +2,10 @@ use clap::Parser;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVector},
     hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem,
-        HnswParams, HnswSearcher, VectorStore,
+        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
+        HnswSearcher,
     },
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
@@ -273,7 +273,7 @@ async fn main() -> Result<()> {
         [graph_l, graph_r]
     } else {
         // new graphs
-        [GraphMemOld::new(), GraphMemOld::new()]
+        [GraphMem::new(), GraphMem::new()]
     };
 
     let n_existing_irises = {
@@ -435,9 +435,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(
-    graph: &GraphMemOld<<PlaintextStore as VectorStore>::VectorRef>,
-) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem<PlaintextVector>) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

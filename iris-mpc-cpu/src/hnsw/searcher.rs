@@ -14,7 +14,7 @@ use crate::hnsw::{
     VectorStore,
 };
 
-use crate::hnsw::GraphMemNew as GraphMem;
+use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
@@ -1089,7 +1089,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMemNew as GraphMem};
+    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::GraphMem};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;

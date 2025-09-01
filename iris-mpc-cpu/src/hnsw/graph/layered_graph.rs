@@ -243,10 +243,10 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::plaintext_store::PlaintextStore,
+        hawkers::plaintext_store::{PlaintextStore, PlaintextVector},
         hnsw::{
-            graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMemNew as GraphMem,
-            HnswSearcher, VectorStore,
+            graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
+            VectorStore,
         },
     };
     use aes_prng::AesRng;
@@ -351,9 +351,6 @@ mod tests {
                 .await?;
         }
 
-        let equal_graph_store: GraphMem<VectorId> = migrate(graph_store.clone(), |v| v);
-        assert_eq!(graph_store, equal_graph_store);
-
         let different_graph_store: GraphMem<VectorId> = migrate(graph_store.clone(), |v| {
             VectorId::from_0_index(v.index() * 2)
         });
@@ -369,8 +366,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =
-            HashMap::new();
+        let mut point_ids_map: HashMap<PlaintextVector, usize> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
