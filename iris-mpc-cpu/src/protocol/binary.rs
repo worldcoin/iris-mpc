@@ -94,6 +94,36 @@ fn transposed_pack_xor<T: IntRing2k>(x1: &[VecShare<T>], x2: &[VecShare<T>]) -> 
 }
 
 /// Computes and sends a local share of the AND of two vectors of bit-sliced shares.
+async fn and_many_iter_send<T: IntRing2k + NetworkInt>(
+    session: &mut Session,
+    a: impl Iterator<Item = Share<T>>,
+    b: impl Iterator<Item = Share<T>>,
+) -> Result<Vec<RingElement<T>>, Error>
+where
+    Standard: Distribution<T>,
+{
+    // if a.len() != b.len() {
+    //     bail!("InvalidSize in and_many_send");
+    // }
+    let mut shares_a = Vec::with_capacity(10);
+    for (a_, b_) in a.zip(b) {
+        let rand = session.prf.gen_binary_zero_share::<T>();
+        let mut c = &a_ & &b_;
+        c ^= rand;
+        shares_a.push(c);
+    }
+
+    let network = &mut session.network_session;
+    let messages = shares_a.clone();
+    let message = if messages.len() == 1 {
+        T::new_network_element(messages[0])
+    } else {
+        T::new_network_vec(messages)
+    };
+    network.send_next(message).await?;
+    Ok(shares_a)
+}
+
 async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
@@ -167,6 +197,7 @@ where
     if x1.len() != x2.len() {
         bail!("Inputs have different length {} {}", x1.len(), x2.len());
     }
+
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
     let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
     if chunk_sizes != chunk_sizes2 {
@@ -175,7 +206,7 @@ where
 
     let x1 = VecShare::flatten(x1);
     let x2 = VecShare::flatten(x2);
-    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
+    let mut shares_a = and_many_iter_send(session, x1, x2).await?;
     let mut shares_b = and_many_receive(session).await?;
 
     // Unflatten the shares vectors
