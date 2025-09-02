@@ -45,7 +45,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "a
   aws --version
 
 
-RUN apt-get update && apt-get install -y ca-certificates awscli curl
+RUN apt-get update && apt-get install -y ca-certificates curl
 RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.pem && \
     curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.pem
