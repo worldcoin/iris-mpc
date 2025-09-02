@@ -148,6 +148,14 @@ impl<T: IntRing2k> VecShare<T> {
         Self { shares }
     }
 
+    pub fn from_iter_ab(
+        a: impl Iterator<Item = RingElement<T>>,
+        b: impl Iterator<Item = RingElement<T>>,
+    ) -> Self {
+        let shares = a.zip(b).map(|(a_, b_)| Share::new(a_, b_)).collect();
+        Self { shares }
+    }
+
     pub fn flatten(inp: Vec<Self>) -> impl Iterator<Item = Share<T>> {
         inp.into_iter().flat_map(|x| x.shares)
     }
