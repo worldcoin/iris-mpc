@@ -70,6 +70,9 @@ pub struct Config {
     #[serde(default = "default_shares_bucket_name")]
     pub shares_bucket_name: String,
 
+    #[serde(default = "default_sns_buffer_bucket_name")]
+    pub sns_buffer_bucket_name: String,
+
     #[serde(default)]
     pub clear_db_before_init: bool,
 
@@ -297,6 +300,10 @@ fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
 
 fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
+}
+
+fn default_sns_buffer_bucket_name() -> String {
+    "wf-smpcv2-prod-sns-buffer".to_string()
 }
 
 fn default_schema_name() -> String {
@@ -578,6 +585,7 @@ pub struct CommonConfig {
     startup_sync_timeout_secs: u64,
     public_key_base_url: String,
     shares_bucket_name: String,
+    sns_buffer_bucket_name: String,
     clear_db_before_init: bool,
     init_db_size: usize,
     max_db_size: usize,
@@ -644,6 +652,7 @@ impl From<Config> for CommonConfig {
             startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
+            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -712,6 +721,7 @@ impl From<Config> for CommonConfig {
             startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
+            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,

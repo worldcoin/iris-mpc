@@ -1895,7 +1895,7 @@ async fn server_main(config: Config) -> Result<()> {
                 let s3_key = format!("stats2d/{}_{}.json", now_ms, content_hash);
 
                 upload_file_to_s3(
-                    &config_bg.shares_bucket_name,
+                    &config_bg.sns_buffer_bucket_name,
                     &s3_key,
                     s3_client_bg.clone(),
                     serialized.as_bytes(),
