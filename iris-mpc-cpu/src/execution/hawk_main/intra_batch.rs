@@ -5,7 +5,7 @@ use super::{
 };
 use crate::{
     execution::hawk_main::scheduler::parallelize, hawkers::aby3::aby3_store::Aby3Query,
-    hnsw::VectorStore,
+    hnsw::VectorStore, protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
 use itertools::{izip, Itertools};
@@ -69,22 +69,21 @@ async fn per_session(
         .collect_vec();
 
     // Compare the rotated and processed irises of one request, to the centered unprocessed iris of the other request.
-    let query_pairs = pairs
+    let query_pairs: Vec<Option<(ArcIris, ArcIris)>> = pairs
         .iter()
         .map(|pair| {
             let iris1_proc =
-                &*search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
-            let iris2 = &*search_queries[batch.i_eye][pair.earlier_request]
+                &search_queries[batch.i_eye][pair.task.i_request][pair.task.i_rotation].iris_proc;
+            let iris2 = &search_queries[batch.i_eye][pair.earlier_request]
                 .center()
                 .iris;
-            Some((iris1_proc, iris2))
+            Some((iris1_proc.clone(), iris2.clone()))
         })
         .collect_vec();
 
     let mut store = session.aby3_store.write().await;
 
-    let distances = store.eval_pairwise_distances(&query_pairs).await?;
-    let distances = store.lift_distances(distances).await?;
+    let distances = store.eval_pairwise_distances(query_pairs).await?;
     let is_matches = store.is_match_batch(&distances).await?;
 
     for (pair, is_match) in izip!(pairs, is_matches) {
