@@ -48,6 +48,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
           platforms: linux/arm64
+          build-args: |
+            ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.arm64.hawk
