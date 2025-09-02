@@ -45,13 +45,13 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "a
   ./aws/install && \
   aws --version
 
-RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_1.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_stage_2.crt https://wf-ampc-hnsw-ca-stage-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_stage_2.pem
 
-RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_0.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_1.pem && \
-    curl -o /usr/local/share/ca-certificates/ca_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_2.pem
+RUN curl -o /usr/local/share/ca-certificates/ca_party_prod_0.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_0.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_1.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_1.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_party_prod_2.crt https://wf-ampc-hnsw-ca-prod-eu-central-1.s3.eu-central-1.amazonaws.com/ca_party_prod_2.pem
 
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
