@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc@sha256:bdb005c04a9a1a0b39aa3784752f8eb494f275bd642ce159fb32c7a35187cd46" #  2D image with S3
+image: "ghcr.io/worldcoin/iris-mpc@sha256:deb744e3402585e77f20f8300cbc05ae9b6dda7c93b02ae745bc93eb6f73e9e0" #  2D image with new S3 sns buffer bucket
 
 environment: stage
 replicaCount: 1
