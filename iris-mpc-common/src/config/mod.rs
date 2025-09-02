@@ -604,16 +604,21 @@ pub struct MetricsConfig {
 // absence of these fields to make the arg None, each field needs
 // 'required = false'
 #[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
-#[group(requires_all = ["private_key", "leaf_cert", "root_cert"])]
+#[group(requires_all = ["private_key", "leaf_cert", "root_certs"])]
 pub struct TlsConfig {
+    // if true, the app will start assuming that the nginx sidecar is running
+    // Client will be TLS aware with root certs applied, the server will not be TLS aware
     #[arg(required = false)]
-    pub private_key: String,
+    pub with_nginx_sidecar: bool,
+
+    #[arg(required = false)]
+    pub private_key: Option<String>,
     // used by a peer to identify itself
     #[arg(required = false)]
-    pub leaf_cert: String,
-    // used by the client to make them trust the server cert
-    #[arg(required = false)]
-    pub root_cert: String,
+    pub leaf_cert: Option<String>,
+    // used by the client to make them trust the server certs
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub root_certs: Vec<String>,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>

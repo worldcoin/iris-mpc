@@ -55,11 +55,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 124
-    memory: 3720Gi
+    cpu: 186
+    memory: 2800Gi
   requests:
-    cpu: 124
-    memory: 3720Gi
+    cpu: 186
+    memory: 2800Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -68,9 +68,9 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: amd64
+  kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "x2iedn.32xlarge"
+  node.kubernetes.io/instance-type: "x8g.48xlarge"
 
 podSecurityContext:
   runAsUser: 65534
@@ -84,10 +84,10 @@ preStop:
 # long enough to allow for graceful shutdown to safely process 2 batches
 # single batch timeout in stage is 240 seconds
 terminationGracePeriodSeconds: 240
-#
-#mountSSLCerts:
-#  enabled: true
-#  mountPath: /etc/ssl/private
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
 #
 #nginxSidecar:
 #  enabled: true
