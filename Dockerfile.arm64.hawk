@@ -1,4 +1,4 @@
-FROM  ubuntu:22.04 AS build-image
+FROM  ubuntu:24.04 AS build-image
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y \
@@ -31,8 +31,19 @@ COPY . .
 ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
 RUN cargo build --release --target=aarch64-unknown-linux-gnu --bin iris-mpc-hawk
 
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
+
+ARG ARCHITECTURE
+ENV ARCHITECTURE=$ARCHITECTURE
+
+RUN apt-get update && apt-get install -y ca-certificates curl unzip
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
+  unzip awscliv2.zip && \
+  ./aws/install && \
+  aws --version
+
 
 RUN apt-get update && apt-get install -y ca-certificates awscli curl
 RUN curl -o /usr/local/share/ca-certificates/ca_party_stage_0.crt https://wf-ampc-hnsw-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_0.pem && \
