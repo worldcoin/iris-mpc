@@ -6,6 +6,7 @@ use crate::{
     },
 };
 use eyre::{eyre, Result};
+use iris_mpc_common::fast_metrics::FastHistogram;
 use std::{collections::HashMap, time::Duration};
 use tokio::{
     sync::{
@@ -249,6 +250,7 @@ impl GrpcHandle {
             out_streams: outstreams,
             in_streams: instreams,
             config: self.config.clone(),
+            metric: FastHistogram::new("grpc_session_bytes"),
         })
     }
 
