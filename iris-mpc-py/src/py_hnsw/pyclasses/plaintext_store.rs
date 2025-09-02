@@ -23,12 +23,12 @@ impl PyPlaintextStore {
             .unwrap()
             .as_ref()
             .clone())
-        .into()
+            .into()
     }
 
     pub fn eval_distance_to_id(&self, lhs: PyIrisCode, rhs: u32) -> (u16, u16) {
         let iris_rhs = self.get(rhs);
-        lhs.0.get_distance_fraction(&iris_rhs.0)
+        lhs.get_distance_fraction(iris_rhs)
     }
 
     pub fn eval_distance(&self, lhs: u32, rhs: u32) -> (u16, u16) {
