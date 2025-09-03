@@ -85,8 +85,8 @@ hnsw-smpc-2:
       - "172.20.0.10"
     searches:
       - "localstack"
-      - "mongodb.e2e.svc.cluster.local"
-      - "e2e.svc.cluster.local"
+      - "mongodb.$ENV.svc.cluster.local"
+      - "$ENV.svc.cluster.local"
       - "svc.cluster.local"
       - "cluster.local"
 

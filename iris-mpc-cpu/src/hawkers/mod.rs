@@ -19,3 +19,5 @@ pub mod plaintext_store;
 
 /// Data structure for shared in-memory irises
 pub mod shared_irises;
+
+pub mod build_plaintext;
