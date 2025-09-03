@@ -6,6 +6,7 @@ use chrono::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// 1D anonymized statistics types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {
     pub count: usize,
@@ -144,6 +145,130 @@ impl BucketStatistics {
             self.start_time_utc_timestamp = start_timestamp;
         }
         // Set the next start timestamp to now
+        self.next_start_time_utc_timestamp = Some(now_timestamp);
+    }
+}
+
+// 2D anonymized statistics types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bucket2DResult {
+    pub count: usize,
+    pub left_hamming_distance_bucket: [f64; 2],
+    pub right_hamming_distance_bucket: [f64; 2],
+}
+
+impl Eq for Bucket2DResult {}
+impl PartialEq for Bucket2DResult {
+    fn eq(&self, other: &Self) -> bool {
+        self.count == other.count
+            && (self.left_hamming_distance_bucket[0] - other.left_hamming_distance_bucket[0]).abs()
+                <= 1e-9
+            && (self.left_hamming_distance_bucket[1] - other.left_hamming_distance_bucket[1]).abs()
+                <= 1e-9
+            && (self.right_hamming_distance_bucket[0] - other.right_hamming_distance_bucket[0])
+                .abs()
+                <= 1e-9
+            && (self.right_hamming_distance_bucket[1] - other.right_hamming_distance_bucket[1])
+                .abs()
+                <= 1e-9
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BucketStatistics2D {
+    pub buckets: Vec<Bucket2DResult>,
+    pub n_buckets_per_side: usize,
+    // The number of two-sided matches gathered before sending the statistics
+    pub match_distances_buffer_size: usize,
+    pub party_id: usize,
+    #[serde(with = "ts_seconds")]
+    pub start_time_utc_timestamp: DateTime<Utc>,
+    #[serde(with = "ts_seconds_option")]
+    pub end_time_utc_timestamp: Option<DateTime<Utc>>,
+    #[serde(skip_serializing)]
+    #[serde(skip_deserializing)]
+    #[serde(with = "ts_seconds_option")]
+    pub next_start_time_utc_timestamp: Option<DateTime<Utc>>,
+}
+
+impl BucketStatistics2D {
+    pub fn is_empty(&self) -> bool {
+        self.buckets.is_empty()
+    }
+}
+
+impl fmt::Display for BucketStatistics2D {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "    party_id: {}", self.party_id)?;
+        writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
+        match &self.end_time_utc_timestamp {
+            Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
+            None => writeln!(f, "    end_time_utc: <none>")?,
+        }
+        for bucket in &self.buckets {
+            writeln!(
+                f,
+                "    L({:.3}-{:.3}), R({:.3}-{:.3}): {}",
+                bucket.left_hamming_distance_bucket[0],
+                bucket.left_hamming_distance_bucket[1],
+                bucket.right_hamming_distance_bucket[0],
+                bucket.right_hamming_distance_bucket[1],
+                bucket.count
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl BucketStatistics2D {
+    pub fn new(
+        match_distances_buffer_size: usize,
+        n_buckets_per_side: usize,
+        party_id: usize,
+    ) -> Self {
+        Self {
+            buckets: Vec::with_capacity(n_buckets_per_side * n_buckets_per_side),
+            n_buckets_per_side,
+            match_distances_buffer_size,
+            party_id,
+            start_time_utc_timestamp: Utc::now(),
+            end_time_utc_timestamp: None,
+            next_start_time_utc_timestamp: None,
+        }
+    }
+
+    /// Fill bucket counts for the 2D histogram.
+    /// buckets_2d is expected in row-major order (left index major):
+    /// buckets_2d[left_idx * n_buckets_per_side + right_idx]
+    pub fn fill_buckets(
+        &mut self,
+        buckets_2d: &[u32],
+        match_threshold_ratio: f64,
+        start_timestamp: Option<DateTime<Utc>>,
+    ) {
+        tracing::info!("Filling 2D buckets: {} entries", buckets_2d.len());
+
+        let now_timestamp = Utc::now();
+
+        self.buckets.clear();
+        self.end_time_utc_timestamp = Some(now_timestamp);
+
+        let step = match_threshold_ratio / (self.n_buckets_per_side as f64);
+        for (i, &count) in buckets_2d.iter().enumerate() {
+            let left_idx = i / self.n_buckets_per_side;
+            let right_idx = i % self.n_buckets_per_side;
+            let left_range = [step * (left_idx as f64), step * ((left_idx + 1) as f64)];
+            let right_range = [step * (right_idx as f64), step * ((right_idx + 1) as f64)];
+            self.buckets.push(Bucket2DResult {
+                count: count as usize,
+                left_hamming_distance_bucket: left_range,
+                right_hamming_distance_bucket: right_range,
+            });
+        }
+
+        if let Some(start_timestamp) = start_timestamp {
+            self.start_time_utc_timestamp = start_timestamp;
+        }
         self.next_start_time_utc_timestamp = Some(now_timestamp);
     }
 }
