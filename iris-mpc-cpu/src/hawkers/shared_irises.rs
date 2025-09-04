@@ -134,6 +134,13 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
+    pub fn borrow_vector(&self, vector: &VectorId) -> Option<&I> {
+        match &self.points.get(vector.serial_id() as usize) {
+            Some(Some((_, iris))) => Some(iris),
+            _ => None,
+        }
+    }
+
     pub fn contains(&self, vector: &VectorId) -> bool {
         matches!(self.points.get(vector.serial_id() as usize),
             Some(Some((version, _))) if vector.version_matches(*version))
