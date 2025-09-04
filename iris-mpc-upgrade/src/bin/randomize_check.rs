@@ -119,7 +119,15 @@ async fn main() -> Result<()> {
             || iris_old_0.id() != iris_old_1.id()
             || iris_old_0.id() != iris_old_2.id()
         {
-            eyre::bail!("Mismatched iris IDs between databases");
+            eyre::bail!(
+                "Mismatched iris IDs between databases: {}, {}, {}, {}, {}, {}",
+                iris_old_0.id(),
+                iris_old_1.id(),
+                iris_old_2.id(),
+                iris_new_0.id(),
+                iris_new_1.id(),
+                iris_new_2.id(),
+            );
         }
         let id = iris_old_0.id();
 

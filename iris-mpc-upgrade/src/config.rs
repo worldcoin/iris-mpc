@@ -260,4 +260,10 @@ pub struct ReRandomizeDbConfig {
 
     #[clap(long, default_value = "1000", env = "CHUNK_SIZE")]
     pub chunk_size: usize,
+
+    #[clap(long, default_value = "1", env = "RANGE_MIN")]
+    pub range_min: usize,
+
+    #[clap(long, default_value = "9223372036854775807", env = "RANGE_MAX")]
+    pub range_max_inclusive: usize,
 }

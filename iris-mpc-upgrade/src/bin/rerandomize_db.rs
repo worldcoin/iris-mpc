@@ -65,13 +65,18 @@ async fn rerandomize_db(
 
     let max_id = read_store.get_max_serial_id().await?;
 
-    let chunk_len = max_id.div_ceil(config.num_tasks);
+    let start = std::cmp::max(1, config.range_min);
+    let end = std::cmp::min(max_id, config.range_max_inclusive) + 1;
+
+    let total = end - start;
+
+    let chunk_len = total.div_ceil(config.num_tasks);
 
     let mut tasks = JoinSet::new();
 
     for i in 0..config.num_tasks {
-        let start = 1 + i * chunk_len;
-        let end = std::cmp::min(start + chunk_len, max_id + 1);
+        let start = start + i * chunk_len;
+        let end = std::cmp::min(start + chunk_len, end);
         let read_store = read_store.clone();
         let write_store = write_store.clone();
         let party_id = config.party_id;
@@ -82,7 +87,7 @@ async fn rerandomize_db(
                 let chunk_end = std::cmp::min(chunk_start + config.chunk_size, end);
                 let span = tracing::span!(
                     Level::INFO,
-                    "Processing chunk {} to {} for party ID: {}",
+                    "Processing chunk",
                     chunk_start,
                     chunk_end,
                     party_id
@@ -104,7 +109,7 @@ async fn rerandomize_db(
                 };
 
                 tracing::info!(
-                    "Fetched chunk {} to {} for party ID: {}",
+                    "Fetched chunk [{},{}) for party ID: {}",
                     chunk_start,
                     chunk_end,
                     party_id
@@ -115,7 +120,7 @@ async fn rerandomize_db(
                     .map(|iris| randomize_iris(iris, master_seed.as_bytes(), party_id as usize))
                     .collect();
                 tracing::info!(
-                    "Rerandomized chunk  {} to {} for party ID: {}",
+                    "Rerandomized chunk [{},{}) for party ID: {}",
                     chunk_start,
                     chunk_end,
                     party_id
@@ -157,7 +162,7 @@ async fn rerandomize_db(
                     tracing::error!("Failed to commit transaction: {e}");
                 } else {
                     tracing::info!(
-                        "Successfully committed rerandomized chunk {} to {} for party ID: {}",
+                        "Successfully committed rerandomized chunk [{},{}) for party ID: {}",
                         chunk_start,
                         chunk_end,
                         party_id

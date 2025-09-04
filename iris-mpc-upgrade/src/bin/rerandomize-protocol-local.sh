@@ -33,14 +33,24 @@ $TARGET_DIR/release/seed-v2-dbs --db-url-party1 postgres://postgres:postgres@loc
 echo "Seeding complete"
 
 
-echo "Rerandomizing DB 0"
-$TARGET_DIR/release/rerandomize-db --party-id 0 --source-db-url postgres://postgres:postgres@localhost:6200 --dest-db-url postgres://postgres:postgres@localhost:6203 --source-schema-name SMPC_testing_0 --dest-schema-name SMPC_testing_0 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf"
+echo "Rerandomizing DB 0 part 1"
+$TARGET_DIR/release/rerandomize-db --party-id 0 --source-db-url postgres://postgres:postgres@localhost:6200 --dest-db-url postgres://postgres:postgres@localhost:6203 --source-schema-name SMPC_testing_0 --dest-schema-name SMPC_testing_0 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 1 --range-max-inclusive 5000
 
-echo "Rerandomizing DB 1"
-$TARGET_DIR/release/rerandomize-db --party-id 1 --source-db-url postgres://postgres:postgres@localhost:6201 --dest-db-url postgres://postgres:postgres@localhost:6204 --source-schema-name SMPC_testing_1 --dest-schema-name SMPC_testing_1 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf"
+echo "Rerandomizing DB 1 part 1"
+$TARGET_DIR/release/rerandomize-db --party-id 1 --source-db-url postgres://postgres:postgres@localhost:6201 --dest-db-url postgres://postgres:postgres@localhost:6204 --source-schema-name SMPC_testing_1 --dest-schema-name SMPC_testing_1 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 1 --range-max-inclusive 5000
 
-echo "Rerandomizing DB 2"
-$TARGET_DIR/release/rerandomize-db --party-id 2 --source-db-url postgres://postgres:postgres@localhost:6202 --dest-db-url postgres://postgres:postgres@localhost:6205 --source-schema-name SMPC_testing_2 --dest-schema-name SMPC_testing_2 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf"
+echo "Rerandomizing DB 2 part 1" --range-min 1 
+$TARGET_DIR/release/rerandomize-db --party-id 2 --source-db-url postgres://postgres:postgres@localhost:6202 --dest-db-url postgres://postgres:postgres@localhost:6205 --source-schema-name SMPC_testing_2 --dest-schema-name SMPC_testing_2 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 1 --range-max-inclusive 5000
+
+echo "Rerandomizing DB 0 part 2"
+$TARGET_DIR/release/rerandomize-db --party-id 0 --source-db-url postgres://postgres:postgres@localhost:6200 --dest-db-url postgres://postgres:postgres@localhost:6203 --source-schema-name SMPC_testing_0 --dest-schema-name SMPC_testing_0 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 5001 
+
+echo "Rerandomizing DB 1 part 2"
+$TARGET_DIR/release/rerandomize-db --party-id 1 --source-db-url postgres://postgres:postgres@localhost:6201 --dest-db-url postgres://postgres:postgres@localhost:6204 --source-schema-name SMPC_testing_1 --dest-schema-name SMPC_testing_1 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 5001
+
+echo "Rerandomizing DB 2 part 2"
+$TARGET_DIR/release/rerandomize-db --party-id 2 --source-db-url postgres://postgres:postgres@localhost:6202 --dest-db-url postgres://postgres:postgres@localhost:6205 --source-schema-name SMPC_testing_2 --dest-schema-name SMPC_testing_2 --master-seed "asdfasdfasdfasdfasdfasdfasdfasdf" --range-min 5001
+
 
 echo "Checking Rerandomized DBs"
 $TARGET_DIR/release/randomize_check
