@@ -235,24 +235,29 @@ pub struct ReRandomizeDbConfig {
     #[clap(long, env = "PARTY_ID")]
     pub party_id: u8,
 
-    /// The DB connection URL to store reshared iris codes to
-    #[clap(long, env = "DB_URL")]
-    pub db_url: String,
+    /// The DB connection URL to load iris codes from
+    #[clap(long, env = "DB_URL_SOURCE")]
+    pub source_db_url: String,
 
-    /// The environment in which the reshare protocol is being run (mostly used
-    /// for the DB schema name)
-    #[clap(long, env = "ENVIRONMENT")]
-    pub environment: String,
+    /// The DB connection URL to store rerandomized iris codes to
+    #[clap(long, env = "DB_URL_DEST")]
+    pub dest_db_url: String,
+
+    #[clap(long, env = "SCHEMA_NAME_SOURCE")]
+    pub source_schema_name: String,
+
+    #[clap(long, env = "SCHEMA_NAME_DEST")]
+    pub dest_schema_name: String,
 
     #[clap(long, env = "MASTER_SEED")]
     pub master_seed: String,
 
-    #[clap(long, default_value = "3000")]
+    #[clap(long, default_value = "3000", env = "HEALTHCHECK_PORT")]
     pub healthcheck_port: usize,
 
-    #[clap(long, default_value = "8")]
+    #[clap(long, default_value = "8", env = "NUM_TASKS")]
     pub num_tasks: usize,
 
-    #[clap(long, default_value = "1000")]
+    #[clap(long, default_value = "1000", env = "CHUNK_SIZE")]
     pub chunk_size: usize,
 }

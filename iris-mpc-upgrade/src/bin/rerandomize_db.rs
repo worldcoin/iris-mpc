@@ -14,14 +14,12 @@ use iris_mpc_upgrade::{
 use tokio::task::JoinSet;
 use tracing::Level;
 
-const APP_NAME: &str = "SMPC";
-
 #[tokio::main]
 async fn main() -> Result<()> {
     install_tracing();
     let config = ReRandomizeDbConfig::parse();
 
-    if config.master_seed.len() <= 32 {
+    if config.master_seed.len() < 32 {
         eyre::bail!("Master seed must be at least 32 characters.");
     }
 
@@ -36,27 +34,36 @@ async fn main() -> Result<()> {
         config.healthcheck_port.clone()
     );
 
-    tracing::info!(
-        "Healthcheck server running on port {}.",
-        config.healthcheck_port
-    );
+    let postgres_client_read = PostgresClient::new(
+        &config.source_db_url,
+        &config.source_schema_name,
+        AccessMode::ReadOnly,
+    )
+    .await?;
+    let postgres_client_write = PostgresClient::new(
+        &config.dest_db_url,
+        &config.dest_schema_name,
+        AccessMode::ReadWrite,
+    )
+    .await?;
+    let read_store = Store::new(&postgres_client_read).await?;
+    let write_store = Store::new(&postgres_client_write).await?;
 
-    let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
-    let postgres_client =
-        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
-    let store = Store::new(&postgres_client).await?;
-
-    rerandomize_db(&store, config).await?;
+    rerandomize_db(&read_store, &write_store, config).await?;
 
     background_tasks.abort_and_wait_for_finish().await;
 
     Ok(())
 }
 
-async fn rerandomize_db(store: &Store, config: ReRandomizeDbConfig) -> Result<()> {
+async fn rerandomize_db(
+    read_store: &Store,
+    write_store: &Store,
+    config: ReRandomizeDbConfig,
+) -> Result<()> {
     tracing::info!("Rerandomizing database for party ID: {}", config.party_id);
 
-    let max_id = store.get_max_serial_id().await?;
+    let max_id = read_store.get_max_serial_id().await?;
 
     let chunk_len = max_id.div_ceil(config.num_tasks);
 
@@ -65,7 +72,8 @@ async fn rerandomize_db(store: &Store, config: ReRandomizeDbConfig) -> Result<()
     for i in 0..config.num_tasks {
         let start = 1 + i * chunk_len;
         let end = std::cmp::min(start + chunk_len, max_id + 1);
-        let store = store.clone();
+        let read_store = read_store.clone();
+        let write_store = write_store.clone();
         let party_id = config.party_id;
         let master_seed = config.master_seed.clone();
 
@@ -80,7 +88,7 @@ async fn rerandomize_db(store: &Store, config: ReRandomizeDbConfig) -> Result<()
                     party_id
                 );
                 let _span = span.enter();
-                let chunk: Result<Vec<DbStoredIris>, _> = store
+                let chunk: Result<Vec<DbStoredIris>, _> = read_store
                     .stream_irises_in_range(Range {
                         start: chunk_start as u64,
                         end: chunk_end as u64,
@@ -126,7 +134,7 @@ async fn rerandomize_db(store: &Store, config: ReRandomizeDbConfig) -> Result<()
                     )
                     .collect();
 
-                let mut tx = match store.tx().await {
+                let mut tx = match write_store.tx().await {
                     Ok(tx) => tx,
                     Err(e) => {
                         tracing::error!("Failed to start transaction: {e}");
@@ -134,7 +142,7 @@ async fn rerandomize_db(store: &Store, config: ReRandomizeDbConfig) -> Result<()
                     }
                 };
 
-                match store
+                match write_store
                     .insert_irises_overriding(&mut tx, &inserted_chunk)
                     .await
                 {

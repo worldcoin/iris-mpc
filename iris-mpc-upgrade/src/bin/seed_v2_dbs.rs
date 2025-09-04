@@ -51,13 +51,13 @@ async fn main() -> Result<()> {
     .await?;
     let party_2_pg_client = PostgresClient::new(
         &args.db_url_party2,
-        &args.schema_name_party1,
+        &args.schema_name_party2,
         AccessMode::ReadWrite,
     )
     .await?;
     let party_3_pg_client = PostgresClient::new(
         &args.db_url_party3,
-        &args.schema_name_party1,
+        &args.schema_name_party3,
         AccessMode::ReadWrite,
     )
     .await?;
