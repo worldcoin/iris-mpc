@@ -285,6 +285,8 @@ pub(crate) async fn cross_mul(
 }
 
 /// Conditionally selects the distance shares based on control bits.
+/// If the control bit is 1, it selects the first distance share (d1),
+/// otherwise it selects the second distance share (d2).
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn conditionally_select_distance(
@@ -402,17 +404,29 @@ thread_local! {
     ]);
 }
 
-/// Computes the dot product between the iris pairs; for both the code and the
-/// mask of the irises. We pack the dot products of the code and mask into one
-/// vector to be able to reshare it later.
+/// See pairwise_distance.
+/// This variant takes as input a Vec of Arc.
 pub fn galois_ring_pairwise_distance(
     pairs: Vec<Option<(ArcIris, ArcIris)>>,
 ) -> Vec<RingElement<u16>> {
-    let start = Instant::now();
+    pairwise_distance(pairs.iter().map(|opt| opt.as_ref().map(|(x, y)| (x, y))))
+}
 
+/// Computes the dot product between the iris pairs; for both the code and the
+/// mask of the irises. We pack the dot products of the code and mask into one
+/// vector to be able to reshare it later.
+/// This function takes an iterator of known size.
+pub fn pairwise_distance<'a, I>(pairs: I) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<(&'a ArcIris, &'a ArcIris)>> + ExactSizeIterator,
+{
+    let start = Instant::now();
+    let mut count = 0;
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
-    for pair in pairs.iter() {
+
+    for pair in pairs {
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
+            count += 1;
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
@@ -427,7 +441,7 @@ pub fn galois_ring_pairwise_distance(
         additive_shares.push(mask_dist);
     }
 
-    let batch_size = pairs.iter().filter(|x| x.is_some()).count() as f64;
+    let batch_size = count as f64;
     let duration = start.elapsed().as_secs_f64() / batch_size;
     PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
         metric_batch_size.record(batch_size);
