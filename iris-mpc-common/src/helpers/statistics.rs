@@ -237,30 +237,82 @@ impl BucketStatistics2D {
         }
     }
 
-    /// Fill bucket counts for the 2D histogram.
-    /// buckets_2d is expected in row-major order (left index major):
-    /// buckets_2d[left_idx * n_buckets_per_side + right_idx]
+    // Fill bucket counts for the 2D histogram.
+    // buckets_2d is expected in row-major order (left index major):
+    // buckets_2d[left_idx * n_buckets_per_side + right_idx]
+    // flattened, row-major, INCLUSIVE 2D cumulative sums
     pub fn fill_buckets(
         &mut self,
         buckets_2d: &[u32],
         match_threshold_ratio: f64,
         start_timestamp: Option<DateTime<Utc>>,
     ) {
-        tracing::info!("Filling 2D buckets: {} entries", buckets_2d.len());
-
+        tracing::info!("Filling 2D buckets : {} entries", buckets_2d.len());
         let now_timestamp = Utc::now();
-
         self.buckets.clear();
         self.end_time_utc_timestamp = Some(now_timestamp);
 
+        let n = self.n_buckets_per_side as usize;
+        let nn = n.saturating_mul(n);
+
+        if buckets_2d.len() != nn {
+            tracing::warn!(
+                "Expected {} cumulative entries ({}x{}), got {}. Missing cells treated as 0.",
+                nn,
+                n,
+                n,
+                buckets_2d.len()
+            );
+        }
+
         let step = match_threshold_ratio / (self.n_buckets_per_side as f64);
-        for (i, &count) in buckets_2d.iter().enumerate() {
-            let left_idx = i / self.n_buckets_per_side;
-            let right_idx = i % self.n_buckets_per_side;
-            let left_range = [step * (left_idx as f64), step * ((left_idx + 1) as f64)];
-            let right_range = [step * (right_idx as f64), step * ((right_idx + 1) as f64)];
+        self.buckets.reserve(nn);
+        for idx in 0..nn {
+            let i = idx / n; // row (left)
+            let j = idx % n; // col (right)
+
+            // C is the cumulative 2D bucket counts
+            // C[i][j]
+            let c_ij = *buckets_2d.get(idx).unwrap_or(&0) as i64;
+
+            // C[i-1][j]
+            let c_im1_j = if i > 0 {
+                *buckets_2d.get(idx - n).unwrap_or(&0) as i64
+            } else {
+                0
+            };
+
+            // C[i][j-1]
+            let c_i_jm1 = if j > 0 {
+                *buckets_2d.get(idx - 1).unwrap_or(&0) as i64
+            } else {
+                0
+            };
+
+            // C[i-1][j-1]
+            let c_im1_jm1 = if i > 0 && j > 0 {
+                *buckets_2d.get(idx - n - 1).unwrap_or(&0) as i64
+            } else {
+                0
+            };
+
+            // Inclusion–exclusion to recover the true cell count [i][j]
+            let mut cell = c_ij - c_im1_j - c_i_jm1 + c_im1_jm1;
+
+            if cell < 0 {
+                tracing::warn!(
+                    "Negative decumulated count at ({},{}) after inclusion–exclusion; clamping to 0 \
+                     (C[i,j]={}, C[i-1,j]={}, C[i,j-1]={}, C[i-1,j-1]={})",
+                    i, j, c_ij, c_im1_j, c_i_jm1, c_im1_jm1
+                );
+                cell = 0;
+            }
+
+            let left_range = [step * (i as f64), step * ((i + 1) as f64)];
+            let right_range = [step * (j as f64), step * ((j + 1) as f64)];
+
             self.buckets.push(Bucket2DResult {
-                count: count as usize,
+                count: cell as usize,
                 left_hamming_distance_bucket: left_range,
                 right_hamming_distance_bucket: right_range,
             });
