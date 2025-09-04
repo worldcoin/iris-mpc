@@ -73,17 +73,13 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     // Collect and sort keys
-    let mut serial_ids: Vec<_> = vector.storage.points.keys().cloned().collect();
-    serial_ids.sort();
+    let serial_ids: Vec<_> = vector.storage.get_sorted_serial_ids();
     // to keep all old ndjson files backwards compatible, we write the iris codes only
     for serial_id in serial_ids {
         let pt = vector
             .storage
-            .points
-            .get(&serial_id)
-            .expect("Key not found")
-            .1
-            .clone();
+            .get_vector_by_serial_id(serial_id)
+            .expect("key not found in store");
         let json_pt: Base64IrisCode = (&*pt).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object

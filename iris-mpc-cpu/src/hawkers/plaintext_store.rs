@@ -89,12 +89,15 @@ impl PlaintextStore {
         }
 
         // sort in order to ensure deterministic behavior
-        let mut serial_ids: Vec<_> = self.storage.points.keys().cloned().collect();
-        serial_ids.sort();
+        let mut serial_ids: Vec<_> = self.storage.get_sorted_serial_ids();
         serial_ids.truncate(graph_size);
 
         for serial_id in serial_ids {
-            let query = self.storage.points[&serial_id].1.clone();
+            let query = self
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher

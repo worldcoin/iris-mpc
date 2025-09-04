@@ -16,7 +16,14 @@ impl PyPlaintextStore {
     }
 
     pub fn get(&self, id: u32) -> PyIrisCode {
-        (*self.0.storage.points[&id].1).clone().into()
+        (self
+            .0
+            .storage
+            .get_vector_by_serial_id(id)
+            .unwrap()
+            .as_ref()
+            .clone())
+        .into()
     }
 
     pub fn eval_distance_to_id(&self, lhs: PyIrisCode, rhs: u32) -> (u16, u16) {
