@@ -69,7 +69,7 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: arm64
+  kubernetes.io/arch: amd64
   karpenter.sh/capacity-type: on-demand
   node.kubernetes.io/instance-type: "x2iedn.32xlarge"
 
