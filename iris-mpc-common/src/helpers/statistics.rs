@@ -252,7 +252,7 @@ impl BucketStatistics2D {
         self.buckets.clear();
         self.end_time_utc_timestamp = Some(now_timestamp);
 
-        let n = self.n_buckets_per_side as usize;
+        let n = self.n_buckets_per_side;
         let nn = n.saturating_mul(n);
 
         if buckets_2d.len() != nn {
