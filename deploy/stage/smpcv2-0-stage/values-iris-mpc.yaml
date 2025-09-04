@@ -75,7 +75,7 @@ env:
     value: "wf-smpcv2-stage-sns-buffer"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-stage--eun1-az3--x-s3"
@@ -104,13 +104,16 @@ env:
   - name: SMPC__MATCH_DISTANCES_BUFFER_SIZE
     value: "64"
 
-  - name: SMPC__N_BUCKETS
-    value: "10"
+  - name: SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE
+    value: "64"
 
   - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
     value: "true"
 
   - name: SMPC__ENABLE_SENDING_MIRROR_ANONYMIZED_STATS_MESSAGE
+    value: "true"
+
+  - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_2D_MESSAGE
     value: "true"
 
   - name: SMPC__ENABLE_REAUTH

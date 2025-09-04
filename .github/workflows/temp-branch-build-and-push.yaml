@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "leonidasnanos-pop-2659-2d-hd-and-implementation-of-the-required-wiring"
+      - "leonidas/test-2D-correctness"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
