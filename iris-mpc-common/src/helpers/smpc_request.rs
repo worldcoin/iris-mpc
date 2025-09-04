@@ -103,6 +103,7 @@ where
 
 pub const IDENTITY_DELETION_MESSAGE_TYPE: &str = "identity_deletion";
 pub const ANONYMIZED_STATISTICS_MESSAGE_TYPE: &str = "anonymized_statistics";
+pub const ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE: &str = "anonymized_statistics_2d";
 pub const CIRCUIT_BREAKER_MESSAGE_TYPE: &str = "circuit_breaker";
 pub const UNIQUENESS_MESSAGE_TYPE: &str = "uniqueness";
 pub const REAUTH_MESSAGE_TYPE: &str = "reauth";
