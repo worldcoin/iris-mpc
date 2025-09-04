@@ -752,9 +752,12 @@ where
         // We anticipate concatenations to allocate vecs with the correct capacity
         // and minimize cloning/collecting
 
-        let mut even_p_with_even_g = Vec::with_capacity(temp_p.len() / 2 + temp_g.len() / 2 + 1);
+        // To assess correctness of these sizes, note that the encompassing while loop
+        // maintains the invariant `temp_g.len() - 1 = temp_p.len()`
+
+        let mut even_p_with_even_g = Vec::with_capacity(temp_g.len() - 1);
         let mut odd_p_temp = Vec::with_capacity(temp_p.len() / 2 + 1);
-        let mut odd_g = Vec::with_capacity(temp_g.len() / 2 + 1);
+        let mut odd_g = Vec::with_capacity(temp_g.len() / 2);
 
         for (i, p) in temp_p.into_iter().enumerate() {
             if i % 2 == 1 {
