@@ -47,5 +47,5 @@ services:
       - "127.0.0.1:4566:4566"
       - "127.0.0.1:4571:4571"
     environment:
-      - SERVICES=kms
+      - SERVICES=secretsmanager,s3
       - DEFAULT_REGION=us-east-1

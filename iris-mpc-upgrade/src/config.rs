@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Display, Formatter},
@@ -231,6 +231,19 @@ pub struct ReShareServerConfig {
 
 #[derive(Parser)]
 pub struct ReRandomizeDbConfig {
+    #[clap(subcommand)]
+    pub command: ReRandomizeDbSubCommand,
+}
+
+#[derive(Subcommand)]
+pub enum ReRandomizeDbSubCommand {
+    KeyGen(KeyGenConfig),
+    RerandomizeDb(ReRandomizeConfig),
+    KeyCleanup(KeyCleanupConfig),
+}
+
+#[derive(Args)]
+pub struct ReRandomizeConfig {
     /// The 0-indexed party ID of the server party
     #[clap(long, env = "PARTY_ID")]
     pub party_id: u8,
@@ -238,6 +251,18 @@ pub struct ReRandomizeDbConfig {
     /// The DB connection URL to load iris codes from
     #[clap(long, env = "DB_URL_SOURCE")]
     pub source_db_url: String,
+
+    /// The environment in which the rerandomization protocol is being run (used to determine secrets to load from SM)
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
+
+    /// The name of the S3 bucket where the tripartite ECDH public keys are stored
+    #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
+    pub public_key_bucket_name: String,
+
+    /// The region of the S3 bucket where the tripartite ECDH public keys are stored
+    #[clap(long, env = "PUBLIC_KEY_BUCKET_REGION")]
+    pub public_key_bucket_region: String,
 
     /// The DB connection URL to store rerandomized iris codes to
     #[clap(long, env = "DB_URL_DEST")]
@@ -248,9 +273,6 @@ pub struct ReRandomizeDbConfig {
 
     #[clap(long, env = "SCHEMA_NAME_DEST")]
     pub dest_schema_name: String,
-
-    #[clap(long, env = "MASTER_SEED")]
-    pub master_seed: String,
 
     #[clap(long, default_value = "3000", env = "HEALTHCHECK_PORT")]
     pub healthcheck_port: usize,
@@ -266,4 +288,26 @@ pub struct ReRandomizeDbConfig {
 
     #[clap(long, default_value = "9223372036854775807", env = "RANGE_MAX")]
     pub range_max_inclusive: usize,
+}
+
+#[derive(Args)]
+pub struct KeyGenConfig {
+    /// The 0-indexed party ID of the server party
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
+
+    #[clap(long, env = "PUBLIC_KEY_BUCKET_NAME")]
+    pub public_key_bucket_name: String,
+}
+#[derive(Args)]
+pub struct KeyCleanupConfig {
+    /// The 0-indexed party ID of the server party
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+
+    #[clap(long, env = "ENVIRONMENT")]
+    pub env: String,
 }
