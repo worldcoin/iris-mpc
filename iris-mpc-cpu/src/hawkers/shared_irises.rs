@@ -110,8 +110,12 @@ impl<I: Clone> SharedIrises<I> {
     }
 
     pub fn get_vector(&self, vector: &VectorId) -> Option<I> {
+        self.borrow_vector(vector).cloned()
+    }
+
+    pub fn borrow_vector(&self, vector: &VectorId) -> Option<&I> {
         match self.points.get(&vector.serial_id()) {
-            Some((version, iris)) if vector.version_matches(*version) => Some(iris.clone()),
+            Some((version, iris)) if vector.version_matches(*version) => Some(iris),
             _ => None,
         }
     }
