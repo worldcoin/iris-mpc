@@ -166,6 +166,9 @@ env:
   - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
+  - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
+    value: "2DAnonStatsTest"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"
