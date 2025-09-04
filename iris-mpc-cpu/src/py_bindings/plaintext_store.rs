@@ -80,7 +80,7 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
             .storage
             .get_vector_by_serial_id(serial_id)
             .expect("key not found in store");
-        let json_pt: Base64IrisCode = (&*pt).into();
+        let json_pt: Base64IrisCode = (&**pt).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }

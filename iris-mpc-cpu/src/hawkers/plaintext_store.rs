@@ -131,7 +131,7 @@ impl VectorStore for PlaintextStore {
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         vectors
             .iter()
-            .map(|id| self.storage.get_vector(id).unwrap())
+            .map(|id| self.storage.get_vector(id).unwrap().clone())
             .collect()
     }
 
@@ -144,7 +144,7 @@ impl VectorStore for PlaintextStore {
         let serial_id = vector.serial_id();
         let vector_code = self
             .storage
-            .borrow_vector(vector)
+            .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
@@ -230,7 +230,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.storage.read().await;
         vectors
             .iter()
-            .map(|id| store.get_vector(id).unwrap())
+            .map(|id| store.get_vector(id).unwrap().clone())
             .collect()
     }
 
@@ -243,7 +243,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.storage.read().await;
         let serial_id = vector.serial_id();
         let vector_code = store
-            .borrow_vector(vector)
+            .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
@@ -373,7 +373,7 @@ mod tests {
         for i in 0..database_size {
             let serial_id = i as u32 + 1;
             let vector_id = VectorId::from_serial_id(serial_id);
-            let query = ptxt_vector.storage.get_vector(&vector_id).unwrap();
+            let query = ptxt_vector.storage.get_vector(&vector_id).unwrap().clone();
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;

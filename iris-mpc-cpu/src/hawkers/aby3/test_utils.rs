@@ -50,7 +50,8 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
             .expect("Key not found in plain store");
 
         let vector_id = VectorId::from_serial_id(serial_id);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
+        let all_shares =
+            GaloisRingSharedIris::generate_shares_locally(rng, (**iris).as_ref().clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }

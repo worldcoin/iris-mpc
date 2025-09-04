@@ -116,27 +116,20 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
-    pub fn get_vector_or_empty(&self, vector: &VectorId) -> I {
-        self.get_vector(vector).unwrap_or(self.empty_iris.clone())
+    pub fn get_vector_or_empty(&self, vector: &VectorId) -> &I {
+        self.get_vector(vector).unwrap_or(&self.empty_iris)
     }
 
-    pub fn get_vector_by_serial_id(&self, serial_id: SerialId) -> Option<I> {
+    pub fn get_vector_by_serial_id(&self, serial_id: SerialId) -> Option<&I> {
         match &self.points.get(serial_id as usize) {
-            Some(Some((_, iris))) => Some(iris.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn get_vector(&self, vector: &VectorId) -> Option<I> {
-        match &self.points.get(vector.serial_id() as usize) {
-            Some(Some((version, iris))) if vector.version_matches(*version) => Some(iris.clone()),
-            _ => None,
-        }
-    }
-
-    pub fn borrow_vector(&self, vector: &VectorId) -> Option<&I> {
-        match &self.points.get(vector.serial_id() as usize) {
             Some(Some((_, iris))) => Some(iris),
+            _ => None,
+        }
+    }
+
+    pub fn get_vector(&self, vector: &VectorId) -> Option<&I> {
+        match &self.points.get(vector.serial_id() as usize) {
+            Some(Some((version, iris))) if vector.version_matches(*version) => Some(iris),
             _ => None,
         }
     }
@@ -217,11 +210,11 @@ impl<I: Clone> SharedIrisesRef<I> {
     }
 
     pub async fn get_vector_or_empty(&self, vector: &VectorId) -> I {
-        self.data.read().await.get_vector_or_empty(vector)
+        self.data.read().await.get_vector_or_empty(vector).clone()
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> Option<I> {
-        self.data.read().await.get_vector(vector)
+        self.data.read().await.get_vector(vector).cloned()
     }
 
     pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
@@ -243,7 +236,7 @@ impl<I: Clone> SharedIrisesRef<I> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
-            .map(|v| body.get_vector(v))
+            .map(|v| body.get_vector(v).cloned())
             .collect_vec()
     }
 
@@ -254,7 +247,7 @@ impl<I: Clone> SharedIrisesRef<I> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
-            .map(|v| body.get_vector_or_empty(v))
+            .map(|v| body.get_vector_or_empty(v).clone())
             .collect_vec()
     }
 
