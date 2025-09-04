@@ -7,7 +7,6 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
-use iris_mpc_common::fast_metrics::FastHistogram;
 use tokio::{sync::mpsc::UnboundedSender, time::timeout};
 
 #[derive(Debug)]
@@ -16,7 +15,6 @@ pub struct TcpSession {
     tx: HashMap<Identity, UnboundedSender<OutboundMsg>>,
     rx: HashMap<Identity, InStream>,
     config: TcpConfig,
-    metric: FastHistogram,
 }
 
 impl TcpSession {
@@ -31,7 +29,6 @@ impl TcpSession {
             tx,
             rx,
             config,
-            metric: FastHistogram::new("tcp_session_bytes"),
         }
     }
 
@@ -43,8 +40,6 @@ impl TcpSession {
 #[async_trait]
 impl Networking for TcpSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
-        self.metric.record(value.byte_len() as f64);
-
         let outgoing_stream = self.tx.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
