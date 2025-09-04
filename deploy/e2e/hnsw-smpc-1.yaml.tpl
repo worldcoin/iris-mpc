@@ -1,6 +1,6 @@
 hnsw-smpc-1:
   fullnameOverride: "hnsw-smpc-1"
-  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -85,8 +85,8 @@ hnsw-smpc-1:
       - "172.20.0.10"
     searches:
       - "localstack"
-      - "mongodb.e2e.svc.cluster.local"
-      - "e2e.svc.cluster.local"
+      - "mongodb.$ENV.svc.cluster.local"
+      - "$ENV.svc.cluster.local"
       - "svc.cluster.local"
       - "cluster.local"
 
@@ -248,7 +248,7 @@ hnsw-smpc-1:
       value: "hnsw-0"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"

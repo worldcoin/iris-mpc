@@ -70,8 +70,8 @@ iris-mpc-0:
       - "172.20.0.10"
     searches:
       - "localstack"
-      - "mongodb.e2e.svc.cluster.local"
-      - "e2e.svc.cluster.local"
+      - "mongodb.$ENV.svc.cluster.local"
+      - "$ENV.svc.cluster.local"
       - "svc.cluster.local"
       - "cluster.local"
 
@@ -186,6 +186,9 @@ iris-mpc-0:
 
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
+
+    - name: SMPC__SNS_BUFFER_BUCKET_NAME
+      value: "wf-smpcv2-stage-sns-buffer"
 
     - name: SMPC__CLEAR_DB_BEFORE_INIT
       value: "true"

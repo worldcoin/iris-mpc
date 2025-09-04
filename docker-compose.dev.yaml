@@ -1,6 +1,6 @@
 services:
   dev_db:
-    image: postgres
+    image: public.ecr.aws/docker/library/postgres
     ports:
       - "5432:5432"
     user: "postgres"
@@ -17,7 +17,7 @@ services:
       start_period: 40s
 
   localstack:
-    image: localstack/localstack
+    image: public.ecr.aws/localstack/localstack
     depends_on:
       dev_db:
         condition: service_healthy

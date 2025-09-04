@@ -200,6 +200,10 @@ __device__ void lifted_sub(U32 *mask, U32 *code, U32 *output, U32 a) {
   *output = *mask * a - *code;
 }
 
+__device__ void prelifted_sub_ab(U32 *mask, U32 *code, U32 *output, U32 a) {
+  *output = *mask * a - (*code << B_BITS);
+}
+
 __device__ void split_inner(U64 *x1_a, U64 *x1_b, U64 *x2_a, U64 *x2_b,
                             U64 *x3_a, U64 *x3_b, int id) {
   U64 tmp_a = *x1_a;
@@ -446,6 +450,20 @@ shared_finalize_lift(U32 *mask_a, U32 *mask_b, U32 *code_lift_a,
   }
 }
 
+// Corrects lifted values by subtracting the correction values
+extern "C" __global__ void shared_finalize_lift_u16_u32(U32 *share_a,
+                                                        U32 *share_b,
+                                                        U32 *corr_a,
+                                                        U32 *corr_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    share_a[i] -= (U32)(corr_a[i]) << 16;
+    share_a[i] -= (U32)(corr_a[i + n]) << 17;
+    share_b[i] -= (U32)(corr_b[i]) << 16;
+    share_b[i] -= (U32)(corr_b[i + n]) << 17;
+  }
+}
+
 // Puts the results into output_a and output_b
 extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
                                              U32 *code_a, U32 *code_b,
@@ -455,6 +473,29 @@ extern "C" __global__ void shared_lifted_sub(U32 *mask_a, U32 *mask_b,
   if (i < n) {
     lifted_sub(&mask_a[i], &code_a[i], &output_a[i], a);
     lifted_sub(&mask_b[i], &code_b[i], &output_b[i], a);
+    switch (id) {
+    case 0:
+      output_a[i] -= 1; // Transforms the <= into <
+      break;
+    case 1:
+      output_b[i] -= 1; // Transforms the <= into <
+      break;
+    default:
+      break;
+    }
+  }
+}
+
+// Puts the results into output_a and output_b, in contrast to lifted_sub,
+// this also adds the b factor to code
+extern "C" __global__ void shared_prelifted_sub_ab(U32 *mask_a, U32 *mask_b,
+                                                   U32 *code_a, U32 *code_b,
+                                                   U32 *output_a, U32 *output_b,
+                                                   U32 a, int id, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    prelifted_sub_ab(&mask_a[i], &code_a[i], &output_a[i], a);
+    prelifted_sub_ab(&mask_b[i], &code_b[i], &output_b[i], a);
     switch (id) {
     case 0:
       output_a[i] -= 1; // Transforms the <= into <
@@ -597,5 +638,61 @@ extern "C" __global__ void mask_bitvec(U64 *inout_a, U64 *inout_b, U64 *mask,
   if (i < n) {
     inout_a[i] = inout_a[i] & mask[i];
     inout_b[i] = inout_b[i] & mask[i];
+  }
+}
+
+// Calculates the pre-networking step for a conditional select operation.
+// Conditional multiplexing:
+// If control bit is 1, select d1, else select d2.
+// res = c * d1 + (1 - c) * d2 = d2 + c * (d1 - d2);
+// We need to do it for both code_dot and mask_dot.
+// we start with the mult of c and d1-d2
+extern "C" __global__ void
+conditional_select_pre(U32 *cond_a, U32 *cond_b, U32 *inout_code_a,
+                       U32 *inout_code_b, U32 *inout_mask_a, U32 *inout_mask_b,
+                       U32 *code_2_a, U32 *code_2_b, U32 *mask_2_a,
+                       U32 *mask_2_b, U32 *rand, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    U32 code_a = inout_code_a[i] - code_2_a[i];
+    U32 code_b = inout_code_b[i] - code_2_b[i];
+    U32 mask_a = inout_mask_a[i] - mask_2_a[i];
+    U32 mask_b = inout_mask_b[i] - mask_2_b[i];
+    inout_code_a[i] = cond_a[i] * code_a + cond_b[i] * code_a +
+                      cond_a[i] * code_b + rand[2 * i] - rand[2 * n + 2 * i];
+    inout_mask_a[i] = cond_a[i] * mask_a + cond_b[i] * mask_a +
+                      cond_a[i] * mask_b + rand[2 * i + 1] -
+                      rand[2 * n + 2 * i + 1];
+  }
+}
+
+// finally compute the result by adding the d2 shares
+extern "C" __global__ void
+conditional_select_post(U32 *inout_code_a, U32 *inout_code_b, U32 *inout_mask_a,
+                        U32 *inout_mask_b, U32 *code_2_a, U32 *code_2_b,
+                        U32 *mask_2_a, U32 *mask_2_b, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    inout_code_a[i] += code_2_a[i];
+    inout_code_b[i] += code_2_b[i];
+    inout_mask_a[i] += mask_2_a[i];
+    inout_mask_b[i] += mask_2_b[i];
+  }
+}
+
+// implements the local part of the cross multiplication of two distance
+// shares, see cross_mul in the CPU code
+extern "C" __global__ void cross_mul_pre(U32 *out_a, U32 *code_a, U32 *code_b,
+                                         U32 *mask_a, U32 *mask_b,
+                                         U32 *code_2_a, U32 *code_2_b,
+                                         U32 *mask_2_a, U32 *mask_2_b,
+                                         U32 *rand, size_t n) {
+  size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    U32 code2_mask1 = code_2_a[i] * mask_a[i] + code_2_b[i] * mask_a[i] +
+                      code_2_a[i] * mask_b[i];
+    U32 code1_mask2 = code_a[i] * mask_2_a[i] + code_b[i] * mask_2_a[i] +
+                      code_a[i] * mask_2_b[i];
+    out_a[i] = rand[i] - rand[n + i] + code2_mask1 - code1_mask2;
   }
 }
