@@ -1,6 +1,6 @@
 hnsw-smpc-2:
   fullnameOverride: "hnsw-smpc-2"
-  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -248,7 +248,7 @@ hnsw-smpc-2:
       value: "hnsw-2"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"

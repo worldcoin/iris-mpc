@@ -393,8 +393,7 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
                     }
                 }
                 Err(TryRecvError::Empty) => {
-                    let elapsed = loop_start_time.elapsed();
-                    if elapsed >= Duration::from_micros(FLUSH_INTERVAL_US) {
+                    if loop_start_time.elapsed() >= Duration::from_micros(FLUSH_INTERVAL_US) {
                         break;
                     }
                     tokio::task::yield_now().await;
