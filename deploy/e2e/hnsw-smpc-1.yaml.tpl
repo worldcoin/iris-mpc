@@ -1,6 +1,6 @@
 hnsw-smpc-1:
   fullnameOverride: "hnsw-smpc-1"
-  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -137,6 +137,9 @@ hnsw-smpc-1:
           key: DATABASE_AURORA_HNSW_URL
           name: application
 
+    - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+      value: "_hnsw"
+
     - name: SMPC__MAX_DB_SIZE
       value: "100000"
 
@@ -248,7 +251,7 @@ hnsw-smpc-1:
       value: "hnsw-0"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"
