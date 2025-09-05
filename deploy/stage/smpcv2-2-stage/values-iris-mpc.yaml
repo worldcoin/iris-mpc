@@ -167,7 +167,7 @@ env:
     value: "true"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "2DAnonStatsTest"
+    value: "2DAnonStatsTestWithDecumulationFix"
 
 initContainer:
   enabled: true
