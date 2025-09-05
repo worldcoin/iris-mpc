@@ -133,6 +133,9 @@ hnsw-smpc-0:
           key: DATABASE_AURORA_HNSW_URL
           name: application
 
+    - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+      value: "_hnsw"
+
     - name: SMPC__MAX_DB_SIZE
       value: "100000"
 
