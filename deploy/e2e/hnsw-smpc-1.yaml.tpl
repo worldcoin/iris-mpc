@@ -171,7 +171,7 @@ hnsw-smpc-1:
       value: "16"
 
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-      value: "false"
+      value: "true"
 
     - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
       value: "false"
@@ -186,10 +186,10 @@ hnsw-smpc-1:
       value: "true"
 
     - name: SMPC__LUC_LOOKBACK_RECORDS
-      value: "5"
+      value: "0"
 
     - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
-      value: "false"
+      value: "true"
 
     - name: SMPC__AWS__REGION
       value: "$AWS_REGION"
