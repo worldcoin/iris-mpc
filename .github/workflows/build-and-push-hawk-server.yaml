@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - chore/fix-cpu-pipeline
   release:
     types:
       - 'published'
@@ -48,6 +47,7 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:latest
+            ${{ github.event.release.tag_name && format('{0}/worldcoin/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           build-args: |
             ARCHITECTURE=x86_64
