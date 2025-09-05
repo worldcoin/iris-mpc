@@ -1,7 +1,7 @@
 mod tests {
     use chrono::{TimeZone, Utc};
     use iris_mpc_common::{
-        helpers::statistics::{BucketResult, BucketStatistics},
+        helpers::statistics::{Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D},
         job::Eye,
     };
     use serde_json::{json, Value};
@@ -186,5 +186,68 @@ mod tests {
             roundtrip_stats.is_mirror_orientation,
             original_stats.is_mirror_orientation
         );
+    }
+
+    #[test]
+    fn test_2d_fill_buckets_decumulate_and_ranges() {
+        // n = 3 thresholds per side, match_threshold_ratio = 1.0 → step = 1/3
+        let n = 3usize;
+        let step = 1.0 / n as f64; // 0.333...
+
+        // Cumulative matrix B (row-major):
+        // [ [1,1,2],
+        //   [1,2,4],
+        //   [2,3,7] ]
+        let buckets_2d_cumulative = vec![1, 1, 2, 1, 2, 4, 2, 3, 7];
+
+        let mut stats = BucketStatistics2D::new(128, n, 42);
+        stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
+
+        // Expected per-cell histogram H (row-major, skipping zeros in output order):
+        // H = [ [1,0,1],
+        //       [0,1,1],
+        //       [1,0,2] ]
+        // Pushed in row-major skipping zeros → counts: [1,1,1,1,1,2]
+        let expected = vec![
+            Bucket2DResult {
+                // (i,j) = (0,0)
+                count: 1,
+                left_hamming_distance_bucket: [0.0 * step, 1.0 * step],
+                right_hamming_distance_bucket: [0.0 * step, 1.0 * step],
+            },
+            Bucket2DResult {
+                // (0,2)
+                count: 1,
+                left_hamming_distance_bucket: [0.0 * step, 1.0 * step],
+                right_hamming_distance_bucket: [2.0 * step, 3.0 * step],
+            },
+            Bucket2DResult {
+                // (1,1)
+                count: 1,
+                left_hamming_distance_bucket: [1.0 * step, 2.0 * step],
+                right_hamming_distance_bucket: [1.0 * step, 2.0 * step],
+            },
+            Bucket2DResult {
+                // (1,2)
+                count: 1,
+                left_hamming_distance_bucket: [1.0 * step, 2.0 * step],
+                right_hamming_distance_bucket: [2.0 * step, 3.0 * step],
+            },
+            Bucket2DResult {
+                // (2,0)
+                count: 1,
+                left_hamming_distance_bucket: [2.0 * step, 3.0 * step],
+                right_hamming_distance_bucket: [0.0 * step, 1.0 * step],
+            },
+            Bucket2DResult {
+                // (2,2)
+                count: 2,
+                left_hamming_distance_bucket: [2.0 * step, 3.0 * step],
+                right_hamming_distance_bucket: [2.0 * step, 3.0 * step],
+            },
+        ];
+
+        assert_eq!(stats.buckets.len(), expected.len());
+        assert_eq!(stats.buckets, expected);
     }
 }
