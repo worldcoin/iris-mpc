@@ -131,6 +131,9 @@ struct Args {
     #[clap(long, default_value = "0")]
     hnsw_prf_key: u64,
 
+    #[clap(long, default_value = "1")]
+    batch_size: usize,
+
     /// Shares seed for iris shares insertion, used to generate secret
     /// shares of iris codes.
     /// The default is 42 to match the default in `shares_encoding.rs`.
@@ -365,7 +368,7 @@ async fn main() -> Result<()> {
 
         jobs.spawn(async move {
             let mut counter = 0usize;
-            let batch_size = 5;
+            let batch_size = args.batch_size;
             let mut batch = Vec::with_capacity(batch_size);
             let searcher_ = searcher.clone();
             let prf = move |vector_id: IrisVectorId| {
