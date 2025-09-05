@@ -253,8 +253,7 @@ impl BucketStatistics2D {
         self.end_time_utc_timestamp = Some(now_timestamp);
 
         let n = self.n_buckets_per_side;
-        let nn = n.saturating_mul(n);
-
+        let nn = n * n; // safe from overflow, worst case its 375*375=140625
         if buckets_2d.len() != nn {
             tracing::warn!(
                 "Expected {} cumulative entries ({}x{}), got {}. Missing cells treated as 0.",
@@ -311,11 +310,16 @@ impl BucketStatistics2D {
             let left_range = [step * (i as f64), step * ((i + 1) as f64)];
             let right_range = [step * (j as f64), step * ((j + 1) as f64)];
 
-            self.buckets.push(Bucket2DResult {
-                count: cell as usize,
-                left_hamming_distance_bucket: left_range,
-                right_hamming_distance_bucket: right_range,
-            });
+            // Only add the bucket if the count is greater than 0
+            // This is because our end goal is to create a 2D histogram, and buckets with 0 count are not meaningful.
+            // By avoiding them, we can dramatically reduce the size of the resulting message.
+            if cell > 0 {
+                self.buckets.push(Bucket2DResult {
+                    count: cell as usize,
+                    left_hamming_distance_bucket: left_range,
+                    right_hamming_distance_bucket: right_range,
+                });
+            }
         }
 
         if let Some(start_timestamp) = start_timestamp {
