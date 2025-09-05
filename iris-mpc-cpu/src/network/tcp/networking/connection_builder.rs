@@ -13,7 +13,6 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     marker::PhantomData,
-    net::SocketAddr,
     time::Duration,
 };
 use tokio::{
@@ -54,7 +53,7 @@ impl<T: NetworkConnection> Clone for Reconnector<T> {
 enum Cmd<T> {
     Connect {
         peer: Identity,
-        addr: SocketAddr,
+        url: String,
         stream_id: StreamId,
         rsp: oneshot::Sender<Result<()>>,
     },
@@ -99,16 +98,17 @@ where
     }
 
     // returns when the command is queued. will not block for long.
-    pub async fn include_peer(&self, peer: Identity, addr: SocketAddr) -> Result<()> {
+    pub async fn include_peer(&self, peer: Identity, url: String) -> Result<()> {
         if peer == self.id {
             return Err(eyre!("cannot connect to self"));
         }
         for idx in 0..self.tcp_config.num_connections {
+            let url = url.clone();
             let stream_id = StreamId::from(idx as u32);
             let (tx, rx) = oneshot::channel();
             self.cmd_tx.send(Cmd::Connect {
                 peer: peer.clone(),
-                addr,
+                url,
                 stream_id,
                 rsp: tx,
             })?;
@@ -159,7 +159,7 @@ struct Worker<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>
     ct: CancellationToken,
 
     // used to reconnect
-    peer_addrs: HashMap<Identity, SocketAddr>,
+    peer_addrs: HashMap<Identity, String>,
     connector: C,
 
     // used for both the initial connection setup and reconnection
@@ -305,11 +305,11 @@ where
         match cmd {
             Cmd::Connect {
                 peer,
-                addr,
+                url,
                 stream_id,
                 rsp,
             } => {
-                self.peer_addrs.insert(peer.clone(), addr);
+                self.peer_addrs.insert(peer.clone(), url.clone());
                 if !self
                     .requested_connections
                     .entry(peer.clone())
@@ -323,7 +323,7 @@ where
                     return;
                 }
                 if self.id > peer {
-                    self.initiate_connection(peer, addr, stream_id);
+                    self.initiate_connection(peer, url, stream_id);
                 }
                 rsp.send(Ok(())).unwrap();
             }
@@ -341,14 +341,12 @@ where
                     .insert(stream_id, rsp);
                 if self.id > peer {
                     match self.peer_addrs.get(&peer) {
-                        Some(addr) => {
-                            self.initiate_connection(peer.clone(), *addr, stream_id);
+                        Some(url) => {
+                            let url = url.clone();
+                            self.initiate_connection(peer.clone(), url, stream_id);
                         }
                         None => {
-                            tracing::error!(
-                                "reconnect for {:?} requested but addr not found",
-                                peer
-                            );
+                            tracing::error!("reconnect for {:?} requested but URL not found", peer);
                         }
                     }
                 }
@@ -458,7 +456,7 @@ where
         true
     }
 
-    fn initiate_connection(&mut self, peer: Identity, addr: SocketAddr, stream_id: StreamId) {
+    fn initiate_connection(&mut self, peer: Identity, url: String, stream_id: StreamId) {
         let own_id = self.id.clone();
         let pending_tx = self.pending_tx.clone();
         let ct = self.ct.clone();
@@ -480,7 +478,7 @@ where
             sleep(Duration::from_millis(delay_ms)).await;
             loop {
                 let r = tokio::select! {
-                    res = connector.connect(addr) => res,
+                    res = connector.connect(url.clone()) => res,
                     _ = ct.cancelled() => {
                         return;
                     }
@@ -499,7 +497,7 @@ where
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(%e, "dial {:?} failed, retrying", addr);
+                        tracing::warn!(%e, "dial {:?} failed, retrying", url.clone());
                     }
                 };
                 sleep(Duration::from_secs(retry_sec)).await;

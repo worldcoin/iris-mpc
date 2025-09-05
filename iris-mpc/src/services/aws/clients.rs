@@ -27,10 +27,10 @@ impl AwsClients {
 
         let region_provider = Region::new(region);
         let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let sns_client = SNSClient::new(&shared_config);
 
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
 
+        let sns_client = SNSClient::new(&shared_config);
         let sqs_client = create_sqs_client(&shared_config, config.sqs_long_poll_wait_time);
         let s3_client = create_s3_client(&shared_config, force_path_style);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
