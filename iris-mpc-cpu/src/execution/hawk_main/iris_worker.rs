@@ -135,7 +135,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 
                 let iris_pairs = pairs
                     .iter()
-                    .map(|(q, vid)| store.borrow_vector(vid).map(|iris| (q, iris)));
+                    .map(|(q, vid)| store.get_vector(vid).map(|iris| (q, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -150,7 +150,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 
                 let iris_pairs = vector_ids
                     .iter()
-                    .map(|v| store.borrow_vector(v).map(|iris| (&query, iris)));
+                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
