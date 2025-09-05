@@ -4,6 +4,7 @@ use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::Itertools;
 use tokio::task::JoinSet;
+use tracing::{span, trace_span, Level};
 
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},

@@ -858,7 +858,7 @@ impl HnswSearcher {
     /// If no entry point is initialized for the index, then the insertion will
     /// set `query` as the index entry point.
     #[instrument(
-        level = "trace",
+        level = "info",
         target = "searcher::cpu_time",
         skip(self, store, graph, query)
     )]
@@ -913,6 +913,12 @@ impl HnswSearcher {
     /// updated neighborhoods are done in batches.
     ///
     /// This function call does *not* update `graph`.
+    ///    
+    #[instrument(
+        level = "info",
+        target = "searcher::cpu_time",
+        skip(self, store, graph, inserted_vector, links)
+    )]
     pub async fn insert_prepare<V: VectorStore>(
         &self,
         store: &mut V,

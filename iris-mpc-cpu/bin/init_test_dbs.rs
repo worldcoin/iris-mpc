@@ -16,11 +16,16 @@ use iris_mpc_cpu::{
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
-use tracing_subscriber::fmt;
+use tracing_subscriber::{
+    filter::FilterFn,
+    fmt::{self, format::FmtSpan},
+    layer::SubscriberExt,
+    EnvFilter, Registry,
+};
 
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
-use tracing::{info, warn};
+use tracing::{info, warn, Level};
 
 use eyre::Result;
 
@@ -192,14 +197,20 @@ pub struct IrisCodeWithSerialId {
 #[tokio::main]
 async fn main() -> Result<()> {
     let log_file = File::create("app.log").expect("Failed to create log file");
+    let span_filter =
+        FilterFn::new(|metadata| metadata.is_span() && metadata.level() <= &Level::INFO);
 
-    // 2. Build a simple subscriber.
-    // We'll use the `fmt` subscriber which formats events for display.
-    tracing_subscriber::fmt()
-        .with_writer(log_file) // Direct output to the file.
-        .with_ansi(true) // Disable ANSI color codes for plain text logs.
-        .init();
-    info!("Initialized tracing subscriber");
+    let formatting_layer = tracing_subscriber::registry()
+        .with(
+            fmt::layer()
+                .with_writer(log_file)
+                .with_span_events(FmtSpan::CLOSE)
+                .with_ansi(false),
+        )
+        .with(span_filter);
+
+    tracing::subscriber::set_global_default(formatting_layer)
+        .expect("Failed to set global subscriber");
 
     info!("Parsing CLI arguments");
     let args = Args::parse();
