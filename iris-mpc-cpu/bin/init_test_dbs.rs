@@ -16,6 +16,7 @@ use iris_mpc_cpu::{
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
+use tracing_subscriber::fmt;
 
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
@@ -190,7 +191,14 @@ pub struct IrisCodeWithSerialId {
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
+    let log_file = File::create("app.log").expect("Failed to create log file");
+
+    // 2. Build a simple subscriber.
+    // We'll use the `fmt` subscriber which formats events for display.
+    tracing_subscriber::fmt()
+        .with_writer(log_file) // Direct output to the file.
+        .with_ansi(true) // Disable ANSI color codes for plain text logs.
+        .init();
     info!("Initialized tracing subscriber");
 
     info!("Parsing CLI arguments");
