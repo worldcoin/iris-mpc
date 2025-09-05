@@ -1,10 +1,6 @@
 name: Build and push image for iris-mpc-cpu
 
 on:
-  push:
-    branches:
-      - main
-      - e2e/templates-for-hnsw-e2e
   release:
     types:
       - 'published'
@@ -46,6 +42,7 @@ jobs:
           context: .
           push: true
           tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
