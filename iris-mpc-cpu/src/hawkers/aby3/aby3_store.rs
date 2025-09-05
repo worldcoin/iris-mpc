@@ -351,15 +351,20 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.read().await.points,
-                premade_v.storage.read().await.points
+                v_from_scratch.storage.read().await.get_points(),
+                premade_v.storage.read().await.get_points()
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
-            let query = cleartext_data.0.storage.get_vector(&vector_id).unwrap();
+            let query = cleartext_data
+                .0
+                .storage
+                .get_vector(&vector_id)
+                .unwrap()
+                .clone();
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
