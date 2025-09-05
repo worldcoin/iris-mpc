@@ -276,8 +276,10 @@ hnsw-smpc-1:
         #!/usr/bin/env bash
         set -e
 
-        key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
-        key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+        # CPU and GPU versions use the same encryption keys in e2e. Commenting this out to avoid race conditions which end up with unseal errors in one of the systems.
+        # Currently, we rely on GPU pod's init container to do the key rotation. Uncomment this once GPU is deprecated.
+        # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+        # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
 
         # Set up environment variables
         HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region $AWS_REGION --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)
