@@ -385,7 +385,7 @@ async fn main() -> Result<()> {
                     continue;
                 }
                 batch.push((
-                    IrisVectorId::from_0_index(serial_id),
+                    IrisVectorId::from_serial_id(serial_id),
                     Arc::new(raw_query.iris_code),
                 ));
                 if batch.len() >= batch_size {

@@ -1,13 +1,15 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
-    protocol::{ops::galois_ring_pairwise_distance, shared_iris::ArcIris},
+    protocol::{
+        ops::{galois_ring_pairwise_distance, pairwise_distance},
+        shared_iris::ArcIris,
+    },
     shares::RingElement,
 };
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
-use itertools::Itertools;
 use metrics::histogram;
 use std::{
     cmp,
@@ -129,19 +131,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
             IrisTask::DotProductPairs { pairs, rsp } => {
-                let pairs = {
-                    let store = iris_store.data.blocking_read();
+                let store = iris_store.data.blocking_read();
 
-                    pairs
-                        .into_iter()
-                        .map(|(q, vid)| {
-                            let vector = store.get_vector(&vid);
-                            vector.map(|v| (q, v))
-                        })
-                        .collect_vec()
-                };
+                let iris_pairs = pairs
+                    .iter()
+                    .map(|(q, vid)| store.borrow_vector(vid).map(|iris| (q, iris)));
 
-                let r = galois_ring_pairwise_distance(pairs);
+                let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
             }
 
@@ -150,16 +146,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 vector_ids,
                 rsp,
             } => {
-                let pairs = {
-                    let store = iris_store.data.blocking_read();
+                let store = iris_store.data.blocking_read();
 
-                    vector_ids
-                        .iter()
-                        .map(|v| store.get_vector(v).map(|v| (query.clone(), v)))
-                        .collect_vec()
-                };
+                let iris_pairs = vector_ids
+                    .iter()
+                    .map(|v| store.borrow_vector(v).map(|iris| (&query, iris)));
 
-                let r = galois_ring_pairwise_distance(pairs);
+                let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
             }
 
