@@ -4,7 +4,6 @@ use crate::{
     proto_generated::party_node::SendRequest,
 };
 use eyre::{eyre, Result};
-use iris_mpc_common::fast_metrics::FastHistogram;
 use std::collections::HashMap;
 use tokio::time::timeout;
 use tonic::async_trait;
@@ -18,14 +17,12 @@ pub struct GrpcSession {
     pub out_streams: HashMap<Identity, OutStream>,
     pub in_streams: HashMap<Identity, InStream>,
     pub config: GrpcConfig,
-    pub metric: FastHistogram,
 }
 
 #[async_trait]
 impl Networking for GrpcSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
         let value = value.to_network();
-        self.metric.record(value.len() as f64);
 
         let outgoing_stream = self.out_streams.get(receiver).ok_or(eyre!(
             "Outgoing stream for {receiver:?} in {:?} not found",
