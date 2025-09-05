@@ -45,7 +45,7 @@ impl PyPlaintextStore {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.0.storage.points.is_empty()
+        self.0.storage.get_points().is_empty()
     }
 
     #[staticmethod]

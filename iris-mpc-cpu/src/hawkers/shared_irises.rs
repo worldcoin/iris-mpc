@@ -10,7 +10,7 @@ use crate::execution::hawk_main::state_check::SetHash;
 /// Storage of inserted irises.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SharedIrises<I: Clone> {
-    pub points: Vec<Option<(VersionId, I)>>,
+    points: Vec<Option<(VersionId, I)>>,
     pub size: usize, // Number of Some() stored in points
     pub next_id: u32,
     pub empty_iris: I,
@@ -48,6 +48,10 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
+    pub fn get_points(&self) -> &Vec<Option<(VersionId, I)>> {
+        &self.points
+    }
+
     /// Inserts the given iris into the database with the specified id.  If an
     /// entry is already present with the given id, the iris is overwritten by `iris`.
     ///
@@ -60,8 +64,7 @@ impl<I: Clone> SharedIrises<I> {
 
         // Extend underlying Vec to accomodate the new serial_id
         if self.points.len() <= serial_id {
-            self.points
-                .extend((0..serial_id - self.points.len() + 1).map(|_| None));
+            self.points.resize(serial_id + 1, None);
         }
 
         // If overwriting entry, remove previous vector id from set_hash
@@ -157,7 +160,6 @@ impl<I: Clone> SharedIrises<I> {
     }
 
     pub fn last_vector_ids(&self, n: usize) -> Vec<VectorId> {
-        // Mihai: was this logic correct previously?
         (1..self.next_id)
             .rev()
             .take(n)
