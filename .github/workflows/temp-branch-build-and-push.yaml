@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2530/implement-anon-stat-change-in-hnsw-that-do-not-count-all-rotations"
+      - "leonidasnanos-pop-2855-implement-2d-stats-cleaning-of-the-cummulative-buckets"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"

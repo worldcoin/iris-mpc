@@ -1,14 +1,15 @@
 use crate::{
     hawkers::shared_irises::SharedIrisesRef,
-    protocol::{ops::galois_ring_pairwise_distance, shared_iris::ArcIris},
+    protocol::{
+        ops::{galois_ring_pairwise_distance, pairwise_distance},
+        shared_iris::ArcIris,
+    },
     shares::RingElement,
 };
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
-use itertools::Itertools;
-use metrics::histogram;
+use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
 use std::{
     cmp,
     sync::{
@@ -51,6 +52,7 @@ enum IrisTask {
 pub struct IrisPoolHandle {
     workers: Arc<[Sender<IrisTask>]>,
     next_counter: Arc<AtomicU64>,
+    metric_latency: FastHistogram,
 }
 
 impl IrisPoolHandle {
@@ -77,7 +79,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_pairs(
-        &self,
+        &mut self,
         pairs: Vec<(ArcIris, VectorId)>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -86,7 +88,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_batch(
-        &self,
+        &mut self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -100,7 +102,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn galois_ring_pairwise_distances(
-        &self,
+        &mut self,
         input: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -109,7 +111,7 @@ impl IrisPoolHandle {
     }
 
     async fn submit(
-        &self,
+        &mut self,
         task: IrisTask,
         rx: oneshot::Receiver<Vec<RingElement<u16>>>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -118,8 +120,7 @@ impl IrisPoolHandle {
         self.get_next_worker().send(task)?;
         let res = rx.await?;
 
-        histogram!("iris_worker.latency", "histogram" => "histogram")
-            .record(start.elapsed().as_secs_f64());
+        self.metric_latency.record(start.elapsed().as_secs_f64());
         Ok(res)
     }
 
@@ -154,6 +155,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     IrisPoolHandle {
         workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
+        metric_latency: FastHistogram::new("iris_worker.latency"),
     }
 }
 
@@ -178,19 +180,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
             }
 
             IrisTask::DotProductPairs { pairs, rsp } => {
-                let pairs = {
-                    let store = iris_store.data.blocking_read();
+                let store = iris_store.data.blocking_read();
 
-                    pairs
-                        .into_iter()
-                        .map(|(q, vid)| {
-                            let vector = store.get_vector(&vid);
-                            vector.map(|v| (q, v))
-                        })
-                        .collect_vec()
-                };
+                let iris_pairs = pairs
+                    .iter()
+                    .map(|(q, vid)| store.get_vector(vid).map(|iris| (q, iris)));
 
-                let r = galois_ring_pairwise_distance(pairs);
+                let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
             }
 
@@ -199,16 +195,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 vector_ids,
                 rsp,
             } => {
-                let pairs = {
-                    let store = iris_store.data.blocking_read();
+                let store = iris_store.data.blocking_read();
 
-                    vector_ids
-                        .iter()
-                        .map(|v| store.get_vector(v).map(|v| (query.clone(), v)))
-                        .collect_vec()
-                };
+                let iris_pairs = vector_ids
+                    .iter()
+                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
 
-                let r = galois_ring_pairwise_distance(pairs);
+                let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
             }
 
