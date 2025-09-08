@@ -1,11 +1,18 @@
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode,
+    vector_id::{SerialId, VectorId},
+    IrisVectorId,
+};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{
+        build_plaintext::plaintext_parallel_batch_insert, plaintext_store::SharedPlaintextStore,
+    },
     hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
-        HnswSearcher,
+        graph::{layered_graph::migrate, test_utils::DbContext},
+        vector_store::VectorStoreMut,
+        GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
@@ -13,10 +20,16 @@ use iris_mpc_cpu::{
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
+use tracing_subscriber::{
+    filter::FilterFn,
+    fmt::{self, format::FmtSpan},
+    layer::SubscriberExt,
+    EnvFilter, Registry,
+};
 
 use serde_json::Deserializer;
 use tokio::{sync::mpsc, task::JoinSet};
-use tracing::{info, warn};
+use tracing::{info, warn, Level};
 
 use eyre::Result;
 
@@ -128,6 +141,9 @@ struct Args {
     #[clap(long, default_value = "0")]
     hnsw_prf_key: u64,
 
+    #[clap(long, default_value = "1")]
+    batch_size: usize,
+
     /// Shares seed for iris shares insertion, used to generate secret
     /// shares of iris codes.
     /// The default is 42 to match the default in `shares_encoding.rs`.
@@ -184,8 +200,21 @@ pub struct IrisCodeWithSerialId {
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt().init();
-    info!("Initialized tracing subscriber");
+    // let log_file = File::create("app.log").expect("Failed to create log file");
+    // let span_filter =
+    //     FilterFn::new(|metadata| metadata.is_span() && metadata.level() <= &Level::INFO);
+
+    // let formatting_layer = tracing_subscriber::registry()
+    //     .with(
+    //         fmt::layer()
+    //             .with_writer(log_file)
+    //             .with_span_events(FmtSpan::CLOSE)
+    //             .with_ansi(false),
+    //     )
+    //     .with(span_filter);
+
+    // tracing::subscriber::set_global_default(formatting_layer)
+    //     .expect("Failed to set global subscriber");
 
     info!("Parsing CLI arguments");
     let args = Args::parse();
@@ -270,6 +299,9 @@ async fn main() -> Result<()> {
         let graph_r = dbs[DEFAULT_PARTY_IDX]
             .load_graph_to_mem(StoreId::Right)
             .await?;
+
+        let graph_l: GraphMem<SharedPlaintextStore> = migrate(graph_l, |v| v);
+        let graph_r: GraphMem<SharedPlaintextStore> = migrate(graph_r, |v| v);
         [graph_l, graph_r]
     } else {
         // new graphs
@@ -296,7 +328,7 @@ async fn main() -> Result<()> {
         .map(|target| target.saturating_sub(n_existing_irises));
 
     info!("Initializing in-memory vectors from NDJSON file");
-    let mut vectors = [PlaintextStore::new(), PlaintextStore::new()];
+    let mut vectors = [SharedPlaintextStore::new(), SharedPlaintextStore::new()];
     if n_existing_irises > 0 {
         let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
         let reader = BufReader::new(file);
@@ -344,6 +376,9 @@ async fn main() -> Result<()> {
         }
     });
 
+    let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
+    let searcher = HnswSearcher { params };
+
     info!("Initializing jobs to process plaintext iris codes");
     for (side, mut rx, mut vector_store, mut graph) in izip!(
         STORE_IDS,
@@ -351,13 +386,17 @@ async fn main() -> Result<()> {
         vectors.into_iter(),
         graphs.into_iter(),
     ) {
-        let params = params.clone();
-        let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
         let skip_serial_ids = args.skip_insert_serial_ids.clone();
+        let searcher = searcher.clone();
 
         jobs.spawn(async move {
-            let searcher = HnswSearcher { params };
             let mut counter = 0usize;
+            let batch_size = args.batch_size;
+            let mut batch = Vec::with_capacity(batch_size);
+            let searcher_ = searcher.clone();
+            let prf = move |vector_id: IrisVectorId| {
+                searcher_.select_layer_prf(&prf_seed, &(vector_id, side))
+            };
 
             while let Some(raw_query) = rx.recv().await {
                 let serial_id = raw_query.serial_id;
@@ -368,29 +407,75 @@ async fn main() -> Result<()> {
                     );
                     continue;
                 }
-                let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = IrisVectorId::from_serial_id(serial_id);
-                vector_store.insert_with_id(inserted_id, query.clone());
+                // if serial_id == 29 {
+                //     dbg!(
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(raw_query.iris_code.clone()),
+                //                 &vector_store.storage.get_vector_id(11).await.unwrap()
+                //             )
+                //             .await?
+                //     );
 
-                let insertion_layer = searcher.select_layer_prf(&prf_seed, &(inserted_id, side))?;
-                let (neighbors, set_ep) = searcher
-                    .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
-                    .await?;
-                searcher
-                    .insert_from_search_results(
-                        &mut vector_store,
-                        &mut graph,
-                        inserted_id,
-                        neighbors,
-                        set_ep,
+                //     dbg!(
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(raw_query.iris_code.clone()),
+                //                 &vector_store.storage.get_vector_id(6).await.unwrap()
+                //             )
+                //             .await?
+                //     );
+                //     dbg!(
+                //         side,
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(
+                //                     vector_store
+                //                         .storage
+                //                         .get_vector_by_serial_id(6)
+                //                         .await
+                //                         .unwrap()
+                //                         .as_ref()
+                //                         .clone()
+                //                 ),
+                //                 &vector_store.storage.get_vector_id(11).await.unwrap()
+                //             )
+                //             .await?
+                //     );
+                // }
+
+                batch.push((
+                    IrisVectorId::from_serial_id(serial_id),
+                    Arc::new(raw_query.iris_code),
+                ));
+                if batch.len() >= batch_size {
+                    (graph, vector_store) = plaintext_parallel_batch_insert(
+                        Some(graph),
+                        Some(vector_store),
+                        batch.clone(),
+                        searcher.clone(),
+                        prf.clone(),
                     )
                     .await?;
-
-                counter += 1;
-                if counter % 1000 == 0 {
-                    info!("Processed {} plaintext entries for {} side", counter, side);
+                    counter += batch.len();
+                    if counter % 1000 == 0 {
+                        info!("Processed {} plaintext entries for {} side", counter, side);
+                    }
+                    batch.clear();
                 }
+            }
+
+            // Process left-over batch
+            if !batch.is_empty() {
+                (graph, vector_store) = plaintext_parallel_batch_insert(
+                    Some(graph),
+                    Some(vector_store),
+                    batch.clone(),
+                    searcher.clone(),
+                    prf,
+                )
+                .await?;
             }
 
             Ok((side, vector_store, graph))
@@ -410,7 +495,7 @@ async fn main() -> Result<()> {
 
     info!(
         "Finished building HNSW graphs with {} nodes",
-        results[0].1.len()
+        results[0].1.len().await
     );
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
@@ -418,7 +503,8 @@ async fn main() -> Result<()> {
     for (party, db) in dbs.iter().enumerate() {
         for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
             info!("Persisting {} graph for party {}", side, party);
-            db.persist_graph_db(graph.clone(), side).await?;
+            db.persist_graph_db(migrate(graph.clone(), |v| v), side)
+                .await?;
         }
     }
 
@@ -435,7 +521,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<PlaintextStore>) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem<SharedPlaintextStore>) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

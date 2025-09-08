@@ -15,6 +15,7 @@ use itertools::izip;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::RwLock;
+use tracing::instrument;
 
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
@@ -80,6 +81,7 @@ impl<V: VectorStore> GraphMem<V> {
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
+    #[instrument(level = "info", target = "searcher::cpu_time", skip(self, plan))]
     pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
         // If required, set vector as new entry point
         if plan.set_ep {

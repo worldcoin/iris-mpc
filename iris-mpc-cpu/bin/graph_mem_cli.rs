@@ -35,6 +35,8 @@ enum Command {
     VerifyBackup,
     /// Load a graph from a file and compare it to the graph stored in the database.
     CompareToDb,
+    // Load a graph from a file and diff it to the graph stored in the database
+    DiffWithDb,
 }
 
 #[tokio::main]
@@ -68,6 +70,7 @@ async fn main() -> Result<()> {
         Command::CompareToDb => {
             db_context.compare_to_db(&file, dbg).await?;
         }
+        Command::DiffWithDb => db_context.diff_with_db(&file, dbg).await?,
     }
     // this command has it own output
     if !matches!(command, Command::CompareToDb) {
