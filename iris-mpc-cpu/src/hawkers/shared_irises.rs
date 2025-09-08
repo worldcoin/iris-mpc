@@ -211,6 +211,14 @@ impl<I: Clone> SharedIrisesRef<I> {
         *self.get_vector_ids(&[serial_id]).await.first().unwrap()
     }
 
+    pub async fn get_vector_by_serial_id(&self, serial_id: SerialId) -> Option<I> {
+        self.data
+            .read()
+            .await
+            .get_vector_by_serial_id(serial_id)
+            .cloned()
+    }
+
     pub async fn get_vector_or_empty(&self, vector: &VectorId) -> I {
         self.data.read().await.get_vector_or_empty(vector).clone()
     }

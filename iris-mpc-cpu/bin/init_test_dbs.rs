@@ -1,5 +1,9 @@
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode,
+    vector_id::{SerialId, VectorId},
+    IrisVectorId,
+};
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::{
@@ -8,7 +12,7 @@ use iris_mpc_cpu::{
     hnsw::{
         graph::{layered_graph::migrate, test_utils::DbContext},
         vector_store::VectorStoreMut,
-        GraphMem, HnswParams, HnswSearcher,
+        GraphMem, HnswParams, HnswSearcher, VectorStore,
     },
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
@@ -196,21 +200,21 @@ pub struct IrisCodeWithSerialId {
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
-    let log_file = File::create("app.log").expect("Failed to create log file");
-    let span_filter =
-        FilterFn::new(|metadata| metadata.is_span() && metadata.level() <= &Level::INFO);
+    // let log_file = File::create("app.log").expect("Failed to create log file");
+    // let span_filter =
+    //     FilterFn::new(|metadata| metadata.is_span() && metadata.level() <= &Level::INFO);
 
-    let formatting_layer = tracing_subscriber::registry()
-        .with(
-            fmt::layer()
-                .with_writer(log_file)
-                .with_span_events(FmtSpan::CLOSE)
-                .with_ansi(false),
-        )
-        .with(span_filter);
+    // let formatting_layer = tracing_subscriber::registry()
+    //     .with(
+    //         fmt::layer()
+    //             .with_writer(log_file)
+    //             .with_span_events(FmtSpan::CLOSE)
+    //             .with_ansi(false),
+    //     )
+    //     .with(span_filter);
 
-    tracing::subscriber::set_global_default(formatting_layer)
-        .expect("Failed to set global subscriber");
+    // tracing::subscriber::set_global_default(formatting_layer)
+    //     .expect("Failed to set global subscriber");
 
     info!("Parsing CLI arguments");
     let args = Args::parse();
@@ -403,6 +407,44 @@ async fn main() -> Result<()> {
                     );
                     continue;
                 }
+
+                // if serial_id == 29 {
+                //     dbg!(
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(raw_query.iris_code.clone()),
+                //                 &vector_store.storage.get_vector_id(11).await.unwrap()
+                //             )
+                //             .await?
+                //     );
+
+                //     dbg!(
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(raw_query.iris_code.clone()),
+                //                 &vector_store.storage.get_vector_id(6).await.unwrap()
+                //             )
+                //             .await?
+                //     );
+                //     dbg!(
+                //         side,
+                //         vector_store
+                //             .eval_distance(
+                //                 &Arc::new(
+                //                     vector_store
+                //                         .storage
+                //                         .get_vector_by_serial_id(6)
+                //                         .await
+                //                         .unwrap()
+                //                         .as_ref()
+                //                         .clone()
+                //                 ),
+                //                 &vector_store.storage.get_vector_id(11).await.unwrap()
+                //             )
+                //             .await?
+                //     );
+                // }
+
                 batch.push((
                     IrisVectorId::from_serial_id(serial_id),
                     Arc::new(raw_query.iris_code),
@@ -420,6 +462,7 @@ async fn main() -> Result<()> {
                     if counter % 1000 == 0 {
                         info!("Processed {} plaintext entries for {} side", counter, side);
                     }
+                    batch.clear();
                 }
             }
 

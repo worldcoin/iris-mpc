@@ -201,6 +201,47 @@ impl DbContext {
         Ok(())
     }
 
+    /// load a graph from the file and compare it against the database
+    pub async fn diff_with_db(&self, path: &Path, dbg: bool) -> Result<()> {
+        let db_graph = self.get_both_eyes().await?;
+        if dbg {
+            println!("graph from database:");
+            println!("{:#?}", db_graph);
+        }
+        let loaded_graph = deserialize_graph(path).await?;
+        if dbg {
+            println!("graph from file:");
+            println!("{:#?}", loaded_graph);
+        }
+        if db_graph != loaded_graph {
+            eprintln!("the graphs don't match");
+
+            // Print diffs for left eyes
+            println!("Diff for LEFT eye:");
+            let left_diff = db_graph[0].diff_graph(&loaded_graph[0]);
+            println!("{}", &left_diff);
+
+            // Print diffs for right eyes
+            println!("Diff for RIGHT eye:");
+            let right_diff = db_graph[1].diff_graph(&loaded_graph[1]);
+            println!("{}", &right_diff);
+
+            // for v in db_graph[1].layers[0].links.keys() {
+            //     if &db_graph[1].layers[0].links.get(v) != &loaded_graph[1].layers[0].links.get(v) {
+            //         println!(
+            //             "v: {:?}, DB: {:?}\nLoaded: {:?}",
+            //             v,
+            //             db_graph[1].layers[0].links.get(v),
+            //             loaded_graph[1].layers[0].links.get(v)
+            //         );
+            //     }
+            // }
+        } else {
+            println!("the graphs match")
+        }
+        Ok(())
+    }
+
     /// populates the database with a small graph. This is needed because
     /// the test database is initially empty and some data is needed to
     /// test the backup and restore commands.
