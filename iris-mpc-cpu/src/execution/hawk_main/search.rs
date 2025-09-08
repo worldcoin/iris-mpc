@@ -160,7 +160,12 @@ async fn per_search_query(
 
     let layer_0_neighbors = search_params
         .hnsw
-        .search(aby3_store, graph_store, &query, 1)
+        .search(
+            aby3_store,
+            graph_store,
+            &query,
+            search_params.hnsw.params.get_ef_search(0),
+        )
         .await?;
 
     let links = vec![layer_0_neighbors];
