@@ -135,9 +135,11 @@ In DataDog we also have a dashboard for monitoring the health of the clusters: [
 To send test messages to the dev environment, you can use the `client` binary:
 
 ```bash
+# Don't forge to unset the AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY from direnv!
+export AWS_REGION=eu-central-1
 cargo run --release --bin client -- \
-    --request-topic-arn arn:aws:sns:us-east-1:000000000000:iris-mpc-input.fifo \
-    --requests-bucket-name wf-smpcv2-dev-sns-requests \
-    --public-key-base-url "http://localhost:4566/wf-dev-public-keys" \
-    --response-queue-url http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/iris-mpc-results-us-east-1.fifo
+   --request-topic-arn arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo \
+   --requests-bucket-name wf-smpcv2-dev-sns-requests-v2 \
+   --public-key-base-url "https://pki-smpcv2-dev.worldcoin.org" \
+   --response-queue-url https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo
 ```
