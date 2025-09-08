@@ -10,7 +10,7 @@ use crate::{
     },
     protocol::{
         prf::{Prf, PrfSeed},
-        shared_iris::GaloisRingSharedIris,
+        shared_iris::ArcIris,
     },
     shares::{
         bit::Bit,
@@ -21,9 +21,9 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::galois_engine::degree4::SHARE_OF_MAX_DISTANCE;
+use iris_mpc_common::{fast_metrics::FastHistogram, galois_engine::degree4::SHARE_OF_MAX_DISTANCE};
 use itertools::{izip, Itertools};
-use std::{array, ops::Not};
+use std::{array, ops::Not, time::Instant};
 use tracing::instrument;
 
 pub(crate) const MATCH_THRESHOLD_RATIO: f64 = iris_mpc_common::iris_db::iris::MATCH_THRESHOLD_RATIO;
@@ -285,6 +285,8 @@ pub(crate) async fn cross_mul(
 }
 
 /// Conditionally selects the distance shares based on control bits.
+/// If the control bit is 1, it selects the first distance share (d1),
+/// otherwise it selects the second distance share (d2).
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn conditionally_select_distance(
@@ -393,15 +395,38 @@ pub async fn cross_compare_and_swap(
     conditionally_select_distance(session, distances, u32_bits.as_slice()).await
 }
 
+use std::cell::RefCell;
+
+thread_local! {
+    static PAIRWISE_DISTANCE_METRICS: RefCell<[FastHistogram; 2]> = RefCell::new([
+        FastHistogram::new("pairwise_distance.batch_size"),
+        FastHistogram::new("pairwise_distance.per_pair_duration"),
+    ]);
+}
+
+/// See pairwise_distance.
+/// This variant takes as input a Vec of Arc.
+pub fn galois_ring_pairwise_distance(
+    pairs: Vec<Option<(ArcIris, ArcIris)>>,
+) -> Vec<RingElement<u16>> {
+    pairwise_distance(pairs.iter().map(|opt| opt.as_ref().map(|(x, y)| (x, y))))
+}
+
 /// Computes the dot product between the iris pairs; for both the code and the
 /// mask of the irises. We pack the dot products of the code and mask into one
 /// vector to be able to reshare it later.
-pub fn galois_ring_pairwise_distance(
-    pairs: &[Option<(&GaloisRingSharedIris, &GaloisRingSharedIris)>],
-) -> Vec<RingElement<u16>> {
+/// This function takes an iterator of known size.
+pub fn pairwise_distance<'a, I>(pairs: I) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<(&'a ArcIris, &'a ArcIris)>> + ExactSizeIterator,
+{
+    let start = Instant::now();
+    let mut count = 0;
     let mut additive_shares = Vec::with_capacity(2 * pairs.len());
-    for pair in pairs.iter() {
+
+    for pair in pairs {
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
+            count += 1;
             let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
@@ -415,6 +440,14 @@ pub fn galois_ring_pairwise_distance(
         // the elements that a full GaloisRingMask has.
         additive_shares.push(mask_dist);
     }
+
+    let batch_size = count as f64;
+    let duration = start.elapsed().as_secs_f64() / batch_size;
+    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
+        metric_batch_size.record(batch_size);
+        metric_per_pair_duration.record(duration);
+    });
+
     additive_shares
 }
 
@@ -1009,16 +1042,18 @@ mod tests {
 
         let mut jobs = JoinSet::new();
         for (index, session) in sessions.iter().enumerate() {
-            let mut own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())];
-            own_shares.iter_mut().for_each(|(_x, y)| {
-                y.code.preprocess_iris_code_query_share();
-                y.mask.preprocess_mask_code_query_share();
-            });
+            let own_shares = vec![(first_entry[index].clone(), second_entry[index].clone())]
+                .into_iter()
+                .map(|(x, mut y)| {
+                    y.code.preprocess_iris_code_query_share();
+                    y.mask.preprocess_mask_code_query_share();
+                    Some((Arc::new(x), Arc::new(y)))
+                })
+                .collect_vec();
             let session = session.clone();
             jobs.spawn(async move {
                 let mut player_session = session.lock().await;
-                let own_shares = own_shares.iter().map(|(x, y)| Some((x, y))).collect_vec();
-                let x = galois_ring_pairwise_distance(&own_shares);
+                let x = galois_ring_pairwise_distance(own_shares);
                 let opened_x = open_additive(&mut player_session, x.clone()).await.unwrap();
                 let x_rep = galois_ring_to_rep3(&mut player_session, x).await.unwrap();
                 let opened_x_rep = open_t_many(&mut player_session, x_rep).await.unwrap();

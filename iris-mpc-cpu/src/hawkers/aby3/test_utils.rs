@@ -9,6 +9,7 @@ use tokio::{sync::Mutex, task::JoinHandle};
 
 use crate::{
     execution::{
+        hawk_main::iris_worker,
         local::{generate_local_identities, LocalRuntime},
         session::SessionHandles,
     },
@@ -40,18 +41,17 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     // sort the iris codes by their serial id
     // Collect and sort keys
-    let mut sorted_serial_ids: Vec<_> = plain_store.storage.points.keys().cloned().collect();
-    sorted_serial_ids.sort();
+    let sorted_serial_ids: Vec<_> = plain_store.storage.get_sorted_serial_ids();
 
     for serial_id in sorted_serial_ids {
         let iris = &plain_store
             .storage
-            .points
-            .get(&serial_id)
-            .expect("Key not found in plain store")
-            .1;
+            .get_vector_by_serial_id(serial_id)
+            .expect("Key not found in plain store");
+
         let vector_id = VectorId::from_serial_id(serial_id);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
+        let all_shares =
+            GaloisRingSharedIris::generate_shares_locally(rng, (**iris).as_ref().clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -75,7 +75,14 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .sessions
         .into_iter()
         .zip(storages.into_iter())
-        .map(|(session, storage)| Ok(Arc::new(Mutex::new(Aby3Store { session, storage }))))
+        .map(|(session, storage)| {
+            let workers = iris_worker::init_workers(0, storage.clone());
+            Ok(Arc::new(Mutex::new(Aby3Store {
+                session,
+                storage,
+                workers,
+            })))
+        })
         .collect()
 }
 
@@ -85,9 +92,13 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .sessions
         .into_iter()
         .map(|session| {
+            let storage = Aby3Store::new_storage(None).to_arc();
+            let workers = iris_worker::init_workers(0, storage.clone());
+
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
-                storage: Aby3Store::new_storage(None).to_arc(),
+                storage: storage.clone(),
+                workers,
             })))
         })
         .collect()
@@ -127,9 +138,9 @@ pub async fn eval_vector_distance(
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
     point2.code.preprocess_iris_code_query_share();
     point2.mask.preprocess_mask_code_query_share();
-    let pairs = &[Some((&*point1, &point2))];
+    let pairs = vec![Some((point1.clone(), Arc::new(point2)))];
     let dist = store.eval_pairwise_distances(pairs).await?;
-    Ok(store.lift_distances(dist).await?[0].clone())
+    Ok(dist[0].clone())
 }
 
 // TODO Since GraphMem no longer caches distances, this function is now just a

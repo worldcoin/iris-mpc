@@ -14,7 +14,10 @@ use crate::{
             CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
         },
     },
-    server::PreprocessedBatchQuery,
+    server::{
+        anon_stats::{DistanceCache, OneSidedDistanceCache, TwoSidedDistanceCache},
+        PreprocessedBatchQuery,
+    },
     threshold_ring::protocol::{ChunkShare, ChunkShareView, Circuits},
 };
 use cudarc::{
@@ -35,7 +38,7 @@ use iris_mpc_common::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::BucketStatistics,
+        statistics::{BucketStatistics, BucketStatistics2D},
     },
     iris_db::{get_dummy_shares_for_deletion, iris::MATCH_THRESHOLD_RATIO},
     job::{Eye, JobSubmissionHandle, ServerJobResult},
@@ -129,6 +132,7 @@ pub struct ServerActor {
     phase2: Circuits,
     phase2_batch: Circuits,
     phase2_buckets: Circuits,
+    phase2_2d_buckets: Circuits,
     distance_comparator: DistanceComparator,
     comms: Vec<Arc<NcclComm>>,
     // DB slices
@@ -151,6 +155,7 @@ pub struct ServerActor {
     max_db_size: usize,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
+    match_distances_2d_buffer_size: usize,
     n_buckets: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -163,28 +168,17 @@ pub struct ServerActor {
     // this is used to determine the "global" query id for the current query for bucket statistics
     internal_batch_counter: u64,
     // Normal orientation buffers
-    match_distances_buffer_codes_left: Vec<ChunkShare<u16>>,
-    match_distances_buffer_codes_right: Vec<ChunkShare<u16>>,
-    match_distances_buffer_masks_left: Vec<ChunkShare<u16>>,
-    match_distances_buffer_masks_right: Vec<ChunkShare<u16>>,
-    match_distances_counter_left: Vec<CudaSlice<u32>>,
-    match_distances_counter_right: Vec<CudaSlice<u32>>,
-    match_distances_indices_left: Vec<CudaSlice<u64>>,
-    match_distances_indices_right: Vec<CudaSlice<u64>>,
+    match_distances_buffer: DistanceCache,
     // Mirror orientation buffers
-    match_distances_buffer_codes_left_mirror: Vec<ChunkShare<u16>>,
-    match_distances_buffer_codes_right_mirror: Vec<ChunkShare<u16>>,
-    match_distances_buffer_masks_left_mirror: Vec<ChunkShare<u16>>,
-    match_distances_buffer_masks_right_mirror: Vec<ChunkShare<u16>>,
-    match_distances_counter_left_mirror: Vec<CudaSlice<u32>>,
-    match_distances_counter_right_mirror: Vec<CudaSlice<u32>>,
-    match_distances_indices_left_mirror: Vec<CudaSlice<u64>>,
-    match_distances_indices_right_mirror: Vec<CudaSlice<u64>>,
+    match_distances_buffer_mirror: DistanceCache,
     buckets: ChunkShare<u32>,
     anonymized_bucket_statistics_left: BucketStatistics,
     anonymized_bucket_statistics_right: BucketStatistics,
     anonymized_bucket_statistics_left_mirror: BucketStatistics,
     anonymized_bucket_statistics_right_mirror: BucketStatistics,
+    // 2D anon stats buffer
+    both_side_match_distances_buffer: Vec<TwoSidedDistanceCache>,
+    anonymized_bucket_statistics_2d: BucketStatistics2D,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
 }
@@ -201,6 +195,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -219,6 +214,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -237,6 +233,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -257,6 +254,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -277,6 +275,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -295,6 +294,7 @@ impl ServerActor {
             max_batch_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -316,6 +316,7 @@ impl ServerActor {
         max_batch_size: usize,
         match_distances_buffer_size: usize,
         match_distances_buffer_size_extra_percent: usize,
+        match_distances_2d_buffer_size: usize,
         n_buckets: usize,
         return_partial_results: bool,
         disable_persistence: bool,
@@ -438,6 +439,20 @@ impl ServerActor {
             comms.clone(),
         );
 
+        let first_gpu_only = Arc::new(DeviceManager::init_from_devices(vec![device_manager
+            .devices()[0]
+            .clone()]));
+
+        let phase2_2d_buckets = Circuits::new(
+            party_id,
+            match_distances_2d_buffer_size,
+            match_distances_2d_buffer_size / 64,
+            Some(n_buckets),
+            next_chacha_seeds(chacha_seeds)?,
+            first_gpu_only,
+            comms.iter().take(1).cloned().collect::<Vec<_>>(),
+        );
+
         let distance_comparator =
             DistanceComparator::init(n_queries, max_db_size, device_manager.clone());
         // Prepare streams etc.
@@ -479,40 +494,13 @@ impl ServerActor {
         // Buffers and counters for match distribution
         let distance_buffer_len =
             match_distances_buffer_size * (100 + match_distances_buffer_size_extra_percent) / 100;
-        let match_distances_buffer_codes_left =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_codes_right =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_masks_left =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_masks_right =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_counter_left = distance_comparator.prepare_match_distances_counter();
-        let match_distances_counter_right = distance_comparator.prepare_match_distances_counter();
-        let match_distances_indices_left =
-            distance_comparator.prepare_match_distances_index(distance_buffer_len);
-        let match_distances_indices_right =
-            distance_comparator.prepare_match_distances_index(distance_buffer_len);
+        let bucket_distance_cache = DistanceCache::init(&device_manager, distance_buffer_len);
 
         // Mirror orientation buffers
-        let match_distances_buffer_codes_left_mirror =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_codes_right_mirror =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_masks_left_mirror =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_buffer_masks_right_mirror =
-            distance_comparator.prepare_match_distances_buffer(distance_buffer_len);
-        let match_distances_counter_left_mirror =
-            distance_comparator.prepare_match_distances_counter();
-        let match_distances_counter_right_mirror =
-            distance_comparator.prepare_match_distances_counter();
-        let match_distances_indices_left_mirror =
-            distance_comparator.prepare_match_distances_index(distance_buffer_len);
-        let match_distances_indices_right_mirror =
-            distance_comparator.prepare_match_distances_index(distance_buffer_len);
+        let bucket_distance_cache_mirror =
+            DistanceCache::init(&device_manager, distance_buffer_len);
 
-        let buckets = distance_comparator.prepare_match_distances_buckets(n_buckets);
+        let buckets = DistanceCache::prepare_match_distances_buckets(&device_manager, n_buckets);
 
         for dev in device_manager.devices() {
             dev.synchronize().unwrap();
@@ -533,6 +521,12 @@ impl ServerActor {
         anonymized_bucket_statistics_right_mirror.is_mirror_orientation = true;
         tracing::info!("GPU actor: Initialized");
 
+        let both_side_match_distances_buffer =
+            vec![TwoSidedDistanceCache::default(); device_manager.device_count()];
+
+        let anonymized_bucket_statistics_2d =
+            BucketStatistics2D::new(match_distances_2d_buffer_size, n_buckets, party_id);
+
         Ok(Self {
             party_id,
             job_queue,
@@ -542,6 +536,7 @@ impl ServerActor {
             phase2,
             phase2_batch,
             phase2_buckets,
+            phase2_2d_buckets,
             buckets,
             distance_comparator,
             batch_codes_engine,
@@ -566,6 +561,7 @@ impl ServerActor {
             max_db_size,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
+            match_distances_2d_buffer_size,
             n_buckets,
             return_partial_results,
             disable_persistence,
@@ -575,28 +571,16 @@ impl ServerActor {
             phase1_events,
             phase2_events,
             internal_batch_counter: 0,
-            match_distances_buffer_codes_left,
-            match_distances_buffer_codes_right,
-            match_distances_buffer_masks_left,
-            match_distances_buffer_masks_right,
-            match_distances_counter_left,
-            match_distances_counter_right,
-            match_distances_indices_left,
-            match_distances_indices_right,
-            match_distances_buffer_codes_left_mirror,
-            match_distances_buffer_codes_right_mirror,
-            match_distances_buffer_masks_left_mirror,
-            match_distances_buffer_masks_right_mirror,
-            match_distances_counter_left_mirror,
-            match_distances_counter_right_mirror,
-            match_distances_indices_left_mirror,
-            match_distances_indices_right_mirror,
+            match_distances_buffer: bucket_distance_cache,
+            match_distances_buffer_mirror: bucket_distance_cache_mirror,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
             anonymized_bucket_statistics_left_mirror,
             anonymized_bucket_statistics_right_mirror,
             full_scan_side,
             full_scan_side_switching_enabled,
+            both_side_match_distances_buffer,
+            anonymized_bucket_statistics_2d,
         })
     }
 
@@ -654,6 +638,7 @@ impl ServerActor {
             self.anonymized_bucket_statistics_right_mirror
                 .buckets
                 .clear();
+            self.anonymized_bucket_statistics_2d.buckets.clear();
 
             tracing::info!(
                 "Full batch duration took:  {:?}",
@@ -983,14 +968,15 @@ impl ServerActor {
             self.full_scan_side
         );
 
-        let partial_results_with_rotations_side1 = self.compare_query_against_db_and_self(
-            &compact_device_queries_side1,
-            &compact_device_sums_side1,
-            &mut events,
-            self.full_scan_side,
-            batch_size,
-            orientation,
-        );
+        let (partial_results_with_rotations_side1, one_sided_distance_cache_side1) = self
+            .compare_query_against_db_and_self(
+                &compact_device_queries_side1,
+                &compact_device_sums_side1,
+                &mut events,
+                self.full_scan_side,
+                batch_size,
+                orientation,
+            );
 
         ///////////////////////////////////////////////////////////////////
         // FETCH PARTIAL FULL SCAN PARTIAL RESULTS
@@ -1079,38 +1065,39 @@ impl ServerActor {
             }
         );
 
-        let partial_results_with_rotations_side2 = if partial_matches_side1
-            .iter()
-            .any(|x| x.len() >= DB_CHUNK_SIZE)
-        {
-            tracing::warn!(
-                "Partial matches {} too large, doing full match: {} > {}",
-                self.full_scan_side,
-                partial_matches_side1.len(),
-                DB_CHUNK_SIZE
-            );
+        let (partial_results_with_rotations_side2, one_sided_distance_cache_side2) =
+            if partial_matches_side1
+                .iter()
+                .any(|x| x.len() >= DB_CHUNK_SIZE)
+            {
+                tracing::warn!(
+                    "Partial matches {} too large, doing full match: {} > {}",
+                    self.full_scan_side,
+                    partial_matches_side1.len(),
+                    DB_CHUNK_SIZE
+                );
 
-            tracing::info!("Comparing {} eye queries against DB and self", other_side);
-            self.compare_query_against_db_and_self(
-                &compact_device_queries_side2,
-                &compact_device_sums_side2,
-                &mut events,
-                other_side,
-                batch_size,
-                orientation,
-            )
-        } else {
-            tracing::info!("Comparing {} eye queries against DB subset", other_side);
-            self.compare_query_against_db_subset_and_self(
-                &compact_device_queries_side2,
-                &compact_device_sums_side2,
-                &mut events,
-                other_side,
-                batch_size,
-                &partial_matches_side1,
-                orientation,
-            )
-        };
+                tracing::info!("Comparing {} eye queries against DB and self", other_side);
+                self.compare_query_against_db_and_self(
+                    &compact_device_queries_side2,
+                    &compact_device_sums_side2,
+                    &mut events,
+                    other_side,
+                    batch_size,
+                    orientation,
+                )
+            } else {
+                tracing::info!("Comparing {} eye queries against DB subset", other_side);
+                self.compare_query_against_db_subset_and_self(
+                    &compact_device_queries_side2,
+                    &compact_device_sums_side2,
+                    &mut events,
+                    other_side,
+                    batch_size,
+                    &partial_matches_side1,
+                    orientation,
+                )
+            };
 
         ///////////////////////////////////////////////////////////////////
         // MERGE LEFT & RIGHT results
@@ -1617,6 +1604,95 @@ impl ServerActor {
             );
         }
 
+        // Attempt for 2D anonymized bucket statistics calculation
+        let (one_sided_distance_cache_left, one_sided_distance_cache_right) =
+            if self.full_scan_side == Eye::Left {
+                (
+                    one_sided_distance_cache_side1,
+                    one_sided_distance_cache_side2,
+                )
+            } else {
+                (
+                    one_sided_distance_cache_side2,
+                    one_sided_distance_cache_side1,
+                )
+            };
+        let two_sided_match_distances = one_sided_distance_cache_left
+            .into_iter()
+            .zip(one_sided_distance_cache_right)
+            .map(|(left, right)| TwoSidedDistanceCache::merge(left, right))
+            .collect::<Vec<_>>();
+
+        for (new, cache) in two_sided_match_distances
+            .into_iter()
+            .zip(self.both_side_match_distances_buffer.iter_mut())
+        {
+            cache.extend(new);
+        }
+
+        // check if we have enough results to calculate 2D bucket statistics
+        let match_distance_2d_count = self
+            .both_side_match_distances_buffer
+            .iter()
+            .map(|x| x.len())
+            .sum::<usize>();
+        tracing::info!(
+            "Match distance 2D count: {match_distance_2d_count}/{}",
+            self.match_distances_2d_buffer_size
+        );
+        if match_distance_2d_count >= self.match_distances_2d_buffer_size {
+            tracing::info!("Calculating bucket statistics for both sides");
+            let mut both_side_match_distances_buffer =
+                vec![TwoSidedDistanceCache::default(); self.device_manager.device_count()];
+            std::mem::swap(
+                &mut self.both_side_match_distances_buffer,
+                &mut both_side_match_distances_buffer,
+            );
+
+            let min_distance_cache = TwoSidedDistanceCache::into_min_distance_cache(
+                both_side_match_distances_buffer,
+                &mut self.phase2_2d_buckets,
+                &self.streams[0],
+            );
+            let thresholds = (1..=self.n_buckets)
+                .map(|x: usize| {
+                    Circuits::translate_threshold_a(
+                        MATCH_THRESHOLD_RATIO / (self.n_buckets as f64) * (x as f64),
+                    ) as u16
+                })
+                .collect::<Vec<_>>();
+
+            let buckets_2d = min_distance_cache.compute_buckets(
+                &mut self.phase2_2d_buckets,
+                &self.streams[0],
+                &thresholds,
+            );
+            tracing::info!("Bucket statistics calculated");
+            let mut buckets_2d_string = String::new();
+            for (i, bucket) in buckets_2d.iter().enumerate() {
+                let left_idx = i / self.n_buckets;
+                let right_idx = i % self.n_buckets;
+                let step = 0.375 / self.n_buckets as f64;
+                buckets_2d_string += &format!(
+                    "Bucket ({:.3}-{:.3},{:.3}-{:.3}): {}\n",
+                    left_idx as f64 * step,
+                    (left_idx + 1) as f64 * step,
+                    right_idx as f64 * step,
+                    (right_idx + 1) as f64 * step,
+                    bucket
+                );
+            }
+            tracing::info!("Bucket statistics calculated:\n{}", buckets_2d_string);
+
+            // Fill the 2D anonymized statistics structure for propagation
+            self.anonymized_bucket_statistics_2d.fill_buckets(
+                &buckets_2d,
+                MATCH_THRESHOLD_RATIO,
+                self.anonymized_bucket_statistics_left
+                    .next_start_time_utc_timestamp,
+            );
+        }
+
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
             merged_results,
@@ -1643,6 +1719,7 @@ impl ServerActor {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left: self.anonymized_bucket_statistics_left.clone(),
             anonymized_bucket_statistics_right: self.anonymized_bucket_statistics_right.clone(),
+            anonymized_bucket_statistics_2d: self.anonymized_bucket_statistics_2d.clone(),
             anonymized_bucket_statistics_left_mirror: self
                 .anonymized_bucket_statistics_left_mirror
                 .clone(),
@@ -1742,31 +1819,9 @@ impl ServerActor {
             match_distances_buffers_masks,
             match_distances_counters,
             match_distances_indices,
-        ) = match (eye_db, orientation) {
-            (Eye::Left, Orientation::Normal) => (
-                &self.match_distances_buffer_codes_left,
-                &self.match_distances_buffer_masks_left,
-                &self.match_distances_counter_left,
-                &self.match_distances_indices_left,
-            ),
-            (Eye::Right, Orientation::Normal) => (
-                &self.match_distances_buffer_codes_right,
-                &self.match_distances_buffer_masks_right,
-                &self.match_distances_counter_right,
-                &self.match_distances_indices_right,
-            ),
-            (Eye::Left, Orientation::Mirror) => (
-                &self.match_distances_buffer_codes_left_mirror,
-                &self.match_distances_buffer_masks_left_mirror,
-                &self.match_distances_counter_left_mirror,
-                &self.match_distances_indices_left_mirror,
-            ),
-            (Eye::Right, Orientation::Mirror) => (
-                &self.match_distances_buffer_codes_right_mirror,
-                &self.match_distances_buffer_masks_right_mirror,
-                &self.match_distances_counter_right_mirror,
-                &self.match_distances_indices_right_mirror,
-            ),
+        ) = match orientation {
+            Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+            Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
         };
         let bucket_distance_counters = self
             .device_manager
@@ -1949,40 +2004,12 @@ impl ServerActor {
                 };
 
             // Reset all buffers used in this calculation
-            match (eye_db, orientation) {
-                (Eye::Left, Orientation::Normal) => {
-                    reset_all_buffers(
-                        &self.match_distances_counter_left,
-                        &self.match_distances_indices_left,
-                        &self.match_distances_buffer_codes_left,
-                        &self.match_distances_buffer_masks_left,
-                    );
-                }
-                (Eye::Right, Orientation::Normal) => {
-                    reset_all_buffers(
-                        &self.match_distances_counter_right,
-                        &self.match_distances_indices_right,
-                        &self.match_distances_buffer_codes_right,
-                        &self.match_distances_buffer_masks_right,
-                    );
-                }
-                (Eye::Left, Orientation::Mirror) => {
-                    reset_all_buffers(
-                        &self.match_distances_counter_left_mirror,
-                        &self.match_distances_indices_left_mirror,
-                        &self.match_distances_buffer_codes_left_mirror,
-                        &self.match_distances_buffer_masks_left_mirror,
-                    );
-                }
-                (Eye::Right, Orientation::Mirror) => {
-                    reset_all_buffers(
-                        &self.match_distances_counter_right_mirror,
-                        &self.match_distances_indices_right_mirror,
-                        &self.match_distances_buffer_codes_right_mirror,
-                        &self.match_distances_buffer_masks_right_mirror,
-                    );
-                }
-            }
+            reset_all_buffers(
+                match_distances_counters,
+                match_distances_indices,
+                match_distances_buffers_codes,
+                match_distances_buffers_masks,
+            );
             reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
 
             self.device_manager.await_streams(streams);
@@ -2110,9 +2137,19 @@ impl ServerActor {
         batch_size: usize,
         db_subset_idx: &[Vec<u32>],
         orientation: Orientation,
-    ) -> PartialResultsWithRotations {
+    ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
+
+        let old_distance_cache_counters = match orientation {
+            Orientation::Normal => Some(
+                self.match_distances_buffer
+                    .load_counters(&self.device_manager, eye_db),
+            ),
+            Orientation::Mirror => {
+                None // Do not work on mirror
+            }
+        };
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2125,7 +2162,10 @@ impl ServerActor {
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
         if db_subset_idx.iter().all(|x| x.is_empty()) {
-            return HashMap::new();
+            return (
+                HashMap::new(),
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()],
+            );
         }
 
         // which database are we querying against
@@ -2250,6 +2290,16 @@ impl ServerActor {
             Eye::Right => &self.db_match_list_right,
         };
 
+        let (
+            match_distances_buffers_codes,
+            match_distances_buffers_masks,
+            match_distances_counters,
+            match_distances_indices,
+        ) = match orientation {
+            Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+            Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
+        };
+
         // ignore all device results where the chunk size is 0
         let ignore_device_results: Vec<bool> = chunk_size.iter().map(|&s| s == 0).collect();
 
@@ -2270,7 +2320,17 @@ impl ServerActor {
                     &chunk_size,
                     &self.current_db_sizes,
                     &ignore_device_results,
+                    match_distances_buffers_codes,
+                    match_distances_buffers_masks,
+                    match_distances_counters,
+                    match_distances_indices,
+                    self.internal_batch_counter,
+                    &code_dots,
+                    &mask_dots,
                     batch_size,
+                    self.match_distances_buffer_size
+                        * (100 + self.match_distances_buffer_size_extra_percent)
+                        / 100,
                     &self.streams[0],
                     db_subset_idx,
                 );
@@ -2299,8 +2359,22 @@ impl ServerActor {
             0,
             &self.streams[0],
         );
+        let new_partial_match_buffer = match old_distance_cache_counters {
+            Some(counters) => self.match_distances_buffer.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+            ),
+            None => {
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
+            }
+        };
 
-        partial_results_with_rotations
+        (partial_results_with_rotations, new_partial_match_buffer)
     }
 
     fn compare_query_against_db_and_self(
@@ -2311,9 +2385,19 @@ impl ServerActor {
         eye_db: Eye,
         batch_size: usize,
         orientation: Orientation,
-    ) -> PartialResultsWithRotations {
+    ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
         self.try_calculate_bucket_stats(eye_db, orientation);
+
+        let old_distance_cache_counters = match orientation {
+            Orientation::Normal => Some(
+                self.match_distances_buffer
+                    .load_counters(&self.device_manager, eye_db),
+            ),
+            Orientation::Mirror => {
+                None // Do not work on mirror
+            }
+        };
 
         // ---- START BATCH DEDUP ----
         self.compare_query_against_self(
@@ -2536,31 +2620,9 @@ impl ServerActor {
                     match_distances_buffers_masks,
                     match_distances_counters,
                     match_distances_indices,
-                ) = match (eye_db, orientation) {
-                    (Eye::Left, Orientation::Normal) => (
-                        &self.match_distances_buffer_codes_left,
-                        &self.match_distances_buffer_masks_left,
-                        &self.match_distances_counter_left,
-                        &self.match_distances_indices_left,
-                    ),
-                    (Eye::Right, Orientation::Normal) => (
-                        &self.match_distances_buffer_codes_right,
-                        &self.match_distances_buffer_masks_right,
-                        &self.match_distances_counter_right,
-                        &self.match_distances_indices_right,
-                    ),
-                    (Eye::Left, Orientation::Mirror) => (
-                        &self.match_distances_buffer_codes_left_mirror,
-                        &self.match_distances_buffer_masks_left_mirror,
-                        &self.match_distances_counter_left_mirror,
-                        &self.match_distances_indices_left_mirror,
-                    ),
-                    (Eye::Right, Orientation::Mirror) => (
-                        &self.match_distances_buffer_codes_right_mirror,
-                        &self.match_distances_buffer_masks_right_mirror,
-                        &self.match_distances_counter_right_mirror,
-                        &self.match_distances_indices_right_mirror,
-                    ),
+                ) = match orientation {
+                    Orientation::Normal => self.match_distances_buffer.get_buffers(eye_db),
+                    Orientation::Mirror => self.match_distances_buffer_mirror.get_buffers(eye_db),
                 };
 
                 record_stream_time!(
@@ -2646,7 +2708,22 @@ impl ServerActor {
             reset_slice(self.device_manager.devices(), dst, 0xff, &self.streams[0]);
         }
 
-        partial_results_with_rotations
+        let new_partial_match_buffer = match old_distance_cache_counters {
+            Some(counters) => self.match_distances_buffer.load_additions_since(
+                &self.device_manager,
+                eye_db,
+                counters,
+                self.match_distances_buffer_size
+                    * (100 + self.match_distances_buffer_size_extra_percent)
+                    / 100,
+                &self.streams[0],
+            ),
+            None => {
+                vec![OneSidedDistanceCache::default(); self.device_manager.device_count()]
+            }
+        };
+
+        (partial_results_with_rotations, new_partial_match_buffer)
     }
 
     fn sync_match_results(&mut self, max_batch_size: usize, match_results: &[u32]) -> Result<()> {
@@ -2952,7 +3029,15 @@ fn open_subset_results(
     real_db_sizes: &[usize],
     total_db_sizes: &[usize],
     ignore_db_results: &[bool],
+    match_distances_buffers_codes: &[ChunkShare<u16>],
+    match_distances_buffers_masks: &[ChunkShare<u16>],
+    match_distances_counters: &[CudaSlice<u32>],
+    match_distances_indices: &[CudaSlice<u64>],
+    batch_id: u64,
+    code_dots: &[ChunkShareView<u16>],
+    mask_dots: &[ChunkShareView<u16>],
     batch_size: usize,
+    max_bucket_distances: usize,
     streams: &[CudaStream],
     index_mapping: &[Vec<u32>],
 ) {
@@ -2989,7 +3074,15 @@ fn open_subset_results(
         real_db_sizes,
         total_db_sizes,
         ignore_db_results,
+        match_distances_buffers_codes,
+        match_distances_buffers_masks,
+        match_distances_counters,
+        match_distances_indices,
+        batch_id,
+        code_dots,
+        mask_dots,
         batch_size,
+        max_bucket_distances,
         streams,
         index_mapping,
     );
@@ -3112,7 +3205,7 @@ fn reset_single_share<T>(
     };
 }
 
-fn reset_share<T>(
+pub(crate) fn reset_share<T>(
     devs: &[Arc<CudaDevice>],
     dst: &[ChunkShare<T>],
     value: u8,

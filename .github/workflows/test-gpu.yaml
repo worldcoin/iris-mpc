@@ -13,7 +13,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
 
       - name: Get all test, doc and src files that have changed
         id: changed-files-yaml
@@ -43,8 +43,8 @@ jobs:
       - name: Update gcc to version 11
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: |
-          sudo apt-get install --reinstall ca-certificates
           sudo apt-get update
+          sudo apt-get install --reinstall ca-certificates
           sudo apt-get install -y build-essential manpages-dev software-properties-common
           sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update

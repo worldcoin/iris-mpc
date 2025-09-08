@@ -20,7 +20,10 @@ pub enum AccessMode {
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
-    if input.chars().all(|c| c.is_alphanumeric() || c == '_') {
+    if input
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         Ok(())
     } else {
         Err(eyre!("Invalid SQL identifier"))

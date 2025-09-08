@@ -9,6 +9,8 @@ use rand::{CryptoRng, Rng};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+pub type ArcIris = Arc<GaloisRingSharedIris>;
+
 #[derive(PartialEq, Eq, Debug, Clone, Serialize, Deserialize, Hash)]
 pub struct GaloisRingSharedIris {
     pub code: GaloisRingIrisCodeShare,

@@ -11,7 +11,7 @@ use eyre::Result;
 /// Requirements for networking.
 #[async_trait]
 pub trait Networking {
-    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()>;
+    async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()>;
 
     async fn receive(&mut self, sender: &Identity) -> Result<NetworkValue>;
 }

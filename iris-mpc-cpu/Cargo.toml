@@ -20,6 +20,8 @@ bincode.workspace = true
 bytes = "1.7"
 bytemuck.workspace = true
 clap.workspace = true
+core_affinity = "0.8.3"
+crossbeam = "0.8.4"
 dashmap = "6.1.0"
 dotenvy.workspace = true
 eyre.workspace = true
@@ -74,7 +76,6 @@ tonic-build = "0.12.3"
 
 [features]
 db_dependent = []
-networking_benchmark = []
 networking_metrics = []
 
 [[bench]]
