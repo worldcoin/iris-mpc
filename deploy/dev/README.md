@@ -50,7 +50,8 @@ A user can be created on your account, with the following policy attached to it:
       "Resource": [
         "arn::aws:iam::004304088310:role/ampc-hnsw-developer-role",
         "arn::aws:iam::284038850594:role/ampc-hnsw-developer-role",
-        "arn::aws:iam::882222437714:role/ampc-hnsw-developer-role"
+        "arn::aws:iam::882222437714:role/ampc-hnsw-developer-role",
+        "arn::aws:iam::238407200320:role/ampc-hnsw-developer-role"
       ]
     }
   ]

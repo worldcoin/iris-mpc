@@ -48,7 +48,7 @@ elif [ "$MPCV2_TYPE" == "gpu" ]; then
   fi
   CLUSTER_NAME="smpcv2"
   ARGOCD_APP="iris-mpc"
-  CLUSTERS=("arn:aws:eks:eu-central-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-central-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-central-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
+  CLUSTERS=("arn:aws:eks:eu-north-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-north-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-north-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
   echo "Using GPU cluster name: $CLUSTER_NAME"
   echo "Using GPU argo app: $ARGOCD_APP"
   echo "Operating on environment: $ENVIRONMENT_NAME"
