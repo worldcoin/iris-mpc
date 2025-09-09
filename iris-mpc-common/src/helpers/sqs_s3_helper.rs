@@ -22,10 +22,10 @@ pub async fn upload_file_to_s3(
         .await
     {
         Ok(_) => {
-            tracing::info!("File {} uploaded to s3 successfully", key);
+            tracing::info!("File uploaded successfully.");
         }
         Err(e) => {
-            tracing::error!("Failed to upload file {} to s3: {:?}", key, e);
+            tracing::error!("Error: Failed to upload file: {:?}", e);
             return Err(SharesDecodingError::UploadS3Error);
         }
     }

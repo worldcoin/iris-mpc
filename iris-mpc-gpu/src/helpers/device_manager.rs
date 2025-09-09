@@ -60,13 +60,6 @@ impl DeviceManager {
         }
     }
 
-    pub fn init_from_devices(devices: Vec<Arc<CudaDevice>>) -> Self {
-        Self {
-            devices,
-            locked_dbs: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
     /// Splits the devices into n chunks, returning a device manager for each
     /// chunk.
     /// If too few devices are present, returns the original device manager.

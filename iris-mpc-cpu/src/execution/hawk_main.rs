@@ -28,7 +28,7 @@ use iris_mpc_common::{
     config::TlsConfig,
     helpers::{
         smpc_request::{REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE},
-        statistics::{BucketStatistics, BucketStatistics2D},
+        statistics::BucketStatistics,
     },
     vector_id::VectorId,
 };
@@ -1233,7 +1233,6 @@ impl HawkResult {
             anonymized_bucket_statistics_right,
             anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
             anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
-            anonymized_bucket_statistics_2d: BucketStatistics2D::default(),        // TODO.
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,

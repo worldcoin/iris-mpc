@@ -81,7 +81,7 @@ env:
     value: '["node.0.dev.hnsw.worldcoin.dev", "0.0.0.0", "node.2.dev.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-dev-sns-requests-v2"
+    value: "wf-smpcv2-dev-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
     value: "false"

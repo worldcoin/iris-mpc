@@ -407,7 +407,7 @@ mod tests {
                 players.pop();
 
                 let mut bob = players.pop().unwrap();
-                let mut alice = players.pop().unwrap();
+                let alice = players.pop().unwrap();
 
                 // Send a message from the first party to the second party
                 let alice_prf = get_prf();

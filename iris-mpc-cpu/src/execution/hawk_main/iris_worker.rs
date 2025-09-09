@@ -9,7 +9,8 @@ use crate::{
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
+use iris_mpc_common::vector_id::VectorId;
+use metrics::histogram;
 use std::{
     cmp,
     sync::{
@@ -55,7 +56,6 @@ enum IrisTask {
 pub struct IrisPoolHandle {
     workers: Arc<[Sender<IrisTask>]>,
     next_counter: Arc<AtomicU64>,
-    metric_latency: FastHistogram,
 }
 
 impl IrisPoolHandle {
@@ -91,7 +91,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_pairs(
-        &mut self,
+        &self,
         pairs: Vec<(ArcIris, VectorId)>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -100,7 +100,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_batch(
-        &mut self,
+        &self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -114,7 +114,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn galois_ring_pairwise_distances(
-        &mut self,
+        &self,
         input: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -123,7 +123,7 @@ impl IrisPoolHandle {
     }
 
     async fn submit(
-        &mut self,
+        &self,
         task: IrisTask,
         rx: oneshot::Receiver<Vec<RingElement<u16>>>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -132,7 +132,8 @@ impl IrisPoolHandle {
         self.get_next_worker().send(task)?;
         let res = rx.await?;
 
-        self.metric_latency.record(start.elapsed().as_secs_f64());
+        histogram!("iris_worker.latency", "histogram" => "histogram")
+            .record(start.elapsed().as_secs_f64());
         Ok(res)
     }
 
@@ -167,7 +168,6 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     IrisPoolHandle {
         workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
-        metric_latency: FastHistogram::new("iris_worker.latency"),
     }
 }
 
@@ -200,7 +200,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 
                 let iris_pairs = pairs
                     .iter()
-                    .map(|(q, vid)| store.get_vector(vid).map(|iris| (q, iris)));
+                    .map(|(q, vid)| store.borrow_vector(vid).map(|iris| (q, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -215,7 +215,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 
                 let iris_pairs = vector_ids
                     .iter()
-                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
+                    .map(|v| store.borrow_vector(v).map(|iris| (&query, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
