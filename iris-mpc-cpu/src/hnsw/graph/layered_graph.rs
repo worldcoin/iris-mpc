@@ -179,7 +179,7 @@ impl<V: Ref + Display + FromStr> Layer<V> {
         }
     }
 
-    fn get_links(&self, from: &V) -> Option<SortedEdgeIds<V>> {
+    pub fn get_links(&self, from: &V) -> Option<SortedEdgeIds<V>> {
         self.links.get(from).cloned()
     }
 

@@ -187,6 +187,9 @@ iris-mpc-1:
     - name: SMPC__SHARES_BUCKET_NAME
       value: "wf-smpcv2-stage-sns-requests"
 
+    - name: SMPC__SNS_BUFFER_BUCKET_NAME
+      value: "wf-smpcv2-stage-sns-buffer"
+
     - name: SMPC__CLEAR_DB_BEFORE_INIT
       value: "true"
 

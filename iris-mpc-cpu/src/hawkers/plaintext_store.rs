@@ -90,12 +90,15 @@ impl PlaintextStore {
         }
 
         // sort in order to ensure deterministic behavior
-        let mut serial_ids: Vec<_> = self.storage.points.keys().cloned().collect();
-        serial_ids.sort();
+        let mut serial_ids: Vec<_> = self.storage.get_sorted_serial_ids();
         serial_ids.truncate(graph_size);
 
         for serial_id in serial_ids {
-            let query = self.storage.points[&serial_id].1.clone();
+            let query = self
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
@@ -140,7 +143,7 @@ impl VectorStore for PlaintextStore {
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let serial_id = vector.serial_id();
-        let vector_code = &self
+        let vector_code = self
             .storage
             .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
@@ -243,7 +246,7 @@ impl VectorStore for SharedPlaintextStore {
         let vector_code = store
             .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
-        Ok(query.get_distance_fraction(&vector_code))
+        Ok(query.get_distance_fraction(vector_code))
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {

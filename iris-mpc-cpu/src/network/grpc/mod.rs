@@ -107,7 +107,7 @@ mod tests {
                 players.pop();
 
                 let mut bob = players.pop().unwrap();
-                let alice = players.pop().unwrap();
+                let mut alice = players.pop().unwrap();
 
                 // Send a message from the first party to the second party
                 let message = get_prf();
@@ -224,7 +224,7 @@ mod tests {
             let players = players.clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(0);
-                let sessions = create_session_helper(session_id, &players).await.unwrap();
+                let mut sessions = create_session_helper(session_id, &players).await.unwrap();
 
                 let message = get_prf();
                 let res = sessions[0]
@@ -257,7 +257,7 @@ mod tests {
             let players = players.clone();
             jobs.spawn(async move {
                 let session_id = SessionId::from(2);
-                let sessions = create_session_helper(session_id, &players).await.unwrap();
+                let mut sessions = create_session_helper(session_id, &players).await.unwrap();
 
                 let message = get_prf();
                 let res = sessions[0]

@@ -17,7 +17,7 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
@@ -81,7 +81,7 @@ env:
     value: '["0.0.0.0","node.1.dev.hnsw.worldcoin.dev","node.2.dev.hnsw.worldcoin.dev"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-dev-sns-requests"
+    value: "wf-smpcv2-dev-sns-requests-v2"
 
   - name: SMPC__ENABLE_S3_IMPORTER
     value: "false"

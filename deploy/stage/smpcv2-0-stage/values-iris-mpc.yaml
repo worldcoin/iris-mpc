@@ -49,7 +49,7 @@ env:
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "120"
-  
+
   - name: SMPC__HEARTBEAT_INITIAL_RETRIES
     value: "65"
 
@@ -70,6 +70,9 @@ env:
 
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-stage-sns-requests"
+
+  - name: SMPC__SNS_BUFFER_BUCKET_NAME
+    value: "wf-smpcv2-stage-sns-buffer"
 
   - name: SMPC__ENABLE_S3_IMPORTER
     value: "true"
@@ -157,7 +160,7 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
-  - name : SMPC__ENABLE_DEBUG_TIMING
+  - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
 initContainer:

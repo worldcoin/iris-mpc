@@ -353,8 +353,8 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.read().await.points,
-                premade_v.storage.read().await.points
+                v_from_scratch.storage.read().await.get_points(),
+                premade_v.storage.read().await.get_points()
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();

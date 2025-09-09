@@ -1,6 +1,6 @@
 hnsw-smpc-1:
   fullnameOverride: "hnsw-smpc-1"
-  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -137,6 +137,9 @@ hnsw-smpc-1:
           key: DATABASE_AURORA_HNSW_URL
           name: application
 
+    - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+      value: "_hnsw"
+
     - name: SMPC__MAX_DB_SIZE
       value: "100000"
 
@@ -168,7 +171,7 @@ hnsw-smpc-1:
       value: "16"
 
     - name: SMPC__ENABLE_SENDING_ANONYMIZED_STATS_MESSAGE
-      value: "false"
+      value: "true"
 
     - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
       value: "false"
@@ -183,10 +186,10 @@ hnsw-smpc-1:
       value: "true"
 
     - name: SMPC__LUC_LOOKBACK_RECORDS
-      value: "5"
+      value: "0"
 
     - name: SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST
-      value: "false"
+      value: "true"
 
     - name: SMPC__AWS__REGION
       value: "$AWS_REGION"
@@ -248,7 +251,7 @@ hnsw-smpc-1:
       value: "hnsw-0"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_IMAGE_TAG"
+      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"
@@ -273,8 +276,10 @@ hnsw-smpc-1:
         #!/usr/bin/env bash
         set -e
 
-        key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
-        key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+        # CPU and GPU versions use the same encryption keys in e2e. Commenting this out to avoid race conditions which end up with unseal errors in one of the systems.
+        # Currently, we rely on GPU pod's init container to do the key rotation. Uncomment this once GPU is deprecated.
+        # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+        # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
 
         # Set up environment variables
         HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region $AWS_REGION --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)

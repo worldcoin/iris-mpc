@@ -66,7 +66,7 @@ where
 
     let schedule = Schedule::new(n_sessions, n_requests, ROT::N_ROTATIONS);
 
-    parallelize(schedule.batches().into_iter().map(per_session)).await?;
+    parallelize(schedule.search_batches().into_iter().map(per_session)).await?;
 
     let results = schedule.organize_results(collect_results(rx).await?)?;
 
