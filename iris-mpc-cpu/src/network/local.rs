@@ -59,7 +59,7 @@ pub struct LocalNetworking {
 
 #[async_trait]
 impl Networking for LocalNetworking {
-    async fn send(&mut self, val: NetworkValue, receiver: &Identity) -> Result<()> {
+    async fn send(&self, val: NetworkValue, receiver: &Identity) -> Result<()> {
         let val = val.to_network();
         let (tx, _) = self
             .p2p_channels
@@ -105,7 +105,7 @@ mod tests {
         let identities: Vec<Identity> = vec!["alice".into(), "bob".into(), "charlie".into()];
         let networking_store = LocalNetworkingStore::from_host_ids(&identities);
 
-        let mut alice = networking_store.get_local_network("alice".into());
+        let alice = networking_store.get_local_network("alice".into());
         let mut bob = networking_store.get_local_network("bob".into());
 
         let task1 = tokio::spawn(async move {

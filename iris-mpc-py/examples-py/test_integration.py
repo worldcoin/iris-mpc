@@ -1,5 +1,4 @@
 import os
-import random
 from iris_mpc_py import PyIrisCode, PyPlaintextStore, PyGraphStore, PyHnswSearcher
 
 vector_filename = "./data/vector.ndjson"
@@ -42,21 +41,3 @@ vector2 = PyPlaintextStore.read_from_ndjson(vector_filename, 10000)
 graph2 = PyGraphStore.read_from_bin(graph_filename)
 
 print("Search for random query iris code:", hnsw.search(query, vector2, graph2))
-
-print("Distance queries, with various arguments")
-
-dist_indices = vector2.eval_distance(1, 2)
-dist_iris_to_id = vector2.eval_distance_to_id(vector2.get(1), 2)
-dist_irises = vector2.get(1).get_distance_fraction(vector2.get(2))
-
-print(dist_indices, dist_iris_to_id, dist_irises)
-assert(dist_indices == dist_iris_to_id and dist_indices == dist_irises)
-
-print("For each layer, sample one random node from it and print its neighborhood")
-for layer in range(graph2.get_max_layer()):
-    print(f"Layer {layer}:\n")
-    vertices = graph2.get_layer_nodes(layer)
-    i = random.randint(0, len(vertices))
-    ret = graph2.get_links(vertices[i], layer)
-    if ret is not None:
-        print(f"Neighborhood of vertex {vertices[i]} in layer {layer}", ret)

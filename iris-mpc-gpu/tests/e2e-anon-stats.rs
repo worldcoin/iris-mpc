@@ -20,7 +20,6 @@ mod e2e_anon_stats_test {
     const N_BUCKETS: usize = 8;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
-    const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
 
     fn install_tracing() {
         tracing_subscriber::registry()
@@ -112,7 +111,6 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -147,7 +145,6 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,
@@ -182,7 +179,6 @@ mod e2e_anon_stats_test {
                 MAX_BATCH_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE,
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
-                MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
                 true,
                 false,

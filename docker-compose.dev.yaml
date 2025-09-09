@@ -1,6 +1,6 @@
 services:
   dev_db:
-    image: public.ecr.aws/docker/library/postgres
+    image: postgres
     ports:
       - "5432:5432"
     user: "postgres"
@@ -17,7 +17,7 @@ services:
       start_period: 40s
 
   localstack:
-    image: public.ecr.aws/localstack/localstack
+    image: localstack/localstack
     depends_on:
       dev_db:
         condition: service_healthy
@@ -41,3 +41,13 @@ services:
 
     volumes:
       - ./scripts/tools/init-localstack.sh:/etc/localstack/init/ready.d/init-localstack.sh
+
+  nginx_0:
+    image: nginx:latest
+    ports:
+      - "4100:4100"
+      - "4101:4101"
+      - "4102:4102"
+    volumes:
+      - ./scripts/nginx/cert:/etc/nginx/cert:ro
+      - ./scripts/nginx/nginx.conf:/etc/nginx/nginx.conf:ro

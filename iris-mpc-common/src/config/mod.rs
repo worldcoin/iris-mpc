@@ -70,9 +70,6 @@ pub struct Config {
     #[serde(default = "default_shares_bucket_name")]
     pub shares_bucket_name: String,
 
-    #[serde(default = "default_sns_buffer_bucket_name")]
-    pub sns_buffer_bucket_name: String,
-
     #[serde(default)]
     pub clear_db_before_init: bool,
 
@@ -181,9 +178,6 @@ pub struct Config {
     #[serde(default = "default_match_distances_buffer_size_extra_percent")]
     pub match_distances_buffer_size_extra_percent: usize,
 
-    #[serde(default = "default_match_distances_2d_buffer_size")]
-    pub match_distances_2d_buffer_size: usize,
-
     #[serde(default = "default_n_buckets")]
     pub n_buckets: usize,
 
@@ -192,9 +186,6 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_sending_mirror_anonymized_stats_message: bool,
-
-    #[serde(default)]
-    pub enable_sending_anonymized_stats_2d_message: bool,
 
     #[serde(default)]
     pub enable_reauth: bool,
@@ -237,6 +228,37 @@ pub struct Config {
 
     #[serde(default)]
     pub enable_modifications_replay: bool,
+
+    // ---- pprof continuous collector (optional) ----
+    #[serde(default = "default_pprof_collector_enabled")]
+    pub enable_pprof_collector: bool,
+
+    #[serde(default = "default_pprof_s3_bucket")]
+    pub pprof_s3_bucket: String,
+
+    #[serde(default = "default_pprof_prefix")]
+    pub pprof_prefix: String,
+
+    #[serde(default)]
+    pub pprof_run_id: Option<String>,
+
+    #[serde(default = "default_pprof_seconds")]
+    pub pprof_seconds: u64,
+
+    #[serde(default = "default_pprof_frequency")]
+    pub pprof_frequency: i32,
+
+    #[serde(default = "default_pprof_idle_interval_sec")]
+    pub pprof_idle_interval_sec: u64,
+
+    #[serde(default)]
+    pub pprof_flame_only: bool,
+
+    #[serde(default)]
+    pub pprof_profile_only: bool,
+
+    #[serde(default = "default_pprof_per_batch_enabled")]
+    pub enable_pprof_per_batch: bool,
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
@@ -305,10 +327,6 @@ fn default_shares_bucket_name() -> String {
     "wf-mpc-prod-smpcv2-sns-requests".to_string()
 }
 
-fn default_sns_buffer_bucket_name() -> String {
-    "wf-smpcv2-prod-sns-buffer".to_string()
-}
-
 fn default_schema_name() -> String {
     "SMPC".to_string()
 }
@@ -336,11 +354,6 @@ fn default_match_distances_buffer_size() -> usize {
 
 fn default_match_distances_buffer_size_extra_percent() -> usize {
     20
-}
-
-// Default size for the 2D match distances buffer, needs to be a multiple of 64 at least
-fn default_match_distances_2d_buffer_size() -> usize {
-    1 << 13 // 8192
 }
 
 fn default_n_buckets() -> usize {
@@ -418,6 +431,36 @@ fn default_batch_sync_polling_timeout_secs() -> u64 {
 
 fn default_full_scan_side_switching_enabled() -> bool {
     true
+}
+
+// ---- pprof collector defaults ----
+fn default_pprof_collector_enabled() -> bool {
+    false
+}
+
+fn default_pprof_s3_bucket() -> String {
+    // Stage default bucket; override in prod via env
+    "wf-smpcv2-stage-hnsw-performance-reports".to_string()
+}
+
+fn default_pprof_prefix() -> String {
+    "hnsw/pprof".to_string()
+}
+
+fn default_pprof_seconds() -> u64 {
+    30
+}
+
+fn default_pprof_frequency() -> i32 {
+    99
+}
+
+fn default_pprof_idle_interval_sec() -> u64 {
+    5
+}
+
+fn default_pprof_per_batch_enabled() -> bool {
+    false
 }
 
 fn default_tokio_threads() -> usize {
@@ -561,16 +604,21 @@ pub struct MetricsConfig {
 // absence of these fields to make the arg None, each field needs
 // 'required = false'
 #[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
-#[group(requires_all = ["private_key", "leaf_cert", "root_cert"])]
+#[group(requires_all = ["private_key", "leaf_cert", "root_certs"])]
 pub struct TlsConfig {
+    // if true, the app will start assuming that the nginx sidecar is running
+    // Client will be TLS aware with root certs applied, the server will not be TLS aware
     #[arg(required = false)]
-    pub private_key: String,
+    pub with_nginx_sidecar: bool,
+
+    #[arg(required = false)]
+    pub private_key: Option<String>,
     // used by a peer to identify itself
     #[arg(required = false)]
-    pub leaf_cert: String,
-    // used by the client to make them trust the server cert
-    #[arg(required = false)]
-    pub root_cert: String,
+    pub leaf_cert: Option<String>,
+    // used by the client to make them trust the server certs
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub root_certs: Vec<String>,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
@@ -592,7 +640,6 @@ pub struct CommonConfig {
     startup_sync_timeout_secs: u64,
     public_key_base_url: String,
     shares_bucket_name: String,
-    sns_buffer_bucket_name: String,
     clear_db_before_init: bool,
     init_db_size: usize,
     max_db_size: usize,
@@ -610,11 +657,9 @@ pub struct CommonConfig {
     luc_serial_ids_from_smpc_request: bool,
     match_distances_buffer_size: usize,
     match_distances_buffer_size_extra_percent: usize,
-    match_distances_2d_buffer_size: usize,
     n_buckets: usize,
     enable_sending_anonymized_stats_message: bool,
     enable_sending_mirror_anonymized_stats_message: bool,
-    enable_sending_anonymized_stats_2d_message: bool,
     enable_reauth: bool,
     enable_reset: bool,
     hawk_request_parallelism: usize,
@@ -659,7 +704,6 @@ impl From<Config> for CommonConfig {
             startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
-            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -690,11 +734,9 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             n_buckets,
             enable_sending_anonymized_stats_message,
             enable_sending_mirror_anonymized_stats_message,
-            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
@@ -719,6 +761,17 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            // pprof collector (not part of common hash)
+            enable_pprof_collector: _,
+            pprof_s3_bucket: _,
+            pprof_prefix: _,
+            pprof_run_id: _,
+            pprof_seconds: _,
+            pprof_frequency: _,
+            pprof_idle_interval_sec: _,
+            pprof_flame_only: _,
+            pprof_profile_only: _,
+            enable_pprof_per_batch: _,
             tokio_threads: _,
         } = value;
 
@@ -729,7 +782,6 @@ impl From<Config> for CommonConfig {
             startup_sync_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
-            sns_buffer_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -747,11 +799,9 @@ impl From<Config> for CommonConfig {
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
-            match_distances_2d_buffer_size,
             n_buckets,
             enable_sending_anonymized_stats_message,
             enable_sending_mirror_anonymized_stats_message,
-            enable_sending_anonymized_stats_2d_message,
             enable_reauth,
             enable_reset,
             hawk_request_parallelism,
