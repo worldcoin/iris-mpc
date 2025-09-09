@@ -1,7 +1,6 @@
 #![allow(clippy::needless_range_loop)]
 pub mod config;
 pub mod error;
-pub mod fast_metrics;
 pub mod galois;
 pub mod galois_engine;
 pub mod helpers;

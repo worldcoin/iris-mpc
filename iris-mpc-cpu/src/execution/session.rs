@@ -40,7 +40,7 @@ pub struct NetworkSession {
 }
 
 impl NetworkSession {
-    async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
+    async fn send(&self, value: NetworkValue, receiver: &Identity) -> Result<()> {
         self.networking.send(value, receiver).await
     }
 
@@ -48,12 +48,12 @@ impl NetworkSession {
         self.networking.receive(sender).await
     }
 
-    pub async fn send_next(&mut self, value: NetworkValue) -> Result<()> {
+    pub async fn send_next(&self, value: NetworkValue) -> Result<()> {
         let next_identity = self.next_identity()?;
         self.send(value, &next_identity).await
     }
 
-    pub async fn send_prev(&mut self, value: NetworkValue) -> Result<()> {
+    pub async fn send_prev(&self, value: NetworkValue) -> Result<()> {
         let prev_identity = self.prev_identity()?;
         self.send(value, &prev_identity).await
     }

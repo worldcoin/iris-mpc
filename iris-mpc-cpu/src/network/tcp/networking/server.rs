@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, sync::Arc};
-
+use crate::network::tcp::networking::client::DynStream;
+use crate::network::tcp::{networking::configure_tcp_stream, Server};
 use async_trait::async_trait;
-use eyre::Result;
+use eyre::{eyre, Result};
+use std::{net::SocketAddr, sync::Arc};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::{
     pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer},
@@ -9,8 +10,6 @@ use tokio_rustls::rustls::{
     RootCertStore, ServerConfig,
 };
 use tokio_rustls::{TlsAcceptor, TlsStream};
-
-use crate::network::tcp::{networking::configure_tcp_stream, Server};
 
 pub struct TlsServer {
     listener: TcpListener,
@@ -26,13 +25,20 @@ impl TlsServer {
         own_addr: SocketAddr,
         key_file: &str,
         cert_file: &str,
-        root_cert: &str,
+        root_certs: &[String],
     ) -> Result<Self> {
         let mut root_cert_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_file_iter(root_cert)? {
-            root_cert_store.add(cert?)?;
+        for root_cert in root_certs {
+            for cert in CertificateDer::pem_file_iter(root_cert)? {
+                root_cert_store.add(cert?)?;
+            }
         }
-        let client_verifier = WebPkiClientVerifier::builder(Arc::new(root_cert_store)).build()?;
+
+        let client_verifier =
+            WebPkiClientVerifier::builder(<Arc<RootCertStore>>::from(root_cert_store))
+                .allow_unauthenticated()
+                .build()
+                .map_err(|e| eyre!(e))?;
 
         let certs = CertificateDer::pem_file_iter(cert_file)?.collect::<Result<Vec<_>, _>>()?;
         let key = PrivateKeyDer::from_pem_file(key_file)?;
@@ -74,5 +80,25 @@ impl Server for TcpServer {
         let (tcp_stream, peer_addr) = self.listener.accept().await?;
         configure_tcp_stream(&tcp_stream)?;
         Ok((peer_addr, tcp_stream))
+    }
+}
+
+pub struct BoxTcpServer(pub TcpServer);
+#[async_trait]
+impl Server for BoxTcpServer {
+    type Output = DynStream;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
+        let (addr, stream) = self.0.accept().await?;
+        Ok((addr, Box::new(stream)))
+    }
+}
+
+pub struct BoxTlsServer(pub TlsServer);
+#[async_trait]
+impl Server for BoxTlsServer {
+    type Output = DynStream;
+    async fn accept(&self) -> Result<(SocketAddr, Self::Output)> {
+        let (addr, stream) = self.0.accept().await?;
+        Ok((addr, Box::new(stream)))
     }
 }

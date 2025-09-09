@@ -15,7 +15,6 @@ use crate::hnsw::{
 };
 use aes_prng::AesRng;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
@@ -504,7 +503,6 @@ impl HnswSearcher {
         lc: usize,
     ) -> Result<()> {
         let metrics_labels = [("layer", lc.to_string())];
-        let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
 
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<V::VectorRef>::from_iter(W.iter().map(|(e, _eq)| e.clone()));
@@ -556,7 +554,7 @@ impl HnswSearcher {
                 .await?;
             opened.insert(c.clone());
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
-            metric_edges.record(c_links.len() as f64);
+            metrics::histogram!("search_edges", &metrics_labels).record(c_links.len() as f64);
 
             // If W is not filled to size ef, insert neighbors in batches until it is
             if W.len() < ef && !c_links.is_empty() {

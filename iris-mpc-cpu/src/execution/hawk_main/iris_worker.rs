@@ -9,7 +9,8 @@ use crate::{
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
-use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
+use iris_mpc_common::vector_id::VectorId;
+use metrics::histogram;
 use std::{
     cmp,
     sync::{
@@ -23,6 +24,19 @@ use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
+    /// Move an iris code to memory closer to the pool (NUMA-awareness).
+    Realloc {
+        iris: ArcIris,
+        rsp: oneshot::Sender<ArcIris>,
+    },
+    /// Same as Realloc, but responds on a blocking channel to allow use from
+    /// synchronous contexts without touching Tokio's blocking APIs.
+    ReallocSync { iris: ArcIris, rsp: Sender<ArcIris> },
+    Insert {
+        vector_id: VectorId,
+        iris: ArcIris,
+        rsp: oneshot::Sender<VectorId>,
+    },
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -40,14 +54,44 @@ enum IrisTask {
 
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
-    workers: Arc<Vec<Sender<IrisTask>>>,
+    workers: Arc<[Sender<IrisTask>]>,
     next_counter: Arc<AtomicU64>,
-    metric_latency: FastHistogram,
 }
 
 impl IrisPoolHandle {
+    pub fn numa_realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Realloc { iris, rsp: tx };
+        self.get_next_worker().send(task)?;
+        Ok(rx)
+    }
+
+    pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
+        // Use a crossbeam oneshot to avoid Tokio's `blocking_recv()` inside a
+        // runtime worker thread. This runs during DB load (startup) and the
+        // worker thread completes quickly (first-touch clone).
+        let (tx, rx) = crossbeam::channel::bounded(1);
+        let task = IrisTask::ReallocSync { iris, rsp: tx };
+        self.get_next_worker().send(task)?;
+        match rx.recv() {
+            Ok(v) => Ok(v),
+            Err(e) => Err(eyre::eyre!("numa_realloc_blocking recv failed: {}", e)),
+        }
+    }
+
+    pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::Insert {
+            vector_id,
+            iris,
+            rsp: tx,
+        };
+        self.get_next_worker().send(task)?;
+        Ok(rx.await?)
+    }
+
     pub async fn dot_product_pairs(
-        &mut self,
+        &self,
         pairs: Vec<(ArcIris, VectorId)>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -56,7 +100,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn dot_product_batch(
-        &mut self,
+        &self,
         query: ArcIris,
         vector_ids: Vec<VectorId>,
     ) -> Result<Vec<RingElement<u16>>> {
@@ -70,7 +114,7 @@ impl IrisPoolHandle {
     }
 
     pub async fn galois_ring_pairwise_distances(
-        &mut self,
+        &self,
         input: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
@@ -79,16 +123,17 @@ impl IrisPoolHandle {
     }
 
     async fn submit(
-        &mut self,
+        &self,
         task: IrisTask,
         rx: oneshot::Receiver<Vec<RingElement<u16>>>,
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        let _ = self.get_next_worker().send(task);
+        self.get_next_worker().send(task)?;
         let res = rx.await?;
 
-        self.metric_latency.record(start.elapsed().as_secs_f64());
+        histogram!("iris_worker.latency", "histogram" => "histogram")
+            .record(start.elapsed().as_secs_f64());
         Ok(res)
     }
 
@@ -121,21 +166,41 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     }
 
     IrisPoolHandle {
-        workers: Arc::new(channels),
+        workers: channels.into(),
         next_counter: Arc::new(AtomicU64::new(0)),
-        metric_latency: FastHistogram::new("iris_worker.latency"),
     }
 }
 
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
+            IrisTask::Realloc { iris, rsp } => {
+                // Re-allocate from this thread.
+                // This attempts to use the NUMA-aware first-touch policy of the OS.
+                let new_iris = Arc::new((*iris).clone());
+                let _ = rsp.send(new_iris);
+            }
+            IrisTask::ReallocSync { iris, rsp } => {
+                let new_iris = Arc::new((*iris).clone());
+                let _ = rsp.send(new_iris);
+            }
+
+            IrisTask::Insert {
+                vector_id,
+                iris,
+                rsp,
+            } => {
+                let mut store = iris_store.data.blocking_write();
+                let vector_id = store.insert(vector_id, iris);
+                let _ = rsp.send(vector_id);
+            }
+
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let store = iris_store.data.blocking_read();
 
                 let iris_pairs = pairs
                     .iter()
-                    .map(|(q, vid)| store.get_vector(vid).map(|iris| (q, iris)));
+                    .map(|(q, vid)| store.borrow_vector(vid).map(|iris| (q, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -150,7 +215,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 
                 let iris_pairs = vector_ids
                     .iter()
-                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
+                    .map(|v| store.borrow_vector(v).map(|iris| (&query, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -167,7 +232,8 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let core_ids = core_affinity::get_core_ids().unwrap();
+    let mut core_ids = core_affinity::get_core_ids().unwrap();
+    core_ids.sort();
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());

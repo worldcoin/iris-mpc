@@ -94,35 +94,6 @@ fn transposed_pack_xor<T: IntRing2k>(x1: &[VecShare<T>], x2: &[VecShare<T>]) -> 
 }
 
 /// Computes and sends a local share of the AND of two vectors of bit-sliced shares.
-async fn and_many_iter_send<T: IntRing2k + NetworkInt>(
-    session: &mut Session,
-    a: impl Iterator<Item = Share<T>>,
-    b: impl Iterator<Item = Share<T>>,
-    size_hint: usize,
-) -> Result<Vec<RingElement<T>>, Error>
-where
-    Standard: Distribution<T>,
-{
-    // Caller should ensure that size_hint == a.len() == b.len()
-    let mut shares_a = Vec::with_capacity(size_hint);
-    for (a_, b_) in a.zip(b) {
-        let rand = session.prf.gen_binary_zero_share::<T>();
-        let mut c = &a_ & &b_;
-        c ^= rand;
-        shares_a.push(c);
-    }
-
-    let network = &mut session.network_session;
-    let messages = shares_a.clone();
-    let message = if messages.len() == 1 {
-        T::new_network_element(messages[0])
-    } else {
-        T::new_network_vec(messages)
-    };
-    network.send_next(message).await?;
-    Ok(shares_a)
-}
-
 async fn and_many_send<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     a: SliceShare<'_, T>,
@@ -196,26 +167,23 @@ where
     if x1.len() != x2.len() {
         bail!("Inputs have different length {} {}", x1.len(), x2.len());
     }
-    let x1_length = x1.len();
-
     let chunk_sizes = x1.iter().map(VecShare::len).collect::<Vec<_>>();
-    for (chunk_size1, chunk_size2) in izip!(chunk_sizes.iter(), x2.iter().map(VecShare::len)) {
-        if *chunk_size1 != chunk_size2 {
-            bail!("VecShare lengths are not equal");
-        }
+    let chunk_sizes2 = x2.iter().map(VecShare::len).collect::<Vec<_>>();
+    if chunk_sizes != chunk_sizes2 {
+        bail!("VecShare lengths are not equal");
     }
 
     let x1 = VecShare::flatten(x1);
     let x2 = VecShare::flatten(x2);
-    let mut shares_a = and_many_iter_send(session, x1, x2, x1_length).await?;
+    let mut shares_a = and_many_send(session, x1.as_slice(), x2.as_slice()).await?;
     let mut shares_b = and_many_receive(session).await?;
 
     // Unflatten the shares vectors
     let mut res = Vec::with_capacity(chunk_sizes.len());
     for l in chunk_sizes {
-        let a = shares_a.drain(..l);
-        let b = shares_b.drain(..l);
-        res.push(VecShare::from_iter_ab(a, b));
+        let a = shares_a.drain(..l).collect();
+        let b = shares_b.drain(..l).collect();
+        res.push(VecShare::from_ab(a, b));
     }
     Ok(res)
 }
@@ -253,7 +221,6 @@ where
     // c = (x1 AND x2) XOR (x3 AND (x1 XOR x2)) and
     // s = x1 XOR x2 XOR x3
     // Note that x1 + x2 + x3 = 2 * c + s mod 2^k
-
     let mut x2x3 = x2;
     transposed_pack_xor_assign(&mut x2x3, &x3);
     // x1 XOR x2 XOR x3
@@ -749,43 +716,31 @@ where
 
         // Split the vectors into even and odd indexed elements
         // Note that the starting index of temp_p is 1 due to removal of p0 above
-        // We anticipate concatenations to allocate vecs with the correct capacity
-        // and minimize cloning/collecting
+        let (even_p, odd_p): (Vec<_>, Vec<_>) = temp_p
+            .clone()
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| i % 2 == 1);
+        let even_p: Vec<_> = even_p.into_iter().map(|(_, x)| x).collect();
+        let odd_p: Vec<_> = odd_p.into_iter().map(|(_, x)| x).collect();
+        let (even_g, odd_g): (Vec<_>, Vec<_>) = temp_g
+            .clone()
+            .into_iter()
+            .enumerate()
+            .partition(|(i, _)| i % 2 == 0);
+        let even_g: Vec<_> = even_g.into_iter().map(|(_, x)| x).collect();
+        let odd_g: Vec<_> = odd_g.into_iter().map(|(_, x)| x).collect();
 
-        // To assess correctness of these sizes, note that the encompassing while loop
-        // maintains the invariant `temp_g.len() - 1 = temp_p.len()`
-
-        let mut even_p_with_even_g = Vec::with_capacity(temp_g.len() - 1);
-        let mut odd_p_temp = Vec::with_capacity(temp_p.len() / 2 + 1);
-        let mut odd_g = Vec::with_capacity(temp_g.len() / 2);
-
-        for (i, p) in temp_p.into_iter().enumerate() {
-            if i % 2 == 1 {
-                even_p_with_even_g.push(p);
-            } else {
-                odd_p_temp.push(p);
-            }
-        }
-        let new_p_len = even_p_with_even_g.len();
-
-        for (i, g) in temp_g.into_iter().enumerate() {
-            if i % 2 == 0 {
-                even_p_with_even_g.push(g);
-            } else {
-                odd_g.push(g);
-            }
-        }
-
-        // Now `even_p_with_even_g` contains merged even_p and even_g to multiply
-        // them by odd_p at once
+        // Merge even_p and even_g to multiply them by odd_p at once
         // This corresponds to computing
         //            (p2 AND p3, p4 AND p5,...) and
         // (g0 AND p1, g2 AND p3, g4 AND p5,...) as above
-
-        let mut odd_p_doubled = Vec::with_capacity(odd_p_temp.len() * 2 - 1);
+        let mut even_p_with_even_g = even_p;
+        let new_p_len = even_p_with_even_g.len();
+        even_p_with_even_g.extend(even_g);
         // Remove p1 to multiply even_p with odd_p
-        odd_p_doubled.extend(odd_p_temp.iter().skip(1).cloned());
-        odd_p_doubled.extend(odd_p_temp);
+        let mut odd_p_doubled = odd_p[1..].to_vec();
+        odd_p_doubled.extend(odd_p);
 
         let mut tmp = transposed_pack_and(session, even_p_with_even_g, odd_p_doubled).await?;
 

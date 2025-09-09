@@ -10,8 +10,7 @@ use crate::execution::hawk_main::state_check::SetHash;
 /// Storage of inserted irises.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SharedIrises<I: Clone> {
-    points: Vec<Option<(VersionId, I)>>,
-    pub size: usize, // Number of Some() stored in points
+    pub points: HashMap<SerialId, (VersionId, I)>,
     pub next_id: u32,
     pub empty_iris: I,
     pub set_hash: SetHash,
@@ -21,7 +20,6 @@ impl<I: Clone + Default> Default for SharedIrises<I> {
     fn default() -> Self {
         Self {
             points: Default::default(),
-            size: 0,
             next_id: 1,
             empty_iris: Default::default(),
             set_hash: Default::default(),
@@ -30,26 +28,20 @@ impl<I: Clone + Default> Default for SharedIrises<I> {
 }
 
 impl<I: Clone> SharedIrises<I> {
-    pub fn new(points_map: HashMap<VectorId, I>, empty_iris: I) -> Self {
-        let size = points_map.keys().map(|v| v.serial_id()).unique().count();
-        let next_id = points_map.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
+    pub fn new(points: HashMap<VectorId, I>, empty_iris: I) -> Self {
+        let next_id = points.keys().map(|v| v.serial_id()).max().unwrap_or(0) + 1;
 
-        let mut points = vec![None; next_id as usize];
-        for (v, iris) in points_map.into_iter() {
-            points[v.serial_id() as usize] = Some((v.version_id(), iris));
-        }
+        let points = points
+            .into_iter()
+            .map(|(v, iris)| (v.serial_id(), (v.version_id(), iris)))
+            .collect::<HashMap<_, _>>();
 
         SharedIrises {
             points,
-            size,
             next_id,
             empty_iris,
             set_hash: SetHash::default(),
         }
-    }
-
-    pub fn get_points(&self) -> &Vec<Option<(VersionId, I)>> {
-        &self.points
     }
 
     /// Inserts the given iris into the database with the specified id.  If an
@@ -60,24 +52,18 @@ impl<I: Clone> SharedIrises<I> {
     /// value after the inserted serial id if this value is larger than the
     /// current value of `next_id`.
     pub fn insert(&mut self, vector_id: VectorId, iris: I) -> VectorId {
-        let serial_id = vector_id.serial_id() as usize;
+        let prev_entry = self
+            .points
+            .insert(vector_id.serial_id(), (vector_id.version_id(), iris));
 
-        // Extend underlying Vec to accomodate the new serial_id
-        if self.points.len() <= serial_id {
-            self.points.resize(serial_id + 1, None);
-        }
+        self.next_id = self.next_id.max(vector_id.serial_id() + 1);
 
         // If overwriting entry, remove previous vector id from set_hash
-        if let Some((version, _)) = self.points[serial_id] {
-            let prev_vector_id = VectorId::new(serial_id as u32, version);
+        if let Some((version, _)) = prev_entry {
+            let prev_vector_id = VectorId::new(vector_id.serial_id(), version);
             self.set_hash.remove(prev_vector_id);
-            self.size -= 1;
         }
-
-        self.size += 1;
-        self.points[serial_id] = Some((vector_id.version_id(), iris));
         self.set_hash.add_unordered(vector_id);
-        self.next_id = self.next_id.max(serial_id as u32 + 1);
 
         vector_id
     }
@@ -99,7 +85,7 @@ impl<I: Clone> SharedIrises<I> {
     }
 
     pub fn db_size(&self) -> usize {
-        self.size
+        self.points.len()
     }
 
     /// Return the next id for new insertions, which should have the serial id
@@ -113,44 +99,30 @@ impl<I: Clone> SharedIrises<I> {
     }
 
     pub fn get_current_version(&self, serial_id: SerialId) -> Option<VersionId> {
-        match &self.points.get(serial_id as usize) {
-            Some(Some((version, _))) => Some(*version),
-            _ => None,
+        self.points.get(&serial_id).map(|(version, _iris)| *version)
+    }
+
+    pub fn get_vector_or_empty(&self, vector: &VectorId) -> I {
+        match self.points.get(&vector.serial_id()) {
+            Some((version, iris)) if vector.version_matches(*version) => iris.clone(),
+            _ => self.empty_iris.clone(),
         }
     }
 
-    pub fn get_vector_or_empty(&self, vector: &VectorId) -> &I {
-        self.get_vector(vector).unwrap_or(&self.empty_iris)
+    pub fn get_vector(&self, vector: &VectorId) -> Option<I> {
+        self.borrow_vector(vector).cloned()
     }
 
-    pub fn get_vector_by_serial_id(&self, serial_id: SerialId) -> Option<&I> {
-        match &self.points.get(serial_id as usize) {
-            Some(Some((_, iris))) => Some(iris),
-            _ => None,
-        }
-    }
-
-    pub fn get_vector(&self, vector: &VectorId) -> Option<&I> {
-        match &self.points.get(vector.serial_id() as usize) {
-            Some(Some((version, iris))) if vector.version_matches(*version) => Some(iris),
+    pub fn borrow_vector(&self, vector: &VectorId) -> Option<&I> {
+        match self.points.get(&vector.serial_id()) {
+            Some((version, iris)) if vector.version_matches(*version) => Some(iris),
             _ => None,
         }
     }
 
     pub fn contains(&self, vector: &VectorId) -> bool {
-        matches!(self.points.get(vector.serial_id() as usize),
-            Some(Some((version, _))) if vector.version_matches(*version))
-    }
-
-    pub fn get_sorted_serial_ids(&self) -> Vec<SerialId> {
-        self.points
-            .iter()
-            .enumerate()
-            .filter_map(|(i, op)| match op {
-                Some(_) => Some(i as SerialId),
-                _ => None,
-            })
-            .collect_vec()
+        matches!(self.points.get(&vector.serial_id()),
+            Some((version, _)) if vector.version_matches(*version))
     }
 
     pub fn to_arc(self) -> SharedIrisesRef<I> {
@@ -163,9 +135,10 @@ impl<I: Clone> SharedIrises<I> {
         (1..self.next_id)
             .rev()
             .take(n)
-            .filter_map(|serial_id| match self.points.get(serial_id as usize) {
-                Some(Some((version, _))) => Some(VectorId::new(serial_id, *version)),
-                _ => None,
+            .filter_map(|serial_id| {
+                self.points
+                    .get(&serial_id)
+                    .map(|(version, _)| VectorId::new(serial_id, *version))
             })
             .collect_vec()
     }
@@ -175,8 +148,8 @@ impl<I: Clone> SharedIrises<I> {
             .iter()
             .map(|index| {
                 let v = VectorId::from_0_index(*index);
-                if let Some(version) = self.get_current_version(v.serial_id()) {
-                    VectorId::new(v.serial_id(), version)
+                if let Some((version, _)) = self.points.get(&v.serial_id()) {
+                    VectorId::new(v.serial_id(), *version)
                 } else {
                     v
                 }
@@ -212,11 +185,11 @@ impl<I: Clone> SharedIrisesRef<I> {
     }
 
     pub async fn get_vector_or_empty(&self, vector: &VectorId) -> I {
-        self.data.read().await.get_vector_or_empty(vector).clone()
+        self.data.read().await.get_vector_or_empty(vector)
     }
 
     pub async fn get_vector(&self, vector: &VectorId) -> Option<I> {
-        self.data.read().await.get_vector(vector).cloned()
+        self.data.read().await.get_vector(vector)
     }
 
     pub async fn get_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
@@ -238,7 +211,7 @@ impl<I: Clone> SharedIrisesRef<I> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
-            .map(|v| body.get_vector(v).cloned())
+            .map(|v| body.get_vector(v))
             .collect_vec()
     }
 
@@ -249,7 +222,7 @@ impl<I: Clone> SharedIrisesRef<I> {
         let body = self.data.read().await;
         vector_ids
             .into_iter()
-            .map(|v| body.get_vector_or_empty(v).clone())
+            .map(|v| body.get_vector_or_empty(v))
             .collect_vec()
     }
 

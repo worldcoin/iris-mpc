@@ -88,20 +88,17 @@ async fn create_graph_from_plain_dbs(
     let mut right_shared_irises = HashMap::new();
 
     // sort the points by serial id to ensure consistent ordering
-    let left_points_sorted: Vec<_> = left_store.storage.get_sorted_serial_ids();
+    let mut left_points_sorted: Vec<_> = left_store.storage.points.keys().cloned().collect();
+    left_points_sorted.sort();
 
-    let right_points_sorted: Vec<_> = right_store.storage.get_sorted_serial_ids();
+    let mut right_points_sorted: Vec<_> = right_store.storage.points.keys().cloned().collect();
+    right_points_sorted.sort();
 
     for serial_id in left_points_sorted {
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            left_store
-                .storage
-                .get_vector_by_serial_id(serial_id)
-                .unwrap()
-                .as_ref()
-                .clone(),
+            (*left_store.storage.points.get(&serial_id).unwrap().1).clone(),
         );
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
@@ -109,12 +106,7 @@ async fn create_graph_from_plain_dbs(
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            right_store
-                .storage
-                .get_vector_by_serial_id(serial_id)
-                .unwrap()
-                .as_ref()
-                .clone(),
+            (*right_store.storage.points.get(&serial_id).unwrap().1).clone(),
         );
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
