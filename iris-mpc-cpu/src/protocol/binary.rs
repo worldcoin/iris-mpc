@@ -335,12 +335,17 @@ where
     }
     let next_id = session.next_identity()?;
     let network = &mut session.network_session;
-    trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
+
+    #[cfg(feature = "networking_metrics")]
+    {
+        trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
+        metrics::counter!(
+            "smpc.rounds",
+            "session_id" => network.session_id.0.to_string(),
+        )
+        .increment(1);
+    }
+
     // Send masks to Receiver
     network.send_next(T::new_network_vec(wc)).await?;
 
@@ -415,12 +420,16 @@ where
     }
 
     // Send unmasked m to Helper
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
+    #[cfg(feature = "networking_metrics")]
+    {
+        trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
+        metrics::counter!(
+            "smpc.rounds",
+            "session_id" => network.session_id.0.to_string(),
+        )
+        .increment(1);
+    }
+
     network.send_prev(T::new_network_vec(unmasked_m)).await?;
 
     Ok(shares)
@@ -462,12 +471,17 @@ where
         .into_iter()
         .map(T::new_network_vec)
         .collect::<Vec<_>>();
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => session.network_session.session_id.0.to_string(),
-    )
-    .increment(1);
+
+    #[cfg(feature = "networking_metrics")]
+    {
+        trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
+        metrics::counter!(
+            "smpc.rounds",
+            "session_id" => session.network_session.session_id.0.to_string(),
+        )
+        .increment(1);
+    }
+
     // Send m0 and m1 to Receiver
     session
         .network_session
