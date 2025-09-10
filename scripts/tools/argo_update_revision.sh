@@ -124,6 +124,14 @@ for i in "${!CLUSTERS[@]}"; do
         continue
     fi
 
+    echo "Disabling apps-bootstrap auto-sync to allow custom deployments."
+    # Disable auto-sync for the apps-bootstrap
+    argocd app set apps-bootstrap --sync-policy manual
+    if [ $? -ne 0 ]; then
+        echo "Failed to disable auto-sync for apps-bootstrap. Exiting the script"
+        exit 1
+    fi
+
     echo "Updating targetRevision for application $ARGOCD_APP in $CLUSTER..."
     # Use ArgoCD CLI to update the application
     argocd app set $ARGOCD_APP --revision $NEW_BRANCH --source-position 2

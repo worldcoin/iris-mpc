@@ -44,7 +44,6 @@ impl Networking for TcpSession {
             "Outgoing stream for {receiver:?} in session {:?} not found",
             self.session_id
         ))?;
-
         outgoing_stream
             .send((self.session_id, value))
             .map_err(|e| eyre!(e.to_string()))?;
