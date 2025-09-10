@@ -23,19 +23,6 @@ use tracing::info;
 
 #[derive(Debug)]
 enum IrisTask {
-    /// Move an iris code to memory closer to the pool (NUMA-awareness).
-    Realloc {
-        iris: ArcIris,
-        rsp: oneshot::Sender<ArcIris>,
-    },
-    /// Same as Realloc, but responds on a blocking channel to allow use from
-    /// synchronous contexts without touching Tokio's blocking APIs.
-    ReallocSync { iris: ArcIris, rsp: Sender<ArcIris> },
-    Insert {
-        vector_id: VectorId,
-        iris: ArcIris,
-        rsp: oneshot::Sender<VectorId>,
-    },
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -53,43 +40,12 @@ enum IrisTask {
 
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
-    workers: Arc<[Sender<IrisTask>]>,
+    workers: Arc<Vec<Sender<IrisTask>>>,
     next_counter: Arc<AtomicU64>,
     metric_latency: FastHistogram,
 }
 
 impl IrisPoolHandle {
-    pub fn numa_realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
-        let (tx, rx) = oneshot::channel();
-        let task = IrisTask::Realloc { iris, rsp: tx };
-        self.get_next_worker().send(task)?;
-        Ok(rx)
-    }
-
-    pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
-        // Use a crossbeam oneshot to avoid Tokio's `blocking_recv()` inside a
-        // runtime worker thread. This runs during DB load (startup) and the
-        // worker thread completes quickly (first-touch clone).
-        let (tx, rx) = crossbeam::channel::bounded(1);
-        let task = IrisTask::ReallocSync { iris, rsp: tx };
-        self.get_next_worker().send(task)?;
-        match rx.recv() {
-            Ok(v) => Ok(v),
-            Err(e) => Err(eyre::eyre!("numa_realloc_blocking recv failed: {}", e)),
-        }
-    }
-
-    pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
-        let (tx, rx) = oneshot::channel();
-        let task = IrisTask::Insert {
-            vector_id,
-            iris,
-            rsp: tx,
-        };
-        self.get_next_worker().send(task)?;
-        Ok(rx.await?)
-    }
-
     pub async fn dot_product_pairs(
         &mut self,
         pairs: Vec<(ArcIris, VectorId)>,
@@ -129,7 +85,7 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let start = Instant::now();
 
-        self.get_next_worker().send(task)?;
+        let _ = self.get_next_worker().send(task);
         let res = rx.await?;
 
         self.metric_latency.record(start.elapsed().as_secs_f64());
@@ -165,7 +121,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     }
 
     IrisPoolHandle {
-        workers: channels.into(),
+        workers: Arc::new(channels),
         next_counter: Arc::new(AtomicU64::new(0)),
         metric_latency: FastHistogram::new("iris_worker.latency"),
     }
@@ -174,27 +130,6 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
 fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
     while let Ok(task) = ch.recv() {
         match task {
-            IrisTask::Realloc { iris, rsp } => {
-                // Re-allocate from this thread.
-                // This attempts to use the NUMA-aware first-touch policy of the OS.
-                let new_iris = Arc::new((*iris).clone());
-                let _ = rsp.send(new_iris);
-            }
-            IrisTask::ReallocSync { iris, rsp } => {
-                let new_iris = Arc::new((*iris).clone());
-                let _ = rsp.send(new_iris);
-            }
-
-            IrisTask::Insert {
-                vector_id,
-                iris,
-                rsp,
-            } => {
-                let mut store = iris_store.data.blocking_write();
-                let vector_id = store.insert(vector_id, iris);
-                let _ = rsp.send(vector_id);
-            }
-
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let store = iris_store.data.blocking_read();
 
@@ -232,8 +167,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
 const SHARD_COUNT: usize = 2;
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
-    let mut core_ids = core_affinity::get_core_ids().unwrap();
-    core_ids.sort();
+    let core_ids = core_affinity::get_core_ids().unwrap();
     assert!(!core_ids.is_empty());
 
     let shard_count = cmp::min(SHARD_COUNT, core_ids.len());
