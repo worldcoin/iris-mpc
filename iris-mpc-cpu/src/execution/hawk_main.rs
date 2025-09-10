@@ -648,6 +648,9 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
 
 pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
+/// Extra space to reserve in the iris store to avoid reallocations during insertion.
+const IRIS_STORE_RESERVE_EXTRA: f64 = 0.2;
+
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
@@ -682,7 +685,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
 
     fn reserve(&mut self, additional: usize) {
         for side in &mut self.irises {
-            side.reserve(additional);
+            side.reserve(additional + (additional as f64 * IRIS_STORE_RESERVE_EXTRA) as usize);
         }
     }
 
