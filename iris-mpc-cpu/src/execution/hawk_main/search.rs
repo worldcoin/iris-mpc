@@ -154,7 +154,7 @@ async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
-    graph_store: &GraphMem<Aby3Store>,
+    graph_store: &GraphMem<Aby3VectorRef>,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
