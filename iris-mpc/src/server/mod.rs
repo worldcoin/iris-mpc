@@ -6,6 +6,7 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
+use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -18,6 +19,7 @@ use iris_mpc_common::helpers::smpc_request::{
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs::{delete_messages_until_sequence_num, get_next_sns_seq_num};
+use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::helpers::task_monitor::TaskMonitor;
 use iris_mpc_common::job::{JobSubmissionHandle, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
@@ -34,6 +36,8 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
+use pprof::protos::Message;
+use pprof::ProfilerGuardBuilder;
 use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
@@ -642,6 +646,17 @@ async fn run_main_server_loop(
             current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
             sem.add_permits(1);
 
+            // Optionally start per-batch pprof guard just before compute begins
+            let mut pprof_guard = None;
+            let pprof_freq = config.pprof_frequency.clamp(1, 1000);
+            let pprof_start = Instant::now();
+            if config.enable_pprof_per_batch {
+                match ProfilerGuardBuilder::default().frequency(pprof_freq).build() {
+                    Ok(g) => pprof_guard = Some(g),
+                    Err(e) => tracing::warn!("pprof per-batch guard init failed: {:?}", e),
+                }
+            }
+
             let result_future = hawk_handle.submit_batch_query(batch.clone());
 
             // await the result
@@ -649,6 +664,63 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             tx_results.send(result).await?;
+
+            // If enabled, stop pprof and upload artifacts tagged with batch info
+            if let Some(guard) = pprof_guard.take() {
+                let dur_secs = pprof_start.elapsed().as_secs();
+                let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+                let party = format!("party{}", config.party_id);
+                let s3 = aws_clients.s3_client.clone();
+                let bucket = config.pprof_s3_bucket.clone();
+                let prefix = config.pprof_prefix.clone();
+                let run_id = config
+                    .pprof_run_id
+                    .clone()
+                    .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
+                let hash_prefix = hex::encode(&batch_hash[0..4]);
+
+                match guard.report().build() {
+                    Ok(report) => {
+                        if !config.pprof_profile_only {
+                            let mut svg = Vec::new();
+                            if let Err(e) = report.flamegraph(&mut svg) {
+                                tracing::warn!("pprof per-batch flamegraph error: {:?}", e);
+                            } else {
+                                let key = format!(
+                                    "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.flame.svg",
+                                    prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                );
+                                let _ = upload_file_to_s3(&bucket, &key, s3.clone(), &svg).await;
+                            }
+                        }
+                        if !config.pprof_flame_only {
+                            match report.pprof() {
+                                Ok(profile) => {
+                                    let mut buf = Vec::new();
+                                    if let Err(e) = profile.encode(&mut buf) {
+                                        tracing::warn!(
+                                            "pprof per-batch protobuf encode error: {:?}",
+                                            e
+                                        );
+                                    } else {
+                                        let key = format!(
+                                            "{}/{}/{}/per-batch/{}_batch-{}_dur{}s_freq{}Hz.profile.pprof",
+                                            prefix, run_id, party, ts, hash_prefix, dur_secs, pprof_freq
+                                        );
+                                        let _ =
+                                            upload_file_to_s3(&bucket, &key, s3.clone(), &buf).await;
+                                    }
+                                }
+                                Err(e) => tracing::warn!(
+                                    "pprof per-batch protobuf report error: {:?}",
+                                    e
+                                ),
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("pprof per-batch report build failed: {:?}", e),
+                }
+            }
 
             shutdown_handler.increment_batches_pending_completion()
             // wrap up tracing span context
