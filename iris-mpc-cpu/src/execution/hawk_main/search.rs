@@ -8,7 +8,7 @@ use crate::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3Vector},
+    hawkers::aby3::aby3_store::{Aby3Query, Aby3Store, Aby3VectorRef},
     hnsw::{GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
@@ -119,7 +119,7 @@ async fn per_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store,
-    graph_store: &GraphMem<Aby3Vector>,
+    graph_store: &GraphMem<Aby3VectorRef>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();

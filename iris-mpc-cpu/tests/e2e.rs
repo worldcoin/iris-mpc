@@ -7,7 +7,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle},
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, Aby3Vector},
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, Aby3VectorRef},
         plaintext_store::PlaintextStore,
         shared_irises::SharedIrises,
     },
@@ -46,7 +46,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     params: &HnswParams,
-) -> Result<([GraphMem<Aby3Vector>; 2], [Aby3SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3VectorRef>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
@@ -81,8 +81,8 @@ async fn create_graph_from_plain_dbs(
         .generate_graph(&mut rng, DB_SIZE, &searcher)
         .await?;
 
-    let left_mpc_graph: GraphMem<Aby3Vector> = left_graph;
-    let right_mpc_graph: GraphMem<Aby3Vector> = right_graph;
+    let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
+    let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();

@@ -23,7 +23,7 @@ use tracing::debug;
 use eyre::{bail, Result};
 use std::collections::HashMap;
 
-pub type PlaintextVector = <PlaintextStore as VectorStore>::VectorRef;
+pub type PlaintextVectorRef = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
 
 pub type PlaintextSharedIrises = SharedIrises<PlaintextStoredIris>;

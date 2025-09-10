@@ -54,7 +54,7 @@ impl Aby3Query {
     }
 }
 
-pub type Aby3Vector = <Aby3Store as VectorStore>::VectorRef;
+pub type Aby3VectorRef = <Aby3Store as VectorStore>::VectorRef;
 
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;

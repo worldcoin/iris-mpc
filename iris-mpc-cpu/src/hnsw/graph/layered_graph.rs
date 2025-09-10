@@ -243,7 +243,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::plaintext_store::{PlaintextStore, PlaintextVector},
+        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             VectorStore,
@@ -366,7 +366,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<PlaintextVector, usize> = HashMap::new();
+        let mut point_ids_map: HashMap<PlaintextVectorRef, usize> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
