@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use eyre::Result;
 use std::io;
 use std::{
@@ -516,11 +516,7 @@ async fn write_buf<T: NetworkConnection>(
     }
     *buffered_msgs = 0;
 
-    // maybe faster than write_all()?
-    while !buf.is_empty() {
-        let n = stream.write(buf).await?;
-        buf.advance(n);
-    }
+    stream.write_all(buf).await?;
     stream.flush().await?;
     buf.clear();
     Ok(())
