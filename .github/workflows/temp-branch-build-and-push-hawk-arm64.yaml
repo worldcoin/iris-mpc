@@ -3,7 +3,6 @@ name: Branch - Hawk Build and push docker image ARM64
 on:
   push:
     branches:
-      - "profiling-server-enabled"
       - "profiling-server-v2"
 
 concurrency:
