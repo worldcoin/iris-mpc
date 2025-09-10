@@ -238,10 +238,6 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
-    // ---- pprof continuous collector (optional) ----
-    #[serde(default = "default_pprof_collector_enabled")]
-    pub enable_pprof_collector: bool,
-
     #[serde(default = "default_pprof_s3_bucket")]
     pub pprof_s3_bucket: String,
 
@@ -452,10 +448,6 @@ fn default_full_scan_side_switching_enabled() -> bool {
 }
 
 // ---- pprof collector defaults ----
-fn default_pprof_collector_enabled() -> bool {
-    false
-}
-
 fn default_pprof_s3_bucket() -> String {
     // Stage default bucket; override in prod via env
     "wf-smpcv2-stage-hnsw-performance-reports".to_string()
@@ -786,7 +778,6 @@ impl From<Config> for CommonConfig {
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
             // pprof collector (not part of common hash)
-            enable_pprof_collector: _,
             pprof_s3_bucket: _,
             pprof_prefix: _,
             pprof_run_id: _,

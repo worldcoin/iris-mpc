@@ -5,9 +5,6 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
-  - name: SMPC__ENABLE_PPROF_COLLECTOR
-    value: "false"
-
   - name: SMPC__PPROF_FLAME_ONLY
     value: "true"
 
