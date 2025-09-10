@@ -285,8 +285,6 @@ async fn maybe_start_pprof_collector(
                 tokio::time::sleep(idle).await;
             }
         }
-        #[allow(unreachable_code)]
-        Ok(())
     });
 }
 

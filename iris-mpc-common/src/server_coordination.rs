@@ -60,7 +60,6 @@ fn pprof_routes() -> Router {
         .route(
             "/pprof/flame",
             get(|Query(q): Query<PprofQuery>| async move {
-                tracing::info!("Preparing pprof flame!!!!");
                 let seconds = q.seconds.unwrap_or(30).min(300);
                 let frequency = q.frequency.unwrap_or(99).clamp(1, 1000);
                 let guard = ProfilerGuardBuilder::default()
@@ -437,7 +436,7 @@ pub async fn init_heartbeat_task(
                         );
                     }
                 } else {
-                    tracing::debug!("Heartbeat: Node {} is healthy", host);
+                    tracing::info!("Heartbeat: Node {} is healthy", host);
                 }
             }
 
