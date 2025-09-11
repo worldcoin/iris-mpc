@@ -37,7 +37,6 @@ enum IrisTask {
     Insert {
         vector_id: VectorId,
         iris: ArcIris,
-        rsp: oneshot::Sender<VectorId>,
     },
     Reserve {
         additional: usize,
@@ -82,19 +81,10 @@ impl IrisPoolHandle {
         Ok(())
     }
 
-    pub fn insert(
-        &self,
-        vector_id: VectorId,
-        iris: ArcIris,
-    ) -> Result<oneshot::Receiver<VectorId>> {
-        let (tx, rx) = oneshot::channel();
-        let task = IrisTask::Insert {
-            vector_id,
-            iris,
-            rsp: tx,
-        };
+    pub fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<()> {
+        let task = IrisTask::Insert { vector_id, iris };
         self.get_mut_worker().send(task)?;
-        Ok(rx)
+        Ok(())
     }
 
     pub fn reserve(&self, additional: usize) -> Result<()> {
@@ -203,11 +193,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 let _ = rsp.send(());
             }
 
-            IrisTask::Insert {
-                vector_id,
-                iris,
-                rsp,
-            } => {
+            IrisTask::Insert { vector_id, iris } => {
                 let iris = if INSERT_NUMA_REALLOC {
                     Arc::new((*iris).clone())
                 } else {
@@ -215,8 +201,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 };
 
                 let mut store = iris_store.data.blocking_write();
-                let vector_id = store.insert(vector_id, iris);
-                let _ = rsp.send(vector_id);
+                store.insert(vector_id, iris);
             }
 
             IrisTask::Reserve { additional } => {

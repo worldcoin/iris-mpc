@@ -679,7 +679,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-            let _no_wait = pool.insert(vector_id, iris).unwrap();
+            pool.insert(vector_id, iris).unwrap();
         }
     }
 
@@ -702,8 +702,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
         for side in &self.iris_pools {
             for i in 0..size {
-                let _no_wait = side
-                    .insert(VectorId::from_serial_id(i as u32), iris.clone())
+                side.insert(VectorId::from_serial_id(i as u32), iris.clone())
                     .unwrap();
             }
         }
