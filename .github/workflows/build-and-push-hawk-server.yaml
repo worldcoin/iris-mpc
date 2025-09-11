@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - e2e/templates-for-hnsw-e2e
+      - chore/fix-cpu-pipeline
   release:
     types:
       - 'published'
@@ -49,6 +49,8 @@ jobs:
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/worldcoin/${{ env.IMAGE_NAME }}:latest
           platforms: linux/amd64
+          build-args: |
+            ARCHITECTURE=x86_64
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.hawk

@@ -1,13 +1,13 @@
 #!/bin/bash
 
-# This script provides a way to update the targetRevision of an ArgoCD application in all SMPC stage clusters.
+# This script provides a way to update the targetRevision of an ArgoCD application in all SMPC stage and dev clusters.
 # The script will loop through each cluster, port-forward ArgoCD server, authenticate to it, update the targetRevision of the application, and close port-forward.
 # The script can be configured to use either CPU or GPU clusters by passing the appropriate argument. The default is GPU
 # Usage examples:
-#   ./scripts/tools/argo_stage_update_revision.sh $(git branch --show-current)
-#   ./scripts/tools/argo_stage_update_revision.sh main
-#   ./scripts/tools/argo_stage_update_revision.sh <another-branch>
-#   ./scripts/tools/argo_stage_update_revision.sh <another-branch> cpu
+#   ./scripts/tools/argo_update_revision.sh $(git branch --show-current)
+#   ./scripts/tools/argo_update_revision.sh main
+#   ./scripts/tools/argo_update_revision.sh <another-branch>
+#   ./scripts/tools/argo_update_revision.sh <another-branch> cpu-dev
 #
 # Pre-requisites:
 # 1. Ensure that you have the ArgoCD CLI installed on your local machine. (brew install argocd)
@@ -23,16 +23,35 @@ if [ -z "$MPCV2_TYPE" ]; then
     MPCV2_TYPE="gpu"
 fi
 
+ENVIRONMENT_NAME=$3
+# if ENVIRONMENT_NAME is not provided, set it to "stage"
+if [ -z "$ENVIRONMENT_NAME" ]; then
+    ENVIRONMENT_NAME="stage"
+fi
+
 if [ "$MPCV2_TYPE" == "cpu" ]; then
   CLUSTER_NAME="ampc-hnsw"
   ARGOCD_APP="ampc-hnsw"
+  if [ "$ENVIRONMENT_NAME" == "dev" ]; then
+    CLUSTERS=("arn:aws:eks:eu-central-1:004304088310:cluster/$CLUSTER_NAME-0-dev" "arn:aws:eks:eu-central-1:284038850594:cluster/$CLUSTER_NAME-1-dev" "arn:aws:eks:eu-central-1:882222437714:cluster/$CLUSTER_NAME-2-dev")
+  else
+    CLUSTERS=("arn:aws:eks:eu-central-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-central-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-central-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
+  fi
   echo "Using CPU cluster name: $CLUSTER_NAME"
   echo "Using CPU argo app: $ARGOCD_APP"
+  echo "Operating on environment: $ENVIRONMENT_NAME"
 elif [ "$MPCV2_TYPE" == "gpu" ]; then
+  # GPU clusters are only available in stage environment
+  if [ "$ENVIRONMENT_NAME" != "stage" ]; then
+     printf "GPU clusters are only available in stage environment\n"
+     exit 1
+  fi
   CLUSTER_NAME="smpcv2"
   ARGOCD_APP="iris-mpc"
+  CLUSTERS=("arn:aws:eks:eu-north-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-north-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-north-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
   echo "Using GPU cluster name: $CLUSTER_NAME"
   echo "Using GPU argo app: $ARGOCD_APP"
+  echo "Operating on environment: $ENVIRONMENT_NAME"
 else
   printf "\nUnknown mpcv2 type: %s\n" "$MPCV2_TYPE"
   printf "Available types: gpu, cpu\n"
@@ -40,8 +59,7 @@ else
 fi
 
 
-# Define clusters and ArgoCD application details
-CLUSTERS=("arn:aws:eks:eu-central-1:024848486749:cluster/$CLUSTER_NAME-0-stage" "arn:aws:eks:eu-central-1:024848486818:cluster/$CLUSTER_NAME-1-stage" "arn:aws:eks:eu-central-1:024848486770:cluster/$CLUSTER_NAME-2-stage")
+# Define ArgoCD application details
 ARGOCD_PORTS=(8081 8082 8083)
 
 # Define a green color
@@ -104,6 +122,14 @@ for i in "${!CLUSTERS[@]}"; do
     authenticate_argocd $PORT
     if [ $? -ne 0 ]; then
         continue
+    fi
+
+    echo "Disabling apps-bootstrap auto-sync to allow custom deployments."
+    # Disable auto-sync for the apps-bootstrap
+    argocd app set apps-bootstrap --sync-policy manual
+    if [ $? -ne 0 ]; then
+        echo "Failed to disable auto-sync for apps-bootstrap. Exiting the script"
+        exit 1
     fi
 
     echo "Updating targetRevision for application $ARGOCD_APP in $CLUSTER..."
