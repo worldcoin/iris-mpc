@@ -2030,6 +2030,7 @@ mod tests_db {
             hnsw_param_M: 256,
             hnsw_param_ef_search: 256,
             hnsw_prf_key: None,
+            numa: true,
             match_distances_buffer_size: 64,
             n_buckets: 10,
             disable_persistence: false,

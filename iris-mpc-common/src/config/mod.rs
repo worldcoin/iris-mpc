@@ -769,6 +769,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hawk_prf_key,
+            hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
             enable_modifications_sync,
             enable_modifications_replay,
