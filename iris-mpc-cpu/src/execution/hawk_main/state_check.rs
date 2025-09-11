@@ -52,10 +52,10 @@ impl HawkSession {
 
             let decode = |msg| match msg {
                 Ok(NetworkValue::PrfCheck(c)) => Ok(c),
-                other => {
-                    tracing::error!("Unexpected message format: {:?}", other);
-                    Err(eyre!("Could not deserialize PrfCheck"))
-                }
+                other => Err(eyre!(
+                    "Could not deserialize PrfCheck due to error: {:?}",
+                    other
+                )),
             };
             let prev_share = decode(net.receive_prev().await)?;
             let next_share = decode(net.receive_next().await)?;
