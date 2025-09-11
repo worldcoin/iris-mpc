@@ -66,10 +66,10 @@ hnsw-smpc-2:
   resources:
     limits:
       cpu: 4
-      memory: 4Gi
+      memory: 16Gi
     requests:
       cpu: 4
-      memory: 4Gi
+      memory: 16Gi
 
   imagePullSecrets:
     - name: github-secret
