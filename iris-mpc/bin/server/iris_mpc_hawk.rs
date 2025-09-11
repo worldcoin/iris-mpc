@@ -10,6 +10,7 @@ use std::process::exit;
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
+    println!("TEST DEV ENV - DEMO CHANGE");
     println!("Init config");
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
