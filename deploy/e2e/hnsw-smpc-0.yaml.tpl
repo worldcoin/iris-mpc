@@ -143,7 +143,7 @@ hnsw-smpc-0:
       value: "32"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
-      value: "30"  # 2 minutes per batch in stage, bump to 4 in prod
+      value: "60"
 
     - name: SMPC__HAWK_REQUEST_PARALLELISM
       value: "1024"
