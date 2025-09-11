@@ -10,21 +10,21 @@ use crate::{
         insert::{self, InsertPlanV},
         BothEyes,
     },
-    hawkers::plaintext_store::SharedPlaintextStore,
+    hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{GraphMem, HnswSearcher},
 };
 
-pub type SharedPlaintextGraphs = BothEyes<GraphMem<SharedPlaintextStore>>;
+pub type SharedPlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
 pub type SharedPlaintextStores = BothEyes<SharedPlaintextStore>;
 
 pub async fn plaintext_parallel_batch_insert(
-    graph: Option<GraphMem<SharedPlaintextStore>>,
+    graph: Option<GraphMem<PlaintextVectorRef>>,
     store: Option<SharedPlaintextStore>,
     irises: Vec<(IrisVectorId, IrisCode)>,
     params: crate::hnsw::HnswParams,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<SharedPlaintextStore>, SharedPlaintextStore)> {
+) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore)> {
     assert!(graph.is_none() == store.is_none());
     let mut graph = Arc::new(graph.unwrap_or_default());
     let mut store = store.unwrap_or_default();
@@ -84,7 +84,7 @@ mod tests {
     use super::*;
     use crate::{
         hawkers::plaintext_store::PlaintextStore,
-        hnsw::{graph::layered_graph::migrate, HnswParams, HnswSearcher},
+        hnsw::{HnswParams, HnswSearcher},
     };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
@@ -95,7 +95,7 @@ mod tests {
         to_insert: usize,
     ) -> Result<(
         HnswSearcher,
-        GraphMem<SharedPlaintextStore>,
+        GraphMem<PlaintextVectorRef>,
         SharedPlaintextStore,
         Vec<(IrisVectorId, IrisCode)>,
         [u8; 16],
@@ -110,7 +110,7 @@ mod tests {
             .await?;
 
         let shared_store = SharedPlaintextStore::from(ptxt_vector);
-        let graph = migrate(ptxt_graph, |id| id);
+        let graph = ptxt_graph;
 
         let irises_to_insert = IrisDB::new_random_rng(to_insert, &mut rng).db;
 
@@ -130,7 +130,7 @@ mod tests {
 
     async fn check_results(
         mut store: SharedPlaintextStore,
-        graph: GraphMem<SharedPlaintextStore>,
+        graph: GraphMem<PlaintextVectorRef>,
         irises: Vec<(IrisVectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,

@@ -7,7 +7,9 @@ use crate::{
         session::{NetworkSession, Session, SessionId},
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store},
+        aby3::aby3_store::{
+            Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, Aby3VectorRef,
+        },
         shared_irises::SharedIrises,
     },
     hnsw::{
@@ -249,8 +251,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store>>;
 
-type GraphRef = Arc<RwLock<GraphMem<Aby3Store>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3Store>>;
+type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 
 /// HawkSession is a unit of parallelism when operating on the HawkActor.
 #[derive(Clone)]
@@ -260,10 +262,7 @@ pub struct HawkSession {
     pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-pub type SearchResult = (
-    <Aby3Store as VectorStore>::VectorRef,
-    <Aby3Store as VectorStore>::DistanceRef,
-);
+pub type SearchResult = (Aby3VectorRef, <Aby3Store as VectorStore>::DistanceRef);
 
 #[derive(Debug, Clone)]
 pub struct HawkInsertPlan {
@@ -293,7 +292,7 @@ impl HawkActor {
     pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
-            [(); 2].map(|_| GraphMem::<Aby3Store>::new()),
+            [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
         .await
@@ -301,7 +300,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
-        graph: BothEyes<GraphMem<Aby3Store>>,
+        graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         let search_params = HnswParams::new(
