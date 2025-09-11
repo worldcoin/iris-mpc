@@ -5,6 +5,31 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__PPROF_FLAME_ONLY
+    value: "true"
+
+  - name: SMPC__ENABLE_PPROF_PER_BATCH
+    value: "true"
+
+  # Optional overrides (uncomment/customize as needed)
+  - name: SMPC__PPROF_S3_BUCKET
+    value: "wf-smpcv2-dev-hnsw-performance-reports"
+
+  - name: SMPC__PPROF_PREFIX
+    value: "dev/hnsw"
+
+  - name: SMPC__PPROF_SECONDS
+    value: "180"
+
+  - name: SMPC__PPROF_FREQUENCY
+    value: "49"
+
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  - name: SMPC__PPROF_RUN_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
@@ -26,6 +51,9 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "32"
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "240"  # 2 minutes per batch in dev, bump to 4 in prod
 
@@ -33,7 +61,7 @@ env:
     value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "8"
+    value: "48"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
