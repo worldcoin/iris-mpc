@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Display};
+use std::str::FromStr;
 
+use crate::hnsw::vector_store::Ref;
 // Assuming these are defined elsewhere in your crate.
 // You might need to adjust the `use` paths.
-use crate::hnsw::{graph::layered_graph::Layer, GraphMem, VectorStore};
+use crate::hnsw::{graph::layered_graph::Layer, GraphMem};
 
 // --- 1. Neighborhood Diffing ---
 
@@ -17,13 +19,9 @@ pub struct NeighborhoodDiff {
     pub percentage_common: f64,
 }
 
-impl<V: VectorStore> Layer<V> {
+impl<V: Ref + Display + FromStr> Layer<V> {
     /// Diffs the neighborhood of a specific node between this layer and another.
-    pub fn diff_neighborhood(
-        &self,
-        other: &Layer<V>,
-        node: &V::VectorRef,
-    ) -> Option<NeighborhoodDiff> {
+    pub fn diff_neighborhood(&self, other: &Layer<V>, node: &V) -> Option<NeighborhoodDiff> {
         let self_neighbors = self.links.get(node);
         let other_neighbors = other.links.get(node);
 
@@ -58,17 +56,17 @@ impl<V: VectorStore> Layer<V> {
 
 /// Holds the aggregated result of diffing two layers.
 #[derive(Debug, Clone, PartialEq)]
-pub struct LayerDiff<V: VectorStore> {
+pub struct LayerDiff<V: Ref + Display + FromStr> {
     pub total_common_edges: usize,
     pub total_edges_in_self: usize,
     pub total_edges_in_other: usize,
     /// Average percentage of common edges across all neighborhoods in the layer.
     pub avg_percentage_common: f64,
     /// Holds individual diffs for each node in the layer for detailed debugging.
-    pub per_node_diffs: HashMap<V::VectorRef, NeighborhoodDiff>,
+    pub per_node_diffs: HashMap<V, NeighborhoodDiff>,
 }
 
-impl<V: VectorStore> Layer<V> {
+impl<V: Ref + Display + FromStr> Layer<V> {
     /// Diffs this entire layer against another layer.
     ///
     /// ## Panics
@@ -123,7 +121,7 @@ impl<V: VectorStore> Layer<V> {
 
 /// Holds validation results and (if valid) the diff of two graphs.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GraphDiff<V: VectorStore> {
+pub struct GraphDiff<V: Ref + Display + FromStr> {
     // --- Validation Fields ---
     /// Number of layers in the `self` graph.
     pub self_layer_count: usize,
@@ -141,7 +139,7 @@ pub struct GraphDiff<V: VectorStore> {
     pub per_layer_diffs: Vec<LayerDiff<V>>,
 }
 
-impl<V: VectorStore> GraphDiff<V> {
+impl<V: Ref + Display + FromStr> GraphDiff<V> {
     /// Helper to create a new, empty diff, primarily for returning early on failure.
     fn new_aborted(self_layers: usize, other_layers: usize, mismatched_nodes: Vec<usize>) -> Self {
         GraphDiff {
@@ -163,10 +161,7 @@ impl<V: VectorStore> GraphDiff<V> {
     }
 }
 
-impl<V: VectorStore> fmt::Display for GraphDiff<V>
-where
-    V::VectorRef: fmt::Debug + Ord, // Added Ord for stable sorting of nodes
-{
+impl<V: Ref + Display + FromStr + fmt::Debug + Ord> fmt::Display for GraphDiff<V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         // --- 1. Print Validation Failure ---
         if self.self_layer_count != self.other_layer_count {
@@ -258,7 +253,7 @@ where
     }
 }
 
-impl<V: VectorStore> GraphMem<V> {
+impl<V: Ref + Display + FromStr> GraphMem<V> {
     /// Diffs this graph against another, comparing layer by layer.
     /// First validates that layer counts and all node sets per layer are identical.
     /// If validation fails, returns a GraphDiff struct containing only the failure info.
