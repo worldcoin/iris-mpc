@@ -1,327 +1,205 @@
+use crate::hnsw::{vector_store::Ref, GraphMem};
 use std::collections::{HashMap, HashSet};
-use std::fmt::{self, Display};
+use std::fmt::{Debug, Display};
+use std::iter::Sum;
+use std::ops::Add;
 use std::str::FromStr;
+// --- 1. Information Collector Structures ---
 
-use crate::hnsw::vector_store::Ref;
-// Assuming these are defined elsewhere in your crate.
-// You might need to adjust the `use` paths.
-use crate::hnsw::{graph::layered_graph::Layer, GraphMem};
-
-// --- 1. Neighborhood Diffing ---
-
-/// Holds the result of diffing two neighborhoods for a single node.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NeighborhoodDiff {
-    pub common_edges: usize,
-    pub total_edges_in_self: usize,
-    pub total_edges_in_other: usize,
-    /// Percentage of common edges relative to the total number of unique edges.
-    pub percentage_common: f64,
+/// Raw neighborhood information for a single node from two graphs.
+pub struct NeighborhoodInfo<'a, V: Ref> {
+    pub self_neighbors: HashSet<&'a V>,
+    pub other_neighbors: HashSet<&'a V>,
 }
 
-impl<V: Ref + Display + FromStr> Layer<V> {
-    /// Diffs the neighborhood of a specific node between this layer and another.
-    pub fn diff_neighborhood(&self, other: &Layer<V>, node: &V) -> Option<NeighborhoodDiff> {
-        let self_neighbors = self.links.get(node);
-        let other_neighbors = other.links.get(node);
+/// A collection of all neighborhood information for a single layer.
+pub struct LayerInfo<'a, V: Ref> {
+    pub nodes: HashMap<&'a V, NeighborhoodInfo<'a, V>>,
+}
 
-        match (self_neighbors, other_neighbors) {
-            (Some(self_nb), Some(other_nb)) => {
-                let self_set: HashSet<_> = self_nb.iter().collect();
-                let other_set: HashSet<_> = other_nb.iter().collect();
+/// A collection of all layer information for an entire graph.
+pub struct GraphInfo<'a, V: Ref> {
+    pub layers: Vec<LayerInfo<'a, V>>,
+}
 
-                let common_edges = self_set.intersection(&other_set).count();
-                let total_unique_edges = self_set.union(&other_set).count();
+// --- 2. Generic Diffing Trait ---
 
-                let percentage_common = if total_unique_edges == 0 {
-                    100.0 // Both are empty, so they are perfectly matching
-                } else {
-                    (common_edges as f64 / total_unique_edges as f64) * 100.0
-                };
+/// A trait that defines a generic graph diffing algorithm.
+/// It separates the logic of how to compare nodes/layers from the data collection.
+pub trait EdgeDiffer<V: Ref + Display + FromStr> {
+    /// The output of diffing a single neighborhood.
+    type NeighborhoodDiff: Debug + Clone;
+    /// The output of diffing an entire layer.
+    type LayerDiff: Debug + Clone;
+    /// The final output of diffing the graph, which must be displayable.
+    type GraphDiff: Debug + Clone;
 
-                Some(NeighborhoodDiff {
-                    common_edges,
-                    total_edges_in_self: self_set.len(),
-                    total_edges_in_other: other_set.len(),
-                    percentage_common,
-                })
-            }
-            // Return None if the node doesn't exist in both layers for comparison.
-            _ => None,
+    /// Diffs a single neighborhood based on the provided info.
+    fn diff_neighborhood(&self, info: &NeighborhoodInfo<V>) -> Self::NeighborhoodDiff;
+
+    /// Diffs a layer by processing all its neighborhood info.
+    fn diff_layer(&self, info: &LayerInfo<V>) -> Self::LayerDiff;
+
+    /// Diffs a graph by processing all its layer info.
+    fn diff_graph(&self, info: &GraphInfo<V>) -> Self::GraphDiff;
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct JaccardState {
+    pub intersection: usize,
+    pub union: usize,
+}
+
+impl JaccardState {
+    pub fn new(intersection: usize, union: usize) -> Self {
+        Self {
+            intersection,
+            union,
         }
     }
-}
-
-// --- 2. Layer Diffing (Modified) ---
-
-/// Holds the aggregated result of diffing two layers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct LayerDiff<V: Ref + Display + FromStr> {
-    pub total_common_edges: usize,
-    pub total_edges_in_self: usize,
-    pub total_edges_in_other: usize,
-    /// Average percentage of common edges across all neighborhoods in the layer.
-    pub avg_percentage_common: f64,
-    /// Holds individual diffs for each node in the layer for detailed debugging.
-    pub per_node_diffs: HashMap<V, NeighborhoodDiff>,
-}
-
-impl<V: Ref + Display + FromStr> Layer<V> {
-    /// Diffs this entire layer against another layer.
-    ///
-    /// ## Panics
-    /// This function ASSUMES (and is guaranteed by `diff_graph`) that both layers
-    /// have identical node sets. It will panic if a node key from `self` is not
-    /// found in `other`.
-    pub fn diff_layer(&self, other: &Layer<V>) -> LayerDiff<V> {
-        let mut total_common_edges = 0;
-        let mut total_edges_in_self = 0;
-        let mut total_edges_in_other = 0;
-        let mut percentage_sum = 0.0;
-        let mut per_node_diffs = HashMap::new();
-
-        // We can just iterate over self's keys, as `diff_graph` has guaranteed
-        // the key sets of both layers are identical.
-        let num_neighborhoods = self.links.len();
-
-        for node_ref in self.links.keys() {
-            // This should always return Some, based on the guarantee from diff_graph.
-            if let Some(neighborhood_diff) = self.diff_neighborhood(other, node_ref) {
-                total_common_edges += neighborhood_diff.common_edges;
-                total_edges_in_self += neighborhood_diff.total_edges_in_self;
-                total_edges_in_other += neighborhood_diff.total_edges_in_other;
-                percentage_sum += neighborhood_diff.percentage_common;
-                per_node_diffs.insert(node_ref.clone(), neighborhood_diff);
-            } else {
-                // This case should be impossible if the graph diff pre-check passed.
-                unreachable!(
-                    "Graph diff logic failure: Node {:?} in self layer keySet but not in other",
-                    node_ref
-                );
-            }
-        }
-
-        let avg_percentage_common = if num_neighborhoods == 0 {
-            100.0
+    /// Calculates the Jaccard similarity, a value between 0.0 and 1.0.
+    pub fn similarity(&self) -> f64 {
+        if self.union == 0 {
+            1.0
         } else {
-            percentage_sum / num_neighborhoods as f64
-        };
-
-        LayerDiff {
-            total_common_edges,
-            total_edges_in_self,
-            total_edges_in_other,
-            avg_percentage_common,
-            per_node_diffs,
+            self.intersection as f64 / self.union as f64
         }
     }
 }
 
-// --- 3. Graph Diffing (Modified) ---
-
-/// Holds validation results and (if valid) the diff of two graphs.
-#[derive(Debug, Clone, PartialEq)]
-pub struct GraphDiff<V: Ref + Display + FromStr> {
-    // --- Validation Fields ---
-    /// Number of layers in the `self` graph.
-    pub self_layer_count: usize,
-    /// Number of layers in the `other` graph.
-    pub other_layer_count: usize,
-    /// List of layer indices where the set of nodes (vertices) did not match.
-    pub mismatched_node_set_layers: Vec<usize>,
-
-    // --- Diff Fields (Only populated if validation passes) ---
-    pub total_common_edges: usize,
-    pub total_edges_in_self: usize,
-    pub total_edges_in_other: usize,
-    /// The overall percentage of common edges across all layers.
-    pub overall_percentage_common: f64,
-    pub per_layer_diffs: Vec<LayerDiff<V>>,
-}
-
-impl<V: Ref + Display + FromStr> GraphDiff<V> {
-    /// Helper to create a new, empty diff, primarily for returning early on failure.
-    fn new_aborted(self_layers: usize, other_layers: usize, mismatched_nodes: Vec<usize>) -> Self {
-        GraphDiff {
-            self_layer_count: self_layers,
-            other_layer_count: other_layers,
-            mismatched_node_set_layers: mismatched_nodes,
-            total_common_edges: 0,
-            total_edges_in_self: 0,
-            total_edges_in_other: 0,
-            overall_percentage_common: 0.0,
-            per_layer_diffs: Vec::new(),
+impl Add for JaccardState {
+    type Output = Self;
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            intersection: self.intersection + rhs.intersection,
+            union: self.union + rhs.union,
         }
-    }
-
-    /// Returns true if the diff was aborted due to validation failure.
-    pub fn did_fail_validation(&self) -> bool {
-        self.self_layer_count != self.other_layer_count
-            || !self.mismatched_node_set_layers.is_empty()
     }
 }
 
-impl<V: Ref + Display + FromStr + fmt::Debug + Ord> fmt::Display for GraphDiff<V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // --- 1. Print Validation Failure ---
-        if self.self_layer_count != self.other_layer_count {
-            writeln!(f, "🛑 Graph Diff Aborted: Layer count mismatch.")?;
-            writeln!(f, "   Self:  {} layers", self.self_layer_count)?;
-            writeln!(f, "   Other: {} layers", self.other_layer_count)?;
-            return Ok(());
-        }
-
-        if !self.mismatched_node_set_layers.is_empty() {
-            writeln!(f, "🛑 Graph Diff Aborted: Node sets mismatch.")?;
-            writeln!(
-                f,
-                "   The following layers do not contain the exact same set of nodes:"
-            )?;
-            for layer_index in &self.mismatched_node_set_layers {
-                writeln!(f, "     - Layer {}", layer_index)?;
-            }
-            return Ok(());
-        }
-
-        // --- 2. Print Full Diff Report (Validation Passed) ---
-        writeln!(f, "✅ Graph Diff Summary (Structural Match):")?;
-        writeln!(
-            f,
-            "  Overall Commonality: {:.2}%",
-            self.overall_percentage_common
-        )?;
-        writeln!(f, "  Total Edges (Self):  {}", self.total_edges_in_self)?;
-        writeln!(f, "  Total Edges (Other): {}", self.total_edges_in_other)?;
-        writeln!(f, "  Total Common Edges:  {}", self.total_common_edges)?;
-
-        for (i, layer_diff) in self.per_layer_diffs.iter().enumerate() {
-            writeln!(f, "\n--- Layer {} ---", i)?;
-            writeln!(
-                f,
-                "  Layer Avg. Commonality: {:.2}%",
-                layer_diff.avg_percentage_common
-            )?;
-            writeln!(
-                f,
-                "  Edges (Self): {}, Edges (Other): {}, Common: {}",
-                layer_diff.total_edges_in_self,
-                layer_diff.total_edges_in_other,
-                layer_diff.total_common_edges
-            )?;
-
-            if layer_diff.per_node_diffs.is_empty() {
-                writeln!(f, "  No nodes to compare in this layer.")?;
-                continue;
-            }
-
-            writeln!(f, "  Top 20 Nodes with < 100% Commonality:")?;
-
-            let mut sorted_nodes: Vec<_> = layer_diff.per_node_diffs.iter().collect();
-            // Sort by percentage_common ascending, then by node_ref for stable sort
-            sorted_nodes.sort_by(|(ka, a), (kb, b)| {
-                a.percentage_common
-                    .partial_cmp(&b.percentage_common)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| ka.cmp(kb)) // Use node ref for tie-breaking
-            });
-
-            // Filter for problematic nodes *before* taking 20
-            let problematic_nodes: Vec<_> = sorted_nodes
-                .into_iter()
-                .filter(|(_, diff)| diff.percentage_common < 100.0)
-                .collect();
-
-            if problematic_nodes.is_empty() {
-                writeln!(f, "    All nodes in this layer have 100% commonality.")?;
-            } else {
-                for (node_ref, diff) in problematic_nodes.iter().take(20) {
-                    writeln!(
-                        f,
-                        "    Node {:?}: {:.2}% common ({}/{}) [Self: {}, Other: {}]",
-                        node_ref,
-                        diff.percentage_common,
-                        diff.common_edges,
-                        diff.total_edges_in_self + diff.total_edges_in_other - diff.common_edges, // Total unique edges
-                        diff.total_edges_in_self,
-                        diff.total_edges_in_other
-                    )?;
-                }
-            }
-        }
-
-        Ok(())
+impl Sum for JaccardState {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(JaccardState::default(), |acc, x| acc + x)
     }
 }
 
-impl<V: Ref + Display + FromStr> GraphMem<V> {
-    /// Diffs this graph against another, comparing layer by layer.
-    /// First validates that layer counts and all node sets per layer are identical.
-    /// If validation fails, returns a GraphDiff struct containing only the failure info.
-    pub fn diff_graph(&self, other: &GraphMem<V>) -> GraphDiff<V> {
-        let self_layer_count = self.layers.len();
-        let other_layer_count = other.layers.len();
+struct JaccardSimilarity;
 
-        // --- Validation Check 1: Layer Count ---
-        if self_layer_count != other_layer_count {
-            return GraphDiff::new_aborted(self_layer_count, other_layer_count, vec![]);
-        }
+impl<V: Ref + FromStr + Display> EdgeDiffer<V> for JaccardSimilarity {
+    type NeighborhoodDiff = JaccardState;
+    type LayerDiff = JaccardState;
+    type GraphDiff = JaccardState;
 
-        // --- Validation Check 2: Node Sets Per Layer ---
-        let mut mismatched_node_set_layers = Vec::new();
-        for i in 0..self_layer_count {
-            // These indexing ops are safe due to the check above.
-            let self_nodes: HashSet<_> = self.layers[i].links.keys().collect();
-            let other_nodes: HashSet<_> = other.layers[i].links.keys().collect();
-
-            if self_nodes != other_nodes {
-                mismatched_node_set_layers.push(i);
-            }
-        }
-
-        if !mismatched_node_set_layers.is_empty() {
-            return GraphDiff::new_aborted(
-                self_layer_count,
-                other_layer_count,
-                mismatched_node_set_layers,
-            );
-        }
-
-        // --- Validation Passed: Proceed with Full Diff ---
-        let mut total_common_edges = 0;
-        let mut total_edges_in_self = 0;
-        let mut total_edges_in_other = 0;
-        let mut per_layer_diffs = Vec::new();
-
-        for i in 0..self_layer_count {
-            // We know layers exist and node sets match.
-            let self_layer = &self.layers[i];
-            let other_layer = &other.layers[i];
-
-            let layer_diff = self_layer.diff_layer(other_layer);
-
-            total_common_edges += layer_diff.total_common_edges;
-            total_edges_in_self += layer_diff.total_edges_in_self;
-            total_edges_in_other += layer_diff.total_edges_in_other;
-
-            per_layer_diffs.push(layer_diff);
-        }
-
-        let total_unique_edges = total_edges_in_self + total_edges_in_other - total_common_edges;
-        let overall_percentage_common = if total_unique_edges == 0 {
-            100.0
-        } else {
-            (total_common_edges as f64 / total_unique_edges as f64) * 100.0
-        };
-
-        GraphDiff {
-            self_layer_count,
-            other_layer_count,
-            mismatched_node_set_layers: Vec::new(), // Success, so empty
-            total_common_edges,
-            total_edges_in_self,
-            total_edges_in_other,
-            overall_percentage_common,
-            per_layer_diffs,
-        }
+    fn diff_neighborhood(&self, info: &NeighborhoodInfo<V>) -> Self::NeighborhoodDiff {
+        JaccardState::new(
+            info.other_neighbors
+                .intersection(&info.self_neighbors)
+                .count(),
+            info.self_neighbors.union(&info.other_neighbors).count(),
+        )
     }
+
+    fn diff_layer(&self, info: &LayerInfo<V>) -> Self::LayerDiff {
+        info.nodes
+            .iter()
+            .map(|(_, ret)| self.diff_neighborhood(ret))
+            .sum()
+    }
+
+    fn diff_graph(&self, info: &GraphInfo<V>) -> Self::GraphDiff {
+        info.layers.iter().map(|ret| self.diff_layer(ret)).sum()
+    }
+}
+
+// --- 3. Public API & Validation Structures ---
+
+/// Contains detailed information about why a diff failed validation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphDiffFailure {
+    pub reason: GraphDiffFailureReason,
+}
+
+/// Specific reasons for a graph diff validation failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GraphDiffFailureReason {
+    LayerCountMismatch {
+        self_layers: usize,
+        other_layers: usize,
+    },
+    NodeSetMismatch {
+        mismatched_layers: Vec<usize>,
+    },
+}
+
+/// The public entry point for diffing two graphs.
+///
+/// It first validates the graphs, then collects the raw link information,
+/// and finally uses the provided `differ` to compute and return the result.
+pub fn diff_graph<V, D>(
+    self_graph: &GraphMem<V>,
+    other_graph: &GraphMem<V>,
+    differ: D,
+) -> Result<D::GraphDiff, GraphDiffFailure>
+where
+    V: Ref + Display + FromStr,
+    D: EdgeDiffer<V>,
+{
+    // --- Validation Step ---
+    if self_graph.layers.len() != other_graph.layers.len() {
+        return Err(GraphDiffFailure {
+            reason: GraphDiffFailureReason::LayerCountMismatch {
+                self_layers: self_graph.layers.len(),
+                other_layers: other_graph.layers.len(),
+            },
+        });
+    }
+
+    let mismatched_layers: Vec<usize> = (0..self_graph.layers.len())
+        .filter(|&i| {
+            let self_nodes: HashSet<_> = self_graph.layers[i].links.keys().collect();
+            let other_nodes: HashSet<_> = other_graph.layers[i].links.keys().collect();
+            self_nodes != other_nodes
+        })
+        .collect();
+
+    if !mismatched_layers.is_empty() {
+        return Err(GraphDiffFailure {
+            reason: GraphDiffFailureReason::NodeSetMismatch { mismatched_layers },
+        });
+    }
+
+    // --- Information Collection Step ---
+    let graph_info = GraphInfo {
+        layers: self_graph
+            .layers
+            .iter()
+            .zip(other_graph.layers.iter())
+            .map(|(self_layer, other_layer)| {
+                let nodes = self_layer
+                    .links
+                    .keys()
+                    .map(|node_ref| {
+                        let self_neighbors = self_layer
+                            .links
+                            .get(node_ref)
+                            .map_or(HashSet::new(), |v| v.iter().collect());
+                        let other_neighbors = other_layer
+                            .links
+                            .get(node_ref)
+                            .map_or(HashSet::new(), |v| v.iter().collect());
+
+                        let info = NeighborhoodInfo {
+                            self_neighbors,
+                            other_neighbors,
+                        };
+                        (node_ref, info)
+                    })
+                    .collect();
+                LayerInfo { nodes }
+            })
+            .collect(),
+    };
+
+    // --- Diffing Step ---
+    Ok(differ.diff_graph(&graph_info))
 }
