@@ -123,6 +123,9 @@ pub struct HawkArgs {
 
     #[clap(flatten)]
     pub tls: Option<TlsConfig>,
+
+    #[clap(long, default_value_t = false)]
+    pub numa: bool,
 }
 
 /// HawkActor manages the state of the HNSW database and connections to other
@@ -327,8 +330,8 @@ impl HawkActor {
             build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
-        let workers_handle =
-            [LEFT, RIGHT].map(|side| iris_worker::init_workers(side, iris_store[side].clone()));
+        let workers_handle = [LEFT, RIGHT]
+            .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
 
         let bucket_statistics_left = BucketStatistics::new(
             args.match_distances_buffer_size,

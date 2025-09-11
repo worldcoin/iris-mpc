@@ -22,8 +22,6 @@ use std::{
 use tokio::sync::oneshot;
 use tracing::info;
 
-const INSERT_NUMA_REALLOC: bool = true;
-
 #[derive(Debug)]
 enum IrisTask {
     Sync {
@@ -152,7 +150,11 @@ impl IrisPoolHandle {
     }
 }
 
-pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) -> IrisPoolHandle {
+pub fn init_workers(
+    shard_index: usize,
+    iris_store: SharedIrisesRef<ArcIris>,
+    numa: bool,
+) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
     info!(
         "Dot product shard {} running on {} cores ({:?})",
@@ -168,7 +170,7 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
         let iris_store = iris_store.clone();
         std::thread::spawn(move || {
             let _ = core_affinity::set_for_current(core_id);
-            worker_thread(rx, iris_store);
+            worker_thread(rx, iris_store, numa);
         });
     }
 
@@ -179,13 +181,17 @@ pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) ->
     }
 }
 
-fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
+fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, numa: bool) {
     while let Ok(task) = ch.recv() {
         match task {
             IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
                 // This attempts to use the NUMA-aware first-touch policy of the OS.
-                let new_iris = Arc::new((*iris).clone());
+                let new_iris = if numa {
+                    Arc::new((*iris).clone())
+                } else {
+                    iris
+                };
                 let _ = rsp.send(new_iris);
             }
 
@@ -194,7 +200,7 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
             }
 
             IrisTask::Insert { vector_id, iris } => {
-                let iris = if INSERT_NUMA_REALLOC {
+                let iris = if numa {
                     Arc::new((*iris).clone())
                 } else {
                     iris
