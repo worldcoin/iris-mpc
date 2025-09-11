@@ -626,10 +626,6 @@ impl HawkActor {
             IrisLoader {
                 party_id: self.party_id,
                 db_size: &mut self.loader_db_size,
-                irises: [
-                    self.iris_store[0].write().await,
-                    self.iris_store[1].write().await,
-                ],
                 iris_pools: self.workers_handle.clone(),
             },
             GraphLoader([
@@ -652,8 +648,17 @@ pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
-    irises: BothEyes<Aby3SharedIrisesMut<'a>>,
     iris_pools: BothEyes<IrisPoolHandle>,
+}
+
+impl IrisLoader<'_> {
+    pub async fn wait_completion(self) -> Result<()> {
+        try_join!(
+            self.iris_pools[LEFT].wait_completion(),
+            self.iris_pools[RIGHT].wait_completion(),
+        )?;
+        Ok(())
+    }
 }
 
 #[allow(clippy::needless_lifetimes)]
@@ -667,16 +672,14 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (store, pool, code, mask) in izip!(
-            &mut self.irises,
-            self.iris_pools.clone(),
+        for (pool, code, mask) in izip!(
+            &self.iris_pools,
             [left_code, right_code],
             [left_mask, right_mask]
         ) {
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
-            let iris = pool.numa_realloc_blocking(iris).unwrap();
-            store.insert(vector_id, iris);
+            let _no_wait = pool.insert(vector_id, iris).unwrap();
         }
     }
 
@@ -685,8 +688,8 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     }
 
     fn reserve(&mut self, additional: usize) {
-        for side in &mut self.irises {
-            side.reserve(additional);
+        for side in &self.iris_pools {
+            side.reserve(additional).unwrap();
         }
     }
 
@@ -697,9 +700,11 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     fn fake_db(&mut self, size: usize) {
         *self.db_size = size;
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
-        for side in &mut self.irises {
+        for side in &self.iris_pools {
             for i in 0..size {
-                side.insert(VectorId::from_serial_id(i as u32), iris.clone());
+                let _no_wait = side
+                    .insert(VectorId::from_serial_id(i as u32), iris.clone())
+                    .unwrap();
             }
         }
     }

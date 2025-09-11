@@ -1245,6 +1245,8 @@ async fn init_graph_from_stores(
     .await
     .expect("Failed to load DB");
 
+    iris_loader.wait_completion().await?;
+
     graph_loader
         .load_graph_store(&graph_store, graph_db_parallelism)
         .await?;

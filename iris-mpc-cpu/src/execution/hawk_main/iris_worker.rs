@@ -9,6 +9,7 @@ use crate::{
 use core_affinity::CoreId;
 use crossbeam::channel::{Receiver, Sender};
 use eyre::Result;
+use futures::future::try_join_all;
 use iris_mpc_common::{fast_metrics::FastHistogram, vector_id::VectorId};
 use std::{
     cmp,
@@ -21,8 +22,13 @@ use std::{
 use tokio::sync::oneshot;
 use tracing::info;
 
+const INSERT_NUMA_REALLOC: bool = true;
+
 #[derive(Debug)]
 enum IrisTask {
+    Sync {
+        rsp: oneshot::Sender<()>,
+    },
     /// Move an iris code to memory closer to the pool (NUMA-awareness).
     Realloc {
         iris: ArcIris,
@@ -32,6 +38,9 @@ enum IrisTask {
         vector_id: VectorId,
         iris: ArcIris,
         rsp: oneshot::Sender<VectorId>,
+    },
+    Reserve {
+        additional: usize,
     },
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
@@ -63,19 +72,35 @@ impl IrisPoolHandle {
         Ok(rx)
     }
 
-    pub fn numa_realloc_blocking(&self, iris: ArcIris) -> Result<ArcIris> {
-        Ok(self.numa_realloc(iris)?.blocking_recv()?)
+    pub async fn wait_completion(&self) -> Result<()> {
+        try_join_all(self.workers.iter().map(|w| {
+            let (rsp, rx) = oneshot::channel();
+            w.send(IrisTask::Sync { rsp }).unwrap();
+            rx
+        }))
+        .await?;
+        Ok(())
     }
 
-    pub async fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<VectorId> {
+    pub fn insert(
+        &self,
+        vector_id: VectorId,
+        iris: ArcIris,
+    ) -> Result<oneshot::Receiver<VectorId>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::Insert {
             vector_id,
             iris,
             rsp: tx,
         };
-        self.get_next_worker().send(task)?;
-        Ok(rx.await?)
+        self.get_mut_worker().send(task)?;
+        Ok(rx)
+    }
+
+    pub fn reserve(&self, additional: usize) -> Result<()> {
+        let task = IrisTask::Reserve { additional };
+        self.get_mut_worker().send(task)?;
+        Ok(())
     }
 
     pub async fn dot_product_pairs(
@@ -130,6 +155,11 @@ impl IrisPoolHandle {
         let idx = idx % self.workers.len();
         &self.workers[idx]
     }
+
+    /// Get the worker responsible for store mutations.
+    fn get_mut_worker(&self) -> &Sender<IrisTask> {
+        &self.workers[0]
+    }
 }
 
 pub fn init_workers(shard_index: usize, iris_store: SharedIrisesRef<ArcIris>) -> IrisPoolHandle {
@@ -169,14 +199,29 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>) {
                 let _ = rsp.send(new_iris);
             }
 
+            IrisTask::Sync { rsp } => {
+                let _ = rsp.send(());
+            }
+
             IrisTask::Insert {
                 vector_id,
                 iris,
                 rsp,
             } => {
+                let iris = if INSERT_NUMA_REALLOC {
+                    Arc::new((*iris).clone())
+                } else {
+                    iris
+                };
+
                 let mut store = iris_store.data.blocking_write();
                 let vector_id = store.insert(vector_id, iris);
                 let _ = rsp.send(vector_id);
+            }
+
+            IrisTask::Reserve { additional } => {
+                let mut store = iris_store.data.blocking_write();
+                store.reserve(additional);
             }
 
             IrisTask::DotProductPairs { pairs, rsp } => {
