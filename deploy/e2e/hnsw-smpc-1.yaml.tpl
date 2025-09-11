@@ -144,7 +144,7 @@ hnsw-smpc-1:
       value: "100000"
 
     - name: SMPC__MAX_BATCH_SIZE
-      value: "1"
+      value: "32"
 
     - name: SMPC__PROCESSING_TIMEOUT_SECS
       value: "30"  # 2 minutes per batch in stage, bump to 4 in prod
@@ -280,6 +280,41 @@ hnsw-smpc-1:
         # Currently, we rely on GPU pod's init container to do the key rotation. Uncomment this once GPU is deprecated.
         # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
         # key-manager --node-id 1 --env $ENV --region $AWS_REGION --endpoint-url "http://localstack:4566" rotate --public-key-bucket-name wf-$ENV-public-keys
+
+        # Wait for GPU pods to complete key generation
+        echo "Waiting for GPU pods to complete key generation..."
+        BUCKET_NAME="wf-e2e-public-keys"
+        EXPECTED_KEYS=3
+        TIMEOUT=120  # 2 minutes timeout
+        SLEEP_INTERVAL=5
+
+        wait_for_keys() {
+            local elapsed=0
+            while [ $elapsed -lt $TIMEOUT ]; do
+                echo "Checking for keys in bucket: $BUCKET_NAME"
+
+                # Count objects in the bucket
+                KEY_COUNT=$(aws s3 ls s3://$BUCKET_NAME --endpoint-url "http://localstack:4566" --region eu-central-1 | wc -l)
+
+                echo "Found $KEY_COUNT keys, expecting $EXPECTED_KEYS"
+
+                if [ "$KEY_COUNT" -ge "$EXPECTED_KEYS" ]; then
+                    echo "All $EXPECTED_KEYS keys found! GPU key generation completed."
+                    return 0
+                fi
+
+                echo "Waiting for GPU pods to generate keys... ($elapsed/$TIMEOUT seconds elapsed)"
+                sleep $SLEEP_INTERVAL
+                elapsed=$((elapsed + SLEEP_INTERVAL))
+            done
+
+            echo "Timeout waiting for GPU key generation after $TIMEOUT seconds"
+            echo "Found $KEY_COUNT keys, but expected $EXPECTED_KEYS"
+            exit 1
+        }
+
+        # Wait for keys before proceeding
+        wait_for_keys
 
         # Set up environment variables
         HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --region $AWS_REGION --dns-name orb.e2e.test --query "HostedZones[].Id" --output text)
