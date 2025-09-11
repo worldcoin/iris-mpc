@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - chore/tag-hnsw-images-with-versions
   release:
     types:
       - 'published'
