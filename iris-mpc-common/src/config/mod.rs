@@ -229,6 +229,9 @@ pub struct Config {
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
 
+    #[serde(default = "default_hawk_numa")]
+    pub hawk_numa: bool,
+
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 
@@ -397,6 +400,10 @@ fn default_hnsw_param_M() -> usize {
 
 fn default_hnsw_param_ef_search() -> usize {
     256
+}
+
+fn default_hawk_numa() -> bool {
+    true
 }
 
 fn default_service_ports() -> Vec<String> {
@@ -762,6 +769,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hawk_prf_key,
+            hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
             enable_modifications_sync,
             enable_modifications_replay,

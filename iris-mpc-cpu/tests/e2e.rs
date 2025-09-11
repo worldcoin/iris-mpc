@@ -176,6 +176,7 @@ async fn e2e_test() -> Result<()> {
         match_distances_buffer_size: 64,
         n_buckets: 10,
         tls: None,
+        numa: true,
     };
     let args1 = HawkArgs {
         party_index: 1,
