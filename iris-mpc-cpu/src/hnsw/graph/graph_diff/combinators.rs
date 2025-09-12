@@ -2,22 +2,30 @@ use super::*;
 use crate::hnsw::graph::graph_diff::NeighborhoodDiffer;
 
 /// Collects diffs for all nodes from a layer into a Vec, for a given node differ
-#[derive(Default)]
-pub struct PerNodeCollector<ND>(pub ND);
+pub struct IntraLayerProcessor<
+    V: Ref + Display + FromStr,
+    ND: NeighborhoodDiffer<V>,
+    LDRET: Clone + Debug,
+> {
+    combinator: dyn Fn(Vec<(V, ND::NeighborhoodDiff)>) -> LDRET,
+}
 
-impl<ND: NeighborhoodDiffer<V>, V: Ref + Display + FromStr> LayerDiffer<V>
-    for PerNodeCollector<ND>
+impl<V: Ref + Display + FromStr, ND: NeighborhoodDiffer<V> + Default, LDRET: Clone + Debug>
+    LayerDiffer<V> for IntraLayerProcessor<V, ND, LDRET>
 {
-    type LayerDiff = Vec<(V, ND::NeighborhoodDiff)>;
+    type LayerDiff = LDRET;
 
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
-        let mut ret = Vec::with_capacity(lhs.links.len());
-        for node_ref in lhs.links.keys() {
-            if let (Some(lhsn), Some(rhsn)) = (lhs.links.get(node_ref), rhs.links.get(node_ref)) {
-                ret.push((node_ref.clone(), self.0.diff_neighborhood(lhsn, rhsn)));
-            }
-        }
-        ret
+        (self.combinator)(
+            lhs.links
+                .iter()
+                .filter_map(|(v, ne)| {
+                    rhs.links
+                        .get(v)
+                        .map(|ner| (v.clone(), ND::default().diff_neighborhood(ne, ner)))
+                })
+                .collect(),
+        )
     }
 }
 

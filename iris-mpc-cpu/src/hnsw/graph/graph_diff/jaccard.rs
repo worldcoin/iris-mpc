@@ -1,6 +1,6 @@
 use itertools::Itertools;
 
-use crate::hnsw::graph::graph_diff::combinators::{PerLayerCollector, PerNodeCollector};
+use crate::hnsw::graph::graph_diff::combinators::{IntraLayerProcessor, PerLayerCollector, PerNodeCollector};
 
 use super::*;
 use std::{collections::HashSet, ops::Add};
@@ -71,6 +71,16 @@ impl<V: Ref + Display + FromStr> NeighborhoodDiffer<V> for SimpleJaccard {
         let lhs: HashSet<_> = lhs.0.iter().cloned().collect();
         let rhs: HashSet<_> = rhs.0.iter().cloned().collect();
         JaccardState::new(lhs.intersection(&rhs).count(), lhs.union(&rhs).count())
+    }
+}
+
+const JaccardAggLayer = IntraLayerProcessor {
+    combinator: |vec| -> JaccardState {
+        let mut ret = JaccardState::default();
+        for (v, res) in vec {
+            ret += res;
+        }
+        ret
     }
 }
 
