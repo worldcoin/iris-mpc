@@ -6,6 +6,8 @@ use super::*;
 use std::{collections::HashSet, ops::Add};
 
 #[derive(Default)]
+/// Computes Jaccard similarity for edges.
+/// Aggregated over graphs, individual layers or individual nodes
 pub struct SimpleJaccard;
 
 #[derive(Debug, Default, Clone)]
@@ -57,7 +59,7 @@ impl Display for JaccardState {
     }
 }
 
-// Simple Jaccard similarity (size of intersection / size of union)
+// Jaccard similarity (size of intersection / size of union)
 impl<V: Ref + Display + FromStr> NeighborhoodDiffer<V> for SimpleJaccard {
     type NeighborhoodDiff = JaccardState;
 
@@ -72,7 +74,7 @@ impl<V: Ref + Display + FromStr> NeighborhoodDiffer<V> for SimpleJaccard {
     }
 }
 
-// Aggregates JaccardStates to provide similarity for entire layers
+// Aggregates JaccardStates to compute similarity for entire layers
 impl<V: Ref + Display + FromStr> LayerDiffer<V> for SimpleJaccard {
     type LayerDiff = JaccardState;
 
@@ -85,7 +87,7 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for SimpleJaccard {
     }
 }
 
-// Aggregates JaccardStates to provide similarity for entire graphs
+// Aggregates JaccardStates to compute similarity for entire graphs
 impl<V: Ref + Display + FromStr> GraphDiffer<V> for SimpleJaccard {
     type GraphDiff = JaccardState;
 
@@ -99,7 +101,7 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for SimpleJaccard {
 }
 
 /// Jaccard similarity for edges of entire graph, individual layers
-/// and `n` most disimilar nodes for each individual layer
+/// and `n` most dissimilar nodes for each individual layer
 #[derive(Clone, Default)]
 pub struct DetailedJaccard {
     pub n: usize,
@@ -107,25 +109,25 @@ pub struct DetailedJaccard {
 
 impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccard {
     type LayerDiff = (JaccardState, Vec<(V, JaccardState)>);
-
+    // Layer aggregate + top `self.n` most dissimilar nodes
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
-        let most_disimilar = PerNodeCollector(SimpleJaccard)
+        let most_dissimilar = PerNodeCollector(SimpleJaccard)
             .diff_layer(lhs, rhs)
             .into_iter()
             .sorted_by(|lhs, rhs| lhs.1.compare_as_fractions(&rhs.1))
             .take(self.n)
             .collect_vec();
         let agg = SimpleJaccard::default().diff_layer(lhs, rhs);
-        (agg, most_disimilar)
+        (agg, most_dissimilar)
     }
 }
 
 impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
     type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>);
-
+    // Graph aggregate + top `self.n` most dissimilar nodes in each layer
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
-        let most_disimilar_per_layer = PerLayerCollector(self.clone()).diff_graph(lhs, rhs);
+        let most_dissimilar_per_layer = PerLayerCollector(self.clone()).diff_graph(lhs, rhs);
         let agg = SimpleJaccard::default().diff_graph(lhs, rhs);
-        (agg, most_disimilar_per_layer)
+        (agg, most_dissimilar_per_layer)
     }
 }

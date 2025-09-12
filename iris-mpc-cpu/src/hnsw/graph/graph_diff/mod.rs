@@ -43,17 +43,3 @@ where
 
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff;
 }
-
-/// Compares node equivalence of two graphs and prints the result if negative
-/// Otherwise, prints Jaccard similarity for the edges of the two graphs
-pub fn edge_diff<V: Ref + Display + FromStr>(lhs: &GraphMem<V>, rhs: &GraphMem<V>) {
-    match node_equiv::NodeEquivalence::default().diff_graph(lhs, rhs) {
-        node_equiv::GraphResult::Equivalent => {
-            let result = jaccard::DetailedJaccard { n: 20 }.diff_graph(lhs, rhs);
-            dbg!(result);
-        }
-        non_equiv => {
-            dbg!(&non_equiv);
-        }
-    }
-}

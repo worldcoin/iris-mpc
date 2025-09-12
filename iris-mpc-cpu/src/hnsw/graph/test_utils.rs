@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
-        graph::graph_diff::{self, node_equiv::GraphResult, GraphDiffer},
+        graph::graph_diff::{self, node_equiv::NodeEquivResult, GraphDiffer},
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
@@ -203,7 +203,7 @@ impl DbContext {
                 // nodes within corresponding layers are identical
                 let node_differ = graph_diff::node_equiv::NodeEquivalence::default();
                 let verdict = node_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
-                if !matches!(verdict, GraphResult::<VectorId>::Equivalent) {
+                if !matches!(verdict, NodeEquivResult::<VectorId>::Equivalent) {
                     stop = true;
                     eprintln!(
                         "Verdict: Side {} graphs are not node-equivalent;\n Reason: {:#?}",
@@ -223,7 +223,7 @@ impl DbContext {
 
                 for (layer_idx, layer_result) in result.1.iter().enumerate() {
                     println!("  LAYER {} aggregate: {}", layer_idx, layer_result.0);
-                    println!("  Top {} most disimilar nodes:", edge_differ.n);
+                    println!("  Top {} most dissimilar nodes:", edge_differ.n);
                     for (node_idx, node_result) in layer_result.1.iter() {
                         println!("    Node {}: {}", node_idx.serial_id(), node_result,);
                     }

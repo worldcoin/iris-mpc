@@ -33,7 +33,7 @@ impl<V: Ref + Display + FromStr + Clone + Eq + std::hash::Hash> LayerDiffer<V> f
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GraphResult<V> {
+pub enum NodeEquivResult<V> {
     LayerCountMismatch {
         lhs_count: usize,
         rhs_count: usize,
@@ -46,11 +46,11 @@ pub enum GraphResult<V> {
 }
 
 impl<V: Ref + Display + FromStr> GraphDiffer<V> for NodeEquivalence {
-    type GraphDiff = GraphResult<V>;
+    type GraphDiff = NodeEquivResult<V>;
 
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
         if lhs.layers.len() != rhs.layers.len() {
-            return GraphResult::LayerCountMismatch {
+            return NodeEquivResult::LayerCountMismatch {
                 lhs_count: lhs.layers.len(),
                 rhs_count: rhs.layers.len(),
             };
@@ -61,12 +61,12 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for NodeEquivalence {
             .enumerate()
         {
             if layer_diff != IntraLayerResult::None {
-                return GraphResult::LayerVertexDiff {
+                return NodeEquivResult::LayerVertexDiff {
                     layer_index: i,
                     diff: layer_diff,
                 };
             }
         }
-        GraphResult::Equivalent
+        NodeEquivResult::Equivalent
     }
 }

@@ -21,7 +21,7 @@ impl<ND: NeighborhoodDiffer<V>, V: Ref + Display + FromStr> LayerDiffer<V>
     }
 }
 
-/// Collects diffs for all layers in into a Vec, for a given layer differ
+/// Collects diffs for all layers from a graph into a Vec, for a given layer differ
 #[derive(Default)]
 pub struct PerLayerCollector<LD>(pub LD);
 
