@@ -7,6 +7,7 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
+        graph::graph_diff::{self, node_equiv::GraphResult, GraphDiffer},
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
@@ -19,6 +20,7 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -195,9 +197,39 @@ impl DbContext {
             println!("{:#?}", loaded_graph);
         }
         if db_graph != loaded_graph {
-            eprintln!("the graphs don't match");
+            let mut stop = false;
+            for side in 0..2 {
+                // Check that we have the same # of layers and that
+                // nodes within corresponding layers are identical
+                let node_differ = graph_diff::node_equiv::NodeEquivalence::default();
+                let verdict = node_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
+                if !matches!(verdict, GraphResult::<VectorId>::Equivalent) {
+                    stop = true;
+                    eprintln!(
+                        "Verdict: Side {} graphs are not node-equivalent;\n Reason: {:#?}",
+                        side, verdict
+                    );
+                }
+            }
+
+            if stop {
+                return Ok(());
+            }
+
+            for side in 0..2 {
+                let edge_differ = graph_diff::jaccard::DetailedJaccard { n: 20 };
+                let result = edge_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
+                println!("Aggregate Jaccard (side {}): {:?}", side, result.0);
+
+                for (layer_idx, layer_result) in result.1.iter().enumerate() {
+                    println!("  Layer {} aggregate: {:?}", layer_idx, layer_result.0);
+                    for (node_idx, node_result) in layer_result.1.iter().enumerate() {
+                        println!("    Node {}: {:?}", node_idx, node_result);
+                    }
+                }
+            }
         } else {
-            println!("the graphs match")
+            println!("Verdict: Graphs for both sides are identical")
         }
         Ok(())
     }

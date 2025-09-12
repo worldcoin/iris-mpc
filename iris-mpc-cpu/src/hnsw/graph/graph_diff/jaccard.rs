@@ -29,8 +29,12 @@ impl JaccardState {
             self.intersection as f64 / self.union as f64
         }
     }
-}
 
+    pub fn compare_as_fractions(&self, other: &Self) -> std::cmp::Ordering {
+        // Compare a/b vs c/d as a*d vs c*b
+        (self.intersection * other.union).cmp(&(other.intersection * self.union))
+    }
+}
 impl Add for JaccardState {
     type Output = Self;
     fn add(self, rhs: Self) -> Self::Output {
@@ -84,6 +88,7 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for SimpleJaccard {
 
 /// Jaccard similarity for edges of entire graph, individual layers
 /// and `n` most disimilar nodes for each individual layer
+#[derive(Clone, Default)]
 pub struct DetailedJaccard {
     pub n: usize,
 }
@@ -94,10 +99,10 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccard {
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
         let most_disimilar = PerNodeCollector(SimpleJaccard)
             .diff_layer(lhs, rhs)
-            .iter()
-            .enumerate()
-            .sorted_by(|lhs, rhs| lhs.1.compute() < rhs.1.compute())
-            .take(self.n);
+            .into_iter()
+            .sorted_by(|lhs, rhs| lhs.compare_as_fractions(rhs))
+            .take(self.n)
+            .collect_vec();
         let agg = SimpleJaccard::default().diff_layer(lhs, rhs);
         (agg, most_disimilar)
     }
@@ -107,8 +112,8 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
     type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<JaccardState>)>);
 
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
-        let most_disimilar_per_layer = PerLayerCollector(DetailedJaccard).diff_graph(lhs, rhs);
-        let agg = SimpleJaccard::default().diff_layer(lhs, rhs);
+        let most_disimilar_per_layer = PerLayerCollector(self.clone()).diff_graph(lhs, rhs);
+        let agg = SimpleJaccard::default().diff_graph(lhs, rhs);
         (agg, most_disimilar_per_layer)
     }
 }

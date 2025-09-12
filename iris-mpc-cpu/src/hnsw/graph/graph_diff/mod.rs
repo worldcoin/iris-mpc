@@ -4,9 +4,7 @@ use std::{
 };
 
 use crate::hnsw::{
-    graph::{
-        graph_diff::jaccard::SimpleJaccard, layered_graph::Layer, neighborhood::SortedEdgeIds,
-    },
+    graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
     vector_store::Ref,
     GraphMem,
 };
@@ -51,7 +49,7 @@ where
 pub fn edge_diff<V: Ref + Display + FromStr>(lhs: &GraphMem<V>, rhs: &GraphMem<V>) {
     match node_equiv::NodeEquivalence::default().diff_graph(lhs, rhs) {
         node_equiv::GraphResult::Equivalent => {
-            let result = DetailedJaccard { n: 20 }.diff_graph(lhs, rhs);
+            let result = jaccard::DetailedJaccard { n: 20 }.diff_graph(lhs, rhs);
             dbg!(result);
         }
         non_equiv => {
