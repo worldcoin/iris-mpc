@@ -1,6 +1,9 @@
 name: Build and push docker image
 
 on:
+  push:
+    branches:
+      - main
   release:
     types:
       - 'published'
@@ -42,9 +45,11 @@ jobs:
           context: .
           push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.release.tag_name }},
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
+          build-args: |
+            ARCHITECTURE=x86_64
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
