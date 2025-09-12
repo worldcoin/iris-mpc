@@ -1,5 +1,7 @@
 /// Node config kinds.
+#[allow(dead_code)]
 pub const NODE_CONFIG_KIND_MAIN: &str = "main";
+#[allow(dead_code)]
 pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
 
 /// MPC parties.

@@ -2,6 +2,7 @@ use super::types::ExecutionHost;
 use std::path::{Path, PathBuf};
 
 /// Returns name of an execution host specific assets subdirectory.
+#[allow(dead_code)]
 pub fn get_execution_host_subdirectory() -> &'static str {
     match ExecutionHost::default() {
         ExecutionHost::BareMetal => "baremetal",
@@ -10,6 +11,7 @@ pub fn get_execution_host_subdirectory() -> &'static str {
 }
 
 /// Returns path to an asset within assets directory.
+#[allow(dead_code)]
 pub fn get_path_to_asset(subpath: &str) -> PathBuf {
     let path_to_root = get_path_to_subdir("assets");
 
@@ -17,6 +19,7 @@ pub fn get_path_to_asset(subpath: &str) -> PathBuf {
 }
 
 /// Returns path to assets directory.
+#[allow(dead_code)]
 pub fn get_path_to_assets_root() -> String {
     format!("{}/assets", get_path_to_root())
 }
@@ -30,6 +33,7 @@ pub fn get_path_to_data(subpath: &str) -> PathBuf {
 }
 
 /// Returns path to data directory.
+#[allow(dead_code)]
 pub fn get_path_to_data_root() -> String {
     format!("{}/data", get_path_to_root())
 }

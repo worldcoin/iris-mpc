@@ -14,6 +14,7 @@ use std::{
 };
 
 /// Returns iterator over Iris code pairs deserialized from an ndjson file.
+#[allow(dead_code)]
 pub fn load_iris_codes(
     path_to_codes: &Path,
     n_to_read: usize,
@@ -31,6 +32,7 @@ pub fn load_iris_codes(
 }
 
 /// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
+#[allow(dead_code)]
 pub fn load_iris_codes_batch(
     path_to_codes: &Path,
     n_to_read: usize,
@@ -45,6 +47,7 @@ pub fn load_iris_codes_batch(
 }
 
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
+#[allow(dead_code)]
 pub fn load_iris_shares(
     path_to_codes: &Path,
     n_to_read: usize,
@@ -59,6 +62,7 @@ pub fn load_iris_shares(
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
+#[allow(dead_code)]
 pub fn load_iris_shares_batch(
     path_to_codes: &Path,
     n_to_read: usize,
@@ -74,6 +78,7 @@ pub fn load_iris_shares_batch(
 }
 
 /// Returns network configuration deserialized from a toml file.
+#[allow(dead_code)]
 pub fn load_net_config(kind: &str, idx: usize) -> Result<NetConfig, Error> {
     let config = PARTY_IDX_SET
         .iter()
@@ -86,6 +91,7 @@ pub fn load_net_config(kind: &str, idx: usize) -> Result<NetConfig, Error> {
 }
 
 /// Returns node configuration deserialized from a toml file.
+#[allow(dead_code)]
 pub fn load_node_config(party_idx: &PartyIdx, kind: &str, idx: usize) -> Result<NodeConfig, Error> {
     let fname = format!("node-{}-{}-{}", party_idx, kind, idx);
 
@@ -93,6 +99,7 @@ pub fn load_node_config(party_idx: &PartyIdx, kind: &str, idx: usize) -> Result<
 }
 
 /// Returns node configuration deserialized from a toml file.
+#[allow(dead_code)]
 pub fn load_node_config_by_name(fname: String) -> Result<NodeConfig, Error> {
     Ok(toml::from_str(
         &fs::read_to_string(fsys::get_path_to_asset(
