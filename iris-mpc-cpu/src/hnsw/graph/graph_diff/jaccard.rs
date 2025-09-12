@@ -117,7 +117,7 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccard {
             .sorted_by(|lhs, rhs| lhs.1.compare_as_fractions(&rhs.1))
             .take(self.n)
             .collect_vec();
-        let agg = SimpleJaccard::default().diff_layer(lhs, rhs);
+        let agg = SimpleJaccard.diff_layer(lhs, rhs);
         (agg, most_dissimilar)
     }
 }
@@ -127,7 +127,7 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
     // Graph aggregate + top `self.n` most dissimilar nodes in each layer
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
         let most_dissimilar_per_layer = PerLayerCollector(self.clone()).diff_graph(lhs, rhs);
-        let agg = SimpleJaccard::default().diff_graph(lhs, rhs);
+        let agg = SimpleJaccard.diff_graph(lhs, rhs);
         (agg, most_dissimilar_per_layer)
     }
 }

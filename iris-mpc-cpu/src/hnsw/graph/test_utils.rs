@@ -201,7 +201,7 @@ impl DbContext {
             for side in 0..2 {
                 // Check that we have the same # of layers and that
                 // nodes within corresponding layers are identical
-                let node_differ = graph_diff::node_equiv::NodeEquivalence::default();
+                let node_differ = graph_diff::node_equiv::NodeEquivalence;
                 let verdict = node_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
                 if !matches!(verdict, NodeEquivResult::<VectorId>::Equivalent) {
                     stop = true;

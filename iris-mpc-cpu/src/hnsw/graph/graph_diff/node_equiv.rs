@@ -23,10 +23,10 @@ impl<V: Ref + Display + FromStr + Clone + Eq + std::hash::Hash> LayerDiffer<V> f
         let lhs_keys: HashSet<_> = lhs.links.keys().cloned().collect();
         let rhs_keys: HashSet<_> = rhs.links.keys().cloned().collect();
 
-        for v in lhs_keys.difference(&rhs_keys) {
+        if let Some(v) = lhs_keys.difference(&rhs_keys).next() {
             return IntraLayerResult::OnlyInLhs(v.clone());
         }
-        for v in rhs_keys.difference(&lhs_keys) {
+        if let Some(v) = rhs_keys.difference(&lhs_keys).next() {
             return IntraLayerResult::OnlyInRhs(v.clone());
         }
         IntraLayerResult::None

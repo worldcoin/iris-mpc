@@ -13,10 +13,7 @@ pub mod combinators;
 pub mod jaccard;
 pub mod node_equiv;
 
-pub trait NeighborhoodDiffer<V>
-where
-    Self: Default,
-{
+pub trait NeighborhoodDiffer<V> {
     type NeighborhoodDiff: Debug + Clone;
 
     fn diff_neighborhood(
@@ -26,19 +23,13 @@ where
     ) -> Self::NeighborhoodDiff;
 }
 
-pub trait LayerDiffer<V: Ref + Display + FromStr>
-where
-    Self: Default,
-{
+pub trait LayerDiffer<V: Ref + Display + FromStr> {
     type LayerDiff: Debug + Clone;
 
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff;
 }
 
-pub trait GraphDiffer<V: Ref + Display + FromStr>
-where
-    Self: Default,
-{
+pub trait GraphDiffer<V: Ref + Display + FromStr> {
     type GraphDiff: Debug + Clone;
 
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff;
