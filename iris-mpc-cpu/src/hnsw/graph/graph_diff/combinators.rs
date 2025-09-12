@@ -8,13 +8,13 @@ pub struct PerNodeCollector<ND>(pub ND);
 impl<ND: NeighborhoodDiffer<V>, V: Ref + Display + FromStr> LayerDiffer<V>
     for PerNodeCollector<ND>
 {
-    type LayerDiff = Vec<ND::NeighborhoodDiff>;
+    type LayerDiff = Vec<(V, ND::NeighborhoodDiff)>;
 
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
         let mut ret = Vec::with_capacity(lhs.links.len());
         for node_ref in lhs.links.keys() {
             if let (Some(lhsn), Some(rhsn)) = (lhs.links.get(node_ref), rhs.links.get(node_ref)) {
-                ret.push(self.0.diff_neighborhood(lhsn, rhsn))
+                ret.push((node_ref.clone(), self.0.diff_neighborhood(lhsn, rhsn)));
             }
         }
         ret

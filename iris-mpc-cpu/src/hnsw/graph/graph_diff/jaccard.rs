@@ -45,6 +45,18 @@ impl Add for JaccardState {
     }
 }
 
+impl Display for JaccardState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:.4} ({}/{})",
+            self.compute(),
+            self.intersection,
+            self.union
+        )
+    }
+}
+
 // Simple Jaccard similarity (size of intersection / size of union)
 impl<V: Ref + Display + FromStr> NeighborhoodDiffer<V> for SimpleJaccard {
     type NeighborhoodDiff = JaccardState;
@@ -67,7 +79,7 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for SimpleJaccard {
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
         let mut total = JaccardState::default();
         for per_node in PerNodeCollector(SimpleJaccard).diff_layer(lhs, rhs) {
-            total = total + per_node;
+            total = total + per_node.1;
         }
         total
     }
@@ -94,13 +106,13 @@ pub struct DetailedJaccard {
 }
 
 impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccard {
-    type LayerDiff = (JaccardState, Vec<JaccardState>);
+    type LayerDiff = (JaccardState, Vec<(V, JaccardState)>);
 
     fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
         let most_disimilar = PerNodeCollector(SimpleJaccard)
             .diff_layer(lhs, rhs)
             .into_iter()
-            .sorted_by(|lhs, rhs| lhs.compare_as_fractions(rhs))
+            .sorted_by(|lhs, rhs| lhs.1.compare_as_fractions(&rhs.1))
             .take(self.n)
             .collect_vec();
         let agg = SimpleJaccard::default().diff_layer(lhs, rhs);
@@ -109,7 +121,7 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccard {
 }
 
 impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
-    type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<JaccardState>)>);
+    type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>);
 
     fn diff_graph(&self, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
         let most_disimilar_per_layer = PerLayerCollector(self.clone()).diff_graph(lhs, rhs);

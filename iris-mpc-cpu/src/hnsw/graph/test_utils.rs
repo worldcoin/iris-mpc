@@ -219,13 +219,15 @@ impl DbContext {
             for side in 0..2 {
                 let edge_differ = graph_diff::jaccard::DetailedJaccard { n: 20 };
                 let result = edge_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
-                println!("Aggregate Jaccard (side {}): {:?}", side, result.0);
+                println!("GRAPH aggregate (side {}): {}", side, result.0);
 
                 for (layer_idx, layer_result) in result.1.iter().enumerate() {
-                    println!("  Layer {} aggregate: {:?}", layer_idx, layer_result.0);
-                    for (node_idx, node_result) in layer_result.1.iter().enumerate() {
-                        println!("    Node {}: {:?}", node_idx, node_result);
+                    println!("  LAYER {} aggregate: {}", layer_idx, layer_result.0);
+                    println!("  Top {} most disimilar nodes:", edge_differ.n);
+                    for (node_idx, node_result) in layer_result.1.iter() {
+                        println!("    Node {}: {}", node_idx.serial_id(), node_result,);
                     }
+                    println!("\n");
                 }
             }
         } else {
