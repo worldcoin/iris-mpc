@@ -171,7 +171,7 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
-    value: "true"
+    value: "false"
 
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
