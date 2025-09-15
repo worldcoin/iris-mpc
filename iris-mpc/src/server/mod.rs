@@ -413,6 +413,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
         tls: config.tls.clone(),
+        numa: config.hawk_numa,
     };
 
     tracing::info!(
@@ -439,6 +440,7 @@ async fn load_database(
     // TODO: not needed?
     if config.fake_db_size > 0 {
         iris_loader.fake_db(config.fake_db_size);
+        iris_loader.wait_completion().await?;
         return Ok(());
     }
 
@@ -457,14 +459,20 @@ async fn load_database(
     let store_len = iris_store.count_irises().await?;
 
     let now = Instant::now();
-    let iris_load_future = load_iris_db(
-        &mut iris_loader,
-        iris_store,
-        store_len,
-        parallelism,
-        config,
-        download_shutdown_handler,
-    );
+
+    let iris_load_future = async move {
+        load_iris_db(
+            &mut iris_loader,
+            iris_store,
+            store_len,
+            parallelism,
+            config,
+            download_shutdown_handler,
+        )
+        .await?;
+        iris_loader.wait_completion().await?;
+        eyre::Result::<()>::Ok(())
+    };
 
     let graph_load_future = graph_loader.load_graph_store(
         graph_store,
