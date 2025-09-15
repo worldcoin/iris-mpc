@@ -48,7 +48,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64
             ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
-          platforms: linux/amd64
+          platforms: linux/arm64
           build-args: |
             ARCHITECTURE=aarch64
           cache-from: type=gha
