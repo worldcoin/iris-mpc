@@ -1485,6 +1485,15 @@ impl HawkHandle {
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
 
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
+
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);
         let query_count = results.batch.request_ids.len();
