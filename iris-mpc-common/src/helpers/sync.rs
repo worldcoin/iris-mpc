@@ -223,6 +223,24 @@ impl SyncResult {
         }
 
         tracing::info!("Grouped modifications: {:?}", grouped);
+        
+        let nodes_max_mod_ids: Vec<Option<i64>> = self
+            .all_states
+            .iter()
+            .map(|s| s.modifications.iter().map(|m| m.id).max())
+            .collect();
+        let min_id = nodes_max_mod_ids.iter().flatten().copied().min();
+        let max_id = nodes_max_mod_ids.iter().flatten().copied().max();
+        if let (Some(min_id), Some(max_id)) = (min_id, max_id) {
+            let mod_id_diff = max_id.saturating_sub(min_id) as usize;
+            if mod_id_diff > self.my_state.common_config.get_max_modifications_lookback() {
+                panic!(
+                    "Modification ID difference across nodes is too large: {:?}. Min: {:?}, Max: {:?}. \
+             One of the nodes is behind by an amount modification sync can not handle. Crashing!",
+                    nodes_max_mod_ids, min_id, max_id
+                );
+            }
+        }
 
         // Store the results here
         let mut to_update = Vec::new();
