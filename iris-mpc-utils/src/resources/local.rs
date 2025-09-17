@@ -1,8 +1,8 @@
 use super::loader;
 use crate::{
     constants::PARTY_IDX,
-    fsys,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair, NetConfig, NodeExecutionHost, PartyIdx},
+    utils::fsys,
 };
 use iris_mpc_common::config::Config as NodeConfig;
 use itertools::IntoChunks;
