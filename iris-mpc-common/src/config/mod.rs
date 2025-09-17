@@ -327,10 +327,7 @@ fn default_max_batch_size() -> usize {
 }
 
 fn default_predefined_batch_sizes() -> Vec<usize> {
-    vec![
-        1, 1, 4, 3, 4, 3, 6, 1, 5, 4, 3, 3, 5, 4, 3, 4, 3, 4, 3, 5, 4, 3, 3, 4, 3, 3, 4, 5, 4, 3,
-        3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 6, 3, 4, 3, 3, 3, 5, 4, 3, 4, 5, 3, 3, 4, 3, 3, 4,
-    ]
+    Vec::new()
 }
 
 fn default_heartbeat_interval_secs() -> u64 {

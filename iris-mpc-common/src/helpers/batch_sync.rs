@@ -116,11 +116,7 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
-    let index = if current_batch_id > 0 {
-        current_batch_id - 1
-    } else {
-        0
-    } as usize;
+    let index = (current_batch_id - 1) as usize;
 
     let messages_to_poll = if config.predefined_batch_sizes.len() > index {
         tracing::info!(
