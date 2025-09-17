@@ -1,60 +1,26 @@
-use super::types::ExecutionHost;
 use std::path::{Path, PathBuf};
 
-/// Returns name of an execution host specific assets subdirectory.
-#[allow(dead_code)]
-pub fn get_execution_host_subdirectory() -> &'static str {
-    match ExecutionHost::default() {
-        ExecutionHost::BareMetal => "baremetal",
-        ExecutionHost::Docker => "docker",
-    }
+/// Returns path to root directory.
+pub fn get_path_to_root_1() -> PathBuf {
+    Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
 }
 
-/// Returns path to an asset within assets directory.
-#[allow(dead_code)]
-pub fn get_path_to_asset(subpath: &str) -> PathBuf {
-    let path_to_root = get_path_to_subdir("assets");
-
-    Path::new(&path_to_root).join(subpath)
-}
-
-/// Returns path to assets directory.
-#[allow(dead_code)]
-pub fn get_path_to_assets_root() -> String {
-    format!("{}/assets", get_path_to_root())
-}
-
-/// Returns path to a resource within data directory.
-#[allow(dead_code)]
-pub fn get_path_to_data(subpath: &str) -> PathBuf {
-    let path_to_root = get_path_to_subdir("data");
-
-    Path::new(&path_to_root).join(subpath)
-}
-
-/// Returns path to data directory.
-#[allow(dead_code)]
-pub fn get_path_to_data_root() -> String {
-    format!("{}/data", get_path_to_root())
-}
-
-/// Returns path to data directory.
-pub fn get_path_to_root() -> String {
-    env!("CARGO_MANIFEST_DIR").to_string()
-}
-
-/// Returns path to data directory.
-pub fn get_path_to_subdir(name: &str) -> String {
-    format!("{}/{}", get_path_to_root(), name)
+/// Returns path to sub-directory.
+pub fn get_path_to_subdir_1(name: &str) -> PathBuf {
+    get_path_to_root_1().join(name)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::get_path_to_subdir;
-    use std::path::Path;
+    use super::{get_path_to_root_1, get_path_to_subdir_1};
 
     #[test]
-    fn test_get_path_to_assets() {
-        assert!(Path::new(&get_path_to_subdir("assets")).exists());
+    fn test_get_path_to_root() {
+        assert!(get_path_to_root_1().exists());
+    }
+
+    #[test]
+    fn test_get_path_to_subdir() {
+        assert!(get_path_to_subdir_1("assets").exists());
     }
 }

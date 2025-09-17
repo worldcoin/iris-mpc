@@ -1,2 +1,2 @@
 pub mod resources;
-mod utils;
+pub mod utils;

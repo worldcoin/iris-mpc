@@ -2,17 +2,7 @@ use crate::utils::types::{GaloisRingSharedIrisPairSet, IrisCodePair};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use rand::{prelude::StdRng, SeedableRng};
 
-/// Converts an RNG state plus a plaintext format Iris code pair to a boxed 3 element array of Galois Ring Iris shares.
-///
-/// # Arguments
-///
-/// * `rng_state` - State of an RNG being used to inject entropy to sahre creation.
-/// * `code_pair` - Pair of Iris codes deserialized from a plaintext source.
-///
-/// # Returns
-///
-/// A boxed 3 element array array of Galois Ring Iris shares.
-///
+/// Converts a plaintext format Iris code pair to a boxed array of Galois Ring Iris shares.
 pub fn to_galois_ring_share_pair_set(
     rng_state: u64,
     code_pair: &IrisCodePair,
@@ -39,7 +29,7 @@ mod tests {
     use super::super::constants::PARTY_COUNT;
     use super::{to_galois_ring_share_pair_set, GaloisRingSharedIrisPairSet, IrisCodePair};
 
-    const DEFAULT_RNG_STATE: u64 = 93;
+    const DEFAULT_RNG_STATE: u64 = 42;
 
     fn get_iris_shares() -> Box<GaloisRingSharedIrisPairSet> {
         to_galois_ring_share_pair_set(DEFAULT_RNG_STATE, &IrisCodePair::default())
