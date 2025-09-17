@@ -1,4 +1,4 @@
-use crate::utils::types::{GaloisRingSharedIrisPairSet, IrisCodePair};
+use crate::types::{GaloisRingSharedIrisPairSet, IrisCodePair};
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use rand::{prelude::StdRng, SeedableRng};
 

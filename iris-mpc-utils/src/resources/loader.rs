@@ -1,4 +1,4 @@
-use crate::utils::{
+use crate::{
     convertor,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair},
 };

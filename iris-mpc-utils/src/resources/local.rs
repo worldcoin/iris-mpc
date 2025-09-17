@@ -1,5 +1,5 @@
 use super::loader;
-use crate::utils::{
+use crate::{
     constants::PARTY_IDX,
     fsys,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair, NetConfig, NodeExecutionHost, PartyIdx},
@@ -116,9 +116,7 @@ mod tests {
         load_iris_codes_batch, load_iris_shares, load_iris_shares_batch, load_net_config,
         load_node_config,
     };
-    use crate::utils::constants::{
-        NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, PARTY_COUNT, PARTY_IDX,
-    };
+    use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, PARTY_COUNT, PARTY_IDX};
 
     const DEFAULT_RNG_STATE: u64 = 93;
 
