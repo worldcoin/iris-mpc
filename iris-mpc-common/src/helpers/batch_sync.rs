@@ -124,7 +124,7 @@ pub async fn get_own_batch_sync_state(
             config.predefined_batch_sizes[index],
             current_batch_id
         );
-        config.predefined_batch_sizes[index] as u32
+        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
     } else {
         std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
     };
