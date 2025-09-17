@@ -90,7 +90,7 @@ impl NodeExecutionHost {
 
 /// Returns path to an asset within the crate assets sub-directory.
 fn get_path_to_assets() -> PathBuf {
-    fsys::get_path_to_subdir_1("assets")
+    fsys::get_path_to_subdir("assets")
 }
 
 /// Returns path to default Iris codes ndjson file.
