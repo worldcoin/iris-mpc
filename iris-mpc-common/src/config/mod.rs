@@ -85,6 +85,13 @@ pub struct Config {
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
+    // used for testing to recreate batch sequence
+    #[serde(
+        default = "default_predefined_batch_sizes",
+        deserialize_with = "deserialize_usize_vec"
+    )]
+    pub predefined_batch_sizes: Vec<usize>,
+
     #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
 
@@ -317,6 +324,13 @@ fn default_startup_sync_timeout_secs() -> u64 {
 
 fn default_max_batch_size() -> usize {
     64
+}
+
+fn default_predefined_batch_sizes() -> Vec<usize> {
+    vec![
+        1, 1, 4, 3, 4, 3, 6, 1, 5, 4, 3, 3, 5, 4, 3, 4, 3, 4, 3, 5, 4, 3, 3, 4, 3, 3, 4, 5, 4, 3,
+        3, 3, 3, 4, 3, 3, 3, 4, 3, 3, 6, 3, 4, 3, 3, 3, 5, 4, 3, 4, 5, 3, 3, 4, 3, 3, 4,
+    ]
 }
 
 fn default_heartbeat_interval_secs() -> u64 {
@@ -646,6 +660,14 @@ where
     serde_json::from_str(&value).map_err(serde::de::Error::custom)
 }
 
+fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&value).map_err(serde::de::Error::custom)
+}
+
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[allow(non_snake_case)]
@@ -662,6 +684,7 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
+    predefined_batch_sizes: Vec<usize>,
     heartbeat_interval_secs: u64,
     heartbeat_initial_retries: u64,
     fake_db_size: usize,
@@ -729,6 +752,7 @@ impl From<Config> for CommonConfig {
             init_db_size,
             max_db_size,
             max_batch_size,
+            predefined_batch_sizes,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
             fake_db_size,
@@ -809,6 +833,7 @@ impl From<Config> for CommonConfig {
             clear_db_before_init,
             init_db_size,
             max_db_size,
+            predefined_batch_sizes,
             max_batch_size,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
