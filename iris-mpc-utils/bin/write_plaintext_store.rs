@@ -7,7 +7,6 @@ use iris_mpc_cpu::{
 use iris_mpc_utils as utils;
 use rand::SeedableRng;
 use std::{error::Error, path::PathBuf};
-use tracing;
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
@@ -98,7 +97,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let graph = store
             .generate_graph(&mut rng, graph_size, &searcher)
             .await?;
-        let out_file = output_dir.join(&format!("graph_{graph_size}.dat"));
+        let out_file = output_dir.join(format!("graph_{graph_size}.dat"));
         utils::fsys::write_bin(&graph, &out_file)?;
     }
 
