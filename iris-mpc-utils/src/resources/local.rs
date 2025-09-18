@@ -1,4 +1,4 @@
-use super::loader;
+use super::reader;
 use crate::{
     constants::PARTY_IDX,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair, NetConfig, NodeExecutionHost, PartyIdx},
@@ -18,7 +18,7 @@ pub fn load_iris_codes(
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
     let path_to_codes = get_path_to_ndjson();
 
-    loader::load_iris_codes(&path_to_codes, n_to_read, n_to_skip)
+    reader::read_iris_codes(&path_to_codes, n_to_read, n_to_skip)
 }
 
 /// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
@@ -29,7 +29,7 @@ pub fn load_iris_codes_batch(
 ) -> Result<IntoChunks<impl Iterator<Item = IrisCodePair>>, Error> {
     let path_to_codes = get_path_to_ndjson();
 
-    loader::load_iris_codes_batch(&path_to_codes, n_to_read, n_to_skip, batch_size)
+    reader::read_iris_codes_batch(&path_to_codes, n_to_read, n_to_skip, batch_size)
 }
 
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -40,7 +40,7 @@ pub fn load_iris_shares(
 ) -> Result<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>, Error> {
     let path_to_codes = get_path_to_ndjson();
 
-    loader::load_iris_shares(&path_to_codes, n_to_read, n_to_skip, rng_state)
+    reader::read_iris_shares(&path_to_codes, n_to_read, n_to_skip, rng_state)
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
@@ -52,7 +52,7 @@ pub fn load_iris_shares_batch(
 ) -> Result<IntoChunks<impl Iterator<Item = Box<GaloisRingSharedIrisPairSet>>>, Error> {
     let path_to_codes = get_path_to_ndjson();
 
-    loader::load_iris_shares_batch(&path_to_codes, n_to_read, n_to_skip, batch_size, rng_state)
+    reader::read_iris_shares_batch(&path_to_codes, n_to_read, n_to_skip, batch_size, rng_state)
 }
 
 /// Returns a loaded node config file.
@@ -63,7 +63,7 @@ pub fn load_node_config(
 ) -> Result<NodeConfig, Error> {
     let path_to_config = get_path_to_node_config(config_kind, config_idx, party_idx);
 
-    loader::load_node_config(&path_to_config)
+    reader::read_node_config(&path_to_config)
 }
 
 /// Returns network configuration deserialized from a toml file.
