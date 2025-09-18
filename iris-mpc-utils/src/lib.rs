@@ -2,4 +2,6 @@ pub mod constants;
 pub mod convertor;
 pub mod resources;
 pub mod types;
-mod utils;
+pub mod utils;
+
+pub use utils::fsys;

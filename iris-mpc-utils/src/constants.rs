@@ -1,3 +1,6 @@
+/// Test graph sizes.
+pub const GRAPH_SIZE_RANGE: [usize; 8] = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000, 2_000_000];
+
 /// Node config kinds.
 pub const NODE_CONFIG_KIND: [&str; 2] = [NODE_CONFIG_KIND_MAIN, NODE_CONFIG_KIND_GENESIS];
 pub const NODE_CONFIG_KIND_GENESIS: &str = "genesis";
