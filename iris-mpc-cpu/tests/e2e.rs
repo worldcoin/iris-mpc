@@ -7,11 +7,11 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle},
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrises, Aby3Store},
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, Aby3VectorRef},
         plaintext_store::PlaintextStore,
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
+    hnsw::{GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -46,7 +46,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     params: &HnswParams,
-) -> Result<([GraphMem<Aby3Store>; 2], [Aby3SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3VectorRef>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
@@ -81,8 +81,8 @@ async fn create_graph_from_plain_dbs(
         .generate_graph(&mut rng, DB_SIZE, &searcher)
         .await?;
 
-    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
-    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
+    let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
+    let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();
@@ -176,6 +176,7 @@ async fn e2e_test() -> Result<()> {
         match_distances_buffer_size: 64,
         n_buckets: 10,
         tls: None,
+        numa: true,
     };
     let args1 = HawkArgs {
         party_index: 1,

@@ -137,6 +137,7 @@ To send test messages to the dev environment, you can use the `client` binary:
 
 ```bash
 # Don't forge to unset the AWS_ENDPOINT_URL AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY from direnv!
+export AWS_PROFILE=worldcoin-smpcv-io-vpc-dev
 export AWS_REGION=eu-central-1
 cargo run --release --bin client -- \
    --request-topic-arn arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo \

@@ -36,6 +36,7 @@ echo "Creating S3 bucket..."
 create_bucket "wf-dev-public-keys"
 create_bucket "wf-smpcv2-dev-sns-requests"
 create_bucket "wf-smpcv2-dev-sync-protocol"
+create_bucket "wf-smpcv2-dev-hnsw-performance-reports"
 
 # Ensure dev_deleted_serial_ids.json exists before uploading
 echo "Creating static dev_deleted_serial_ids.json"

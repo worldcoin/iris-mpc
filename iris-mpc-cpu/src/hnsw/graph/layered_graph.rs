@@ -7,13 +7,13 @@ use super::neighborhood::SortedEdgeIds;
 use crate::{
     execution::hawk_main::state_check::SetHash,
     hnsw::{
-        searcher::{ConnectPlanLayerV, ConnectPlanV},
-        VectorStore,
+        searcher::{ConnectPlan, ConnectPlanLayer},
+        vector_store::Ref,
     },
 };
 use itertools::izip;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 use tokio::sync::RwLock;
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -30,9 +30,10 @@ pub struct EntryPoint<VectorRef> {
 
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
-pub struct GraphMem<V: VectorStore> {
+#[serde(bound = "V: Ref + Display + FromStr")]
+pub struct GraphMem<V: Ref + Display + FromStr> {
     /// Starting vector and layer for HNSW search
-    pub entry_point: Option<EntryPoint<V::VectorRef>>,
+    pub entry_point: Option<EntryPoint<V>>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
@@ -40,7 +41,7 @@ pub struct GraphMem<V: VectorStore> {
     pub layers: Vec<Layer<V>>,
 }
 
-impl<V: VectorStore> Clone for GraphMem<V> {
+impl<V: Ref + Display + FromStr> Clone for GraphMem<V> {
     fn clone(&self) -> Self {
         GraphMem {
             entry_point: self.entry_point.clone(),
@@ -49,7 +50,7 @@ impl<V: VectorStore> Clone for GraphMem<V> {
     }
 }
 
-impl<V: VectorStore> GraphMem<V> {
+impl<V: Ref + Display + FromStr> GraphMem<V> {
     pub fn new() -> Self {
         GraphMem {
             entry_point: None,
@@ -61,10 +62,7 @@ impl<V: VectorStore> GraphMem<V> {
         Arc::new(RwLock::new(self))
     }
 
-    pub fn from_precomputed(
-        entry_point: Option<(V::VectorRef, usize)>,
-        layers: Vec<Layer<V>>,
-    ) -> Self {
+    pub fn from_precomputed(entry_point: Option<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
         GraphMem {
             entry_point: entry_point.map(|ep| EntryPoint {
                 point: ep.0,
@@ -80,7 +78,7 @@ impl<V: VectorStore> GraphMem<V> {
 
     /// Apply an insertion plan from `HnswSearcher::insert_prepare` to the
     /// graph.
-    pub async fn insert_apply(&mut self, plan: ConnectPlanV<V>) {
+    pub async fn insert_apply(&mut self, plan: ConnectPlan<V>) {
         // If required, set vector as new entry point
         if plan.set_ep {
             let insertion_layer = plan.layers.len() - 1;
@@ -96,7 +94,7 @@ impl<V: VectorStore> GraphMem<V> {
     }
 
     /// Apply the connections from `HnswSearcher::connect_prepare` to the graph.
-    async fn connect_apply(&mut self, q: V::VectorRef, lc: usize, plan: ConnectPlanLayerV<V>) {
+    async fn connect_apply(&mut self, q: V, lc: usize, plan: ConnectPlanLayer<V>) {
         // Connect all n -> q.
         for (n, links) in izip!(plan.neighbors.iter(), plan.nb_links) {
             self.set_links(n.clone(), links, lc).await;
@@ -106,13 +104,13 @@ impl<V: VectorStore> GraphMem<V> {
         self.set_links(q, plan.neighbors, lc).await;
     }
 
-    pub async fn get_entry_point(&self) -> Option<(V::VectorRef, usize)> {
+    pub async fn get_entry_point(&self) -> Option<(V, usize)> {
         self.entry_point
             .as_ref()
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    pub async fn set_entry_point(&mut self, point: V::VectorRef, layer: usize) {
+    pub async fn set_entry_point(&mut self, point: V, layer: usize) {
         if let Some(previous) = self.entry_point.as_ref() {
             assert!(
                 previous.layer < layer,
@@ -127,22 +125,13 @@ impl<V: VectorStore> GraphMem<V> {
         self.entry_point = Some(EntryPoint { point, layer });
     }
 
-    pub async fn get_links(
-        &self,
-        base: &<V as VectorStore>::VectorRef,
-        lc: usize,
-    ) -> SortedEdgeIds<V::VectorRef> {
+    pub async fn get_links(&self, base: &V, lc: usize) -> SortedEdgeIds<V> {
         let layer = &self.layers[lc];
         layer.get_links(base).unwrap_or_default()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    pub async fn set_links(
-        &mut self,
-        base: V::VectorRef,
-        links: SortedEdgeIds<V::VectorRef>,
-        lc: usize,
-    ) {
+    pub async fn set_links(&mut self, base: V, links: SortedEdgeIds<V>, lc: usize) {
         if self.layers.len() < lc + 1 {
             self.layers.resize(lc + 1, Layer::new());
         }
@@ -165,14 +154,15 @@ impl<V: VectorStore> GraphMem<V> {
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
-pub struct Layer<V: VectorStore> {
+#[serde(bound = "V: Ref + Display + FromStr")]
+pub struct Layer<V: Ref + Display + FromStr> {
     /// Map a base vector to its neighbors, including the distance between
     /// base and neighbor.
-    pub links: HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>>,
+    pub links: HashMap<V, SortedEdgeIds<V>>,
     set_hash: SetHash,
 }
 
-impl<V: VectorStore> Clone for Layer<V> {
+impl<V: Ref + Display + FromStr> Clone for Layer<V> {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
@@ -181,7 +171,7 @@ impl<V: VectorStore> Clone for Layer<V> {
     }
 }
 
-impl<V: VectorStore> Layer<V> {
+impl<V: Ref + Display + FromStr> Layer<V> {
     pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
@@ -189,11 +179,11 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V::VectorRef) -> Option<SortedEdgeIds<V::VectorRef>> {
+    pub fn get_links(&self, from: &V) -> Option<SortedEdgeIds<V>> {
         self.links.get(from).cloned()
     }
 
-    pub fn set_links(&mut self, from: V::VectorRef, links: SortedEdgeIds<V::VectorRef>) {
+    pub fn set_links(&mut self, from: V, links: SortedEdgeIds<V>) {
         self.set_hash.add_unordered((&from, &links));
 
         let previous = self.links.insert(from.clone(), links);
@@ -203,7 +193,7 @@ impl<V: VectorStore> Layer<V> {
         }
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V::VectorRef, SortedEdgeIds<V::VectorRef>> {
+    pub fn get_links_map(&self) -> &HashMap<V, SortedEdgeIds<V>> {
         &self.links
     }
 }
@@ -218,9 +208,9 @@ impl<V: VectorStore> Layer<V> {
 /// - vector ids are re-mapped to remove blank entries left by deletions
 pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
 where
-    U: VectorStore,
-    V: VectorStore,
-    VecMap: Fn(U::VectorRef) -> V::VectorRef + Copy,
+    U: Ref + Display + FromStr,
+    V: Ref + Display + FromStr,
+    VecMap: Fn(U) -> V + Copy,
 {
     let new_entry_point = graph.entry_point.map(|ep| EntryPoint {
         point: vector_map(ep.point),
@@ -250,10 +240,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::HashMap, sync::Arc};
+
     use crate::{
-        hawkers::plaintext_store::PlaintextStore,
-        hnsw::{vector_store::VectorStoreMut, HnswSearcher},
+        hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+        hnsw::{
+            graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
+            VectorStore,
+        },
     };
     use aes_prng::AesRng;
     use eyre::Result;
@@ -357,10 +351,7 @@ mod tests {
                 .await?;
         }
 
-        let equal_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| v);
-        assert_eq!(graph_store, equal_graph_store);
-
-        let different_graph_store: GraphMem<PlaintextStore> = migrate(graph_store.clone(), |v| {
+        let different_graph_store: GraphMem<VectorId> = migrate(graph_store.clone(), |v| {
             VectorId::from_0_index(v.index() * 2)
         });
         assert_ne!(graph_store, different_graph_store);
@@ -375,8 +366,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<<PlaintextStore as VectorStore>::VectorRef, usize> =
-            HashMap::new();
+        let mut point_ids_map: HashMap<PlaintextVectorRef, usize> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
@@ -398,7 +388,7 @@ mod tests {
             point_ids_map.insert(inserted, rng.next_u32() as usize);
         }
 
-        let new_graph_store: GraphMem<TestStore> =
+        let new_graph_store: GraphMem<<TestStore as VectorStore>::VectorRef> =
             migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
         let (entry_point, layer) = graph_store.get_entry_point().await.unwrap();
