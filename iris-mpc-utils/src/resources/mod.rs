@@ -1,5 +1,3 @@
-/// Generic resource loader.
-pub mod loader;
-
-/// Local resource accessor.
 pub mod local;
+pub mod reader;
+pub mod writer;

@@ -2765,6 +2765,7 @@ dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
  "base64 0.22.1",
+ "bincode",
  "bytemuck",
  "chrono",
  "clap",

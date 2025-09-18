@@ -39,3 +39,8 @@ chrono = "0.4.38"
 sqlx.workspace = true
 toml = { version = "0.8.23", features = ["preserve_order"] }
 async-trait.workspace = true
+bincode.workspace = true
+
+[[bin]]
+name = "write-plaintext-store"
+path = "bin/write_plaintext_store.rs"

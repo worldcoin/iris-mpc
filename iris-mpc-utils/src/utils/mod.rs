@@ -1,2 +1,3 @@
 pub(crate) mod aws;
-pub(crate) mod fsys;
+pub mod fsys;
+pub(crate) mod misc;
