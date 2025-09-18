@@ -61,7 +61,7 @@ env:
     value: "32"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "8"
+    value: "16"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
