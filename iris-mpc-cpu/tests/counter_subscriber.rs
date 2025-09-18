@@ -16,7 +16,7 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
         metrics::ops_counter::{
             OpCountersLayer, Operation, ParamCounterRef, ParamVertexOpeningsCounter, StaticCounter,
@@ -167,7 +167,7 @@ async fn init_hnsw(
 ) -> Result<(
     HnswSearcher,
     PlaintextStore,
-    GraphMem<PlaintextStore>,
+    GraphMem<PlaintextVectorRef>,
     Arc<IrisCode>,
     Arc<IrisCode>,
 )> {
@@ -184,7 +184,7 @@ async fn init_hnsw(
 async fn hnsw_search_queries_seq(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
-    graph_store: &mut GraphMem<PlaintextStore>,
+    graph_store: &mut GraphMem<PlaintextVectorRef>,
     query1: Arc<IrisCode>,
     query2: Arc<IrisCode>,
 ) -> Result<()> {
@@ -198,7 +198,7 @@ async fn hnsw_search_queries_seq(
 async fn hnsw_search_queries_par(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
-    graph_store: &mut GraphMem<PlaintextStore>,
+    graph_store: &mut GraphMem<PlaintextVectorRef>,
     query1: Arc<IrisCode>,
     query2: Arc<IrisCode>,
 ) {
