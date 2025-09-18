@@ -5,6 +5,31 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__PPROF_FLAME_ONLY
+    value: "true"
+
+  - name: SMPC__ENABLE_PPROF_PER_BATCH
+    value: "true"
+
+  # Optional overrides (uncomment/customize as needed)
+  - name: SMPC__PPROF_S3_BUCKET
+    value: "wf-smpcv2-stage-hnsw-performance-reports"
+
+  - name: SMPC__PPROF_PREFIX
+    value: "stage/hnsw"
+
+  - name: SMPC__PPROF_SECONDS
+    value: "180"
+
+  - name: SMPC__PPROF_FREQUENCY
+    value: "49"
+
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  - name: SMPC__PPROF_RUN_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+
   - name: SMPC__ENVIRONMENT
     value: "stage"
 
@@ -26,14 +51,17 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "32"
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in stage, bump to 4 in prod
+    value: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "8"
+    value: "48"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
@@ -147,6 +175,21 @@ env:
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
+
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_party_stage_2.crt"]'
+
+  - name: SMPC__TLS__WITH_NGINX_SIDECAR
+    value: "false"
+
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "false"
 
 initContainer:
   enabled: true

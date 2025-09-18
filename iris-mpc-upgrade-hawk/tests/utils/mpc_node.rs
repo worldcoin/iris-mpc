@@ -14,7 +14,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, StoreId},
     genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -262,7 +262,7 @@ pub struct DbAssertions {
     pub last_indexed_iris_id: Option<IrisSerialId>,
     pub last_indexed_modification_id: Option<i64>,
     pub layer_0_size: Option<usize>,
-    pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextStore>>>,
+    pub hnsw_graphs: Option<BothEyes<GraphMem<PlaintextVectorRef>>>,
 }
 
 impl DbAssertions {
@@ -300,7 +300,7 @@ impl DbAssertions {
         self
     }
 
-    pub fn assert_hnsw_graphs(mut self, graphs: BothEyes<GraphMem<PlaintextStore>>) -> Self {
+    pub fn assert_hnsw_graphs(mut self, graphs: BothEyes<GraphMem<PlaintextVectorRef>>) -> Self {
         self.hnsw_graphs = Some(graphs);
         self
     }
