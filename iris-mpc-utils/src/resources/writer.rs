@@ -7,7 +7,7 @@ use std::{
 };
 
 /// Writes a JSON file containing Iris codes in plaintext format.
-pub fn write_iris_codes(vector: &PlaintextStore, fpath: &Path) -> std::io::Result<()> {
+pub fn write_plaintext_store(vector: &PlaintextStore, fpath: &Path) -> std::io::Result<()> {
     // Set file writer.
     let file = File::create(fpath)?;
     let mut writer = BufWriter::new(file);
