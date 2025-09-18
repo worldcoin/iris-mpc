@@ -12,7 +12,7 @@ use std::{io::Error, path::PathBuf};
 const FNAME_NDJSON_1K: &str = "iris-codes-plaintext/20250710-1k.ndjson";
 
 /// Returns iterator over default Iris code pairs deserialized from an ndjson file.
-pub fn load_iris_codes(
+pub fn read_iris_codes(
     n_to_read: usize,
     n_to_skip: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
@@ -22,7 +22,7 @@ pub fn load_iris_codes(
 }
 
 /// Returns chunked iterator over Iris code pairs deserialized from an ndjson file.
-pub fn load_iris_codes_batch(
+pub fn read_iris_codes_batch(
     n_to_read: usize,
     n_to_skip: usize,
     batch_size: usize,
@@ -33,7 +33,7 @@ pub fn load_iris_codes_batch(
 }
 
 /// Returns iterator over Iris shares deserialized from a stream of Iris Code pairs.
-pub fn load_iris_shares(
+pub fn read_iris_shares(
     n_to_read: usize,
     n_to_skip: usize,
     rng_state: u64,
@@ -44,7 +44,7 @@ pub fn load_iris_shares(
 }
 
 /// Returns chunked iterator over Iris shares deserialized from a stream of Iris Code pairs.
-pub fn load_iris_shares_batch(
+pub fn read_iris_shares_batch(
     n_to_read: usize,
     n_to_skip: usize,
     batch_size: usize,
@@ -56,7 +56,7 @@ pub fn load_iris_shares_batch(
 }
 
 /// Returns a loaded node config file.
-pub fn load_node_config(
+pub fn read_node_config(
     config_kind: &str,
     config_idx: usize,
     party_idx: &PartyIdx,
@@ -67,10 +67,10 @@ pub fn load_node_config(
 }
 
 /// Returns network configuration deserialized from a toml file.
-pub fn load_net_config(config_kind: &str, config_idx: usize) -> Result<NetConfig, Error> {
+pub fn read_net_config(config_kind: &str, config_idx: usize) -> Result<NetConfig, Error> {
     let config = PARTY_IDX
         .iter()
-        .map(|party_idx| load_node_config(config_kind, config_idx, party_idx).unwrap())
+        .map(|party_idx| read_node_config(config_kind, config_idx, party_idx).unwrap())
         .collect::<Vec<_>>()
         .try_into()
         .unwrap();
@@ -112,9 +112,9 @@ fn get_path_to_node_config(config_kind: &str, config_idx: usize, party_idx: &Par
 #[cfg(test)]
 mod tests {
     use super::{
-        get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, load_iris_codes,
-        load_iris_codes_batch, load_iris_shares, load_iris_shares_batch, load_net_config,
-        load_node_config,
+        get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, read_iris_codes,
+        read_iris_codes_batch, read_iris_shares, read_iris_shares_batch, read_net_config,
+        read_node_config,
     };
     use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, PARTY_COUNT, PARTY_IDX};
 
@@ -140,10 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn test_load_iris_codes() {
+    fn test_read_iris_codes() {
         for (n_to_read, n_to_skip) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for _ in load_iris_codes(n_to_read, n_to_skip).unwrap() {
+            for _ in read_iris_codes(n_to_read, n_to_skip).unwrap() {
                 n_read += 1;
             }
             assert_eq!(n_to_read, n_read);
@@ -151,12 +151,12 @@ mod tests {
     }
 
     #[test]
-    fn test_load_iris_codes_batch() {
+    fn test_read_iris_codes_batch() {
         for (batch_size, n_to_read, n_to_skip, expected_batches) in
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in load_iris_codes_batch(n_to_read, n_to_skip, batch_size)
+            for chunk in read_iris_codes_batch(n_to_read, n_to_skip, batch_size)
                 .unwrap()
                 .into_iter()
             {
@@ -172,10 +172,10 @@ mod tests {
     }
 
     #[test]
-    fn test_load_iris_shares() {
+    fn test_read_iris_shares() {
         for (n_to_read, n_to_skip) in [(100, 0), (81, 838)] {
             let mut n_read = 0;
-            for shares in load_iris_shares(n_to_read, n_to_skip, DEFAULT_RNG_STATE).unwrap() {
+            for shares in read_iris_shares(n_to_read, n_to_skip, DEFAULT_RNG_STATE).unwrap() {
                 n_read += 1;
                 assert_eq!(shares.len(), PARTY_COUNT);
             }
@@ -184,12 +184,12 @@ mod tests {
     }
 
     #[test]
-    fn test_load_iris_shares_batch() {
+    fn test_read_iris_shares_batch() {
         for (batch_size, n_to_read, n_to_skip, expected_batches) in
             [(10, 100, 0, 10), (9, 81, 838, 9)]
         {
             let mut n_chunks = 0;
-            for chunk in load_iris_shares_batch(n_to_read, n_to_skip, batch_size, DEFAULT_RNG_STATE)
+            for chunk in read_iris_shares_batch(n_to_read, n_to_skip, batch_size, DEFAULT_RNG_STATE)
                 .unwrap()
                 .into_iter()
             {
@@ -206,17 +206,17 @@ mod tests {
     }
 
     #[test]
-    fn test_load_node_config() {
+    fn test_read_node_config() {
         PARTY_IDX.iter().for_each(move |party_idx| {
             NODE_CONFIG_KIND.iter().for_each(|kind| {
-                load_node_config(kind, 0, party_idx).unwrap();
+                read_node_config(kind, 0, party_idx).unwrap();
             });
         });
     }
 
     #[test]
-    fn test_load_net_config() {
-        let net_config = load_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
+    fn test_read_net_config() {
+        let net_config = read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
         assert!(net_config.len() == PARTY_COUNT);
         for (party_idx, node_config) in net_config.iter().enumerate() {
             assert!(node_config.party_id == party_idx);

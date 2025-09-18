@@ -68,7 +68,7 @@ mod test {
     use crate::{constants::NODE_CONFIG_KIND_GENESIS, resources, types::NetConfig};
 
     fn get_net_config() -> NetConfig {
-        resources::local::load_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
+        resources::local::read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
     }
 
     #[tokio::test]
