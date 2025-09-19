@@ -111,12 +111,7 @@ impl BucketStatistics {
         eye: Eye,
         operation: Operation,
     ) -> Self {
-        let mut bs = Self::new(
-            match_distances_buffer_size,
-            n_buckets,
-            party_id,
-            eye,
-        );
+        let mut bs = Self::new(match_distances_buffer_size, n_buckets, party_id, eye);
         bs.operation = operation;
         bs
     }
@@ -277,11 +272,7 @@ impl BucketStatistics2D {
         party_id: usize,
         operation: Operation,
     ) -> Self {
-        let mut bs = Self::new(
-            match_distances_buffer_size,
-            n_buckets_per_side,
-            party_id,
-        );
+        let mut bs = Self::new(match_distances_buffer_size, n_buckets_per_side, party_id);
         bs.operation = operation;
         bs
     }
