@@ -1309,6 +1309,7 @@ async fn server_main(config: Config) -> Result<()> {
             config.match_distances_buffer_size_extra_percent,
             config.match_distances_2d_buffer_size,
             config.n_buckets,
+            config.reauth_match_distances_min_count,
             config.return_partial_results,
             config.disable_persistence,
             config.enable_debug_timing,
@@ -1398,6 +1399,8 @@ async fn server_main(config: Config) -> Result<()> {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_reauth,
+            anonymized_bucket_statistics_right_reauth,
             anonymized_bucket_statistics_left_mirror,
             anonymized_bucket_statistics_right_mirror,
             successful_reauths,
@@ -1410,6 +1413,7 @@ async fn server_main(config: Config) -> Result<()> {
             actor_data: _,
             full_face_mirror_attack_detected,
             anonymized_bucket_statistics_2d,
+            anonymized_bucket_statistics_2d_reauth,
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
@@ -1849,6 +1853,35 @@ async fn server_main(config: Config) -> Result<()> {
                 .await?;
             }
 
+            // Send reauth anonymized statistics (normal orientation only)
+            if (config_bg.enable_sending_anonymized_stats_message)
+                && (!anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_reauth.buckets.is_empty())
+            {
+                tracing::info!("Sending anonymized stats results (reauth)");
+                let anonymized_statistics_results = [
+                    anonymized_bucket_statistics_left_reauth,
+                    anonymized_bucket_statistics_right_reauth,
+                ];
+                let anonymized_statistics_results = anonymized_statistics_results
+                    .iter()
+                    .map(|anonymized_bucket_statistics| {
+                        serde_json::to_string(anonymized_bucket_statistics)
+                            .wrap_err("failed to serialize anonymized statistics result (reauth)")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+
+                send_results_to_sns(
+                    anonymized_statistics_results,
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_attributes,
+                    ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
             // Send mirror orientation statistics separately with their own flag
             if (config_bg.enable_sending_mirror_anonymized_stats_message)
                 && (!anonymized_bucket_statistics_left_mirror.buckets.is_empty()
@@ -1904,6 +1937,42 @@ async fn server_main(config: Config) -> Result<()> {
                 .wrap_err("failed to upload 2D anonymized statistics to s3")?;
 
                 // Publish only the S3 key to SNS
+                let payload = serde_json::to_string(&serde_json::json!({
+                    "s3_key": s3_key,
+                }))?;
+                send_results_to_sns(
+                    vec![payload],
+                    &metadata,
+                    &sns_client_bg,
+                    &config_bg,
+                    &anonymized_statistics_2d_attributes,
+                    ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE,
+                )
+                .await?;
+            }
+
+            // Send 2D anonymized statistics for reauth if present
+            if config_bg.enable_sending_anonymized_stats_2d_message
+                && !anonymized_bucket_statistics_2d_reauth.buckets.is_empty()
+            {
+                tracing::info!("Sending 2D anonymized stats results (reauth)");
+                let serialized = serde_json::to_string(&anonymized_bucket_statistics_2d_reauth)
+                    .wrap_err("failed to serialize 2D anonymized statistics result (reauth)")?;
+
+                let now_ms = Utc::now().timestamp_millis();
+                let sha = iris_mpc_common::helpers::sha256::sha256_bytes(&serialized);
+                let content_hash =  hex::encode(sha);
+                let s3_key = format!("stats2d/{}_{}_reauth.json", now_ms, content_hash);
+
+                upload_file_to_s3(
+                    &config_bg.sns_buffer_bucket_name,
+                    &s3_key,
+                    s3_client_bg.clone(),
+                    serialized.as_bytes(),
+                )
+                .await
+                .wrap_err("failed to upload 2D anonymized statistics (reauth) to s3")?;
+
                 let payload = serde_json::to_string(&serde_json::json!({
                     "s3_key": s3_key,
                 }))?;

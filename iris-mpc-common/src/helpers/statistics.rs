@@ -6,6 +6,14 @@ use chrono::{
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+// Operation of the anonymized statistics producer
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum Operation {
+    #[default]
+    Uniqueness,
+    Reauth,
+}
+
 // 1D anonymized statistics types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BucketResult {
@@ -30,6 +38,8 @@ pub struct BucketStatistics {
     pub match_distances_buffer_size: usize,
     pub party_id: usize,
     pub eye: Eye,
+    // Operation type this histogram belongs to
+    pub operation: Operation,
     #[serde(with = "ts_seconds")]
     // Start timestamp at which we start recording the statistics
     pub start_time_utc_timestamp: DateTime<Utc>,
@@ -54,6 +64,7 @@ impl fmt::Display for BucketStatistics {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "    party_id: {}", self.party_id)?;
         writeln!(f, "    eye: {:?}", self.eye)?;
+        writeln!(f, "    operation: {:?}", self.operation)?;
         writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
         match &self.end_time_utc_timestamp {
             Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
@@ -84,11 +95,30 @@ impl BucketStatistics {
             eye,
             match_distances_buffer_size,
             party_id,
+            operation: Operation::Uniqueness,
             start_time_utc_timestamp: Utc::now(),
             end_time_utc_timestamp: None,
             next_start_time_utc_timestamp: None,
             is_mirror_orientation: false,
         }
+    }
+
+    /// Create a new `BucketStatistics` with explicit operation type.
+    pub fn new_with_operation(
+        match_distances_buffer_size: usize,
+        n_buckets: usize,
+        party_id: usize,
+        eye: Eye,
+        operation: Operation,
+    ) -> Self {
+        let mut bs = Self::new(
+            match_distances_buffer_size,
+            n_buckets,
+            party_id,
+            eye,
+        );
+        bs.operation = operation;
+        bs
     }
 
     /// `buckets_array` array of buckets
@@ -181,6 +211,8 @@ pub struct BucketStatistics2D {
     // The number of two-sided matches gathered before sending the statistics
     pub match_distances_buffer_size: usize,
     pub party_id: usize,
+    // Operation type this histogram belongs to
+    pub operation: Operation,
     #[serde(with = "ts_seconds")]
     pub start_time_utc_timestamp: DateTime<Utc>,
     #[serde(with = "ts_seconds_option")]
@@ -200,6 +232,7 @@ impl BucketStatistics2D {
 impl fmt::Display for BucketStatistics2D {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "    party_id: {}", self.party_id)?;
+        writeln!(f, "    operation: {:?}", self.operation)?;
         writeln!(f, "    start_time_utc: {}", self.start_time_utc_timestamp)?;
         match &self.end_time_utc_timestamp {
             Some(end) => writeln!(f, "    end_time_utc: {}", end)?,
@@ -231,10 +264,26 @@ impl BucketStatistics2D {
             n_buckets_per_side,
             match_distances_buffer_size,
             party_id,
+            operation: Operation::Uniqueness,
             start_time_utc_timestamp: Utc::now(),
             end_time_utc_timestamp: None,
             next_start_time_utc_timestamp: None,
         }
+    }
+
+    pub fn new_with_operation(
+        match_distances_buffer_size: usize,
+        n_buckets_per_side: usize,
+        party_id: usize,
+        operation: Operation,
+    ) -> Self {
+        let mut bs = Self::new(
+            match_distances_buffer_size,
+            n_buckets_per_side,
+            party_id,
+        );
+        bs.operation = operation;
+        bs
     }
 
     // Fill bucket counts for the 2D histogram.
