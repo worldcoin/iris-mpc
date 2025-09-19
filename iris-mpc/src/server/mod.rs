@@ -116,7 +116,7 @@ pub async fn server_main(config: Config) -> Result<()> {
             &iris_store,
             &aws_clients.sns_client,
             &config,
-            max_sync_lookback(&config),
+            config.max_modifications_lookback,
         )
         .await
         {
@@ -198,11 +198,6 @@ fn process_config(config: &Config) {
     }
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
-}
-
-/// Returns computed maximum sync lookback size.
-fn max_sync_lookback(config: &Config) -> usize {
-    (config.max_deletions_per_batch + config.max_batch_size) * 2
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -350,7 +345,9 @@ async fn build_sync_state(
     store: &Store,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
-    let modifications = store.last_modifications(max_sync_lookback(config)).await?;
+    let modifications = store
+        .last_modifications(config.max_modifications_lookback)
+        .await?;
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 

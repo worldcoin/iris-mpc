@@ -129,7 +129,7 @@ pub async fn sync_modifications(
     if let Some(graph_store) = graph_store {
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
         if !graph_mutations.is_empty() {
-            tracing::info!("Applying graph mutations: {:?}", graph_mutations);
+            tracing::info!("Applying {} graph mutations", graph_mutations.len());
             let hawk_mutation = HawkMutation(graph_mutations);
             hawk_mutation.persist(&mut graph_tx).await?;
         } else {
