@@ -681,6 +681,7 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
+    #[serde(default)]
     predefined_batch_sizes: Vec<usize>,
     heartbeat_interval_secs: u64,
     heartbeat_initial_retries: u64,
