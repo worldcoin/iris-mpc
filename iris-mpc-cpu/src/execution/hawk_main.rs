@@ -1237,9 +1237,12 @@ impl HawkResult {
             matched_batch_request_ids,
             anonymized_bucket_statistics_left,
             anonymized_bucket_statistics_right,
+            anonymized_bucket_statistics_left_reauth: BucketStatistics::default(),
+            anonymized_bucket_statistics_right_reauth: BucketStatistics::default(),
             anonymized_bucket_statistics_left_mirror: BucketStatistics::default(), // TODO.
             anonymized_bucket_statistics_right_mirror: BucketStatistics::default(), // TODO.
             anonymized_bucket_statistics_2d: BucketStatistics2D::default(),        // TODO.
+            anonymized_bucket_statistics_2d_reauth: BucketStatistics2D::default(),
 
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,

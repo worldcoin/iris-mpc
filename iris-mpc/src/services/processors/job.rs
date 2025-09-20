@@ -55,6 +55,8 @@ pub async fn process_job_result(
         matched_batch_request_ids,
         anonymized_bucket_statistics_left,
         anonymized_bucket_statistics_right,
+        anonymized_bucket_statistics_left_reauth,
+        anonymized_bucket_statistics_right_reauth,
         successful_reauths,
         reauth_target_indices,
         reauth_or_rule_used,
@@ -432,6 +434,35 @@ pub async fn process_job_result(
             .map(|anonymized_bucket_statistics| {
                 serde_json::to_string(anonymized_bucket_statistics)
                     .wrap_err("failed to serialize anonymized statistics result")
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        send_results_to_sns(
+            anonymized_statistics_results,
+            &metadata,
+            sns_client,
+            config,
+            anonymized_statistics_attributes,
+            ANONYMIZED_STATISTICS_MESSAGE_TYPE,
+        )
+        .await?;
+    }
+
+    // Send reauth anonymized statistics if present
+    if (config.enable_sending_anonymized_stats_message)
+        && (!anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+            || !anonymized_bucket_statistics_right_reauth.buckets.is_empty())
+    {
+        tracing::info!("Sending anonymized stats results (reauth)");
+        let anonymized_statistics_results = [
+            anonymized_bucket_statistics_left_reauth,
+            anonymized_bucket_statistics_right_reauth,
+        ];
+        let anonymized_statistics_results = anonymized_statistics_results
+            .iter()
+            .map(|anonymized_bucket_statistics| {
+                serde_json::to_string(anonymized_bucket_statistics)
+                    .wrap_err("failed to serialize anonymized statistics result (reauth)")
             })
             .collect::<Result<Vec<_>>>()?;
 
