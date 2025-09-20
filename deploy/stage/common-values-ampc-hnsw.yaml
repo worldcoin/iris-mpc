@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:4a447230e4852349b6842298a09613824fc52b68-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu@sha256:745035ca903b11a604abec3046c9d40eeaab3507b114064343dd403d4754ebde"
 
 environment: stage
 replicaCount: 1
@@ -88,4 +88,3 @@ terminationGracePeriodSeconds: 240
 mountSSLCerts:
   enabled: true
   mountPath: /etc/ssl/private
-
