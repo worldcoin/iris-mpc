@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu@sha256:745035ca903b11a604abec3046c9d40eeaab3507b114064343dd403d4754ebde"
+image: "ghcr.io/worldcoin/iris-mpc-cpu@sha256:733c88afd40e5651104f4894ecbe82a3ebceed3f0d2442c3993ce4444dab7488" # anon stats hnsw test with arm64
 
 environment: stage
 replicaCount: 1
