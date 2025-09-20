@@ -76,6 +76,7 @@ mod tests {
         assert_eq!(value["n_buckets"], json!(2));
         assert_eq!(value["match_distances_buffer_size"], json!(128));
         assert_eq!(value["is_mirror_orientation"], json!(false));
+        assert_eq!(value["operation"], json!("Uniqueness"));
     }
 
     #[test]
@@ -96,7 +97,8 @@ mod tests {
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
             "end_time_utc_timestamp": null,
-            "is_mirror_orientation": false
+            "is_mirror_orientation": false,
+            "operation": "Uniqueness"
         })
         .to_string();
 
