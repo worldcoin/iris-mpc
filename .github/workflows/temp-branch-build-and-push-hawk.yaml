@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "chore/make-predefined-batch-size-optional-in-common-config"
+      - "leonidas/hnsw-stats-corr-test"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
