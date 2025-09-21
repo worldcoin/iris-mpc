@@ -1721,7 +1721,7 @@ impl ServerActor {
 
         // Partition by operation and extend the appropriate caches
         for (dev_idx, new) in two_sided_match_distances.into_iter().enumerate() {
-            let mut uni = TwoSidedDistanceCache::default();
+            let mut uniqueness = TwoSidedDistanceCache::default();
             let mut reauth = TwoSidedDistanceCache::default();
             for (key, (left_vals, right_vals)) in new.map.into_iter() {
                 // Use one of the stored raw ids to classify the op
@@ -1741,7 +1741,7 @@ impl ServerActor {
                 };
                 match classify {
                     RequestOp::Uniqueness => {
-                        uni.map.insert(key, (left_vals, right_vals));
+                        uniqueness.map.insert(key, (left_vals, right_vals));
                     }
                     RequestOp::Reauth => {
                         reauth.map.insert(key, (left_vals, right_vals));
@@ -1749,7 +1749,7 @@ impl ServerActor {
                     RequestOp::Other => {}
                 }
             }
-            self.both_side_match_distances_buffer_uni[dev_idx].extend(uni);
+            self.both_side_match_distances_buffer_uni[dev_idx].extend(uniqueness);
             self.both_side_match_distances_buffer_reauth[dev_idx].extend(reauth);
         }
 
@@ -3649,22 +3649,20 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| a[i][j])
                 .collect::<Vec<_>>();
-            let slice_len = new_a.len().min(length);
-            let a =
-                htod_on_stream_sync(&new_a[..slice_len], &device_manager.device(i), &streams[i])
-                    .unwrap();
+            // Pad to exactly `length` entries (zeros) to satisfy kernel chunking (multiple of 64)
+            let mut pad_a = vec![0u16; length];
+            let copy_len = new_a.len().min(length);
+            pad_a[..copy_len].copy_from_slice(&new_a[..copy_len]);
+            let a = htod_on_stream_sync(&pad_a, &device_manager.device(i), &streams[i]).unwrap();
 
             let new_b = resort_indices[i]
                 .iter()
                 .map(|&j| b[i][j])
                 .collect::<Vec<_>>();
-            let slice_len_b = new_b.len().min(length);
-            let b = htod_on_stream_sync(
-                &new_b[..slice_len_b],
-                &device_manager.device(i),
-                &streams[i],
-            )
-            .unwrap();
+            let mut pad_b = vec![0u16; length];
+            let copy_len_b = new_b.len().min(length);
+            pad_b[..copy_len_b].copy_from_slice(&new_b[..copy_len_b]);
+            let b = htod_on_stream_sync(&pad_b, &device_manager.device(i), &streams[i]).unwrap();
 
             ChunkShare::new(a, b)
         })
