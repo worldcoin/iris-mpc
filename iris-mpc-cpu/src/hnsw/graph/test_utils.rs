@@ -7,7 +7,9 @@ use crate::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
-        graph::graph_diff::{self, node_equiv::NodeEquivResult, GraphDiffer},
+        graph::graph_diff::{
+            self, jaccard::DetailedJaccardLD, node_equiv::ensure_node_equivalence, GraphDiffer,
+        },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
     },
@@ -20,7 +22,6 @@ use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -199,15 +200,12 @@ impl DbContext {
         if db_graph != loaded_graph {
             let mut stop = false;
             for side in 0..2 {
-                // Check that we have the same # of layers and that
-                // nodes within corresponding layers are identical
-                let node_differ = graph_diff::node_equiv::NodeEquivalence;
-                let verdict = node_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
-                if !matches!(verdict, NodeEquivResult::<VectorId>::Equivalent) {
+                let verdict = ensure_node_equivalence(&db_graph[side], &loaded_graph[side]);
+                if let Err(err) = verdict {
                     stop = true;
                     eprintln!(
                         "Verdict: Side {} graphs are not node-equivalent;\n Reason: {:#?}",
-                        side, verdict
+                        side, err
                     );
                 }
             }
@@ -218,7 +216,11 @@ impl DbContext {
 
             for side in 0..2 {
                 let edge_differ = graph_diff::jaccard::DetailedJaccard { n: 20 };
-                let result = edge_differ.diff_graph(&db_graph[side], &loaded_graph[side]);
+                let result = edge_differ.diff_graph(
+                    DetailedJaccardLD { n: 20 },
+                    &db_graph[side],
+                    &loaded_graph[side],
+                );
                 println!("GRAPH aggregate (side {}): {}", side, result.0);
 
                 for (layer_idx, layer_result) in result.1.iter().enumerate() {
