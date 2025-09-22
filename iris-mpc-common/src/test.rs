@@ -1875,6 +1875,7 @@ impl SimpleAnonStatsTestGenerator {
             let mut clear_left = false;
             let mut clear_right = false;
             let mut clear_left_reauth = false;
+            let mut clear_right_reauth = false;
             let mut clear_left_mirror = false;
             let mut clear_right_mirror = false;
             for res in results.iter() {
@@ -1969,7 +1970,7 @@ impl SimpleAnonStatsTestGenerator {
                             .iter()
                             .map(|x| x.count)
                             .sum::<usize>(),
-                        uniq_counter - 1,
+                        uniq_counter,
                     );
 
                     assert_eq!(
@@ -2012,7 +2013,10 @@ impl SimpleAnonStatsTestGenerator {
                     tracing::info!(
                         "Got anonymized bucket statistics for left side (reauth), checking..."
                     );
-                    tracing::info!("Plain distances left : {:?}", self.plain_distances_left);
+                    tracing::info!(
+                        "Plain distances left reauth : {:?}",
+                        self.plain_distances_left_reauth
+                    );
                     let plain_bucket_statistics_left_reauth = Self::calculate_distance_buckets(
                         &self.plain_distances_left_reauth,
                         self.bucket_statistic_parameters.num_buckets,
@@ -2024,7 +2028,7 @@ impl SimpleAnonStatsTestGenerator {
                             .iter()
                             .map(|x| x.count)
                             .sum::<usize>(),
-                        reauth_counter - 1,
+                        reauth_counter,
                     );
 
                     assert_eq!(
@@ -2061,7 +2065,12 @@ impl SimpleAnonStatsTestGenerator {
                     // We already bounded total and absolute per-bucket error above.
                     clear_left_reauth = true;
                 }
-
+                if !anonymized_bucket_statistics_right_reauth.is_empty() {
+                    tracing::info!(
+                        "Got anonymized bucket statistics for right side (reauth), not checking them in this test..."
+                    );
+                    clear_right_reauth = true;
+                }
                 if !anonymized_bucket_statistics_right.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for right side, not checking them in this test...");
                     clear_right = true;
@@ -2107,14 +2116,17 @@ impl SimpleAnonStatsTestGenerator {
 
             if clear_left {
                 self.plain_distances_left.clear();
-                uniq_counter = 1;
-            }
-            if clear_left_reauth {
-                self.plain_distances_left_reauth.clear();
-                reauth_counter = 1;
+                uniq_counter = 0;
             }
             if clear_right {
                 self.plain_distances_right.clear();
+            }
+            if clear_left_reauth {
+                self.plain_distances_left_reauth.clear();
+                reauth_counter = 0;
+            }
+            if clear_right_reauth {
+                self.plain_distances_right_reauth.clear();
             }
             if clear_left_mirror {
                 self.plain_distances_left_mirror.clear();

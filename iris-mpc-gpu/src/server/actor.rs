@@ -2040,8 +2040,8 @@ impl ServerActor {
                 result
             }
             // Helper: build per-op resort indices and bitmasks
-            let mq = self.distance_comparator.query_length as u64; // max_batch_size * ALL_ROTATIONS
-            let md = self.distance_comparator.max_db_size as u64;
+            let query_size = self.distance_comparator.query_length as u64; // max_batch_size * ALL_ROTATIONS
+            let max_db_size = self.distance_comparator.max_db_size as u64;
             let chunk_size_words = self.match_distances_buffer_size.div_ceil(64);
 
             let build_subset = |want_op: RequestOp| {
@@ -2051,17 +2051,17 @@ impl ServerActor {
                     Vec::with_capacity(resort_indices_all.len());
                 let mut subset_lengths: Vec<usize> = Vec::with_capacity(resort_indices_all.len());
 
-                for (dev_i, order) in resort_indices_all.iter().enumerate() {
-                    let idx_vec = &indices_vecs[dev_i];
+                for (device_id, order) in resort_indices_all.iter().enumerate() {
+                    let idx_vec = &indices_vecs[device_id];
                     let mut filtered_positions = Vec::with_capacity(order.len());
                     let mut filtered_ids = Vec::with_capacity(order.len());
                     for &pos in order.iter() {
                         let id_raw = idx_vec[pos];
-                        let q_idx = (id_raw % mq) as usize;
-                        let q_nr = q_idx / ROTATIONS;
-                        let b_id = id_raw / (md * mq);
-                        let classify = match self.batch_ops_map.get(&b_id) {
-                            Some(v) => v.get(q_nr).copied().unwrap_or(RequestOp::Other),
+                        let query_idx = (id_raw % query_size) as usize;
+                        let query_idx_no_rot = query_idx / ROTATIONS;
+                        let batch_id = id_raw / (max_db_size * query_size);
+                        let classify = match self.batch_ops_map.get(&batch_id) {
+                            Some(v) => v.get(query_idx_no_rot).copied().unwrap_or(RequestOp::Other),
                             None => RequestOp::Other,
                         };
                         if classify == want_op {
@@ -2249,6 +2249,10 @@ impl ServerActor {
                                 self.anonymized_bucket_statistics_left_reauth
                                     .next_start_time_utc_timestamp,
                             );
+                            tracing::info!(
+                                "Reauth bucket results (left):\n{}",
+                                self.anonymized_bucket_statistics_left_reauth
+                            );
                         }
                         Eye::Right => {
                             self.anonymized_bucket_statistics_right_reauth.fill_buckets(
@@ -2256,6 +2260,10 @@ impl ServerActor {
                                 MATCH_THRESHOLD_RATIO,
                                 self.anonymized_bucket_statistics_right_reauth
                                     .next_start_time_utc_timestamp,
+                            );
+                            tracing::info!(
+                                "Reauth bucket results (right):\n{}",
+                                self.anonymized_bucket_statistics_right_reauth
                             );
                         }
                     }
