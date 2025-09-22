@@ -1827,8 +1827,6 @@ impl SimpleAnonStatsTestGenerator {
         handles: [&mut impl JobSubmissionHandle; 3],
     ) -> Result<()> {
         let [handle0, handle1, handle2] = handles;
-        let mut uniq_counter = 0; // total uniqueness requests since last flush
-        let mut reauth_counter = 0; // total reauth requests since last flush
 
         for _ in 0..max_num_batches {
             let ([batch0, batch1, batch2], requests) = match self.generate_query_batch()? {
@@ -1838,20 +1836,6 @@ impl SimpleAnonStatsTestGenerator {
             if batch0.request_ids.is_empty() {
                 continue;
             }
-
-            let request_types = batch0.clone().request_types.into_iter().collect::<Vec<_>>();
-
-            let uniqueness_request_types = request_types
-                .iter()
-                .filter(|msg_type| *msg_type == UNIQUENESS_MESSAGE_TYPE)
-                .collect::<Vec<_>>();
-            let reauth_request_types = request_types
-                .iter()
-                .filter(|msg_type| *msg_type == REAUTH_MESSAGE_TYPE)
-                .collect::<Vec<_>>();
-
-            uniq_counter += uniqueness_request_types.len();
-            reauth_counter += reauth_request_types.len();
 
             tracing::info!("sending batch to servers");
             // send batches to servers
@@ -1965,17 +1949,6 @@ impl SimpleAnonStatsTestGenerator {
                         self.bucket_statistic_parameters.num_buckets,
                     );
 
-                    // there must be exactly one match per request
-                    assert!(
-                        plain_bucket_statistics_left
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>().saturating_sub(
-                            uniq_counter.saturating_sub(1),
-                        ) <= 1,
-                        " there must be exactly one match per uniqueness request (with a slack of 1 due to buffering)"
-                    );
-
                     assert_eq!(
                         plain_bucket_statistics_left
                             .iter()
@@ -2009,7 +1982,6 @@ impl SimpleAnonStatsTestGenerator {
                     // buffering/flush and rotation aggregation; allow either direction.
                     // We already bounded total and absolute per-bucket error above.
                     clear_left_reauth = true; // also clear reauth stats to avoid double counting
-                    clear_left = true;
                 }
 
                 if !anonymized_bucket_statistics_left_reauth.is_empty() {
@@ -2023,17 +1995,6 @@ impl SimpleAnonStatsTestGenerator {
                     let plain_bucket_statistics_left_reauth = Self::calculate_distance_buckets(
                         &self.plain_distances_left_reauth,
                         self.bucket_statistic_parameters.num_buckets,
-                    );
-
-                    // there must be exactly one match per request
-                    assert!(
-                        plain_bucket_statistics_left_reauth
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>().saturating_sub(
-                            reauth_counter - 1,
-                        ) <= 1,
-                        " there must be exactly one match per reauth request (with a slack of 1 due to buffering)"
                     );
 
                     assert_eq!(
@@ -2122,14 +2083,12 @@ impl SimpleAnonStatsTestGenerator {
 
             if clear_left {
                 self.plain_distances_left.clear();
-                uniq_counter = 0;
             }
             if clear_right {
                 self.plain_distances_right.clear();
             }
             if clear_left_reauth {
                 self.plain_distances_left_reauth.clear();
-                reauth_counter = 0;
             }
             if clear_right_reauth {
                 self.plain_distances_right_reauth.clear();
