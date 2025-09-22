@@ -14,8 +14,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
-const DEFAULT_REGION: &str = "eu-north-1";
-
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
 async fn load_db_records_from_aurora<'a>(
@@ -83,11 +81,7 @@ pub async fn load_iris_db(
 
     if config.enable_s3_importer {
         tracing::info!("S3 importer enabled. Fetching from s3 + db");
-        let region = config
-            .clone()
-            .aws
-            .and_then(|aws| aws.region)
-            .unwrap_or_else(|| DEFAULT_REGION.to_owned());
+        let region = config.clone().db_chunks_bucket_region;
 
         // Get s3 loading parameters from config
         let s3_load_parallelism = config.load_chunks_parallelism;

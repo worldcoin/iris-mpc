@@ -140,6 +140,9 @@ pub struct Config {
     #[serde(default)]
     pub db_chunks_bucket_name: String,
 
+    #[serde(default = "default_db_chunks_bucket_region")]
+    pub db_chunks_bucket_region: String,
+
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
 
@@ -311,6 +314,10 @@ pub struct Config {
 
 fn default_full_scan_side() -> Eye {
     Eye::Left
+}
+
+fn default_db_chunks_bucket_region() -> String {
+    "eu-north-1".to_string()
 }
 
 fn default_load_chunks_parallelism() -> usize {
@@ -697,6 +704,7 @@ pub struct CommonConfig {
     disable_persistence: bool,
     shutdown_last_results_sync_timeout_secs: u64,
     image_name: String,
+    db_chunks_bucket_region: String,
     fixed_shared_secrets: bool,
     luc_enabled: bool,
     luc_lookback_records: usize,
@@ -779,9 +787,10 @@ impl From<Config> for CommonConfig {
             image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
             db_chunks_bucket_name: _, // different for each server
+            db_chunks_bucket_region,
             load_chunks_parallelism: _, // could be different for each server
             db_load_safety_overlap_seconds: _, // could be different for each server
-            db_chunks_folder_name: _, // different for each server
+            db_chunks_folder_name: _,   // different for each server
             load_chunks_buffer_size: _, // could be different for each server
             load_chunks_max_retries: _, // could be different for each server
             load_chunks_initial_backoff_ms: _, // could be different for each server
@@ -855,6 +864,7 @@ impl From<Config> for CommonConfig {
             disable_persistence,
             shutdown_last_results_sync_timeout_secs,
             image_name,
+            db_chunks_bucket_region,
             fixed_shared_secrets,
             luc_enabled,
             luc_lookback_records,
