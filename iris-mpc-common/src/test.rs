@@ -1975,13 +1975,10 @@ impl SimpleAnonStatsTestGenerator {
                         .map(|(a, b)| a as i64 - b as i64)
                         .collect();
                     // overall num of matches must be approximately equal
-                    assert!(diff.iter().sum::<i64>().abs() <= 1);
+                    assert!(diff.iter().sum::<i64>().abs() <= 0);
                     // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
                     assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
-                    // Direction of the small bucket shift can be non-deterministic under
-                    // buffering/flush and rotation aggregation; allow either direction.
-                    // We already bounded total and absolute per-bucket error above.
-                    clear_left_reauth = true; // also clear reauth stats to avoid double counting
+                    clear_left = true;
                 }
 
                 if !anonymized_bucket_statistics_left_reauth.is_empty() {
@@ -2023,14 +2020,10 @@ impl SimpleAnonStatsTestGenerator {
                         .map(|(a, b)| a as i64 - b as i64)
                         .collect();
                     // overall num of matches must be approximately equal
-                    assert!(diff.iter().sum::<i64>().abs() <= 1);
+                    assert!(diff.iter().sum::<i64>().abs() <= 0);
                     // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
                     assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
-                    // Direction of the small bucket shift can be non-deterministic under
-                    // buffering/flush and rotation aggregation; allow either direction.
-                    // We already bounded total and absolute per-bucket error above.
                     clear_left_reauth = true;
-                    clear_left = true; // also clear normal stats to avoid double counting
                 }
                 if !anonymized_bucket_statistics_right_reauth.is_empty() {
                     tracing::info!(
