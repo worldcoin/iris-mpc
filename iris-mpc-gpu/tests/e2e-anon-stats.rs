@@ -1,9 +1,10 @@
-#[cfg(feature = "gpu_dependent")]
+// #[cfg(feature = "gpu_dependent")]
 mod e2e_anon_stats_test {
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
+        helpers::statistics::Operation,
         job::Eye,
         test::{generate_full_test_db, load_test_db, SimpleAnonStatsTestGenerator},
     };
@@ -19,7 +20,8 @@ mod e2e_anon_stats_test {
     const MAX_BATCH_SIZE: usize = 64;
     const N_BUCKETS: usize = 8;
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 6;
-    const REAUTH_MATCH_DISTANCES_MIN_COUNT: usize = 100;
+    // set to a small number for fast test; here no reauth is generated anyway
+    const REAUTH_MATCH_DISTANCES_MIN_COUNT: usize = 1;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 5000;
     const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
 
@@ -223,9 +225,9 @@ mod e2e_anon_stats_test {
         drop(handle1);
         drop(handle2);
 
-        actor0_task.await.unwrap();
-        actor1_task.await.unwrap();
-        actor2_task.await.unwrap();
+        actor0_task.await?;
+        actor1_task.await?;
+        actor2_task.await?;
 
         Ok(())
     }

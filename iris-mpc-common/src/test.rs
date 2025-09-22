@@ -1256,6 +1256,8 @@ impl TestCaseGenerator {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_reauth,
+                    anonymized_bucket_statistics_right_reauth,
                     anonymized_bucket_statistics_left_mirror,
                     anonymized_bucket_statistics_right_mirror,
                     successful_reauths,
@@ -1264,6 +1266,19 @@ impl TestCaseGenerator {
                     full_face_mirror_attack_detected,
                     ..
                 } = res;
+
+                // Operation tagging checks for 1D stats
+                use crate::helpers::statistics::Operation;
+                assert_eq!(anonymized_bucket_statistics_left.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_right.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_left_mirror.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_right_mirror.operation, Operation::Uniqueness);
+                if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
+                {
+                    assert_eq!(anonymized_bucket_statistics_left_reauth.operation, Operation::Reauth);
+                    assert_eq!(anonymized_bucket_statistics_right_reauth.operation, Operation::Reauth);
+                }
 
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     // Check that normal orientation statistics have is_mirror_orientation set to false
@@ -1809,6 +1824,8 @@ impl SimpleAnonStatsTestGenerator {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_reauth,
+                    anonymized_bucket_statistics_right_reauth,
                     anonymized_bucket_statistics_left_mirror,
                     anonymized_bucket_statistics_right_mirror,
                     ..
@@ -1845,6 +1862,19 @@ impl SimpleAnonStatsTestGenerator {
                     anonymized_bucket_statistics_right,
                     self.bucket_statistic_parameters.num_buckets,
                 )?;
+
+                // Operation tagging checks for 1D stats
+                use crate::helpers::statistics::Operation;
+                assert_eq!(anonymized_bucket_statistics_left.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_right.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_left_mirror.operation, Operation::Uniqueness);
+                assert_eq!(anonymized_bucket_statistics_right_mirror.operation, Operation::Uniqueness);
+                if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
+                {
+                    assert_eq!(anonymized_bucket_statistics_left_reauth.operation, Operation::Reauth);
+                    assert_eq!(anonymized_bucket_statistics_right_reauth.operation, Operation::Reauth);
+                }
 
                 if !anonymized_bucket_statistics_left.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for left side, checking...");
