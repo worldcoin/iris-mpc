@@ -1269,15 +1269,33 @@ impl TestCaseGenerator {
 
                 // Operation tagging checks for 1D stats
                 use crate::helpers::statistics::Operation;
-                assert_eq!(anonymized_bucket_statistics_left.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_right.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_left_mirror.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_right_mirror.operation, Operation::Uniqueness);
+                assert_eq!(
+                    anonymized_bucket_statistics_left.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_left_mirror.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right_mirror.operation,
+                    Operation::Uniqueness
+                );
                 if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
                     || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
                 {
-                    assert_eq!(anonymized_bucket_statistics_left_reauth.operation, Operation::Reauth);
-                    assert_eq!(anonymized_bucket_statistics_right_reauth.operation, Operation::Reauth);
+                    assert_eq!(
+                        anonymized_bucket_statistics_left_reauth.operation,
+                        Operation::Reauth
+                    );
+                    assert_eq!(
+                        anonymized_bucket_statistics_right_reauth.operation,
+                        Operation::Reauth
+                    );
                 }
 
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
@@ -1648,28 +1666,50 @@ impl SimpleAnonStatsTestGenerator {
         }
     }
 
-    fn generate_query(&mut self) -> Option<(String, E2ETemplate, String)> {
+    fn generate_query(&mut self) -> Option<(String, E2ETemplate, String, Option<u32>)> {
+        use crate::helpers::smpc_request::REAUTH_MESSAGE_TYPE;
         let request_id = Uuid::new_v4();
         let db_index = self.rng.gen_range(0..self.db_state.len());
-        let approx_diff_factor = self.rng.gen_range(0.0..0.35);
-        let mut template = E2ETemplate {
-            left: self.db_state.plain_dbs[0].db[db_index]
-                .get_similar_iris(&mut self.rng, approx_diff_factor),
-            right: self.db_state.plain_dbs[1].db[db_index]
-                .get_similar_iris(&mut self.rng, approx_diff_factor),
+
+        // Occasionally generate a REAUTH query by targeting the exact DB entry.
+        // Otherwise generate a UNIQ query similar to a DB entry.
+        let is_reauth = self.rng.gen_bool(0.2);
+        let mut template = if is_reauth {
+            E2ETemplate {
+                left: self.db_state.plain_dbs[0].db[db_index].clone(),
+                right: self.db_state.plain_dbs[1].db[db_index].clone(),
+            }
+        } else {
+            let approx_diff_factor = self.rng.gen_range(0.0..0.35);
+            E2ETemplate {
+                left: self.db_state.plain_dbs[0].db[db_index]
+                    .get_similar_iris(&mut self.rng, approx_diff_factor),
+                right: self.db_state.plain_dbs[1].db[db_index]
+                    .get_similar_iris(&mut self.rng, approx_diff_factor),
+            }
         };
 
-        let rotation = self.rng.gen_range(0..ROTATIONS);
         // Rotate the query iris codes
+        let rotation = self.rng.gen_range(0..ROTATIONS);
         template.left = template.left.all_rotations()[rotation].clone();
         let rotation = self.rng.gen_range(0..ROTATIONS);
         template.right = template.right.all_rotations()[rotation].clone();
 
-        Some((
-            request_id.to_string(),
-            template,
-            UNIQUENESS_MESSAGE_TYPE.to_string(),
-        ))
+        if is_reauth {
+            Some((
+                request_id.to_string(),
+                template,
+                REAUTH_MESSAGE_TYPE.to_string(),
+                Some(db_index as u32),
+            ))
+        } else {
+            Some((
+                request_id.to_string(),
+                template,
+                UNIQUENESS_MESSAGE_TYPE.to_string(),
+                None,
+            ))
+        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -1685,12 +1725,13 @@ impl SimpleAnonStatsTestGenerator {
         batch1.full_face_mirror_attacks_detection_enabled = true;
         batch2.full_face_mirror_attacks_detection_enabled = true;
 
-        let (request_id, e2e_template, message_type) = match self.generate_query() {
-            Some((request_id, e2e_template, message_type)) => {
-                (request_id, e2e_template, message_type)
-            }
-            None => return Ok(None),
-        };
+        let (request_id, e2e_template, message_type, reauth_target_idx) =
+            match self.generate_query() {
+                Some((request_id, e2e_template, message_type, reauth_target_idx)) => {
+                    (request_id, e2e_template, message_type, reauth_target_idx)
+                }
+                None => return Ok(None),
+            };
 
         requests.insert(request_id.to_string(), e2e_template.clone());
 
@@ -1703,7 +1744,7 @@ impl SimpleAnonStatsTestGenerator {
             0,
             shared_template.clone(),
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type.clone(),
         )?;
@@ -1715,7 +1756,7 @@ impl SimpleAnonStatsTestGenerator {
             1,
             shared_template.clone(),
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type.clone(),
         )?;
@@ -1727,7 +1768,7 @@ impl SimpleAnonStatsTestGenerator {
             2,
             shared_template,
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type,
         )?;
@@ -1865,15 +1906,33 @@ impl SimpleAnonStatsTestGenerator {
 
                 // Operation tagging checks for 1D stats
                 use crate::helpers::statistics::Operation;
-                assert_eq!(anonymized_bucket_statistics_left.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_right.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_left_mirror.operation, Operation::Uniqueness);
-                assert_eq!(anonymized_bucket_statistics_right_mirror.operation, Operation::Uniqueness);
+                assert_eq!(
+                    anonymized_bucket_statistics_left.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_left_mirror.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right_mirror.operation,
+                    Operation::Uniqueness
+                );
                 if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
                     || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
                 {
-                    assert_eq!(anonymized_bucket_statistics_left_reauth.operation, Operation::Reauth);
-                    assert_eq!(anonymized_bucket_statistics_right_reauth.operation, Operation::Reauth);
+                    assert_eq!(
+                        anonymized_bucket_statistics_left_reauth.operation,
+                        Operation::Reauth
+                    );
+                    assert_eq!(
+                        anonymized_bucket_statistics_right_reauth.operation,
+                        Operation::Reauth
+                    );
                 }
 
                 if !anonymized_bucket_statistics_left.is_empty() {

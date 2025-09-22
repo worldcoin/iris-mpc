@@ -1,10 +1,9 @@
-// #[cfg(feature = "gpu_dependent")]
+#[cfg(feature = "gpu_dependent")]
 mod e2e_anon_stats_test {
     use cudarc::nccl::Id;
     use eyre::Result;
     use iris_mpc_common::{
         helpers::inmemory_store::InMemoryStore,
-        helpers::statistics::Operation,
         job::Eye,
         test::{generate_full_test_db, load_test_db, SimpleAnonStatsTestGenerator},
     };
