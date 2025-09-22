@@ -242,6 +242,9 @@ pub struct Config {
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
 
+    #[serde(default = "default_max_modifications_lookback")]
+    pub max_modifications_lookback: usize,
+
     #[serde(default)]
     pub enable_modifications_sync: bool,
 
@@ -431,6 +434,10 @@ fn default_http_query_retry_delay_ms() -> u64 {
 
 fn default_max_deletions_per_batch() -> usize {
     100
+}
+
+fn default_max_modifications_lookback() -> usize {
+    (default_max_deletions_per_batch() + default_max_batch_size()) * 2
 }
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
@@ -710,6 +717,7 @@ pub struct CommonConfig {
     hnsw_param_ef_search: usize,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
+    max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -724,6 +732,12 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+}
+
+impl CommonConfig {
+    pub fn get_max_modifications_lookback(&self) -> usize {
+        self.max_modifications_lookback
+    }
 }
 
 impl From<Config> for CommonConfig {
@@ -793,6 +807,7 @@ impl From<Config> for CommonConfig {
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -860,6 +875,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
