@@ -55,7 +55,7 @@ env:
     value: "30"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in dev, bump to 4 in prod
+    value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
@@ -115,7 +115,7 @@ env:
     value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-0-dev--eun1-az3--x-s3"
+    value: "ampc-hnsw-db-exporter-store-node-0-dev--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "hnsw_even_odd_with_version_id_output_16k"
@@ -171,8 +171,23 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
-    value: "true"
+    value: "false"
 
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
+
+  - name: SMPC__TLS__WITH_NGINX_SIDECAR
+    value: "false"
+
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "false"
+    
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

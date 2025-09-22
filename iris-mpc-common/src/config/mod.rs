@@ -85,6 +85,13 @@ pub struct Config {
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
+    // used for testing to recreate batch sequence
+    #[serde(
+        default = "default_predefined_batch_sizes",
+        deserialize_with = "deserialize_usize_vec"
+    )]
+    pub predefined_batch_sizes: Vec<usize>,
+
     #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
 
@@ -229,8 +236,14 @@ pub struct Config {
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
 
+    #[serde(default = "default_hawk_numa")]
+    pub hawk_numa: bool,
+
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
+
+    #[serde(default = "default_max_modifications_lookback")]
+    pub max_modifications_lookback: usize,
 
     #[serde(default)]
     pub enable_modifications_sync: bool,
@@ -316,6 +329,10 @@ fn default_max_batch_size() -> usize {
     64
 }
 
+fn default_predefined_batch_sizes() -> Vec<usize> {
+    Vec::new()
+}
+
 fn default_heartbeat_interval_secs() -> u64 {
     2
 }
@@ -399,6 +416,10 @@ fn default_hnsw_param_ef_search() -> usize {
     256
 }
 
+fn default_hawk_numa() -> bool {
+    true
+}
+
 fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
 }
@@ -413,6 +434,10 @@ fn default_http_query_retry_delay_ms() -> u64 {
 
 fn default_max_deletions_per_batch() -> usize {
     100
+}
+
+fn default_max_modifications_lookback() -> usize {
+    (default_max_deletions_per_batch() + default_max_batch_size()) * 2
 }
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
@@ -639,6 +664,14 @@ where
     serde_json::from_str(&value).map_err(serde::de::Error::custom)
 }
 
+fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&value).map_err(serde::de::Error::custom)
+}
+
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[allow(non_snake_case)]
@@ -655,6 +688,8 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
+    #[serde(default)]
+    predefined_batch_sizes: Vec<usize>,
     heartbeat_interval_secs: u64,
     heartbeat_initial_retries: u64,
     fake_db_size: usize,
@@ -682,6 +717,7 @@ pub struct CommonConfig {
     hnsw_param_ef_search: usize,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
+    max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -696,6 +732,12 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+}
+
+impl CommonConfig {
+    pub fn get_max_modifications_lookback(&self) -> usize {
+        self.max_modifications_lookback
+    }
 }
 
 impl From<Config> for CommonConfig {
@@ -722,6 +764,7 @@ impl From<Config> for CommonConfig {
             init_db_size,
             max_db_size,
             max_batch_size,
+            predefined_batch_sizes,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
             fake_db_size,
@@ -762,7 +805,9 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hawk_prf_key,
+            hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -801,6 +846,7 @@ impl From<Config> for CommonConfig {
             clear_db_before_init,
             init_db_size,
             max_db_size,
+            predefined_batch_sizes,
             max_batch_size,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
@@ -829,6 +875,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,

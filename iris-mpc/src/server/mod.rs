@@ -116,7 +116,7 @@ pub async fn server_main(config: Config) -> Result<()> {
             &iris_store,
             &aws_clients.sns_client,
             &config,
-            max_sync_lookback(&config),
+            config.max_modifications_lookback,
         )
         .await
         {
@@ -198,11 +198,6 @@ fn process_config(config: &Config) {
     }
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
-}
-
-/// Returns computed maximum sync lookback size.
-fn max_sync_lookback(config: &Config) -> usize {
-    (config.max_deletions_per_batch + config.max_batch_size) * 2
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -350,7 +345,9 @@ async fn build_sync_state(
     store: &Store,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
-    let modifications = store.last_modifications(max_sync_lookback(config)).await?;
+    let modifications = store
+        .last_modifications(config.max_modifications_lookback)
+        .await?;
     let next_sns_sequence_num = get_next_sns_seq_num(config, &aws_clients.sqs_client).await?;
     let common_config = CommonConfig::from(config.clone());
 
@@ -413,6 +410,7 @@ async fn init_hawk_actor(config: &Config) -> Result<HawkActor> {
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
         tls: config.tls.clone(),
+        numa: config.hawk_numa,
     };
 
     tracing::info!(
@@ -439,6 +437,7 @@ async fn load_database(
     // TODO: not needed?
     if config.fake_db_size > 0 {
         iris_loader.fake_db(config.fake_db_size);
+        iris_loader.wait_completion().await?;
         return Ok(());
     }
 
@@ -457,14 +456,20 @@ async fn load_database(
     let store_len = iris_store.count_irises().await?;
 
     let now = Instant::now();
-    let iris_load_future = load_iris_db(
-        &mut iris_loader,
-        iris_store,
-        store_len,
-        parallelism,
-        config,
-        download_shutdown_handler,
-    );
+
+    let iris_load_future = async move {
+        load_iris_db(
+            &mut iris_loader,
+            iris_store,
+            store_len,
+            parallelism,
+            config,
+            download_shutdown_handler,
+        )
+        .await?;
+        iris_loader.wait_completion().await?;
+        eyre::Result::<()>::Ok(())
+    };
 
     let graph_load_future = graph_loader.load_graph_store(
         graph_store,

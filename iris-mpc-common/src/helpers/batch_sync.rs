@@ -116,8 +116,20 @@ pub async fn get_own_batch_sync_state(
         approximate_visible_messages
     );
 
-    let messages_to_poll =
-        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32);
+    let index = (current_batch_id - 1) as usize;
+
+    let messages_to_poll = if config.predefined_batch_sizes.len() > index {
+        // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
+        tracing::info!(
+            "Using predefined batch size {} for batch ID {}",
+            config.predefined_batch_sizes[index],
+            current_batch_id
+        );
+        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+    } else {
+        // Use the dynamic batch size calculation based on SQS approximate visible messages
+        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
+    };
 
     let batch_sync_state = BatchSyncState {
         messages_to_poll,
