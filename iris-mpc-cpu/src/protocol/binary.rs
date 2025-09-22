@@ -479,9 +479,11 @@ where
 /// Conducts a 3 party OT protocol to inject bits into shares of type T.
 /// The specifics of the protocol can be found in the ABY3 paper (Section 5.4.1).
 ///
-/// TODO: this is unbalanced.
 /// Party 2 sends twice more than other parties.
 /// So a real implementation should actually rotate parties around.
+///
+/// The protocol itself is unbalanced, but we balance the assignment of roles
+/// in a round-robin over sessions.
 pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -489,7 +491,8 @@ pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let res = match session.own_role().index() {
+    let role_index = (session.own_role().index() + session.session_id().0 as usize) % 3;
+    let res = match role_index {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper::<T>(session, input).await?
