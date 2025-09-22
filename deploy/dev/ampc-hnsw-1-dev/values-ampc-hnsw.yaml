@@ -55,7 +55,7 @@ env:
     value: "30"
 
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in dev, bump to 4 in prod
+    value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "32"
@@ -112,10 +112,10 @@ env:
     value: "wf-smpcv2-dev-sns-requests-v2"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-1-dev--eun1-az3--x-s3"
+    value: "ampc-hnsw-db-exporter-store-node-1-dev--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "hnsw_even_odd_with_version_id_output_16k"
