@@ -143,5 +143,7 @@ cargo run --release --bin client -- \
    --request-topic-arn arn:aws:sns:eu-central-1:238407200320:iris-mpc-input-dev.fifo \
    --requests-bucket-name wf-smpcv2-dev-sns-requests-v2 \
    --public-key-base-url "https://pki-smpcv2-dev.worldcoin.org" \
-   --response-queue-url https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo
+   --response-queue-url https://sqs.eu-central-1.amazonaws.com/238407200320/hnsw-smpc-results.fifo \
+   --n-batches 1 \
+   --batch-size 5
 ```

@@ -10,7 +10,7 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
 use std::io;
@@ -23,8 +23,8 @@ use tokio::{
     },
 };
 
-const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
-const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+const BUFFER_CAPACITY: usize = 32 * 1024;
+const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -510,11 +510,7 @@ async fn write_buf<T: NetworkConnection>(
     stream: &mut WriteHalf<T>,
     buf: &mut BytesMut,
 ) -> io::Result<()> {
-    // maybe faster than write_all()?
-    while !buf.is_empty() {
-        let n = stream.write(buf).await?;
-        buf.advance(n);
-    }
+    stream.write_all(buf).await?;
     stream.flush().await?;
     buf.clear();
     Ok(())
