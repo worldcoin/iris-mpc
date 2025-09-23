@@ -42,13 +42,17 @@ async-trait.workspace = true
 bincode.workspace = true
 
 [[bin]]
-name = "write-plaintext-store"
-path = "bin/write_plaintext_store.rs"
+name = "graph-mem-cli"
+path = "bin/graph_mem_cli.rs"
 
 [[bin]]
 name = "initialise-test-databases"
 path = "bin/initialise_test_databases.rs"
 
 [[bin]]
-name = "graph-mem-cli"
-path = "bin/graph_mem_cli.rs"
+name = "write-node-config-toml"
+path = "bin/write_node_config_toml.rs"
+
+[[bin]]
+name = "write-plaintext-store"
+path = "bin/write_plaintext_store.rs"

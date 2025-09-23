@@ -71,9 +71,9 @@ use tokio::{
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod insert;
+pub mod insert;
 mod intra_batch;
-pub(crate) mod iris_worker;
+pub mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
