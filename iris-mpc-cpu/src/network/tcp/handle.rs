@@ -26,9 +26,9 @@ use tokio::{
     },
 };
 
-const FLUSH_INTERVAL_US: u64 = 500;
-const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
-const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+const FLUSH_INTERVAL_US: u64 = 50;
+const BUFFER_CAPACITY: usize = 32 * 1024;
+const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
