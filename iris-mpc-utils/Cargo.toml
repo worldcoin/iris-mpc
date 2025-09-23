@@ -44,3 +44,11 @@ bincode.workspace = true
 [[bin]]
 name = "write-plaintext-store"
 path = "bin/write_plaintext_store.rs"
+
+[[bin]]
+name = "initialise-test-databases"
+path = "bin/initialise_test_databases.rs"
+
+[[bin]]
+name = "graph-mem-cli"
+path = "bin/graph_mem_cli.rs"

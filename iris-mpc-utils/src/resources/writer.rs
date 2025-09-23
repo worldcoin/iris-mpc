@@ -6,16 +6,17 @@ use std::{
     path::Path,
 };
 
-/// Writes a JSON file containing Iris codes in plaintext format.
-pub fn write_plaintext_store(vector: &PlaintextStore, fpath: &Path) -> std::io::Result<()> {
-    // Set file writer.
-    let file = File::create(fpath)?;
-    let mut writer = BufWriter::new(file);
-
+/// Writes an ndjson file of plaintext Iris codes.
+pub fn write_plaintext_store(
+    vector: &PlaintextStore,
+    path_to_ndjson: &Path,
+) -> std::io::Result<()> {
     // Set serial identifiers.
     let serial_ids: Vec<_> = vector.storage.get_sorted_serial_ids();
 
     // Write Iris codes only - ensures files are backwards compatible.
+    let handle = File::create(path_to_ndjson)?;
+    let mut writer = BufWriter::new(handle);
     for serial_id in serial_ids {
         let pt = vector
             .storage

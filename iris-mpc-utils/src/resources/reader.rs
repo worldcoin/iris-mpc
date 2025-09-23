@@ -23,7 +23,8 @@ pub fn read_iris_codes(
     n_to_read: usize,
     n_to_skip: usize,
 ) -> Result<impl Iterator<Item = IrisCodePair>, Error> {
-    let reader = BufReader::new(File::open(path_to_codes).unwrap());
+    let handle = File::open(path_to_codes)?;
+    let reader = BufReader::new(handle);
     let stream = Deserializer::from_reader(reader)
         .into_iter::<Base64IrisCode>()
         .skip(n_to_skip)
@@ -88,36 +89,50 @@ pub fn read_node_config(path_to_config: &Path) -> Result<NodeConfig, Error> {
     Ok(toml::from_str(&fs::read_to_string(path_to_config)?).unwrap())
 }
 
-/// Returns plaintext store deserialized from a json file.
-pub fn read_plaintext_store(fpath: &Path, len: Option<usize>) -> io::Result<PlaintextStore> {
-    let file = File::open(fpath)?;
-    let reader = BufReader::new(file);
+/// Returns a single plaintext store deserialized from an ndjson file.
+pub fn read_plaintext_store(
+    path_to_ndjson: &Path,
+    len: Option<usize>,
+) -> io::Result<PlaintextStore> {
+    // Set iterator over deserialized file data.
+    let stream = limited_iterator(
+        serde_json::Deserializer::from_reader(BufReader::new(File::open(path_to_ndjson)?))
+            .into_iter::<Base64IrisCode>(),
+        len,
+    );
 
-    // Create an iterator over deserialized objects
-    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-    let stream = limited_iterator(stream, len);
-
-    // Iterate over each deserialized object
-    let mut vector = PlaintextStore::new();
+    // Build plaintext store from deserialized objects.
+    let mut result = PlaintextStore::new();
     for (idx, json_pt) in stream.into_iter().enumerate() {
         let json_pt = json_pt?;
         let iris = (&json_pt).into();
         let id = IrisVectorId::from_0_index(idx as u32);
-        vector.insert_with_id(id, Arc::new(iris));
+        result.insert_with_id(id, Arc::new(iris));
     }
 
+    // Error if file holds too few entries.
     if let Some(num) = len {
-        if vector.len() != num {
+        if result.len() != num {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "File {:?} contains too few entries; number read: {}",
-                    fpath,
-                    vector.len()
+                    path_to_ndjson,
+                    result.len()
                 ),
             ));
         }
     }
 
-    Ok(vector)
+    Ok(result)
+}
+
+/// Returns two plaintext stores deserialized from an ndjson file.
+///
+/// N.B. the stores are interleaved within a single file.
+pub fn read_plaintext_stores(
+    _path_to_ndjson: &Path,
+    _len: Option<usize>,
+) -> io::Result<[PlaintextStore; 2]> {
+    unimplemented!()
 }

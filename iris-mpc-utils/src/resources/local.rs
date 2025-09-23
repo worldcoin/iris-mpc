@@ -116,7 +116,7 @@ mod tests {
         read_iris_codes_batch, read_iris_shares, read_iris_shares_batch, read_net_config,
         read_node_config,
     };
-    use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, PARTY_COUNT, PARTY_IDX};
+    use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, N_PARTIES, PARTY_IDX};
 
     const DEFAULT_RNG_STATE: u64 = 93;
 
@@ -177,7 +177,7 @@ mod tests {
             let mut n_read = 0;
             for shares in read_iris_shares(n_to_read, n_to_skip, DEFAULT_RNG_STATE).unwrap() {
                 n_read += 1;
-                assert_eq!(shares.len(), PARTY_COUNT);
+                assert_eq!(shares.len(), N_PARTIES);
             }
             assert_eq!(n_to_read, n_read);
         }
@@ -196,7 +196,7 @@ mod tests {
                 n_chunks += 1;
                 let mut n_items = 0;
                 for item in chunk.into_iter() {
-                    assert_eq!(item.len(), PARTY_COUNT);
+                    assert_eq!(item.len(), N_PARTIES);
                     n_items += 1;
                 }
                 assert_eq!(batch_size, n_items);
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn test_read_net_config() {
         let net_config = read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap();
-        assert!(net_config.len() == PARTY_COUNT);
+        assert!(net_config.len() == N_PARTIES);
         for (party_idx, node_config) in net_config.iter().enumerate() {
             assert!(node_config.party_id == party_idx);
         }

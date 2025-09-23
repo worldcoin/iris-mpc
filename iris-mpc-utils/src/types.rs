@@ -1,4 +1,4 @@
-use super::constants::PARTY_COUNT;
+use super::constants::N_PARTIES;
 use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodeArray},
@@ -11,7 +11,7 @@ use std::path::Path;
 pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
 
 // Set of pairs of Iris shares associated with left/right eyes.
-pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; PARTY_COUNT];
+pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; N_PARTIES];
 
 /// Iris code representation using base64 encoding compatible with Open IRIS
 #[derive(Serialize, Deserialize)]
@@ -42,7 +42,7 @@ impl From<&IrisCodeBase64> for IrisCode {
 pub type IrisCodePair = (IrisCode, IrisCode);
 
 // Network wide configuration set.
-pub type NetConfig = [NodeConfig; PARTY_COUNT];
+pub type NetConfig = [NodeConfig; N_PARTIES];
 
 /// Set of node execution hosts.
 #[derive(Debug, Clone, Copy)]

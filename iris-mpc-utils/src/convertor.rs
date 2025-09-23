@@ -26,7 +26,7 @@ pub fn to_galois_ring_share_pair_set(
 
 #[cfg(test)]
 mod tests {
-    use super::super::constants::PARTY_COUNT;
+    use super::super::constants::N_PARTIES;
     use super::{to_galois_ring_share_pair_set, GaloisRingSharedIrisPairSet, IrisCodePair};
 
     const DEFAULT_RNG_STATE: u64 = 42;
@@ -37,6 +37,6 @@ mod tests {
 
     #[test]
     fn test_to_galois_ring_shares() {
-        assert!(get_iris_shares().len() == PARTY_COUNT)
+        assert!(get_iris_shares().len() == N_PARTIES)
     }
 }
