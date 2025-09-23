@@ -23,6 +23,10 @@ impl JaccardState {
         }
     }
 
+    pub fn is_one(&self) -> bool {
+        self.union == self.intersection
+    }
+
     pub fn compare_as_fractions(&self, other: &Self) -> std::cmp::Ordering {
         // Compare a/b vs c/d as a*d vs c*b
         (self.intersection * other.union).cmp(&(other.intersection * self.union))
@@ -70,7 +74,7 @@ pub struct JaccardLD;
 impl<V: Ref + Display + FromStr> LayerDiffer<V> for JaccardLD {
     type LayerDiff = JaccardState;
     type ND = JaccardND;
-    fn accumulate(
+    fn accumulate_neighborhoods(
         &self,
         per_nb: Vec<(V, <Self::ND as NeighborhoodDiffer<V>>::NeighborhoodDiff)>,
     ) -> Self::LayerDiff {
@@ -89,7 +93,10 @@ impl<V: Ref + Display + FromStr> GraphDiffer<V> for JaccardGD {
     type GraphDiff = JaccardState;
     type LD = JaccardLD;
 
-    fn accumulate(&self, per_nb: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>) -> Self::GraphDiff {
+    fn accumulate_layers(
+        &self,
+        per_nb: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>,
+    ) -> Self::GraphDiff {
         let mut acc = JaccardState::default();
         for jacc_lay in per_nb.into_iter() {
             acc = acc + jacc_lay;
@@ -109,7 +116,7 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccardLD {
     type LayerDiff = (JaccardState, Vec<(V, JaccardState)>);
     type ND = JaccardND;
 
-    fn accumulate(
+    fn accumulate_neighborhoods(
         &self,
         per_nb: Vec<(V, <Self::ND as NeighborhoodDiffer<V>>::NeighborhoodDiff)>,
     ) -> Self::LayerDiff {
@@ -125,15 +132,13 @@ impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccardLD {
     }
 }
 
-pub struct DetailedJaccard {
-    pub n: usize,
-}
+pub struct DetailedJaccard;
 
 impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
     type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>);
     type LD = DetailedJaccardLD;
 
-    fn accumulate(
+    fn accumulate_layers(
         &self,
         per_layer: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>,
     ) -> Self::GraphDiff {

@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::fmt::Display;
-use std::hash::Hash;
 use std::str::FromStr;
 
 use crate::hnsw::vector_store::Ref;
@@ -28,10 +27,7 @@ pub enum NodeEquivalenceError<V> {
 pub fn ensure_node_equivalence<V: Ref + Display + FromStr>(
     lhs: &GraphMem<V>,
     rhs: &GraphMem<V>,
-) -> Result<(), NodeEquivalenceError<V>>
-where
-    V: Eq + Hash + Clone,
-{
+) -> Result<(), NodeEquivalenceError<V>> {
     // First, check if the number of layers is the same.
     if lhs.layers.len() != rhs.layers.len() {
         return Err(NodeEquivalenceError::LayerCountMismatch {

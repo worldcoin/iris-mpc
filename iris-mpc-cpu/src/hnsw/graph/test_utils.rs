@@ -197,43 +197,51 @@ impl DbContext {
             println!("graph from file:");
             println!("{:#?}", loaded_graph);
         }
-        if db_graph != loaded_graph {
-            let mut stop = false;
-            for side in 0..2 {
-                let verdict = ensure_node_equivalence(&db_graph[side], &loaded_graph[side]);
-                if let Err(err) = verdict {
-                    stop = true;
+
+        for side in 0..2 {
+            if db_graph[side] == loaded_graph[side] {
+                println!(
+                    "Verdict: Side {} graphs are identical (including ordering of neighborhoods)",
+                    side
+                );
+            } else {
+                let node_equiv_result =
+                    ensure_node_equivalence(&db_graph[side], &loaded_graph[side]);
+                if let Err(err) = node_equiv_result {
                     eprintln!(
                         "Verdict: Side {} graphs are not node-equivalent;\n Reason: {:#?}",
                         side, err
                     );
-                }
-            }
+                } else {
+                    let edge_differ = graph_diff::jaccard::DetailedJaccard;
+                    // Show top `n` most dissimilar nodes for each layer, in addition to aggregated values
+                    let n = 15;
+                    let result = edge_differ.diff_graph(
+                        DetailedJaccardLD { n },
+                        &db_graph[side],
+                        &loaded_graph[side],
+                    );
 
-            if stop {
-                return Ok(());
-            }
+                    if result.0.is_one() {
+                        println!(
+                            "Verdict: Side {} graphs are identical (modulo ordering of neighborhoods)",
+                            side
+                        )
+                    } else {
+                        println!("Verdict: Side {} graphs differ in at least one edge; detailed similarity report follows:\n", side);
+                        println!("GRAPH aggregate (side {}): {}", side, result.0);
 
-            for side in 0..2 {
-                let edge_differ = graph_diff::jaccard::DetailedJaccard { n: 20 };
-                let result = edge_differ.diff_graph(
-                    DetailedJaccardLD { n: 20 },
-                    &db_graph[side],
-                    &loaded_graph[side],
-                );
-                println!("GRAPH aggregate (side {}): {}", side, result.0);
-
-                for (layer_idx, layer_result) in result.1.iter().enumerate() {
-                    println!("  LAYER {} aggregate: {}", layer_idx, layer_result.0);
-                    println!("  Top {} most dissimilar nodes:", edge_differ.n);
-                    for (node_idx, node_result) in layer_result.1.iter() {
-                        println!("    Node {}: {}", node_idx.serial_id(), node_result,);
+                        for (layer_idx, layer_result) in result.1.iter().enumerate() {
+                            println!("  LAYER {} aggregate: {}", layer_idx, layer_result.0);
+                            println!("  Top {} most dissimilar nodes:", n);
+                            for (node_idx, node_result) in layer_result.1.iter() {
+                                println!("    Node {}: {}", node_idx.serial_id(), node_result,);
+                            }
+                            println!("\n");
+                        }
                     }
-                    println!("\n");
                 }
             }
-        } else {
-            println!("Verdict: Graphs for both sides are identical")
         }
         Ok(())
     }
