@@ -2,14 +2,47 @@ use super::reader;
 use crate::{
     constants::PARTY_IDX,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair, NetConfig, NodeExecutionHost, PartyIdx},
-    utils::fsys,
 };
 use iris_mpc_common::config::Config as NodeConfig;
 use itertools::IntoChunks;
-use std::{io::Error, path::PathBuf};
+use std::{
+    io::Error,
+    path::{Path, PathBuf},
+};
 
 /// Name of default local ndjson asset file.
 const FNAME_NDJSON_1K: &str = "iris-codes-plaintext/20250710-1k.ndjson";
+
+/// Returns path to an asset within the crate assets sub-directory.
+fn get_path_to_assets() -> PathBuf {
+    get_path_to_subdir("assets")
+}
+
+/// Returns path to default Iris codes ndjson file.
+fn get_path_to_ndjson() -> PathBuf {
+    get_path_to_assets().join(FNAME_NDJSON_1K)
+}
+
+/// Returns path to a node config file.
+fn get_path_to_node_config(config_kind: &str, config_idx: usize, party_idx: &PartyIdx) -> PathBuf {
+    get_path_to_assets().join(
+        format!(
+            "node-config/{}/{config_kind}-{config_idx}-node-{party_idx}.toml",
+            NodeExecutionHost::assets_subdirectory(),
+        )
+        .as_str(),
+    )
+}
+
+/// Returns path to root directory.
+pub fn get_path_to_root() -> PathBuf {
+    Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).into()
+}
+
+/// Returns path to sub-directory.
+pub fn get_path_to_subdir(name: &str) -> PathBuf {
+    get_path_to_root().join(name)
+}
 
 /// Returns iterator over default Iris code pairs deserialized from an ndjson file.
 pub fn read_iris_codes(
@@ -88,37 +121,26 @@ impl NodeExecutionHost {
     }
 }
 
-/// Returns path to an asset within the crate assets sub-directory.
-fn get_path_to_assets() -> PathBuf {
-    fsys::get_path_to_subdir("assets")
-}
-
-/// Returns path to default Iris codes ndjson file.
-fn get_path_to_ndjson() -> PathBuf {
-    get_path_to_assets().join(FNAME_NDJSON_1K)
-}
-
-/// Returns path to a node config file.
-fn get_path_to_node_config(config_kind: &str, config_idx: usize, party_idx: &PartyIdx) -> PathBuf {
-    get_path_to_assets().join(
-        format!(
-            "node-config/{}/{config_kind}-{config_idx}-node-{party_idx}.toml",
-            NodeExecutionHost::assets_subdirectory(),
-        )
-        .as_str(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, read_iris_codes,
-        read_iris_codes_batch, read_iris_shares, read_iris_shares_batch, read_net_config,
-        read_node_config,
+        get_path_to_assets, get_path_to_ndjson, get_path_to_node_config, get_path_to_root,
+        get_path_to_subdir, read_iris_codes, read_iris_codes_batch, read_iris_shares,
+        read_iris_shares_batch, read_net_config, read_node_config,
     };
     use crate::constants::{NODE_CONFIG_KIND, NODE_CONFIG_KIND_GENESIS, N_PARTIES, PARTY_IDX};
 
     const DEFAULT_RNG_STATE: u64 = 93;
+
+    #[test]
+    fn test_get_path_to_root() {
+        assert!(get_path_to_root().exists());
+    }
+
+    #[test]
+    fn test_get_path_to_subdir() {
+        assert!(get_path_to_subdir("assets").exists());
+    }
 
     #[test]
     fn test_get_path_to_assets() {

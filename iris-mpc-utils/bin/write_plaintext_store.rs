@@ -67,7 +67,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => {
             // Default to local data directory.
-            let path = utils::fsys::get_path_to_subdir("data/iris-codes-plaintext");
+            let path = utils::state::fsys::local::get_path_to_subdir("data/iris-codes-plaintext");
             std::fs::create_dir_all(&path).unwrap();
             path
         }
