@@ -2050,11 +2050,14 @@ impl ServerActor {
                 let mut subset_bitmasks: Vec<Vec<u64>> =
                     Vec::with_capacity(resort_indices_all.len());
                 let mut subset_lengths: Vec<usize> = Vec::with_capacity(resort_indices_all.len());
+                let mut subset_ids_raw: Vec<Vec<u64>> =
+                    Vec::with_capacity(resort_indices_all.len());
 
                 for (device_id, order) in resort_indices_all.iter().enumerate() {
                     let idx_vec = &indices_vecs[device_id];
                     let mut filtered_positions = Vec::with_capacity(order.len());
                     let mut filtered_ids = Vec::with_capacity(order.len());
+                    let mut filtered_ids_raw = Vec::with_capacity(order.len());
                     for &pos in order.iter() {
                         let id_raw = idx_vec[pos];
                         let query_idx = (id_raw % query_size) as usize;
@@ -2067,6 +2070,7 @@ impl ServerActor {
                         if classify == want_op {
                             filtered_positions.push(pos);
                             filtered_ids.push(id_raw);
+                            filtered_ids_raw.push(id_raw);
                         }
                     }
 
@@ -2076,6 +2080,7 @@ impl ServerActor {
                         .min(self.match_distances_buffer_size);
                     filtered_positions.truncate(truncate_len);
                     filtered_ids.truncate(truncate_len);
+                    filtered_ids_raw.truncate(truncate_len);
 
                     // remove rotations for grouping
                     for id in &mut filtered_ids {
@@ -2094,13 +2099,19 @@ impl ServerActor {
                     subset_lengths.push(truncate_len);
                     subset_resort.push(filtered_positions);
                     subset_bitmasks.push(bitvec);
+                    subset_ids_raw.push(filtered_ids_raw);
                 }
 
-                (subset_resort, subset_bitmasks, subset_lengths)
+                (
+                    subset_resort,
+                    subset_bitmasks,
+                    subset_lengths,
+                    subset_ids_raw,
+                )
             };
 
             // Always compute Uniqueness buckets
-            let (resort_uni, bitmasks_uni, _) = build_subset(RequestOp::Uniqueness);
+            let (resort_uni, bitmasks_uni, _, _) = build_subset(RequestOp::Uniqueness);
 
             let shares = sort_shares_by_indices(
                 &self.device_manager,
@@ -2194,8 +2205,15 @@ impl ServerActor {
             }
 
             // Compute Reauth buckets only for Normal orientation and above threshold
+            #[allow(clippy::type_complexity)]
+            let mut carryover_reauth: Option<(
+                Vec<Vec<u64>>,        // raw ids per device
+                Vec<usize>,           // lengths per device
+                Vec<ChunkShare<u16>>, // codes shares per device
+                Vec<ChunkShare<u16>>, // masks shares per device
+            )> = None;
             if orientation == Orientation::Normal {
-                let (resort_reauth, bitmasks_reauth, lengths_reauth) =
+                let (resort_reauth, bitmasks_reauth, lengths_reauth, ids_reauth_raw) =
                     build_subset(RequestOp::Reauth);
                 let total_reauth_count: usize = lengths_reauth.iter().sum();
                 tracing::info!(
@@ -2203,26 +2221,30 @@ impl ServerActor {
                     total_reauth_count,
                     self.reauth_match_distances_min_count
                 );
+                // Prepare resorted shares for reauth (used for compute or carryover)
+                let shares_codes_reauth = sort_shares_by_indices(
+                    &self.device_manager,
+                    &resort_reauth,
+                    match_distances_buffers_codes,
+                    self.match_distances_buffer_size,
+                    streams,
+                );
+                let match_distances_buffers_codes_view = shares_codes_reauth
+                    .iter()
+                    .map(|x| x.as_view())
+                    .collect::<Vec<_>>();
+                let shares_masks_reauth = sort_shares_by_indices(
+                    &self.device_manager,
+                    &resort_reauth,
+                    match_distances_buffers_masks,
+                    self.match_distances_buffer_size,
+                    streams,
+                );
+                let match_distances_buffers_masks_view = shares_masks_reauth
+                    .iter()
+                    .map(|x| x.as_view())
+                    .collect::<Vec<_>>();
                 if total_reauth_count >= self.reauth_match_distances_min_count {
-                    let shares = sort_shares_by_indices(
-                        &self.device_manager,
-                        &resort_reauth,
-                        match_distances_buffers_codes,
-                        self.match_distances_buffer_size,
-                        streams,
-                    );
-                    let match_distances_buffers_codes_view =
-                        shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
-                    let shares = sort_shares_by_indices(
-                        &self.device_manager,
-                        &resort_reauth,
-                        match_distances_buffers_masks,
-                        self.match_distances_buffer_size,
-                        streams,
-                    );
-                    let match_distances_buffers_masks_view =
-                        shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
-
                     reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
                     self.phase2_buckets
                         .compare_multiple_thresholds_while_aggregating_per_query(
@@ -2268,7 +2290,13 @@ impl ServerActor {
                         }
                     }
                 } else {
-                    tracing::info!("Reauth distances below threshold, skipping 1D reauth stats");
+                    tracing::info!("Reauth distances below threshold, carrying over to next flush");
+                    carryover_reauth = Some((
+                        ids_reauth_raw,
+                        lengths_reauth,
+                        shares_codes_reauth,
+                        shares_masks_reauth,
+                    ));
                 }
             }
 
@@ -2291,6 +2319,83 @@ impl ServerActor {
                 match_distances_buffers_masks,
             );
             reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
+
+            // If we had reauth carryover, write it back into the now-reset buffers
+            if let Some((
+                ids_reauth_raw,
+                lengths_reauth,
+                shares_codes_reauth,
+                shares_masks_reauth,
+            )) = carryover_reauth
+            {
+                for i in 0..self.device_manager.device_count() {
+                    let n = lengths_reauth[i];
+                    if n == 0 {
+                        continue;
+                    }
+                    // indices back into match_distances_indices
+                    let host_ids = &ids_reauth_raw[i];
+                    unsafe {
+                        result::memcpy_htod_async(
+                            *match_distances_indices[i].device_ptr(),
+                            &host_ids[..n],
+                            streams[i].stream,
+                        )
+                        .unwrap();
+                    }
+                    // counters
+                    let counter_val: [u32; 1] = [n as u32];
+                    unsafe {
+                        result::memcpy_htod_async(
+                            *match_distances_counters[i].device_ptr(),
+                            &counter_val,
+                            streams[i].stream,
+                        )
+                        .unwrap();
+                    }
+                    // codes and masks back into their buffers (a and b limbs)
+                    let copy_bytes = n * size_of::<u16>();
+                    unsafe {
+                        // codes a
+                        helpers::dtod_at_offset(
+                            *match_distances_buffers_codes[i].a.device_ptr(),
+                            0,
+                            *shares_codes_reauth[i].a.device_ptr(),
+                            0,
+                            copy_bytes,
+                            streams[i].stream,
+                        );
+                        // codes b
+                        helpers::dtod_at_offset(
+                            *match_distances_buffers_codes[i].b.device_ptr(),
+                            0,
+                            *shares_codes_reauth[i].b.device_ptr(),
+                            0,
+                            copy_bytes,
+                            streams[i].stream,
+                        );
+                        // masks a
+                        helpers::dtod_at_offset(
+                            *match_distances_buffers_masks[i].a.device_ptr(),
+                            0,
+                            *shares_masks_reauth[i].a.device_ptr(),
+                            0,
+                            copy_bytes,
+                            streams[i].stream,
+                        );
+                        // masks b
+                        helpers::dtod_at_offset(
+                            *match_distances_buffers_masks[i].b.device_ptr(),
+                            0,
+                            *shares_masks_reauth[i].b.device_ptr(),
+                            0,
+                            copy_bytes,
+                            streams[i].stream,
+                        );
+                    }
+                }
+                self.device_manager.await_streams(streams);
+            }
 
             self.device_manager.await_streams(streams);
 
