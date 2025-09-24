@@ -22,6 +22,7 @@ dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 itertools.workspace = true
+iris-mpc = { path = "../iris-mpc" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 iris-mpc-store = { path = "../iris-mpc-store" }
