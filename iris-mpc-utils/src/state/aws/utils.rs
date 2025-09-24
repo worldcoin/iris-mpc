@@ -90,10 +90,10 @@ pub async fn upload_to_s3_of_node(
 #[cfg(test)]
 mod test {
     use super::get_s3_client;
-    use crate::{constants::NODE_CONFIG_KIND_GENESIS, resources, types::NetConfig};
+    use crate::{constants::NODE_CONFIG_KIND_GENESIS, state::fsys, types::NetConfig};
 
     fn get_net_config() -> NetConfig {
-        resources::local::read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
+        fsys::local::read_net_config(NODE_CONFIG_KIND_GENESIS, 0).unwrap()
     }
 
     #[tokio::test]

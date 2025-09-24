@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = AesRng::seed_from_u64(args.rng_seed);
     let mut store = PlaintextStore::new_random(&mut rng, args.store_size);
     let out_file = output_dir.join("store.ndjson");
-    utils::resources::writer::write_plaintext_store(&store, &out_file)?;
+    utils::state::fsys::writer::write_plaintext_store(&store, &out_file)?;
 
     // Write graphs.
     let searcher = HnswSearcher::from(&args);
