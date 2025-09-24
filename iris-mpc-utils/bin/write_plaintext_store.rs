@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .generate_graph(&mut rng, graph_size, &searcher)
             .await?;
         let out_file = output_dir.join(format!("graph_{graph_size}.dat"));
-        utils::fsys::write_bin(&graph, &out_file)?;
+        utils::misc::write_bin(&graph, &out_file)?;
     }
 
     Ok(())

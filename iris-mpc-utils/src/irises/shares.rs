@@ -1,5 +1,4 @@
-use std::{fs::File, io::BufReader, path::PathBuf};
-
+use crate::misc::log_info;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
@@ -7,8 +6,7 @@ use iris_mpc_cpu::{
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
-
-use crate::utils::logger::log_info;
+use std::{fs::File, io::BufReader, path::PathBuf};
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "SystemState-PgresIrises";

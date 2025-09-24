@@ -1,7 +1,7 @@
 use crate::{
     convertor,
+    misc::limited_iterator,
     types::{GaloisRingSharedIrisPairSet, IrisCodePair},
-    utils::misc::limited_iterator,
 };
 use iris_mpc_common::{config::Config as NodeConfig, iris_db::iris::IrisCode, IrisVectorId};
 use iris_mpc_cpu::{

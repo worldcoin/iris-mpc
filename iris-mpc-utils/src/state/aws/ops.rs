@@ -1,4 +1,4 @@
-use crate::utils::logger;
+use crate::misc::{log_error, log_info};
 use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
 use eyre::{eyre, Result};
 use iris_mpc::services::aws::clients::AwsClients;
@@ -33,7 +33,7 @@ pub async fn upload_iris_deletions(
     // Set bucket/key based on environment.
     let s3_bucket = get_s3_bucket_for_iris_deletions(environment);
     let s3_key = get_s3_key_for_iris_deletions(environment);
-    logger::log_info(
+    log_info(
         COMPONENT,
         format!(
             "Inserting deleted serial ids into S3 bucket: {}, key: {}",
@@ -59,7 +59,7 @@ pub async fn upload_iris_deletions(
         .send()
         .await
         .map_err(|err| {
-            logger::log_error(COMPONENT, format!("Failed to upload file to S3: {}", err));
+            log_error(COMPONENT, format!("Failed to upload file to S3: {}", err));
             eyre!("Failed to upload Iris deletions to S3")
         })?;
 
