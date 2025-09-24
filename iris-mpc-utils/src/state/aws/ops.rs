@@ -14,22 +14,22 @@ pub struct IrisDeletionsForS3 {
     pub deleted_serial_ids: Vec<IrisSerialId>,
 }
 
+/// AWS S3 bucket for iris deletions.
+fn get_s3_bucket_for_iris_deletions(environment: &str) -> String {
+    format!("wf-smpcv2-{}-sync-protocol", environment)
+}
+
+/// AWS S3 key for iris deletions.
+fn get_s3_key_for_iris_deletions(environment: &str) -> String {
+    format!("{}_deleted_serial_ids.json", environment)
+}
+
 /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
 pub async fn upload_iris_deletions(
     data: &Vec<IrisSerialId>,
     s3: &S3_Client,
     environment: &str,
 ) -> Result<()> {
-    /// AWS S3 bucket for iris deletions.
-    fn get_s3_bucket_for_iris_deletions(environment: &str) -> String {
-        format!("wf-smpcv2-{}-sync-protocol", environment)
-    }
-
-    /// AWS S3 key for iris deletions.
-    fn get_s3_key_for_iris_deletions(environment: &str) -> String {
-        format!("{}_deleted_serial_ids.json", environment)
-    }
-
     // Set bucket/key based on environment.
     let s3_bucket = get_s3_bucket_for_iris_deletions(environment);
     let s3_key = get_s3_key_for_iris_deletions(environment);
@@ -66,10 +66,9 @@ pub async fn upload_iris_deletions(
     Ok(())
 }
 
-/// Returns an S3 client with retry configuration.
+/// Returns a set of AWS clients for use in tests.
 pub async fn get_aws_clients(config: &Config) -> Result<AwsClients> {
-    let aws_clients = AwsClients::new(config)
+    Ok(AwsClients::new(config)
         .await
-        .expect("failed to create aws clients");
-    Ok(aws_clients)
+        .expect("failed to create aws clients"))
 }
