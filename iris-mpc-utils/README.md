@@ -13,3 +13,18 @@ What uses iris-mpc-utils ?
 
 - Test functions in other crates.
 - DevOps tool chains.
+
+What is iris-mpc-utils roadmap ?
+--------------------------------------
+
+- DONE
+  - Initialisation from existing crates
+
+- QUEUED
+  - Refactor genesis e2e tests to use iris-mpc-utils
+  - AWS functions for setting up and resetting S3/KMS infra
+  - AWS functions for egress/ingress queue interactions
+  - New utils for simulated plaintext graphs
+  - Refactor genesis tests to use new simulated plaintext graphs
+  - Main HNSW binary e2e support
+  - Refactoring as and when makes sense
