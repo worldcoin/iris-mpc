@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+fss-rs= { git = "https://github.com/marsenis/fss", rev = "ede7e27", features=["multi-thread", "parallel"] }
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
 ansiterm = "0.12.2"
 async-channel = "2.3.1"
@@ -68,12 +69,14 @@ rustls-native-certs = "0.8.1"
 rustls = "0.21.12"
 x509-parser = "0.17.0"
 anyhow = "1.0.93"
+ark-std = {version = "0.5.0"}#, features=["print-trace"]}
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
 metrics-logger = "0.22.1"
+rand = { version = "0.8", features = ["std", "std_rng"] }
 
 [build-dependencies]
 tonic-build = "0.12.3"

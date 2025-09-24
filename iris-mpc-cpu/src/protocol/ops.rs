@@ -1,6 +1,6 @@
 use super::binary::{
-    bit_inject_ot_2round, extract_msb_u32_batch, lift, mul_lift_2k, open_bin,
-    single_extract_msb_u32,
+    bit_inject_ot_2round, extract_msb_u32_batch, extract_msb_u32_batch_fss, lift, mul_lift_2k,
+    open_bin, open_bin_fss, single_extract_msb_u32,
 };
 use crate::{
     execution::session::{NetworkSession, Session, SessionHandles},
@@ -96,7 +96,8 @@ pub async fn greater_than_threshold(
         })
         .collect();
 
-    extract_msb_u32_batch(session, &diffs).await
+    // extract_msb_u32_batch(session, &diffs).await
+    extract_msb_u32_batch_fss(session, &diffs).await
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
@@ -128,7 +129,9 @@ pub async fn compare_threshold_buckets(
         .collect_vec();
 
     tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
-    let msbs = extract_msb_u32_batch(session, &diffs).await?;
+    let msbs = extract_msb_u32_batch_fss(session, &diffs).await?; //changed evg
+                                                                  //   let msbs = extract_msb_u32_batch(session, &diffs).await?; //changed evg
+
     let msbs = VecShare::new_vec(msbs);
     tracing::info!("msbs extracted, now bit_injecting");
     // bit_inject all MSBs into u32 to be able to add them up
@@ -208,6 +211,7 @@ pub async fn lift_and_compare_threshold(
     code_dist: Share<u16>,
     mask_dist: Share<u16>,
 ) -> Result<Share<Bit>> {
+    unimplemented!(); //this function should not be called
     let mut y = mul_lift_2k::<B_BITS>(&code_dist);
     let mut x = lift(session, VecShare::new_vec(vec![mask_dist])).await?;
     let mut x = x
@@ -369,9 +373,12 @@ pub async fn cross_compare(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
+    let bits = extract_msb_u32_batch_fss(session, &diff).await?;
+    // let bits = extract_msb_u32_batch(session, &diff).await?;
+
     // Open the MSB
-    let opened_b = open_bin(session, &bits).await?;
+    // let opened_b = open_bin(session, &bits).await?;
+    let opened_b = open_bin_fss(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
@@ -386,7 +393,8 @@ pub async fn cross_compare_and_swap(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
+    // let bits = extract_msb_u32_batch(session, &diff).await?;
+    let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // inject bits to u32 shares
     let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
         .await?
@@ -491,7 +499,10 @@ pub async fn lte_threshold_and_open(
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
     let bits = greater_than_threshold(session, distances).await?;
-    open_bin(session, &bits)
+    // open_bin(session, &bits)
+    //     .await
+    //     .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    open_bin_fss(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
@@ -501,26 +512,30 @@ pub async fn open_ring<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     shares: &[Share<T>],
 ) -> Result<Vec<T>> {
-    let network = &mut session.network_session;
-    let message = if shares.len() == 1 {
-        T::new_network_element(shares[0].b)
-    } else {
-        let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
-        T::new_network_vec(shares)
-    };
+    // let network = &mut session.network_session;
+    // let message = if shares.len() == 1 {
+    //     T::new_network_element(shares[0].b)
+    // } else {
+    //     let shares = shares.iter().map(|x| x.b).collect::<Vec<_>>();
+    //     T::new_network_vec(shares)
+    // };
 
-    network.send_next(message).await?;
+    // network.send_next(message).await?;
 
-    // receiving from previous party
-    let c = network
-        .receive_prev()
-        .await
-        .and_then(|v| T::into_vec(v))
-        .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
+    // // receiving from previous party
+    // let c = network
+    //     .receive_prev()
+    //     .await
+    //     .and_then(|v| T::into_vec(v))
+    //     .map_err(|e| eyre!("Error in receiving in open operation: {}", e))?;
 
     // ADD shares with the received shares
-    izip!(shares.iter(), c.iter())
-        .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+    // izip!(shares.iter(), c.iter())
+    //     .map(|(s, c)| Ok((s.a + s.b + c).convert()))
+    //     .collect::<Result<Vec<_>>>()
+    shares
+        .iter()
+        .map(|s| Ok((s.a ^ s.b).convert()))
         .collect::<Result<Vec<_>>>()
 }
 
