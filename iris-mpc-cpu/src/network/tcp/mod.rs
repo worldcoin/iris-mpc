@@ -288,7 +288,7 @@ pub mod testing {
     }
 
     /// Interleaves a Vec of Vecs into a single Vec by taking one element from each inner Vec in turn.
-    /// For example, interleaving [[1,2,3],[4,5,6],[7,8,9]] yields [1,4,7,2,5,8,3,6,9].
+    /// For example, interleaving `[[1,2,3],[4,5,6],[7,8,9]]` yields `[1,4,7,2,5,8,3,6,9]`.
     pub fn interleave_vecs<T>(vecs: Vec<Vec<T>>) -> Vec<T> {
         let mut result = Vec::new();
         let mut iters: Vec<_> = vecs.into_iter().map(|v| v.into_iter()).collect();
