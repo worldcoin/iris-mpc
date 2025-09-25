@@ -72,7 +72,7 @@ jobs:
         continue-on-error: true
         env:
           WEB_PRIVATE_KEY: ${{ secrets.SMART_CONTAINER_REGISTRY_KEY}}
-          DIGEST: ${{ needs.build-and-push.outputs.digest }}
+          DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           cast send 0x0F054e3666F2e7E4Ce345f55f0d7aeE513aC5540 \
             --from 0x9A7aeeC57b8C354a0d0229f3792282f6F7004A59 \
