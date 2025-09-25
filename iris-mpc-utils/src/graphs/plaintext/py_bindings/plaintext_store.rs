@@ -1,3 +1,4 @@
+use crate::misc::limited_iterator;
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisCodeArray},
     IrisVectorId,
@@ -41,7 +42,7 @@ pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<Plaint
 
     // Create an iterator over deserialized objects
     let stream = serde_json::Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-    let stream = super::limited_iterator(stream, len);
+    let stream = limited_iterator(stream, len);
 
     // Iterate over each deserialized object
     let mut vector = PlaintextStore::new();

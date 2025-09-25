@@ -1,4 +1,5 @@
 use super::plaintext_store::Base64IrisCode;
+use crate::misc::limited_iterator;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
 use iris_mpc_cpu::{
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
@@ -110,7 +111,7 @@ pub fn fill_from_ndjson_file(
 
         // Create an iterator over deserialized objects
         let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-        let stream = super::limited_iterator(stream, limit);
+        let stream = limited_iterator(stream, limit);
 
         // Iterate over each deserialized object
         for json_pt in stream {
