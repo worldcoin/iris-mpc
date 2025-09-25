@@ -279,7 +279,12 @@ async fn manage_connection<T: NetworkConnection>(
                 match maybe_cmd {
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
-                        tracing::info!("cmd channel closed");
+                        // basically means the networking stack was shut down before a command was received.
+                        static EMIT_LOG: Once = Once::new();
+                        EMIT_LOG.call_once(|| {
+                            tracing::info!("cmd channel closed");
+                            ct.cancel();
+                        });
                         return;
                     }
                 }
@@ -337,7 +342,7 @@ async fn manage_connection<T: NetworkConnection>(
                     )
                     .await
                     {
-                        tracing::error!("reconnect failed: {e:?}");
+                        tracing::debug!("reconnect failed: {e:?}");
                         return;
                     };
                     rsp.send(Ok(())).unwrap();
@@ -349,7 +354,7 @@ async fn manage_connection<T: NetworkConnection>(
                     reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
                         .await
                 {
-                    tracing::error!("reconnect failed: {e:?}");
+                    tracing::debug!("reconnect failed: {e:?}");
                     return;
                 } else if RECONNECTING.decrement().await {
                     tracing::info!("all connections re-established");
