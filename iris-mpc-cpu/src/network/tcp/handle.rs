@@ -291,8 +291,10 @@ async fn manage_connection<T: NetworkConnection>(
                         if RECONNECTING.increment().await {
                             tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
                         }
+                        Evt::Disconnected
+                    } else {
+                        unreachable!();
                     }
-                    Evt::Disconnected
                 }
             },
             r = outbound_task => {
@@ -305,8 +307,7 @@ async fn manage_connection<T: NetworkConnection>(
                         }
                         Evt::Disconnected
                     } else {
-                        // new sessions were probably created
-                        Evt::Shutdown
+                        unreachable!();
                     }
                 }
             },
