@@ -99,7 +99,7 @@ pub fn init_plaintext_irises_db(pairs: &[IrisCodePair]) -> IrisesTable {
         .iter()
         .cloned()
         .enumerate()
-        .map(|(idx, (left, right))| (idx as u32 + 1, (0i16, left, right)))
+        .map(|(idx, [left, right])| (idx as u32 + 1, (0i16, left, right)))
         .collect()
 }
 
