@@ -10,14 +10,11 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
 use std::io;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
@@ -26,9 +23,8 @@ use tokio::{
     },
 };
 
-const FLUSH_INTERVAL_US: u64 = 500;
-const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
-const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+const BUFFER_CAPACITY: usize = 32 * 1024;
+const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -380,8 +376,9 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         buf.extend_from_slice(&session_id.0.to_le_bytes());
         msg.serialize(&mut buf);
 
-        // Try to fill the buffer with more messages, up to num_sessions, BUFFER_CAPACITY or FLUSH_INTERVAL_US.
+        // Try to fill the buffer with more messages, up to num_sessions, BUFFER_CAPACITY or two attempts.
         let loop_start_time = Instant::now();
+        let mut retried = false;
         while buffered_msgs < num_sessions {
             match outbound_rx.try_recv() {
                 Ok((session_id, msg)) => {
@@ -392,13 +389,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
                         break;
                     }
                 }
-                Err(TryRecvError::Empty) => {
-                    if loop_start_time.elapsed() >= Duration::from_micros(FLUSH_INTERVAL_US) {
-                        break;
-                    }
+                Err(TryRecvError::Empty) if !retried => {
+                    retried = true;
                     tokio::task::yield_now().await;
                 }
-                Err(_) => break,
+                _ => break,
             }
         }
 
@@ -515,11 +510,7 @@ async fn write_buf<T: NetworkConnection>(
     stream: &mut WriteHalf<T>,
     buf: &mut BytesMut,
 ) -> io::Result<()> {
-    // maybe faster than write_all()?
-    while !buf.is_empty() {
-        let n = stream.write(buf).await?;
-        buf.advance(n);
-    }
+    stream.write_all(buf).await?;
     stream.flush().await?;
     buf.clear();
     Ok(())
