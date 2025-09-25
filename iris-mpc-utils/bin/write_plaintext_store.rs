@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Write plaintext store.
     tracing::info!(
-        "Writing plaintext store of  {} irises -> {:?}/store.ndjson",
+        "Writing plaintext store of {} irises -> {:?}/store.ndjson",
         args.store_size,
         output_dir
     );

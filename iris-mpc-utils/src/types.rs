@@ -3,6 +3,7 @@ use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodeArray},
 };
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
