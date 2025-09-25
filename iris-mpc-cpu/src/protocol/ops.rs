@@ -96,8 +96,8 @@ pub async fn greater_than_threshold(
         })
         .collect();
 
-    // extract_msb_u32_batch(session, &diffs).await
-    extract_msb_u32_batch_fss(session, &diffs).await
+    extract_msb_u32_batch(session, &diffs).await
+    // extract_msb_u32_batch_fss(session, &diffs).await
 }
 
 /// Computes the `A` term of the threshold comparison based on the formula `A = ((1. - 2. * t) * B)`.
@@ -129,8 +129,8 @@ pub async fn compare_threshold_buckets(
         .collect_vec();
 
     tracing::info!("compare_threshold_buckets diffs length: {}", diffs.len());
-    let msbs = extract_msb_u32_batch_fss(session, &diffs).await?; //changed evg
-                                                                  //   let msbs = extract_msb_u32_batch(session, &diffs).await?; //changed evg
+    // let msbs = extract_msb_u32_batch_fss(session, &diffs).await?; //changed evg
+    let msbs = extract_msb_u32_batch(session, &diffs).await?; //changed evg
 
     let msbs = VecShare::new_vec(msbs);
     tracing::info!("msbs extracted, now bit_injecting");
@@ -373,12 +373,12 @@ pub async fn cross_compare(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    let bits = extract_msb_u32_batch_fss(session, &diff).await?;
-    // let bits = extract_msb_u32_batch(session, &diff).await?;
+    // let bits = extract_msb_u32_batch_fss(session, &diff).await?;
+    let bits = extract_msb_u32_batch(session, &diff).await?;
 
     // Open the MSB
-    // let opened_b = open_bin(session, &bits).await?;
-    let opened_b = open_bin_fss(session, &bits).await?;
+    let opened_b = open_bin(session, &bits).await?;
+    // let opened_b = open_bin_fss(session, &bits).await?;
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
@@ -393,8 +393,8 @@ pub async fn cross_compare_and_swap(
     // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
     let diff = cross_mul(session, distances).await?;
     // Compute the MSB of the above
-    // let bits = extract_msb_u32_batch(session, &diff).await?;
-    let bits = extract_msb_u32_batch_fss(session, &diff).await?;
+    let bits = extract_msb_u32_batch(session, &diff).await?;
+    // let bits = extract_msb_u32_batch_fss(session, &diff).await?;
     // inject bits to u32 shares
     let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
         .await?
@@ -499,12 +499,12 @@ pub async fn lte_threshold_and_open(
     distances: &[DistanceShare<u32>],
 ) -> Result<Vec<bool>> {
     let bits = greater_than_threshold(session, distances).await?;
-    // open_bin(session, &bits)
-    //     .await
-    //     .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
-    open_bin_fss(session, &bits)
+    open_bin(session, &bits)
         .await
         .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
+    // open_bin_fss(session, &bits)
+    //     .await
+    //     .map(|v| v.into_iter().map(|x| x.convert().not()).collect())
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
