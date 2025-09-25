@@ -428,7 +428,7 @@ pub async fn conditionally_swap_distances_plain_ids(
 
 /// Conditionally selects the distance shares based on control bits.
 /// Given the ith pair of indices (i1, i2), the function does the following.
-/// If the control bit is 0, it swaps tuples (0-indexed vector id, distance share) with index i1 and i2,
+/// If the ith control bit is 0, it swaps tuples (0-indexed vector id, distance share) with index i1 and i2,
 /// otherwise it does nothing.
 /// Assumes that the input shares are originally 16-bit and lifted to u32.
 /// The vector ids are 0-indexed and given in secret shared form.
@@ -544,8 +544,7 @@ pub async fn conditionally_swap_distances(
 /// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
 /// 2. The most significant bit of the result is extracted.
 ///
-/// Input values are assumed to be 16-bit shares that have been lifted to
-/// 32-bit.
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
 pub async fn cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -559,15 +558,14 @@ pub async fn cross_compare(
     opened_b.into_iter().map(|x| Ok(x.convert())).collect()
 }
 
-/// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 .
+/// For every pair of distance shares (d1, d2), this computes the secret-shared bit d2 < d1 .
 ///
 /// The less-than operator is implemented in 2 steps:
 ///
 /// 1. d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot is computed, which is a numerator of the fraction difference d2.code_dot / d2.mask_dot - d1.code_dot / d1.mask_dot.
 /// 2. The most significant bit of the result is extracted.
 ///
-/// Input values are assumed to be 16-bit shares that have been lifted to
-/// 32-bit.
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
 pub async fn oblivious_cross_compare(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
@@ -580,8 +578,7 @@ pub async fn oblivious_cross_compare(
 
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
-/// Input values are assumed to be 16-bit shares that have been lifted to
-/// 32-bit.
+/// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
 pub async fn cross_compare_and_swap(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],

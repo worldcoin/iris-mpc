@@ -133,6 +133,9 @@ impl Aby3Store {
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
+    /// If bit is 0, the elements are swapped, otherwise they are left unchanged.
+    /// Note that unchanged elements of the list are propagated as secret-shares,
+    /// which introduces an additive throughput overhead logarithmic in the list size.
     pub async fn oblivious_swap_batch_plain_ids(
         &mut self,
         swap_bits: Vec<Share<Bit>>,
@@ -146,6 +149,7 @@ impl Aby3Store {
         conditionally_swap_distances_plain_ids(&mut self.session, swap_bits, list, indices).await
     }
 
+    /// Obliviously compares pairs of distances in batch and returns a secret shared bit a < b for each pair.
     pub async fn oblivious_less_than_batch(
         &mut self,
         distances: &[(Aby3DistanceRef, Aby3DistanceRef)],
@@ -156,6 +160,8 @@ impl Aby3Store {
         oblivious_cross_compare(&mut self.session, distances).await
     }
 
+    /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
+    /// If bit is 0, the elements are swapped, otherwise they are left unchanged.
     pub async fn oblivious_swap_batch(
         &mut self,
         swap_bits: Vec<Share<Bit>>,

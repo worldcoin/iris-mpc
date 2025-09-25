@@ -147,8 +147,9 @@ pub async fn apply_swap_network<V: VectorStore>(
 }
 
 /// Function obliviously applies the supplied swap network `network` to the list of
-/// tuples containing 0-indexed vector ids (no version id!) and iris vectors as `(Aby3VectorRef, Aby3DistanceRef)`.
+/// tuples containing 0-indexed vector ids (no version id!) and distances between iris vectors as `(Aby3VectorRef, Aby3DistanceRef)`.
 /// An 'Aby3Store' object executes comparisons via MPC for each layer in batches.
+/// Note that output is secret-shared.
 pub async fn apply_oblivious_swap_network(
     store: &mut Aby3Store,
     list: &mut [(Aby3VectorRef, Aby3DistanceRef)],
