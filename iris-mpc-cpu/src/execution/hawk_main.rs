@@ -67,6 +67,7 @@ use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
+use tokio_util::sync::CancellationToken;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
@@ -156,6 +157,7 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    session_ct: CancellationToken,
     party_id: usize,
 }
 
@@ -292,9 +294,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
+            ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -303,6 +306,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
+        ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -326,7 +330,8 @@ impl HawkActor {
         let my_index = args.party_index;
 
         let networking =
-            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
+            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
+                .await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -357,6 +362,7 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
+            session_ct: CancellationToken::new(),
             workers_handle,
         })
     }
@@ -431,7 +437,9 @@ impl HawkActor {
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
+        let (tcp_sessions, ct) = self.networking.make_sessions().await?;
+        self.session_ct = ct;
+        for tcp_session in tcp_sessions {
             network_sessions.push(NetworkSession {
                 session_id: tcp_session.id(),
                 role_assignments: self.role_assignments.clone(),
@@ -1350,6 +1358,8 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        // add a channel that sends...something that tells when an error happens and resets when
+        // new sessions are created...
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         // Validate the common state before starting.
@@ -1360,8 +1370,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let session_ct = hawk_actor.session_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = session_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
@@ -1644,7 +1658,7 @@ impl HawkHandle {
 
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let hawk_actor = HawkActor::from_cli(&args).await?;
+    let hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
     HawkHandle::new(hawk_actor).await
 }
 
@@ -2040,7 +2054,7 @@ mod tests_db {
             disable_persistence: false,
             tls: None,
         };
-        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 
