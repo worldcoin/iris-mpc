@@ -40,7 +40,6 @@ impl From<&IrisCodeBase64> for IrisCode {
 }
 
 // Pair of Iris codes aassociated with left/right eyes.
-// pub type IrisCodePair = (IrisCode, IrisCode);
 pub type IrisCodePair = BothEyes<IrisCode>;
 
 // Network wide configuration set.
