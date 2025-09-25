@@ -12,6 +12,9 @@ pub mod degree4 {
     use serde::{Deserialize, Serialize};
     use serde_big_array::BigArray;
 
+    /// For testing, we can reduce the size of dot products.
+    pub const TEST_BOOST: usize = 16;
+
     const CODE_COLS: usize = 200;
 
     /// A representation of a 100% relative distance as a fraction.
@@ -123,6 +126,14 @@ pub mod degree4 {
                 sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
             }
             sum
+        }
+
+        pub fn trick_dot_test_boost(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
+            let mut sum = 0u16;
+            for i in 0..MASK_CODE_LENGTH / TEST_BOOST {
+                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+            }
+            sum.wrapping_mul(TEST_BOOST as u16)
         }
     }
 
@@ -351,12 +362,21 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn trick_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
             let mut sum = 0u16;
             for i in 0..IRIS_CODE_LENGTH {
                 sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
             }
             sum
+        }
+
+        pub fn trick_dot_test_boost(&self, other: &GaloisRingIrisCodeShare) -> u16 {
+            let mut sum = 0u16;
+            for i in 0..IRIS_CODE_LENGTH / TEST_BOOST {
+                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+            }
+            sum.wrapping_mul(TEST_BOOST as u16)
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {

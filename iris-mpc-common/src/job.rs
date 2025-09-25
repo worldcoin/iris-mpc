@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::galois_engine::degree4::GaloisShares;
+use crate::galois_engine::degree4::{GaloisShares, TEST_BOOST};
 use crate::helpers::batch_sync::{
     get_batch_sync_entries, get_own_batch_sync_entries, BatchSyncEntriesResult,
 };
@@ -139,7 +139,8 @@ impl BatchQuery {
         self.request_types.push(request_type.to_string());
         self.metadata.push(metadata);
         self.or_rule_indices.push(or_rule_indices);
-        self.skip_persistence.push(skip_persistence);
+        self.skip_persistence
+            .push(skip_persistence || TEST_BOOST > 1); // Do not persist test runs.
     }
 
     /// Add a Deletion request to the batch.

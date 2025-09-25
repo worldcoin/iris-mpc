@@ -427,7 +427,10 @@ where
     for pair in pairs {
         let (code_dist, mask_dist) = if let Some((x, y)) = pair {
             count += 1;
-            let (a, b) = (x.code.trick_dot(&y.code), x.mask.trick_dot(&y.mask));
+            let (a, b) = (
+                x.code.trick_dot_test_boost(&y.code),
+                x.mask.trick_dot_test_boost(&y.mask),
+            );
             (RingElement(a), RingElement(2) * RingElement(b))
         } else {
             // Non-existent vectors get the largest relative distance of 100%.
