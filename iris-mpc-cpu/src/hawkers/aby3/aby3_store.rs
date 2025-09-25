@@ -615,7 +615,7 @@ mod tests {
                     .iter()
                     .map(|(v, d)| {
                         (
-                            (*v).clone(),
+                            *v,
                             DistanceShare::new(
                                 Share::from_const(d.0, role),
                                 Share::from_const(d.1, role),
