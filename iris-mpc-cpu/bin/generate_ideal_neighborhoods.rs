@@ -24,10 +24,11 @@ enum IrisSelection {
 }
 
 /// A struct to hold the metadata stored in the first line of the results file.
-#[derive(Serialize, Deserialize, PartialEq)]
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct ResultsHeader {
     iris_selection: IrisSelection,
     num_irises: usize,
+    k: usize,
 }
 
 #[derive(Parser, Debug)]
@@ -82,7 +83,7 @@ async fn main() {
                 }
             };
 
-            let header: ResultsHeader = match serde_json::from_str(&header_line) {
+            let file_header: ResultsHeader = match serde_json::from_str(&header_line) {
                 Ok(h) => h,
                 Err(e) => {
                     eprintln!("Error: Could not parse header in results file: {}", e);
@@ -94,27 +95,18 @@ async fn main() {
                 }
             };
 
-            // 2. Check for configuration mismatches
-            if header.iris_selection != args.irises_selection {
-                eprintln!("Error: Mismatch in iris selection.");
-                eprintln!(
-                    " -> Results file was generated with: {:?}",
-                    header.iris_selection
-                );
-                eprintln!(
-                    " -> Current run is configured for:    {:?}",
-                    args.irises_selection
-                );
-                eprintln!(" -> Please use a different results file or change the --irises-selection argument.");
-                std::process::exit(1);
-            }
-            if header.num_irises != args.num_irises {
-                eprintln!("Error: Mismatch in num_irises.");
-                eprintln!(" -> Results file was generated with: {}", header.num_irises);
-                eprintln!(" -> Current run is configured for:    {}", args.num_irises);
-                eprintln!(
-                    " -> Please use a different results file or change the --num-irises argument."
-                );
+            // 2. Check for configuration mismatches with a single comparison
+            let expected_header = ResultsHeader {
+                iris_selection: args.irises_selection,
+                num_irises: args.num_irises,
+                k: args.k,
+            };
+
+            if file_header != expected_header {
+                eprintln!("Error: Mismatch in results file configuration.");
+                eprintln!(" -> Expected parameters: {:?}", expected_header);
+                eprintln!(" -> Parameters found in file: {:?}", file_header);
+                eprintln!(" -> Please use a different results file or adjust the command-line arguments to match.");
                 std::process::exit(1);
             }
 
@@ -152,6 +144,7 @@ async fn main() {
             let header = ResultsHeader {
                 iris_selection: args.irises_selection,
                 num_irises: args.num_irises,
+                k: args.k,
             };
             let header_str =
                 serde_json::to_string(&header).expect("Failed to serialize ResultsHeader");
@@ -164,8 +157,13 @@ async fn main() {
         let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
-                "Warning: The result nodes in the file are not a contiguous sequence from 1 to N."
+                "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
             );
+            eprintln!(
+                " -> Please fix or delete the file '{}' and restart.",
+                args.results_file.display()
+            );
+            std::process::exit(1);
         }
     }
 
@@ -177,10 +175,7 @@ async fn main() {
     let file = File::open(path_to_iris_codes.as_path()).unwrap();
     let reader = BufReader::new(file);
 
-    let stream = Deserializer::from_reader(reader)
-        .into_iter::<Base64IrisCode>()
-        .skip(2 * num_already_processed);
-
+    let stream = Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
     let mut irises: Vec<IrisCode> = Vec::with_capacity(num_irises);
 
     let (limit, skip, step) = match args.irises_selection {
