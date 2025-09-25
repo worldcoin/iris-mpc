@@ -79,13 +79,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Write plaintext store.
+    let out_file = output_dir.join("store.ndjson");
     tracing::info!(
-        "Writing plaintext store of {} irises -> OUTPUT_DIR/store.ndjson",
-        args.store_size
+        "Writing plaintext store of {} irises -> {:?}",
+        args.store_size,
+        out_file
     );
     let mut rng = AesRng::seed_from_u64(args.rng_seed);
     let mut store = PlaintextStore::new_random(&mut rng, args.store_size);
-    let out_file = output_dir.join("store.ndjson");
     write_plaintext_store(&store, &out_file)?;
 
     // Write graphs.
