@@ -1,5 +1,4 @@
-//! this file is used by test utilities
-
+use crate::types::GaloisRingSharedIrisPair;
 use aes_prng::AesRng;
 use eyre::Result;
 use iris_mpc_common::{
@@ -14,7 +13,6 @@ use iris_mpc_cpu::{
         vector_store::{VectorStore, VectorStoreMut},
         GraphMem, SortedNeighborhood,
     },
-    protocol::shared_iris::GaloisRingSharedIris,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
@@ -85,7 +83,7 @@ impl DbContext {
     /// assigned to the inserted shares.
     pub async fn persist_vector_shares(
         &self,
-        shares: Vec<(GaloisRingSharedIris, GaloisRingSharedIris)>,
+        shares: Vec<GaloisRingSharedIrisPair>,
     ) -> Result<(usize, usize)> {
         let mut tx = self.store.tx().await?;
 
@@ -94,7 +92,7 @@ impl DbContext {
 
         for batch in &shares.iter().enumerate().chunks(SECRET_SHARING_PG_TX_SIZE) {
             let iris_refs: Vec<_> = batch
-                .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
+                .map(|(idx, [iris_l, iris_r])| StoredIrisRef {
                     id: (start_serial_id + idx) as i64,
                     left_code: &iris_l.code.coefs,
                     left_mask: &iris_l.mask.coefs,

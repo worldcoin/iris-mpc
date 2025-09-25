@@ -232,7 +232,7 @@ impl MpcNode {
             // use the idx as the id field
             let iris_refs: Vec<_> = batch
                 .into_iter()
-                .map(|(idx, (iris_l, iris_r))| StoredIrisRef {
+                .map(|(idx, [iris_l, iris_r])| StoredIrisRef {
                     // warning: id should be >= 1
                     id: (starting_len + idx + 1) as _,
                     left_code: &iris_l.code.coefs,

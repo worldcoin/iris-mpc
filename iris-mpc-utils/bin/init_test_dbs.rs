@@ -4,16 +4,14 @@ use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId
 use iris_mpc_cpu::{
     execution::hawk_main::{StoreId, STORE_IDS},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
-    hnsw::{
-        graph::test_utils::DbContext, vector_store::VectorStoreMut, GraphMem, HnswParams,
-        HnswSearcher,
-    },
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
 use iris_mpc_utils::{
     self,
     constants::{DEFAULT_PARTY_IDX, N_PARTIES},
+    graphs::plaintext::utils::DbContext,
     types::GaloisRingSharedIrisPair,
 };
 use itertools::{izip, Itertools};
@@ -232,7 +230,7 @@ async fn main() -> Result<()> {
             let right_shares =
                 GaloisRingSharedIris::generate_shares_locally(&mut shares_seed, right.clone());
             for (party, (shares_l, shares_r)) in izip!(left_shares, right_shares).enumerate() {
-                batch[party].push((shares_l, shares_r));
+                batch[party].push([shares_l, shares_r]);
             }
         }
 

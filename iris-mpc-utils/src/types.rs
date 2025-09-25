@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 // Pair of Iris shares associated with left/right eyes.
-pub type GaloisRingSharedIrisPair = (GaloisRingSharedIris, GaloisRingSharedIris);
+pub type GaloisRingSharedIrisPair = BothEyes<GaloisRingSharedIris>;
 
 // Set of pairs of Iris shares associated with left/right eyes.
 pub type GaloisRingSharedIrisPairSet = [GaloisRingSharedIrisPair; N_PARTIES];
