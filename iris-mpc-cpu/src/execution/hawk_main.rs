@@ -2044,7 +2044,7 @@ mod tests_db {
             disable_persistence: false,
             tls: None,
         };
-        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 
