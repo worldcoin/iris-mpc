@@ -12,7 +12,7 @@ pub struct KNNResult {
 }
 
 pub fn naive_knn(
-    irises: &Vec<IrisCode>,
+    irises: &[IrisCode],
     k: usize,
     start: usize,
     end: usize,
