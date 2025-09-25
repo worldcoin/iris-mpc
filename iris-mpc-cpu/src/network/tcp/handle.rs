@@ -46,7 +46,7 @@ pub struct TcpNetworkHandle<T: NetworkConnection> {
 
 #[async_trait]
 impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
-    async fn make_sessions(&mut self) -> Result<Vec<TcpSession>> {
+    async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)> {
         tracing::debug!("make_sessions");
         self.reconnector.wait_for_reconnections().await?;
         let sc = make_channels(&self.peers, &self.config, self.next_session_id);
@@ -66,6 +66,7 @@ enum Cmd {
     NewSessions {
         inbound_forwarder: HashMap<SessionId, OutStream>,
         outbound_rx: UnboundedReceiver<OutboundMsg>,
+        ct: CancellationToken,
         rsp: oneshot::Sender<()>,
     },
     #[cfg(test)]
@@ -122,9 +123,13 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         rsp_rx.await?
     }
 
-    async fn make_sessions_inner(&mut self, mut sc: SessionChannels) -> Vec<TcpSession> {
+    async fn make_sessions_inner(
+        &mut self,
+        mut sc: SessionChannels,
+    ) -> (Vec<TcpSession>, CancellationToken) {
         let num_connections = self.config.num_connections;
         let num_sessions = self.config.num_sessions;
+        let err_ct = CancellationToken::new();
 
         // spawn the forwarders
         for peer_id in &self.peers {
@@ -142,6 +147,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                 ch.send(Cmd::NewSessions {
                     inbound_forwarder,
                     outbound_rx,
+                    ct: err_ct.clone(),
                     rsp: rsp_tx,
                 })
                 .unwrap();
@@ -189,7 +195,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             self.next_session_id = 0;
         }
         assert_eq!(self.config.num_sessions, sessions.len());
-        sessions
+        (sessions, err_ct)
     }
 }
 
@@ -243,14 +249,15 @@ async fn manage_connection<T: NetworkConnection>(
     } = connection;
 
     // We enter the loop only after receiving the first NewSessions
-    let (mut inbound_forwarder, mut outbound_rx) = match cmd_ch.recv().await {
+    let (mut inbound_forwarder, mut outbound_rx, mut err_ct) = match cmd_ch.recv().await {
         Some(Cmd::NewSessions {
             inbound_forwarder,
             outbound_rx,
+            ct,
             rsp,
         }) => {
             let _ = rsp.send(());
-            (inbound_forwarder, outbound_rx)
+            (inbound_forwarder, outbound_rx, ct)
         }
         #[cfg(test)]
         Some(_) => {
@@ -282,6 +289,7 @@ async fn manage_connection<T: NetworkConnection>(
             Disconnected,
             Shutdown,
         }
+
         let event = tokio::select! {
             maybe_cmd = cmd_ch.recv() => {
                 match maybe_cmd {
@@ -297,7 +305,7 @@ async fn manage_connection<T: NetworkConnection>(
                 }
             }
             r = inbound_task => {
-                if ct.is_cancelled() {
+                if shutdown_ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
                     if conn_state.incr_reconnect().await {
@@ -309,7 +317,7 @@ async fn manage_connection<T: NetworkConnection>(
                 }
             },
             r = outbound_task => {
-                if ct.is_cancelled() {
+                if shutdown_ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
                      if conn_state.incr_reconnect().await {
@@ -320,8 +328,13 @@ async fn manage_connection<T: NetworkConnection>(
                     unreachable!();
                 }
             },
-            _ = ct.cancelled() => Evt::Shutdown,
+            _ = shutdown_ct.cancelled() => Evt::Shutdown,
         };
+
+        // the current Hawk job will fail. no sense continuing.
+        if matches!(event, Evt::Disconnected) {
+            err_ct.cancel();
+        }
 
         // update the Arcs depending on the event. wait for reconnect if needed.
         match event {
@@ -329,12 +342,14 @@ async fn manage_connection<T: NetworkConnection>(
                 Cmd::NewSessions {
                     inbound_forwarder: tx,
                     outbound_rx: rx,
+                    ct,
                     rsp,
                 } => {
                     metrics::counter!("network.new_sessions").increment(1);
                     tracing::debug!("updating sessions for {:?}: {:?}", peer, stream_id);
                     inbound_forwarder = tx;
                     outbound_rx = rx;
+                    err_ct = ct;
                     let _ = rsp.send(());
                     continue;
                 }
