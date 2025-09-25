@@ -3,6 +3,7 @@ use iris_mpc_common::{
     config::Config as NodeConfig,
     iris_db::iris::{IrisCode, IrisCodeArray},
 };
+use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -39,7 +40,7 @@ impl From<&IrisCodeBase64> for IrisCode {
 }
 
 // Pair of Iris codes aassociated with left/right eyes.
-pub type IrisCodePair = (IrisCode, IrisCode);
+pub type IrisCodePair = BothEyes<IrisCode>;
 
 // Network wide configuration set.
 pub type NetConfig = [NodeConfig; N_PARTIES];

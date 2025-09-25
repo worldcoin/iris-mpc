@@ -1,47 +1,18 @@
-use crate::misc::limited_iterator;
-use iris_mpc_common::{
-    iris_db::iris::{IrisCode, IrisCodeArray},
-    IrisVectorId,
-};
+use crate::{misc::limited_iterator, types::IrisCodeBase64};
+use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Write},
     sync::Arc,
 };
 
-/// Iris code representation using base64 encoding compatible with Open IRIS
-#[derive(Serialize, Deserialize)]
-pub struct Base64IrisCode {
-    iris_codes: String,
-    mask_codes: String,
-}
-
-impl From<&IrisCode> for Base64IrisCode {
-    fn from(value: &IrisCode) -> Self {
-        Self {
-            iris_codes: value.code.to_base64().unwrap(),
-            mask_codes: value.mask.to_base64().unwrap(),
-        }
-    }
-}
-
-impl From<&Base64IrisCode> for IrisCode {
-    fn from(value: &Base64IrisCode) -> Self {
-        Self {
-            code: IrisCodeArray::from_base64(&value.iris_codes).unwrap(),
-            mask: IrisCodeArray::from_base64(&value.mask_codes).unwrap(),
-        }
-    }
-}
-
 pub fn from_ndjson_file(filename: &str, len: Option<usize>) -> io::Result<PlaintextStore> {
     let file = File::open(filename)?;
     let reader = BufReader::new(file);
 
     // Create an iterator over deserialized objects
-    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
+    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<IrisCodeBase64>();
     let stream = limited_iterator(stream, len);
 
     // Iterate over each deserialized object
@@ -81,7 +52,7 @@ pub fn to_ndjson_file(vector: &PlaintextStore, filename: &str) -> std::io::Resul
             .storage
             .get_vector_by_serial_id(serial_id)
             .expect("key not found in store");
-        let json_pt: Base64IrisCode = (&**pt).into();
+        let json_pt: IrisCodeBase64 = (&**pt).into();
         serde_json::to_writer(&mut writer, &json_pt)?;
         writer.write_all(b"\n")?; // Write a newline after each JSON object
     }
