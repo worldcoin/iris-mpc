@@ -5,6 +5,8 @@ use rayon::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::hawkers::plaintext_store::fraction_ordering;
+
 #[derive(Serialize, Deserialize)]
 pub struct KNNResult {
     pub node: usize,
@@ -28,13 +30,15 @@ pub fn naive_knn(
                     .iter()
                     .enumerate()
                     .flat_map(|(j, other_iris)| {
-                        (i != j + 1).then_some((j + 1, current_iris.get_distance(other_iris)))
+                        (i != j + 1)
+                            .then_some((j + 1, current_iris.get_distance_fraction(other_iris)))
                     })
                     .collect::<Vec<_>>();
-                neighbors.select_nth_unstable_by(k - 1, |(_, d1), (_, d2)| d1.total_cmp(d2));
+                neighbors
+                    .select_nth_unstable_by(k - 1, |lhs, rhs| fraction_ordering(&lhs.1, &rhs.1));
                 let mut neighbors = neighbors.drain(0..k).collect::<Vec<_>>();
                 neighbors.shrink_to_fit(); // just to make sure
-                neighbors.sort_by(|(_, d1), (_, d2)| d1.total_cmp(d2));
+                neighbors.sort_by(|lhs, rhs| fraction_ordering(&lhs.1, &rhs.1));
                 let neighbors = neighbors.into_iter().map(|(i, _)| i).collect::<Vec<_>>();
                 KNNResult { node: i, neighbors }
             })
