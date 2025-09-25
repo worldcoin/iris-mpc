@@ -4,9 +4,14 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{HnswParams, HnswSearcher},
 };
-use iris_mpc_utils as utils;
+use iris_mpc_utils::{self as utils, types::IrisCodeBase64};
 use rand::SeedableRng;
-use std::{error::Error, path::PathBuf};
+use std::{
+    error::Error,
+    fs::File,
+    io::{BufWriter, Write},
+    path::{Path, PathBuf},
+};
 
 #[derive(Parser)]
 #[allow(non_snake_case)]
@@ -67,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
         None => {
             // Default to local data directory.
-            let path = utils::state::fsys::local::get_path_to_subdir("data/iris-codes-plaintext");
+            let path = get_path_to_outdir("data/iris-codes-plaintext");
             std::fs::create_dir_all(&path).unwrap();
             path
         }
@@ -82,7 +87,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut rng = AesRng::seed_from_u64(args.rng_seed);
     let mut store = PlaintextStore::new_random(&mut rng, args.store_size);
     let out_file = output_dir.join("store.ndjson");
-    utils::state::fsys::writer::write_plaintext_store(&store, &out_file)?;
+    write_plaintext_store(&store, &out_file)?;
 
     // Write graphs.
     let searcher = HnswSearcher::from(&args);
@@ -100,6 +105,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let out_file = output_dir.join(format!("graph_{graph_size}.dat"));
         utils::misc::write_bin(&graph, &out_file)?;
     }
+
+    Ok(())
+}
+
+/// Returns path to sub-directory.
+fn get_path_to_outdir(name: &str) -> PathBuf {
+    Path::new(&env!("CARGO_MANIFEST_DIR").to_string()).join(name)
+}
+
+/// Writes an ndjson file of plaintext Iris codes.
+fn write_plaintext_store(vector: &PlaintextStore, path_to_ndjson: &Path) -> std::io::Result<()> {
+    // Set serial identifiers.
+    let serial_ids: Vec<_> = vector.storage.get_sorted_serial_ids();
+
+    // Write Iris codes only - ensures files are backwards compatible.
+    let handle = File::create(path_to_ndjson)?;
+    let mut writer = BufWriter::new(handle);
+    for serial_id in serial_ids {
+        let pt = vector
+            .storage
+            .get_vector_by_serial_id(serial_id)
+            .expect("key not found in store");
+        let json_pt: IrisCodeBase64 = (&**pt).into();
+        serde_json::to_writer(&mut writer, &json_pt)?;
+        writer.write_all(b"\n")?; // Write a newline after each JSON object
+    }
+    writer.flush()?;
 
     Ok(())
 }
