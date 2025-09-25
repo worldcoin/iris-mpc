@@ -87,8 +87,9 @@ where
         tcp_config: TcpConfig,
         listener: S,
         connector: C,
+        ct: CancellationToken,
     ) -> Result<Self> {
-        let cmd_tx = Worker::spawn(id.clone(), listener, connector).await?;
+        let cmd_tx = Worker::spawn(id.clone(), listener, connector, ct).await?;
         Ok(Self {
             id,
             tcp_config,
@@ -195,13 +196,14 @@ where
         id: Identity,
         listener: S,
         connector: C,
+        ct: CancellationToken,
     ) -> io::Result<UnboundedSender<Cmd<T>>> {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (pending_tx, pending_rx) = mpsc::unbounded_channel::<Connection<T>>();
         let mut worker = Self {
             id: id.clone(),
             cmd_rx,
-            ct: CancellationToken::new(),
+            ct,
             peer_addrs: HashMap::new(),
             connector,
             pending_connections: HashMap::new(),
@@ -475,6 +477,8 @@ where
                 peer,
                 stream_id
             );
+
+            // putting ThreadRng in here makes the future not Send
             sleep(Duration::from_millis(delay_ms)).await;
             loop {
                 let r = tokio::select! {
@@ -491,13 +495,13 @@ where
                         } else {
                             let pending = Connection::new(peer, stream, stream_id);
                             if pending_tx.send(pending).is_err() {
-                                tracing::error!("accept loop receiver dropped");
+                                tracing::debug!("accept loop receiver dropped");
                             }
                             break;
                         }
                     }
                     Err(e) => {
-                        tracing::warn!(%e, "dial {:?} failed, retrying", url.clone());
+                        tracing::debug!(%e, "dial {:?} failed, retrying", url.clone());
                     }
                 };
                 sleep(Duration::from_secs(retry_sec)).await;

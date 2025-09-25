@@ -36,6 +36,10 @@ impl ShutdownHandler {
         self.ct.cancelled().await
     }
 
+    pub fn get_cancellation_token(&self) -> CancellationToken {
+        self.ct.clone()
+    }
+
     pub async fn register_signal_handler(&self) {
         let ct = self.ct.clone();
         tokio::spawn(async move {
