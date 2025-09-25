@@ -842,7 +842,7 @@ async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
-    shutdown_handler.wait_for_shutdown_signal().await;
+    shutdown_handler.register_signal_handler().await;
     // Load batch_size config
     *CURRENT_BATCH_SIZE.lock().unwrap() = config.max_batch_size;
     let max_modification_lookback = config.max_modifications_lookback;
