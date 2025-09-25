@@ -2,7 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
-    helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
+    helpers::{shutdown_handler::ShutdownHandler, smpc_request::UNIQUENESS_MESSAGE_TYPE},
     iris_db::db::IrisDB,
     job::{BatchMetadata, BatchQuery},
     ROTATIONS,
@@ -42,7 +42,8 @@ pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
             // Make the test async.
             sleep(Duration::from_millis(index as u64)).await;
 
-            HawkActor::from_cli(&args).await
+            let shutdown_handler = Arc::new(ShutdownHandler::new(10));
+            HawkActor::from_cli(&args, &shutdown_handler).await
         }
     };
 

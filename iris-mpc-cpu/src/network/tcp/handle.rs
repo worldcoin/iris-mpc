@@ -26,7 +26,7 @@ use tokio::{
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
-static RECONNECTING: LazyLock<Counter> = LazyLock::new(|| Counter::new());
+static RECONNECTING: LazyLock<Counter> = LazyLock::new(Counter::new);
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -286,29 +286,25 @@ async fn manage_connection<T: NetworkConnection>(
             r = inbound_task => {
                 if shutdown_handler.is_shutting_down() {
                     Evt::Shutdown
-                } else {
-                    if let Err(e) = r {
-                        if RECONNECTING.increment().await {
-                            tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
-                        }
-                        Evt::Disconnected
-                    } else {
-                        unreachable!();
+                } else if let Err(e) = r {
+                    if RECONNECTING.increment().await {
+                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
                     }
+                    Evt::Disconnected
+                } else {
+                    unreachable!();
                 }
             },
             r = outbound_task => {
                 if shutdown_handler.is_shutting_down() {
                     Evt::Shutdown
-                } else {
-                    if let Err(e) = r {
-                         if RECONNECTING.increment().await {
-                            tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
-                        }
-                        Evt::Disconnected
-                    } else {
-                        unreachable!();
+                } else if let Err(e) = r {
+                     if RECONNECTING.increment().await {
+                        tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
                     }
+                    Evt::Disconnected
+                } else {
+                    unreachable!();
                 }
             },
             _ = shutdown_handler.wait_for_shutdown() => Evt::Shutdown,
@@ -354,10 +350,8 @@ async fn manage_connection<T: NetworkConnection>(
                 {
                     tracing::error!("reconnect failed: {e:?}");
                     return;
-                } else {
-                    if RECONNECTING.decrement().await {
-                        tracing::info!("all connections re-established");
-                    }
+                } else if RECONNECTING.decrement().await {
+                    tracing::info!("all connections re-established");
                 }
             }
             Evt::Shutdown => {
@@ -449,15 +443,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             }
         }
 
-        if let Err(e) = write_buf(stream, &mut buf).await {
-            return Err(e);
-        }
+        write_buf(stream, &mut buf).await?
     }
 
     if !buf.is_empty() {
-        if let Err(e) = write_buf(stream, &mut buf).await {
-            return Err(e);
-        }
+        write_buf(stream, &mut buf).await?
     }
     // the channel will not receive any more commands
     tracing::debug!("outbound_rx closed");
