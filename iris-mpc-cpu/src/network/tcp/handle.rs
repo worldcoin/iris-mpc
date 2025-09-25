@@ -12,9 +12,9 @@ use crate::{
 use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
-use iris_mpc_common::{fast_metrics::FastHistogram, helpers::shutdown_handler::ShutdownHandler};
+use iris_mpc_common::fast_metrics::FastHistogram;
 use std::{collections::HashMap, sync::Once, time::Instant};
-use std::{io, sync::Arc, sync::LazyLock};
+use std::{io, sync::LazyLock};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
@@ -22,6 +22,7 @@ use tokio::{
         oneshot, Mutex,
     },
 };
+use tokio_util::sync::CancellationToken;
 
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
@@ -71,7 +72,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         reconnector: Reconnector<T>,
         connections: PeerConnections<T>,
         config: TcpConfig,
-        shutdown_handler: Arc<ShutdownHandler>,
+        ct: CancellationToken,
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
@@ -82,13 +83,13 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                 let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
                 m.insert(stream_id, cmd_tx);
 
-                let shutdown_handler = shutdown_handler.clone();
+                let ct2 = ct.clone();
                 tokio::spawn(manage_connection(
                     connection,
                     rc,
                     config.get_sessions_for_stream(&stream_id),
                     cmd_rx,
-                    shutdown_handler,
+                    ct2,
                 ));
             }
             ch_map.insert(peer_id.clone(), m);
@@ -225,7 +226,7 @@ async fn manage_connection<T: NetworkConnection>(
     reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
-    shutdown_handler: Arc<ShutdownHandler>,
+    ct: CancellationToken,
 ) {
     let Connection {
         peer,
@@ -284,7 +285,7 @@ async fn manage_connection<T: NetworkConnection>(
                 }
             }
             r = inbound_task => {
-                if shutdown_handler.is_shutting_down() {
+                if ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
                     if RECONNECTING.increment().await {
@@ -296,7 +297,7 @@ async fn manage_connection<T: NetworkConnection>(
                 }
             },
             r = outbound_task => {
-                if shutdown_handler.is_shutting_down() {
+                if ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
                      if RECONNECTING.increment().await {
@@ -307,7 +308,7 @@ async fn manage_connection<T: NetworkConnection>(
                     unreachable!();
                 }
             },
-            _ = shutdown_handler.wait_for_shutdown() => Evt::Shutdown,
+            _ = ct.cancelled() => Evt::Shutdown,
         };
 
         // update the Arcs depending on the event. wait for reconnect if needed.

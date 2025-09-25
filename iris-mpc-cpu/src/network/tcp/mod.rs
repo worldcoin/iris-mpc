@@ -74,7 +74,7 @@ pub async fn build_network_handle(
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
-    let network_shutdown_handler = Arc::clone(shutdown_handler);
+    let ct = shutdown_handler.get_cancellation_token();
 
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
@@ -86,9 +86,14 @@ pub async fn build_network_handle(
     // reduce code duplication. instead, use a macro which makes use of local variables.
     macro_rules! build_network_handle {
         ($listener:expr, $connector:expr) => {{
-            let connection_builder =
-                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), $listener, $connector)
-                    .await?;
+            let connection_builder = PeerConnectionBuilder::new(
+                my_identity,
+                tcp_config.clone(),
+                $listener,
+                $connector,
+                ct.clone(),
+            )
+            .await?;
 
             for (identity, url) in
                 izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
@@ -99,12 +104,7 @@ pub async fn build_network_handle(
             }
 
             let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(
-                reconnector,
-                connections,
-                tcp_config,
-                network_shutdown_handler,
-            );
+            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
             Ok(Box::new(networking))
         }};
     }
@@ -167,15 +167,10 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 pub mod testing {
     use eyre::Result;
 
-    use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
     use itertools::izip;
-    use std::{
-        collections::HashSet,
-        net::SocketAddr,
-        sync::{Arc, LazyLock},
-        time::Duration,
-    };
+    use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
     use tokio::{net::TcpStream, sync::Mutex, time::sleep};
+    use tokio_util::sync::CancellationToken;
 
     use crate::{
         execution::player::Identity,
@@ -228,6 +223,7 @@ pub mod testing {
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
         let connector = TcpClient::new();
+        let ct = CancellationToken::new();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
             let listener = TcpServer::new(*addr).await?;
             builders.push(
@@ -236,6 +232,7 @@ pub mod testing {
                     config.clone(),
                     listener,
                     connector.clone(),
+                    ct.clone(),
                 )
                 .await?,
             );
@@ -264,15 +261,10 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
-        let shutdown_handler = Arc::new(ShutdownHandler::new(10));
+        let ct = CancellationToken::new();
         let mut handles = vec![];
         for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(
-                r,
-                c,
-                config.clone(),
-                shutdown_handler.clone(),
-            ));
+            handles.push(TcpNetworkHandle::new(r, c, config.clone(), ct.clone()));
         }
 
         tracing::debug!("waiting for make_sessions to complete");
