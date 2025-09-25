@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:d3a394f65b2f99a76111441373077b1c6dcf254f"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:75ca25b39d39c7357f0a162c42504f81f013a41b" # au/test-boost
 
 environment: dev
 replicaCount: 1
