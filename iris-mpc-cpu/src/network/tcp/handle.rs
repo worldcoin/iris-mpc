@@ -12,19 +12,21 @@ use crate::{
 use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
-use iris_mpc_common::fast_metrics::FastHistogram;
-use std::io;
-use std::{collections::HashMap, time::Instant};
+use iris_mpc_common::{fast_metrics::FastHistogram, helpers::shutdown_handler::ShutdownHandler};
+use std::{collections::HashMap, sync::Once, time::Instant};
+use std::{io, sync::Arc, sync::LazyLock};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
         mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
-        oneshot,
+        oneshot, Mutex,
     },
 };
 
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
+
+static RECONNECTING: LazyLock<Counter> = LazyLock::new(|| Counter::new());
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -69,6 +71,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         reconnector: Reconnector<T>,
         connections: PeerConnections<T>,
         config: TcpConfig,
+        shutdown_handler: Arc<ShutdownHandler>,
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
@@ -79,11 +82,13 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                 let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
                 m.insert(stream_id, cmd_tx);
 
+                let shutdown_handler = shutdown_handler.clone();
                 tokio::spawn(manage_connection(
                     connection,
                     rc,
                     config.get_sessions_for_stream(&stream_id),
                     cmd_rx,
+                    shutdown_handler,
                 ));
             }
             ch_map.insert(peer_id.clone(), m);
@@ -220,6 +225,7 @@ async fn manage_connection<T: NetworkConnection>(
     reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
+    shutdown_handler: Arc<ShutdownHandler>,
 ) {
     let Connection {
         peer,
@@ -257,22 +263,15 @@ async fn manage_connection<T: NetworkConnection>(
     // when new sessions are requested, also tear down and stand up the forwarders.
     loop {
         let r_writer = writer.as_mut().expect("writer should be Some");
-        let r_outbound = &mut outbound_rx;
-        let outbound_task = async move {
-            let r = handle_outbound_traffic(r_writer, r_outbound, num_sessions).await;
-            tracing::warn!("handle_outbound_traffic exited: {r:?}");
-        };
+        let outbound_task = handle_outbound_traffic(r_writer, &mut outbound_rx, num_sessions);
 
         let r_reader = reader.as_mut().expect("reader should be Some");
-        let r_inbound = &inbound_forwarder;
-        let inbound_task = async move {
-            let r = handle_inbound_traffic(r_reader, r_inbound).await;
-            tracing::warn!("handle_inbound_traffic exited: {r:?}");
-        };
+        let inbound_task = handle_inbound_traffic(r_reader, &inbound_forwarder);
 
         enum Evt {
             Cmd(Cmd),
             Disconnected,
+            Shutdown,
         }
         let event = tokio::select! {
             maybe_cmd = cmd_ch.recv() => {
@@ -284,8 +283,34 @@ async fn manage_connection<T: NetworkConnection>(
                     }
                 }
             }
-            _ = inbound_task => Evt::Disconnected,
-            _ = outbound_task => Evt::Disconnected,
+            r = inbound_task => {
+                if shutdown_handler.is_shutting_down() {
+                    Evt::Shutdown
+                } else {
+                    if let Err(e) = r {
+                        if RECONNECTING.increment().await {
+                            tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
+                        }
+                    }
+                    Evt::Disconnected
+                }
+            },
+            r = outbound_task => {
+                if shutdown_handler.is_shutting_down() {
+                    Evt::Shutdown
+                } else {
+                    if let Err(e) = r {
+                         if RECONNECTING.increment().await {
+                            tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
+                        }
+                        Evt::Disconnected
+                    } else {
+                        // new sessions were probably created
+                        Evt::Shutdown
+                    }
+                }
+            },
+            _ = shutdown_handler.wait_for_shutdown() => Evt::Shutdown,
         };
 
         // update the Arcs depending on the event. wait for reconnect if needed.
@@ -321,14 +346,25 @@ async fn manage_connection<T: NetworkConnection>(
                 }
             },
             Evt::Disconnected => {
-                tracing::info!("reconnecting to {:?}: {:?}", peer, stream_id);
+                tracing::debug!("reconnecting to {:?}: {:?}", peer, stream_id);
                 if let Err(e) =
                     reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
                         .await
                 {
                     tracing::error!("reconnect failed: {e:?}");
                     return;
-                };
+                } else {
+                    if RECONNECTING.decrement().await {
+                        tracing::info!("all connections re-established");
+                    }
+                }
+            }
+            Evt::Shutdown => {
+                static EMIT_LOG: Once = Once::new();
+                EMIT_LOG.call_once(|| {
+                    tracing::info!("shutting down TCP/TLS networking stack");
+                });
+                break;
             }
         }
     }
@@ -413,14 +449,12 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
         }
 
         if let Err(e) = write_buf(stream, &mut buf).await {
-            tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
             return Err(e);
         }
     }
 
     if !buf.is_empty() {
         if let Err(e) = write_buf(stream, &mut buf).await {
-            tracing::error!(error=%e, "Failed to flush buffer when outbound_rx closed");
             return Err(e);
         }
     }
@@ -514,4 +548,29 @@ async fn write_buf<T: NetworkConnection>(
     stream.flush().await?;
     buf.clear();
     Ok(())
+}
+
+struct Counter {
+    num: Mutex<usize>,
+}
+
+impl Counter {
+    fn new() -> Self {
+        Self { num: Mutex::new(0) }
+    }
+
+    // returns true if num was zero
+    async fn increment(&self) -> bool {
+        let mut l = self.num.lock().await;
+        *l += 1;
+        *l == 1
+    }
+
+    // returns true if num was one before decrementing
+    async fn decrement(&self) -> bool {
+        let mut l = self.num.lock().await;
+        let r = *l == 1;
+        *l = l.saturating_sub(1);
+        r
+    }
 }

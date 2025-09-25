@@ -896,7 +896,8 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hawk_args.party_index, node_addresses
     ));
 
-    HawkActor::from_cli(&hawk_args).await
+    let shutdown_handler = Arc::new(ShutdownHandler::new(10));
+    HawkActor::from_cli(&hawk_args, &shutdown_handler).await
 }
 
 /// Returns service clients used downstream.

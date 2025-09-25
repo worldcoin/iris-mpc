@@ -13,8 +13,9 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
+use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use itertools::izip;
-use std::sync::Once;
+use std::sync::{Arc, Once};
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
@@ -55,6 +56,7 @@ pub trait Server: Send {
 
 pub async fn build_network_handle(
     args: &HawkArgs,
+    shutdown_handler: &Arc<ShutdownHandler>,
     identities: &[Identity],
     sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
@@ -72,12 +74,40 @@ pub async fn build_network_handle(
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
+    let network_shutdown_handler = Arc::clone(shutdown_handler);
 
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),
         args.connection_parallelism,
         args.request_parallelism * sessions_per_request,
     );
+
+    // PeerConnectionBuilder is generic over listener and connector and don't want to use a boxed trait to
+    // reduce code duplication. instead, use a macro which makes use of local variables.
+    macro_rules! build_network_handle {
+        ($listener:expr, $connector:expr) => {{
+            let connection_builder =
+                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), $listener, $connector)
+                    .await?;
+
+            for (identity, url) in
+                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+            {
+                connection_builder
+                    .include_peer(identity.clone(), url.clone())
+                    .await?;
+            }
+
+            let (reconnector, connections) = connection_builder.build().await?;
+            let networking = TcpNetworkHandle::new(
+                reconnector,
+                connections,
+                tcp_config,
+                network_shutdown_handler,
+            );
+            Ok(Box::new(networking))
+        }};
+    }
 
     if let Some(tls) = args.tls.as_ref() {
         tracing::info!(
@@ -92,22 +122,7 @@ pub async fn build_network_handle(
 
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
             let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
-            let connection_builder =
-                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                    .await?;
-
-            // Connect to other players.
-            for (identity, url) in
-                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-            {
-                connection_builder
-                    .include_peer(identity.clone(), url.clone())
-                    .await?;
-            }
-
-            let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-            Ok(Box::new(networking))
+            build_network_handle!(listener, connector)
         } else {
             tracing::info!("Running in full app TLS mode.");
             if tls.private_key.is_none() || tls.leaf_cert.is_none() {
@@ -127,22 +142,7 @@ pub async fn build_network_handle(
 
             let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
             let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
-
-            let connection_builder =
-                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                    .await?;
-            // Connect to other players.
-            for (identity, url) in
-                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-            {
-                connection_builder
-                    .include_peer(identity.clone(), url.clone())
-                    .await?;
-            }
-
-            let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-            Ok(Box::new(networking))
+            build_network_handle!(listener, connector)
         }
     } else {
         tracing::info!(
@@ -151,22 +151,7 @@ pub async fn build_network_handle(
         );
         let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
         let connector = BoxTcpClient(TcpClient::new());
-        let connection_builder =
-            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                .await?;
-
-        // Connect to other players.
-        for (identity, url) in
-            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-        {
-            connection_builder
-                .include_peer(identity.clone(), url.clone())
-                .await?;
-        }
-
-        let (reconnector, connections) = connection_builder.build().await?;
-        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-        Ok(Box::new(networking))
+        build_network_handle!(listener, connector)
     }
 }
 
@@ -182,8 +167,14 @@ fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
 pub mod testing {
     use eyre::Result;
 
+    use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
     use itertools::izip;
-    use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
+    use std::{
+        collections::HashSet,
+        net::SocketAddr,
+        sync::{Arc, LazyLock},
+        time::Duration,
+    };
     use tokio::{net::TcpStream, sync::Mutex, time::sleep};
 
     use crate::{
@@ -273,9 +264,15 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
+        let shutdown_handler = Arc::new(ShutdownHandler::new(10));
         let mut handles = vec![];
         for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(r, c, config.clone()));
+            handles.push(TcpNetworkHandle::new(
+                r,
+                c,
+                config.clone(),
+                shutdown_handler.clone(),
+            ));
         }
 
         tracing::debug!("waiting for make_sessions to complete");
