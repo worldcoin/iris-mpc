@@ -102,10 +102,6 @@ harness = false
 name = "hnsw-ex"
 
 [[bin]]
-name = "generate_benchmark_data"
-path = "bin/generate_benchmark_data.rs"
-
-[[bin]]
 name = "hawk_main"
 path = "bin/hawk_main.rs"
 
