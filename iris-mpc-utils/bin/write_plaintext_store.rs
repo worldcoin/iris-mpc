@@ -80,9 +80,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Write plaintext store.
     tracing::info!(
-        "Writing plaintext store of {} irises -> {:?}/store.ndjson",
-        args.store_size,
-        output_dir
+        "Writing plaintext store of {} irises -> OUTPUT_DIR/store.ndjson",
+        args.store_size
     );
     let mut rng = AesRng::seed_from_u64(args.rng_seed);
     let mut store = PlaintextStore::new_random(&mut rng, args.store_size);
