@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use eyre::Result;
-use iris_mpc_cpu::hnsw::graph::test_utils::DbContext;
+use iris_mpc_utils::graphs::plaintext::utils::DbContext;
 use std::path::PathBuf;
 
 #[derive(Parser)]
