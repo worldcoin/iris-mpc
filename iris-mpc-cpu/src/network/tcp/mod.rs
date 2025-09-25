@@ -13,14 +13,14 @@ use crate::{
 };
 use async_trait::async_trait;
 use eyre::Result;
-use iris_mpc_common::helpers::shutdown_handler::ShutdownHandler;
 use itertools::izip;
-use std::sync::{Arc, Once};
+use std::sync::Once;
 use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 
 pub mod config;
 mod data;
@@ -56,7 +56,7 @@ pub trait Server: Send {
 
 pub async fn build_network_handle(
     args: &HawkArgs,
-    shutdown_handler: &Arc<ShutdownHandler>,
+    ct: CancellationToken,
     identities: &[Identity],
     sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
@@ -74,7 +74,6 @@ pub async fn build_network_handle(
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
-    let ct = shutdown_handler.get_cancellation_token();
 
     let tcp_config = TcpConfig::new(
         Duration::from_secs(10),

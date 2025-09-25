@@ -422,7 +422,7 @@ async fn init_hawk_actor(
         node_addresses
     );
 
-    HawkActor::from_cli(&hawk_args, shutdown_handler).await
+    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
 }
 
 /// Loads iris code shares & HNSW graph from Postgres and/or S3.

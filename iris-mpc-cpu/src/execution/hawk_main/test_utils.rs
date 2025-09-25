@@ -2,7 +2,7 @@ use aes_prng::AesRng;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{
-    helpers::{shutdown_handler::ShutdownHandler, smpc_request::UNIQUENESS_MESSAGE_TYPE},
+    helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE,
     iris_db::db::IrisDB,
     job::{BatchMetadata, BatchQuery},
     ROTATIONS,
@@ -11,6 +11,7 @@ use itertools::Itertools;
 use rand::SeedableRng;
 use std::{sync::Arc, time::Duration};
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
@@ -42,8 +43,7 @@ pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
             // Make the test async.
             sleep(Duration::from_millis(index as u64)).await;
 
-            let shutdown_handler = Arc::new(ShutdownHandler::new(10));
-            HawkActor::from_cli(&args, &shutdown_handler).await
+            HawkActor::from_cli(&args, CancellationToken::new()).await
         }
     };
 
