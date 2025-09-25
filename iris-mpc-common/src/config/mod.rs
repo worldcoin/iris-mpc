@@ -85,6 +85,13 @@ pub struct Config {
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
+    // used for testing to recreate batch sequence
+    #[serde(
+        default = "default_predefined_batch_sizes",
+        deserialize_with = "deserialize_usize_vec"
+    )]
+    pub predefined_batch_sizes: Vec<usize>,
+
     #[serde(default = "default_heartbeat_interval_secs")]
     pub heartbeat_interval_secs: u64,
 
@@ -132,6 +139,9 @@ pub struct Config {
 
     #[serde(default)]
     pub db_chunks_bucket_name: String,
+
+    #[serde(default = "default_db_chunks_bucket_region")]
+    pub db_chunks_bucket_region: String,
 
     #[serde(default = "default_load_chunks_parallelism")]
     pub load_chunks_parallelism: usize,
@@ -229,14 +239,47 @@ pub struct Config {
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
 
+    #[serde(default = "default_hawk_numa")]
+    pub hawk_numa: bool,
+
     #[serde(default = "default_max_deletions_per_batch")]
     pub max_deletions_per_batch: usize,
+
+    #[serde(default = "default_max_modifications_lookback")]
+    pub max_modifications_lookback: usize,
 
     #[serde(default)]
     pub enable_modifications_sync: bool,
 
     #[serde(default)]
     pub enable_modifications_replay: bool,
+
+    #[serde(default = "default_pprof_s3_bucket")]
+    pub pprof_s3_bucket: String,
+
+    #[serde(default = "default_pprof_prefix")]
+    pub pprof_prefix: String,
+
+    #[serde(default)]
+    pub pprof_run_id: Option<String>,
+
+    #[serde(default = "default_pprof_seconds")]
+    pub pprof_seconds: u64,
+
+    #[serde(default = "default_pprof_frequency")]
+    pub pprof_frequency: i32,
+
+    #[serde(default = "default_pprof_idle_interval_sec")]
+    pub pprof_idle_interval_sec: u64,
+
+    #[serde(default)]
+    pub pprof_flame_only: bool,
+
+    #[serde(default)]
+    pub pprof_profile_only: bool,
+
+    #[serde(default = "default_pprof_per_batch_enabled")]
+    pub enable_pprof_per_batch: bool,
 
     #[serde(default = "default_sqs_sync_long_poll_seconds")]
     pub sqs_sync_long_poll_seconds: i32,
@@ -273,6 +316,10 @@ fn default_full_scan_side() -> Eye {
     Eye::Left
 }
 
+fn default_db_chunks_bucket_region() -> String {
+    "eu-north-1".to_string()
+}
+
 fn default_load_chunks_parallelism() -> usize {
     32
 }
@@ -287,6 +334,10 @@ fn default_startup_sync_timeout_secs() -> u64 {
 
 fn default_max_batch_size() -> usize {
     64
+}
+
+fn default_predefined_batch_sizes() -> Vec<usize> {
+    Vec::new()
 }
 
 fn default_heartbeat_interval_secs() -> u64 {
@@ -372,6 +423,10 @@ fn default_hnsw_param_ef_search() -> usize {
     256
 }
 
+fn default_hawk_numa() -> bool {
+    true
+}
+
 fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
 }
@@ -386,6 +441,10 @@ fn default_http_query_retry_delay_ms() -> u64 {
 
 fn default_max_deletions_per_batch() -> usize {
     100
+}
+
+fn default_max_modifications_lookback() -> usize {
+    (default_max_deletions_per_batch() + default_max_batch_size()) * 2
 }
 
 fn default_sqs_sync_long_poll_seconds() -> i32 {
@@ -418,6 +477,32 @@ fn default_batch_sync_polling_timeout_secs() -> u64 {
 
 fn default_full_scan_side_switching_enabled() -> bool {
     true
+}
+
+// ---- pprof collector defaults ----
+fn default_pprof_s3_bucket() -> String {
+    // Stage default bucket; override in prod via env
+    "wf-smpcv2-stage-hnsw-performance-reports".to_string()
+}
+
+fn default_pprof_prefix() -> String {
+    "hnsw/pprof".to_string()
+}
+
+fn default_pprof_seconds() -> u64 {
+    30
+}
+
+fn default_pprof_frequency() -> i32 {
+    99
+}
+
+fn default_pprof_idle_interval_sec() -> u64 {
+    5
+}
+
+fn default_pprof_per_batch_enabled() -> bool {
+    false
 }
 
 fn default_tokio_threads() -> usize {
@@ -561,19 +646,32 @@ pub struct MetricsConfig {
 // absence of these fields to make the arg None, each field needs
 // 'required = false'
 #[derive(Debug, Clone, Serialize, Deserialize, clap::Args)]
-#[group(requires_all = ["private_key", "leaf_cert", "root_cert"])]
+#[group(requires_all = ["private_key", "leaf_cert", "root_certs"])]
 pub struct TlsConfig {
+    // if true, the app will start assuming that the nginx sidecar is running
+    // Client will be TLS aware with root certs applied, the server will not be TLS aware
     #[arg(required = false)]
-    pub private_key: String,
+    pub with_nginx_sidecar: bool,
+
+    #[arg(required = false)]
+    pub private_key: Option<String>,
     // used by a peer to identify itself
     #[arg(required = false)]
-    pub leaf_cert: String,
-    // used by the client to make them trust the server cert
-    #[arg(required = false)]
-    pub root_cert: String,
+    pub leaf_cert: Option<String>,
+    // used by the client to make them trust the server certs
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub root_certs: Vec<String>,
 }
 
 fn deserialize_yaml_json_string<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value: String = Deserialize::deserialize(deserializer)?;
+    serde_json::from_str(&value).map_err(serde::de::Error::custom)
+}
+
+fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -597,6 +695,8 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
+    #[serde(default)]
+    predefined_batch_sizes: Vec<usize>,
     heartbeat_interval_secs: u64,
     heartbeat_initial_retries: u64,
     fake_db_size: usize,
@@ -604,6 +704,7 @@ pub struct CommonConfig {
     disable_persistence: bool,
     shutdown_last_results_sync_timeout_secs: u64,
     image_name: String,
+    db_chunks_bucket_region: String,
     fixed_shared_secrets: bool,
     luc_enabled: bool,
     luc_lookback_records: usize,
@@ -624,6 +725,7 @@ pub struct CommonConfig {
     hnsw_param_ef_search: usize,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
+    max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
     sqs_sync_long_poll_seconds: i32,
@@ -638,6 +740,12 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+}
+
+impl CommonConfig {
+    pub fn get_max_modifications_lookback(&self) -> usize {
+        self.max_modifications_lookback
+    }
 }
 
 impl From<Config> for CommonConfig {
@@ -664,6 +772,7 @@ impl From<Config> for CommonConfig {
             init_db_size,
             max_db_size,
             max_batch_size,
+            predefined_batch_sizes,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
             fake_db_size,
@@ -678,9 +787,10 @@ impl From<Config> for CommonConfig {
             image_name,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
             db_chunks_bucket_name: _, // different for each server
+            db_chunks_bucket_region,
             load_chunks_parallelism: _, // could be different for each server
             db_load_safety_overlap_seconds: _, // could be different for each server
-            db_chunks_folder_name: _, // different for each server
+            db_chunks_folder_name: _,   // different for each server
             load_chunks_buffer_size: _, // could be different for each server
             load_chunks_max_retries: _, // could be different for each server
             load_chunks_initial_backoff_ms: _, // could be different for each server
@@ -704,7 +814,9 @@ impl From<Config> for CommonConfig {
             hnsw_param_M,
             hnsw_param_ef_search,
             hawk_prf_key,
+            hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,
@@ -719,6 +831,16 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            // pprof collector (not part of common hash)
+            pprof_s3_bucket: _,
+            pprof_prefix: _,
+            pprof_run_id: _,
+            pprof_seconds: _,
+            pprof_frequency: _,
+            pprof_idle_interval_sec: _,
+            pprof_flame_only: _,
+            pprof_profile_only: _,
+            enable_pprof_per_batch: _,
             tokio_threads: _,
         } = value;
 
@@ -733,6 +855,7 @@ impl From<Config> for CommonConfig {
             clear_db_before_init,
             init_db_size,
             max_db_size,
+            predefined_batch_sizes,
             max_batch_size,
             heartbeat_interval_secs,
             heartbeat_initial_retries,
@@ -741,6 +864,7 @@ impl From<Config> for CommonConfig {
             disable_persistence,
             shutdown_last_results_sync_timeout_secs,
             image_name,
+            db_chunks_bucket_region,
             fixed_shared_secrets,
             luc_enabled,
             luc_lookback_records,
@@ -761,6 +885,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_search,
             hawk_prf_key,
             max_deletions_per_batch,
+            max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
             sqs_sync_long_poll_seconds,

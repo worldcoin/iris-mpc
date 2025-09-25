@@ -43,7 +43,7 @@ sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
-tokio-util = "0.7.15"
+tokio-util.workspace = true
 tonic = "0.12.3"
 metrics = "0.22.1"
 tracing.workspace = true
@@ -64,6 +64,10 @@ backon = { version = "1.4.0", default-features = false, features = [
 rand_chacha = { version = "0.3", features = ["serde1"] }
 num_enum = "0.7.3"
 tokio-rustls = { version = "0.26.2" }
+rustls-native-certs = "0.8.1"
+rustls = "0.21.12"
+x509-parser = "0.17.0"
+anyhow = "1.0.93"
 
 [dev-dependencies]
 criterion = { version = "0.5.1", features = ["async_tokio"] }
@@ -76,7 +80,6 @@ tonic-build = "0.12.3"
 
 [features]
 db_dependent = []
-networking_benchmark = []
 networking_metrics = []
 
 [[bench]]

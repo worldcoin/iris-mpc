@@ -10,13 +10,11 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use bytes::{Buf, BytesMut};
+use bytes::BytesMut;
 use eyre::Result;
+use iris_mpc_common::fast_metrics::FastHistogram;
 use std::io;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
@@ -25,9 +23,8 @@ use tokio::{
     },
 };
 
-const FLUSH_INTERVAL_US: u64 = 500;
-const BUFFER_CAPACITY: usize = 2 * 1024 * 1024;
-const READ_BUF_SIZE: usize = BUFFER_CAPACITY;
+const BUFFER_CAPACITY: usize = 32 * 1024;
+const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -364,15 +361,24 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
     outbound_rx: &mut UnboundedReceiver<OutboundMsg>,
     num_sessions: usize,
 ) -> io::Result<()> {
-    let mut buffered_msgs = 0;
+    // Time spent buffering between the first and last messages of a packet.
+    let mut metrics_buffer_latency = FastHistogram::new("outbound_buffer_latency");
+    // Number of messages per packet.
+    let mut metrics_messages = FastHistogram::new("outbound_packet_messages");
+    // Number of bytes per packet.
+    let mut metrics_packet_bytes = FastHistogram::new("outbound_packet_bytes");
+
     let mut buf = BytesMut::with_capacity(BUFFER_CAPACITY);
+
     while let Some((session_id, msg)) = outbound_rx.recv().await {
-        let _wakeup_time = Instant::now();
-        buffered_msgs += 1;
+        // First message of the next packet.
+        let mut buffered_msgs = 1;
         buf.extend_from_slice(&session_id.0.to_le_bytes());
         msg.serialize(&mut buf);
 
+        // Try to fill the buffer with more messages, up to num_sessions, BUFFER_CAPACITY or two attempts.
         let loop_start_time = Instant::now();
+        let mut retried = false;
         while buffered_msgs < num_sessions {
             match outbound_rx.try_recv() {
                 Ok((session_id, msg)) => {
@@ -383,15 +389,17 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
                         break;
                     }
                 }
-                Err(TryRecvError::Empty) => {
-                    if loop_start_time.elapsed() >= Duration::from_micros(FLUSH_INTERVAL_US) {
-                        break;
-                    }
+                Err(TryRecvError::Empty) if !retried => {
+                    retried = true;
                     tokio::task::yield_now().await;
                 }
-                Err(_) => break,
+                _ => break,
             }
         }
+
+        metrics_buffer_latency.record(loop_start_time.elapsed().as_secs_f64());
+        metrics_messages.record(buffered_msgs as f64);
+        metrics_packet_bytes.record(buf.len() as f64);
 
         #[cfg(feature = "networking_metrics")]
         {
@@ -404,20 +412,14 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             }
         }
 
-        if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
+        if let Err(e) = write_buf(stream, &mut buf).await {
             tracing::error!(error=%e, "Failed to flush buffer on outbound_rx");
             return Err(e);
-        }
-
-        #[cfg(feature = "networking_metrics")]
-        {
-            let elapsed = _wakeup_time.elapsed().as_micros();
-            metrics::histogram!("network.outbound.tx_time_us").record(elapsed as f64);
         }
     }
 
     if !buf.is_empty() {
-        if let Err(e) = write_buf(stream, &mut buf, &mut buffered_msgs).await {
+        if let Err(e) = write_buf(stream, &mut buf).await {
             tracing::error!(error=%e, "Failed to flush buffer when outbound_rx closed");
             return Err(e);
         }
@@ -507,20 +509,8 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
 async fn write_buf<T: NetworkConnection>(
     stream: &mut WriteHalf<T>,
     buf: &mut BytesMut,
-    buffered_msgs: &mut usize,
 ) -> io::Result<()> {
-    #[cfg(feature = "networking_metrics")]
-    {
-        metrics::histogram!("network.buffered_msgs").record(*buffered_msgs as f64);
-        metrics::histogram!("network.bytes_flushed").record(buf.len() as f64);
-    }
-    *buffered_msgs = 0;
-
-    // maybe faster than write_all()?
-    while !buf.is_empty() {
-        let n = stream.write(buf).await?;
-        buf.advance(n);
-    }
+    stream.write_all(buf).await?;
     stream.flush().await?;
     buf.clear();
     Ok(())

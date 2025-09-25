@@ -1,15 +1,16 @@
 use std::{
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         Arc,
     },
     time::{Duration, Instant},
 };
 use tokio::signal;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Clone, Debug)]
 pub struct ShutdownHandler {
-    shutdown_received: Arc<AtomicBool>,
+    ct: CancellationToken,
     n_batches_pending_completion: Arc<AtomicUsize>,
     last_results_sync_timeout: Duration,
 }
@@ -17,25 +18,29 @@ pub struct ShutdownHandler {
 impl ShutdownHandler {
     pub fn new(shutdown_last_results_sync_timeout_secs: u64) -> Self {
         Self {
-            shutdown_received: Arc::new(AtomicBool::new(false)),
+            ct: CancellationToken::new(),
             n_batches_pending_completion: Arc::new(AtomicUsize::new(0)),
             last_results_sync_timeout: Duration::from_secs(shutdown_last_results_sync_timeout_secs),
         }
     }
 
     pub fn is_shutting_down(&self) -> bool {
-        self.shutdown_received.load(Ordering::Relaxed)
+        self.ct.is_cancelled()
     }
 
     pub fn trigger_manual_shutdown(&self) {
-        self.shutdown_received.store(true, Ordering::Relaxed);
+        self.ct.cancel()
     }
 
-    pub async fn wait_for_shutdown_signal(&self) {
-        let shutdown_flag = self.shutdown_received.clone();
+    pub async fn wait_for_shutdown(&self) {
+        self.ct.cancelled().await
+    }
+
+    pub async fn register_signal_handler(&self) {
+        let ct = self.ct.clone();
         tokio::spawn(async move {
             shutdown_signal().await;
-            shutdown_flag.store(true, Ordering::Relaxed);
+            ct.cancel();
             tracing::info!("Shutdown signal received.");
         });
     }

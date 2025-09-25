@@ -5,6 +5,31 @@ env:
   - name: RUST_BACKTRACE
     value: "full"
 
+  - name: SMPC__PPROF_FLAME_ONLY
+    value: "true"
+
+  - name: SMPC__ENABLE_PPROF_PER_BATCH
+    value: "true"
+
+  # Optional overrides (uncomment/customize as needed)
+  - name: SMPC__PPROF_S3_BUCKET
+    value: "wf-smpcv2-dev-hnsw-performance-reports"
+
+  - name: SMPC__PPROF_PREFIX
+    value: "dev/hnsw"
+
+  - name: SMPC__PPROF_SECONDS
+    value: "180"
+
+  - name: SMPC__PPROF_FREQUENCY
+    value: "49"
+
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  - name: SMPC__PPROF_RUN_ID
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+
   - name: SMPC__ENVIRONMENT
     value: "dev"
 
@@ -17,7 +42,7 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
 
   - name: SMPC__MAX_DB_SIZE
@@ -26,11 +51,14 @@ env:
   - name: SMPC__MAX_BATCH_SIZE
     value: "32"
 
+  - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
+    value: "30"
+
   - name: SMPC__PROCESSING_TIMEOUT_SECS
-    value: "240"  # 2 minutes per batch in dev, bump to 4 in prod
+    value: "1240"
 
   - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "1024"
+    value: "32"
 
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
     value: "8"
@@ -81,13 +109,13 @@ env:
     value: '["node.0.dev.hnsw.worldcoin.dev","node.1.dev.hnsw.worldcoin.dev","0.0.0.0"]'
 
   - name: SMPC__SHARES_BUCKET_NAME
-    value: "wf-smpcv2-dev-sns-requests"
+    value: "wf-smpcv2-dev-sns-requests-v2"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-2-dev--eun1-az3--x-s3"
+    value: "ampc-hnsw-db-exporter-store-node-2-dev--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "hnsw_even_odd_with_version_id_output_16k"
@@ -143,7 +171,22 @@ env:
     value: "true"
 
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
-    value: "true"
+    value: "false"
+
+  - name: SMPC__TLS__PRIVATE_KEY
+    value: "/etc/ssl/private/key.pem"
+
+  - name: SMPC__TLS__LEAF_CERT
+    value: "/etc/ssl/private/certificate.crt"
+
+  - name: SMPC__TLS__ROOT_CERTS
+    value: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
+
+  - name: SMPC__TLS__WITH_NGINX_SIDECAR
+    value: "false"
+
+  - name: SMPC__TLS__CLIENT_ONLY_TLS
+    value: "false"
 
 initContainer:
   enabled: true

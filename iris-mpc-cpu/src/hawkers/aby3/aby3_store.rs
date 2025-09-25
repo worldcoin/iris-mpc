@@ -54,6 +54,8 @@ impl Aby3Query {
     }
 }
 
+pub type Aby3VectorRef = <Aby3Store as VectorStore>::VectorRef;
+
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
 
@@ -95,7 +97,7 @@ impl Aby3Store {
     /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
     ///
     /// Assumes that the first iris of each pair is preprocessed.
-    /// This first iris is usually preprocessed when a related query is created, see [prepare_query] for more details.
+    /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub(crate) async fn eval_pairwise_distances(
         &mut self,
@@ -351,15 +353,20 @@ mod tests {
             let v_from_scratch = v_from_scratch.lock().await;
             let premade_v = premade_v.lock().await;
             assert_eq!(
-                v_from_scratch.storage.read().await.points,
-                premade_v.storage.read().await.points
+                v_from_scratch.storage.read().await.get_points(),
+                premade_v.storage.read().await.get_points()
             );
         }
         let hawk_searcher = HnswSearcher::new_with_test_parameters();
 
         for i in 0..database_size {
             let vector_id = VectorId::from_0_index(i as u32);
-            let query = cleartext_data.0.storage.get_vector(&vector_id).unwrap();
+            let query = cleartext_data
+                .0
+                .storage
+                .get_vector(&vector_id)
+                .unwrap()
+                .clone();
             let cleartext_neighbors = hawk_searcher
                 .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;

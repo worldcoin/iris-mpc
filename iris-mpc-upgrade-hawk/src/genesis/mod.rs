@@ -888,6 +888,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         match_distances_buffer_size: config.match_distances_buffer_size,
         n_buckets: config.n_buckets,
         tls: config.tls.clone(),
+        numa: config.hawk_numa,
     };
 
     log_info(format!(
@@ -1245,6 +1246,8 @@ async fn init_graph_from_stores(
     .await
     .expect("Failed to load DB");
 
+    iris_loader.wait_completion().await?;
+
     graph_loader
         .load_graph_store(&graph_store, graph_db_parallelism)
         .await?;
@@ -1264,7 +1267,7 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
-    shutdown_handler.wait_for_shutdown_signal().await;
+    shutdown_handler.register_signal_handler().await;
 
     shutdown_handler
 }

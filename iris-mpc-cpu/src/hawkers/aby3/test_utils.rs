@@ -14,8 +14,8 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef},
-        plaintext_store::PlaintextStore,
+        aby3::aby3_store::{Aby3Query, Aby3SharedIrisesRef, Aby3VectorRef},
+        plaintext_store::{PlaintextStore, PlaintextVectorRef},
     },
     hnsw::{
         graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
@@ -41,18 +41,17 @@ pub fn setup_aby3_shared_iris_stores_with_preloaded_db<R: RngCore + CryptoRng>(
 
     // sort the iris codes by their serial id
     // Collect and sort keys
-    let mut sorted_serial_ids: Vec<_> = plain_store.storage.points.keys().cloned().collect();
-    sorted_serial_ids.sort();
+    let sorted_serial_ids: Vec<_> = plain_store.storage.get_sorted_serial_ids();
 
     for serial_id in sorted_serial_ids {
         let iris = &plain_store
             .storage
-            .points
-            .get(&serial_id)
-            .expect("Key not found in plain store")
-            .1;
+            .get_vector_by_serial_id(serial_id)
+            .expect("Key not found in plain store");
+
         let vector_id = VectorId::from_serial_id(serial_id);
-        let all_shares = GaloisRingSharedIris::generate_shares_locally(rng, (**iris).clone());
+        let all_shares =
+            GaloisRingSharedIris::generate_shares_locally(rng, (**iris).as_ref().clone());
         for (party_id, share) in all_shares.into_iter().enumerate() {
             shared_irises[party_id].insert(vector_id, Arc::new(share));
         }
@@ -77,7 +76,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .into_iter()
         .zip(storages.into_iter())
         .map(|(session, storage)| {
-            let workers = iris_worker::init_workers(0, storage.clone());
+            let workers = iris_worker::init_workers(0, storage.clone(), true);
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
                 storage,
@@ -94,7 +93,7 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let storage = Aby3Store::new_storage(None).to_arc();
-            let workers = iris_worker::init_workers(0, storage.clone());
+            let workers = iris_worker::init_workers(0, storage.clone(), true);
 
             Ok(Arc::new(Mutex::new(Aby3Store {
                 session,
@@ -132,8 +131,8 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
 /// Returns the distance between two vectors inserted into Aby3Store.
 pub async fn eval_vector_distance(
     store: &mut Aby3Store,
-    vector1: &<Aby3Store as VectorStore>::VectorRef,
-    vector2: &<Aby3Store as VectorStore>::VectorRef,
+    vector1: &Aby3VectorRef,
+    vector2: &Aby3VectorRef,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
     let point1 = store.storage.get_vector_or_empty(vector1).await;
     let mut point2 = (*store.storage.get_vector_or_empty(vector2).await).clone();
@@ -153,7 +152,7 @@ pub async fn eval_vector_distance(
 /// SMPC. Otherwise, distances are naively converted from plaintext ones
 /// via trivial shares,
 /// i.e., the sharing of a value x is a triple (x, 0, 0).
-async fn graph_from_plain(graph_store: &GraphMem<PlaintextStore>) -> GraphMem<Aby3Store> {
+async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMem<Aby3VectorRef> {
     let ep = graph_store.get_entry_point().await;
     let layers = graph_store.get_layers();
 
@@ -186,8 +185,8 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     database_size: usize,
     network_t: NetworkType,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
+    (PlaintextStore, GraphMem<PlaintextVectorRef>),
+    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
     if database_size > 100_000 {
         return Err(eyre::eyre!("Database size too large, max. 100,000"));
@@ -196,7 +195,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
                                   generate_benchmark_data.";
     let plaintext_vector_store = from_ndjson_file(plainstore_file, Some(database_size))
         .map_err(|e| eyre::eyre!("Cannot find store: {e}. {generation_comment}"))?;
-    let plaintext_graph_store: GraphMem<PlaintextStore> = read_bin(plaingraph_file)
+    let plaintext_graph_store: GraphMem<PlaintextVectorRef> = read_bin(plaingraph_file)
         .map_err(|e| eyre::eyre!("Cannot find graph: {e}. {generation_comment}"))?;
 
     let protocol_stores =
@@ -232,8 +231,8 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
+    (PlaintextStore, GraphMem<PlaintextVectorRef>),
+    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
     lazy_setup_from_files(
         plainstore_file,
@@ -256,8 +255,8 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     database_size: usize,
     network_t: NetworkType,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
+    (PlaintextStore, GraphMem<PlaintextVectorRef>),
+    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
     let searcher = HnswSearcher::new_with_test_parameters();
 
@@ -297,8 +296,8 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
+    (PlaintextStore, GraphMem<PlaintextVectorRef>),
+    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
     lazy_random_setup(rng, database_size, NetworkType::Local).await
 }
@@ -310,8 +309,8 @@ pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextStore>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>,
+    (PlaintextStore, GraphMem<PlaintextVectorRef>),
+    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
 )> {
     lazy_random_setup(rng, database_size, NetworkType::default_grpc()).await
 }
@@ -322,7 +321,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
     let rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
@@ -341,7 +340,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             .map(|id| Aby3Query::new_from_raw(shared_irises[id][role].clone()))
             .collect::<Vec<_>>();
         let store = store.clone();
-        let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3Store>)>> =
+        let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> =
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
                 let mut graph_store = GraphMem::new();
@@ -376,7 +375,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
 pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
     shared_random_setup(rng, database_size, NetworkType::Local).await
 }
 
@@ -385,6 +384,6 @@ pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoR
 pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3Store>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
     shared_random_setup(rng, database_size, NetworkType::default_grpc()).await
 }

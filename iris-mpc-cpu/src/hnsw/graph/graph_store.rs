@@ -450,7 +450,7 @@ where
         &mut self,
         pool: &sqlx::PgPool,
         parallelism: usize,
-    ) -> Result<GraphMem<V>> {
+    ) -> Result<GraphMem<<V as VectorStore>::VectorRef>> {
         let mut graph_mem = GraphMem::new();
         let schema_name = self.tx.schema_name.clone();
         let graph_id = self.graph_id();
@@ -684,7 +684,11 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.storage.points[&1].1.clone();
+            let q = vector_store
+                .storage
+                .get_vector_by_serial_id(1)
+                .unwrap()
+                .clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }
@@ -735,7 +739,11 @@ mod tests {
 
         let distances = {
             let mut d = vec![];
-            let q = vector_store.storage.points[&1].1.clone();
+            let q = vector_store
+                .storage
+                .get_vector_by_serial_id(1)
+                .unwrap()
+                .clone();
             for v in vectors.iter() {
                 d.push(vector_store.eval_distance(&q, v).await?);
             }

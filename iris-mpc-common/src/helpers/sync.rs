@@ -224,6 +224,30 @@ impl SyncResult {
 
         tracing::info!("Grouped modifications: {:?}", grouped);
 
+        let completed_max_mod_ids: Vec<Option<i64>> = self
+            .all_states
+            .iter()
+            .map(|s| {
+                s.modifications
+                    .iter()
+                    .filter(|m| m.status == MOD_STATUS_COMPLETED)
+                    .map(|m| m.id)
+                    .max()
+            })
+            .collect();
+        let min_id = completed_max_mod_ids.iter().flatten().copied().min();
+        let max_id = completed_max_mod_ids.iter().flatten().copied().max();
+        if let (Some(min_id), Some(max_id)) = (min_id, max_id) {
+            let mod_id_diff = max_id.saturating_sub(min_id) as usize;
+            if mod_id_diff > self.my_state.common_config.get_max_modifications_lookback() {
+                panic!(
+                    "Modification ID difference across nodes is too large: {:?}. Min: {:?}, Max: {:?}. \
+             Can not safely handle this case, consider bumping lookback. Crashing!",
+                    completed_max_mod_ids, min_id, max_id
+                );
+            }
+        }
+
         // Store the results here
         let mut to_update = Vec::new();
         let mut to_delete = Vec::new();
@@ -365,11 +389,22 @@ mod tests {
 
     // Create a SyncState with a given vector of modifications.
     fn create_sync_state(modifications: Vec<Modification>) -> SyncState {
+        let default_lookback = (100 + 64) * 2;
+        create_sync_state_with_lookback(modifications, default_lookback)
+    }
+
+    // Create a SyncState with a custom lookback value for testing.
+    fn create_sync_state_with_lookback(
+        modifications: Vec<Modification>,
+        lookback: usize,
+    ) -> SyncState {
+        let mut config = Config::load_config("dummy").unwrap();
+        config.max_modifications_lookback = lookback;
         SyncState {
             db_len: modifications.len() as u64,
             modifications,
             next_sns_sequence_num: None,
-            common_config: CommonConfig::default(),
+            common_config: CommonConfig::from(config),
         }
     }
 
@@ -1005,5 +1040,59 @@ mod tests {
 
         let sync_result = SyncResult::new(states[0].clone(), states);
         assert!(sync_result.check_common_config().is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "Modification ID difference across nodes is too large")]
+    fn test_compare_modifications_large_id_difference_panic() {
+        // Create a scenario where nodes have completed modifications with IDs
+        // that differ by more than the max_modifications_lookback limit.
+        // Test lookback is (100 + 64) * 2 = 328, so we'll create a difference of 350.
+
+        // Node 1: has completed modification with ID 1
+        let mod1_node1 = create_modification(
+            1,
+            Some(100),
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/100"),
+            ModificationStatus::Completed,
+            true,
+            None,
+        );
+        let my_state = create_sync_state_with_lookback(vec![mod1_node1], 10);
+
+        // Node 2: has completed modification with ID 15 (difference = 14 > 10)
+        let mod15_node2 = create_modification(
+            15,
+            Some(1500),
+            REAUTH_MESSAGE_TYPE,
+            Some("http://example.com/1500"),
+            ModificationStatus::Completed,
+            true,
+            None,
+        );
+        let other_state1 = create_sync_state_with_lookback(vec![mod15_node2], 10);
+
+        // Node 3: has completed modification with ID 20 (even larger)
+        let mod20_node3 = create_modification(
+            20,
+            Some(2000),
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            None,
+            ModificationStatus::Completed,
+            true,
+            None,
+        );
+        let other_state2 = create_sync_state_with_lookback(vec![mod20_node3], 10);
+
+        let all_states = vec![my_state.clone(), other_state1, other_state2];
+
+        let sync_result = SyncResult {
+            my_state,
+            all_states,
+        };
+
+        // This should panic because max_id (20) - min_id (1) = 19 > 10 (test lookback)
+        sync_result.compare_modifications();
     }
 }

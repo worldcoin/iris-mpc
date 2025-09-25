@@ -23,6 +23,7 @@ use tracing::debug;
 use eyre::{bail, Result};
 use std::collections::HashMap;
 
+pub type PlaintextVectorRef = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
 
 pub type PlaintextSharedIrises = SharedIrises<PlaintextStoredIris>;
@@ -80,7 +81,7 @@ impl PlaintextStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<Self>> {
+    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
@@ -89,12 +90,15 @@ impl PlaintextStore {
         }
 
         // sort in order to ensure deterministic behavior
-        let mut serial_ids: Vec<_> = self.storage.points.keys().cloned().collect();
-        serial_ids.sort();
+        let mut serial_ids: Vec<_> = self.storage.get_sorted_serial_ids();
         serial_ids.truncate(graph_size);
 
         for serial_id in serial_ids {
-            let query = self.storage.points[&serial_id].1.clone();
+            let query = self
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.select_layer_rng(&mut rng)?;
             let (neighbors, set_ep) = searcher
@@ -128,7 +132,7 @@ impl VectorStore for PlaintextStore {
     async fn vectors_as_queries(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::QueryRef> {
         vectors
             .iter()
-            .map(|id| self.storage.get_vector(id).unwrap())
+            .map(|id| self.storage.get_vector(id).unwrap().clone())
             .collect()
     }
 
@@ -141,7 +145,7 @@ impl VectorStore for PlaintextStore {
         let serial_id = vector.serial_id();
         let vector_code = self
             .storage
-            .borrow_vector(vector)
+            .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
@@ -227,7 +231,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.storage.read().await;
         vectors
             .iter()
-            .map(|id| store.get_vector(id).unwrap())
+            .map(|id| store.get_vector(id).unwrap().clone())
             .collect()
     }
 
@@ -240,7 +244,7 @@ impl VectorStore for SharedPlaintextStore {
         let store = self.storage.read().await;
         let serial_id = vector.serial_id();
         let vector_code = store
-            .borrow_vector(vector)
+            .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
     }
@@ -285,7 +289,7 @@ impl VectorStoreMut for SharedPlaintextStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::{graph::layered_graph::migrate, HnswSearcher};
+    use crate::hnsw::HnswSearcher;
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;
@@ -370,7 +374,7 @@ mod tests {
         for i in 0..database_size {
             let serial_id = i as u32 + 1;
             let vector_id = VectorId::from_serial_id(serial_id);
-            let query = ptxt_vector.storage.get_vector(&vector_id).unwrap();
+            let query = ptxt_vector.storage.get_vector(&vector_id).unwrap().clone();
             let cleartext_neighbors = searcher
                 .search(&mut ptxt_vector, &ptxt_graph, &query, 1)
                 .await?;
@@ -396,7 +400,7 @@ mod tests {
             .await?;
 
         let mut shared_vector = SharedPlaintextStore::from(ptxt_vector);
-        let shared_graph = Arc::new(migrate(ptxt_graph, |id| id));
+        let shared_graph = Arc::new(ptxt_graph);
 
         for ids in (0..database_size)
             .map(|id| VectorId::from_0_index(id as u32))

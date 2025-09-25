@@ -21,9 +21,8 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::galois_engine::degree4::SHARE_OF_MAX_DISTANCE;
+use iris_mpc_common::{fast_metrics::FastHistogram, galois_engine::degree4::SHARE_OF_MAX_DISTANCE};
 use itertools::{izip, Itertools};
-use metrics::histogram;
 use std::{array, ops::Not, time::Instant};
 use tracing::instrument;
 
@@ -396,6 +395,15 @@ pub async fn cross_compare_and_swap(
     conditionally_select_distance(session, distances, u32_bits.as_slice()).await
 }
 
+use std::cell::RefCell;
+
+thread_local! {
+    static PAIRWISE_DISTANCE_METRICS: RefCell<[FastHistogram; 2]> = RefCell::new([
+        FastHistogram::new("pairwise_distance.batch_size"),
+        FastHistogram::new("pairwise_distance.per_pair_duration"),
+    ]);
+}
+
 /// See pairwise_distance.
 /// This variant takes as input a Vec of Arc.
 pub fn galois_ring_pairwise_distance(
@@ -435,8 +443,10 @@ where
 
     let batch_size = count as f64;
     let duration = start.elapsed().as_secs_f64() / batch_size;
-    histogram!("pairwise_distance.batch_size", "histogram" => "histogram").record(batch_size);
-    histogram!("pairwise_distance.per_pair_duration", "histogram" => "histogram").record(duration);
+    PAIRWISE_DISTANCE_METRICS.with_borrow_mut(|[metric_batch_size, metric_per_pair_duration]| {
+        metric_batch_size.record(batch_size);
+        metric_per_pair_duration.record(duration);
+    });
 
     additive_shares
 }
