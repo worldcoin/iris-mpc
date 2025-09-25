@@ -157,6 +157,7 @@ pub struct HawkActor {
 
     // ---- My network setup ----
     networking: Box<dyn NetworkHandle>,
+    session_ct: CancellationToken,
     party_id: usize,
 }
 
@@ -361,6 +362,7 @@ impl HawkActor {
             role_assignments: Arc::new(role_assignments),
             networking,
             party_id: my_index,
+            session_ct: CancellationToken::new(),
             workers_handle,
         })
     }
@@ -435,7 +437,9 @@ impl HawkActor {
 
     pub async fn new_sessions(&mut self) -> Result<BothEyes<Vec<HawkSession>>> {
         let mut network_sessions = vec![];
-        for tcp_session in self.networking.make_sessions().await? {
+        let (tcp_sessions, ct) = self.networking.make_sessions().await?;
+        self.session_ct = ct;
+        for tcp_session in tcp_sessions {
             network_sessions.push(NetworkSession {
                 session_id: tcp_session.id(),
                 role_assignments: self.role_assignments.clone(),
@@ -1354,6 +1358,8 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        // add a channel that sends...something that tells when an error happens and resets when
+        // new sessions are created...
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         // Validate the common state before starting.
@@ -1364,8 +1370,12 @@ impl HawkHandle {
         // ---- Request Handler ----
         tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
-                let job_result =
-                    Self::handle_job(&mut hawk_actor, &mut sessions, job.request).await;
+                // check if there was a networking error
+                let session_ct = hawk_actor.session_ct.clone();
+                let job_result = tokio::select! {
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request) => r,
+                    _ = session_ct.cancelled() => Err(eyre!("networking error")),
+                };
 
                 let health =
                     Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
