@@ -97,9 +97,9 @@ impl Aby3Store {
     /// The input irises are given in the Shamir secret sharing scheme, while the output distances are additive replicated secret shares used in the ABY3 framework.
     ///
     /// Assumes that the first iris of each pair is preprocessed.
-    /// This first iris is usually preprocessed when a related query is created, see [prepare_query] for more details.
+    /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub(crate) async fn eval_pairwise_distances(
+    pub async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {

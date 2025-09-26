@@ -1653,10 +1653,11 @@ pub struct SimpleAnonStatsTestGenerator {
     plain_distances_right_mirror: Vec<f64>,
     bucket_statistic_parameters: BucketStatisticParameters,
     rng: StdRng,
+    is_cpu: bool,
 }
 
 impl SimpleAnonStatsTestGenerator {
-    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize) -> Self {
+    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize, is_cpu: bool) -> Self {
         Self {
             db_state: db,
             bucket_statistic_parameters: BucketStatisticParameters { num_buckets },
@@ -1667,6 +1668,7 @@ impl SimpleAnonStatsTestGenerator {
             plain_distances_left_mirror: vec![],
             plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
+            is_cpu,
         }
     }
 
@@ -1855,6 +1857,12 @@ impl SimpleAnonStatsTestGenerator {
                 resp_counters.insert(req, 0);
             }
 
+            // for CPU variant, we calculate the distances here, since it does the bucket calculation after the matching
+            // while GPU does it beforehand. GPU branch is at the end of this loop
+            if self.is_cpu {
+                self.calculate_gt_distances(&e2e_template);
+            }
+
             tracing::info!("checking results");
             let results = [&res0, &res1, &res2];
             let mut clear_left = false;
@@ -1890,15 +1898,18 @@ impl SimpleAnonStatsTestGenerator {
                     !anonymized_bucket_statistics_right.is_mirror_orientation,
                     "Normal orientation right statistics should have is_mirror_orientation = false"
                 );
-                // Check that mirror orientation statistics have is_mirror_orientation set to true
-                assert!(
-                    anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                    "Mirror orientation left statistics should have is_mirror_orientation = true"
-                );
-                assert!(
-                    anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                    "Mirror orientation right statistics should have is_mirror_orientation = true"
-                );
+
+                if !self.is_cpu {
+                    // Check that mirror orientation statistics have is_mirror_orientation set to true
+                    assert!(
+                        anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                        "Mirror orientation left statistics should have is_mirror_orientation = true"
+                    );
+                    assert!(
+                        anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                        "Mirror orientation right statistics should have is_mirror_orientation = true"
+                    );
+                }
 
                 // Perform some very basic checks on the bucket statistics, not checking the results here
                 check_bucket_statistics(
@@ -2099,53 +2110,60 @@ impl SimpleAnonStatsTestGenerator {
             }
 
             // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
-            let span = tracing::span!(Level::INFO, "calculating ground truth distances");
-            let guard = span.enter();
-            // Only accumulate ground-truth distances for Uniqueness requests;
-            // Reauth requests are aggregated into separate anonymized stats and would skew this comparison.
-            let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
-            if msg_type == UNIQUENESS_MESSAGE_TYPE {
-                self.plain_distances_left.extend(
-                    self.db_state.plain_dbs[0]
-                        .calculate_min_distances(&e2e_template.left)
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
-                self.plain_distances_right.extend(
-                    self.db_state.plain_dbs[1]
-                        .calculate_min_distances(&e2e_template.right)
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
-                self.plain_distances_left_mirror.extend(
-                    self.db_state.plain_dbs[0]
-                        .calculate_min_distances(&e2e_template.right.mirrored())
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
-                self.plain_distances_right_mirror.extend(
-                    self.db_state.plain_dbs[1]
-                        .calculate_min_distances(&e2e_template.left.mirrored())
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
+            if !self.is_cpu {
+                self.calculate_gt_distances(&e2e_template);
             }
-            if msg_type == REAUTH_MESSAGE_TYPE {
-                self.plain_distances_left_reauth.extend(
-                    self.db_state.plain_dbs[0]
-                        .calculate_min_distances(&e2e_template.left)
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
-                self.plain_distances_right_reauth.extend(
-                    self.db_state.plain_dbs[1]
-                        .calculate_min_distances(&e2e_template.right)
-                        .into_iter()
-                        .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-                );
-            }
-            drop(guard);
         }
         Ok(())
+    }
+
+    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate) {
+        // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
+        let span = tracing::span!(Level::INFO, "calculating ground truth distances");
+        let guard = span.enter();
+        // Only accumulate ground-truth distances for Uniqueness requests;
+        // Reauth requests are aggregated into separate anonymized stats and would skew this comparison.
+        let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
+        if msg_type == UNIQUENESS_MESSAGE_TYPE {
+            self.plain_distances_left.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.left)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.right)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_left_mirror.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.right.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right_mirror.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.left.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+        }
+        if msg_type == REAUTH_MESSAGE_TYPE {
+            self.plain_distances_left_reauth.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.left)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right_reauth.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.right)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+        }
+        drop(guard);
     }
 }

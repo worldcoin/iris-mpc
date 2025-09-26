@@ -213,7 +213,7 @@ mod e2e_anon_stats_test {
         let mut handle2 = rx2.await??;
 
         let mut test_case_generator =
-            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS);
+            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, false);
 
         tracing::info!("Setup done, starting tests");
         test_case_generator
