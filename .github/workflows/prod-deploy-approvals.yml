@@ -19,10 +19,31 @@ jobs:
             // Configuration - modify these values as needed
             const protectedPath = 'deploy/prod';
             
+            approversGroupA = [
+              'philsippl', 
+              'eaypek-tfh', 
+              'carlomazzaferro', 
+              'wojciechsromek', 
+              'leonanos8', 
+              'danielle-tfh'
+            ];
+            approversGroupB = [
+              'camelop',      // UC Berkeley
+              'stneng',       // UC Berkeley
+              'jweberphipps', // UC Berkeley
+              'Tedlar',       // Nethermind
+              '0xDones',      // Nethermind
+              'matilote',     // Nethermind
+              'nmjustinchan', // Nethermind
+              'reneraab',     // FAU
+              'SyrineSlim',   // FAU
+              'sebhlr'        // FAU
+            ];
+            
             // Define approval groups - each group must have at least one approval
             const approvalGroups = new Map([
-              ['Group A', ['philsippl', 'wojciechsromek', 'leonanos8']],
-              ['Group B', ['eaypek-tfh', 'carlomazzaferro']]
+              ['Group A', approversGroupA],
+              ['Group B', approversGroupB]
             ]);
             
             const pull_number = context.payload.pull_request.number;
