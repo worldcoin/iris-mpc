@@ -1834,15 +1834,18 @@ impl SimpleAnonStatsTestGenerator {
                     !anonymized_bucket_statistics_right.is_mirror_orientation,
                     "Normal orientation right statistics should have is_mirror_orientation = false"
                 );
-                // Check that mirror orientation statistics have is_mirror_orientation set to true
-                // assert!(
-                //     anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                //     "Mirror orientation left statistics should have is_mirror_orientation = true"
-                // );
-                // assert!(
-                //     anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                //     "Mirror orientation right statistics should have is_mirror_orientation = true"
-                // );
+
+                if !self.is_cpu {
+                    // Check that mirror orientation statistics have is_mirror_orientation set to true
+                    assert!(
+                    anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                    "Mirror orientation left statistics should have is_mirror_orientation = true"
+                    );
+                    assert!(
+                    anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                    "Mirror orientation right statistics should have is_mirror_orientation = true"
+                    );
+                }
 
                 // Perform some very basic checks on the bucket statistics, not checking the results here
                 check_bucket_statistics(

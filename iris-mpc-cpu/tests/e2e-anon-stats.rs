@@ -7,11 +7,11 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle},
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrises, Aby3Store},
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, Aby3VectorRef},
         plaintext_store::PlaintextStore,
         shared_irises::SharedIrises,
     },
-    hnsw::{graph::layered_graph::migrate, GraphMem, HnswParams, HnswSearcher},
+    hnsw::{GraphMem, HnswParams, HnswSearcher},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{random, rngs::StdRng, SeedableRng};
@@ -48,7 +48,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     params: &HnswParams,
-) -> Result<([GraphMem<Aby3Store>; 2], [Aby3SharedIrises; 2])> {
+) -> Result<([GraphMem<Aby3VectorRef>; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(db_seed);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
@@ -83,24 +83,29 @@ async fn create_graph_from_plain_dbs(
         .generate_graph(&mut rng, DB_SIZE, &searcher)
         .await?;
 
-    let left_mpc_graph: GraphMem<Aby3Store> = migrate(left_graph, |v| v);
-    let right_mpc_graph: GraphMem<Aby3Store> = migrate(right_graph, |v| v);
+    let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
+    let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();
 
     // sort the points by serial id to ensure consistent ordering
-    let mut left_points_sorted: Vec<_> = left_store.storage.points.keys().cloned().collect();
+    let mut left_points_sorted = left_store.storage.get_sorted_serial_ids();
     left_points_sorted.sort();
 
-    let mut right_points_sorted: Vec<_> = right_store.storage.points.keys().cloned().collect();
+    let mut right_points_sorted = right_store.storage.get_sorted_serial_ids();
     right_points_sorted.sort();
 
     for serial_id in left_points_sorted {
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            (*left_store.storage.points.get(&serial_id).unwrap().1).clone(),
+            left_store
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
         left_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
@@ -108,7 +113,12 @@ async fn create_graph_from_plain_dbs(
         let vector_id: VectorId = VectorId::from_serial_id(serial_id);
         let shares = GaloisRingSharedIris::generate_shares_locally(
             &mut rng,
-            (*right_store.storage.points.get(&serial_id).unwrap().1).clone(),
+            right_store
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .as_ref()
+                .clone(),
         );
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
@@ -193,6 +203,7 @@ async fn e2e_anon_stats_test() -> Result<()> {
         hnsw_param_M: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
         hnsw_prf_key: None,
+        numa: true,
         disable_persistence: false,
         match_distances_buffer_size: MATCH_DISTANCE_BUFFER_SIZE,
         n_buckets: N_BUCKETS,
