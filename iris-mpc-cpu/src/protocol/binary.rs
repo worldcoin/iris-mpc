@@ -12,13 +12,19 @@ use crate::{
 use aes_prng::AesRng;
 use ark_std::{end_timer, start_timer};
 use eyre::{bail, eyre, Error, Result};
-
+use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
 use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
-use std::ops::SubAssign;
-use tracing::{instrument, trace, trace_span, Instrument};
+use std::{cell::RefCell, ops::SubAssign};
+use tracing::{instrument, trace_span, Instrument};
+
+thread_local! {
+    static ROUNDS_METRICS: RefCell<FastHistogram> = RefCell::new(
+        FastHistogram::new("smpc.rounds")
+    );
+}
 
 use fss_rs::icf::{IcShare, Icf, InG, IntvFn, OutG};
 use fss_rs::prg::Aes128MatyasMeyerOseasPrg;
@@ -346,16 +352,15 @@ where
             wc.push(w0);
         }
     }
-    let next_id = session.next_identity()?;
+
     let network = &mut session.network_session;
-    trace!(target: "searcher::network", action = "send", party = ?next_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
+
     // Send masks to Receiver
     network.send_next(T::new_network_vec(wc)).await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
 
     // Receive m0 or m1 from Receiver
     let m0_or_m1 = match network.receive_next().await {
@@ -378,7 +383,6 @@ async fn bit_inject_ot_2round_receiver<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let prev_id = session.prev_identity()?;
     let network = &mut session.network_session;
 
     let (m0, m1, wc) = {
@@ -428,13 +432,11 @@ where
     }
 
     // Send unmasked m to Helper
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => network.session_id.0.to_string(),
-    )
-    .increment(1);
     network.send_prev(T::new_network_vec(unmasked_m)).await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
 
     Ok(shares)
 }
@@ -470,31 +472,32 @@ where
         m1.push(m1_ ^ w1);
     }
 
-    let prev_id = session.prev_identity()?;
     let m0_and_m1: Vec<NetworkValue> = [m0, m1]
         .into_iter()
         .map(T::new_network_vec)
         .collect::<Vec<_>>();
-    trace!(target: "searcher::network", action = "send", party = ?prev_id, bytes = 0, rounds = 1);
-    metrics::counter!(
-        "smpc.rounds",
-        "session_id" => session.network_session.session_id.0.to_string(),
-    )
-    .increment(1);
+
     // Send m0 and m1 to Receiver
     session
         .network_session
         .send_prev(NetworkValue::vec_to_network(m0_and_m1))
         .await?;
+
+    ROUNDS_METRICS.with_borrow_mut(|rounds_metrics| {
+        rounds_metrics.record(1.0);
+    });
+
     Ok(shares)
 }
 
 /// Conducts a 3 party OT protocol to inject bits into shares of type T.
 /// The specifics of the protocol can be found in the ABY3 paper (Section 5.4.1).
 ///
-/// TODO: this is unbalanced.
 /// Party 2 sends twice more than other parties.
 /// So a real implementation should actually rotate parties around.
+///
+/// The protocol itself is unbalanced, but we balance the assignment of roles
+/// in a round-robin over sessions.
 pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
     session: &mut Session,
     input: VecShare<Bit>,
@@ -502,7 +505,8 @@ pub(crate) async fn bit_inject_ot_2round<T: IntRing2k + NetworkInt>(
 where
     Standard: Distribution<T>,
 {
-    let res = match session.own_role().index() {
+    let role_index = (session.own_role().index() + session.session_id().0 as usize) % 3;
+    let res = match role_index {
         0 => {
             // OT Helper
             bit_inject_ot_2round_helper::<T>(session, input).await?
