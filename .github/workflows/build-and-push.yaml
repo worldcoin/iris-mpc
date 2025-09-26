@@ -86,7 +86,7 @@ jobs:
         # TODO: continue-on-error is only for the PoC phase, remove when use mainnet
         continue-on-error: true
         env:
-          WEB_PRIVATE_KEY: ${{ secrets.SMART_CONTAINER_REGISTRY_KEY}}
+          WEB_PRIVATE_KEY: ${{ secrets.SMART_CONTAINER_REGISTRY_KEY }}
           DIGEST: ${{ needs.docker.outputs.digest }}
         run: |
           cast send 0x0F054e3666F2e7E4Ce345f55f0d7aeE513aC5540 \
