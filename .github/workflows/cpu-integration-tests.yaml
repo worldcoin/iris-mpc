@@ -32,7 +32,7 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
-#              - .github/workflows/cpu-integration-tests.yaml -- bring this back after Canonical incident
+              - .github/workflows/cpu-integration-tests.yaml
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

@@ -34,16 +34,7 @@ jobs:
               - deny.toml
               - rust-toolchain.toml
               - iris-*/**
-#              - .github/workflows/lint-clippy.yaml -- bring this back after Canonical incident
-
-      # remove this once the latest ubuntu image has been rolled out
-      - name: Fix APT mirror (working patch)
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: |
-          echo "Patching sources.list..."
-          sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
-          sudo apt-get clean
-          sudo apt-get update
+              - .github/workflows/lint-clippy.yaml
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
