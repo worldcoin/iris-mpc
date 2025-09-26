@@ -2,9 +2,7 @@ name: Enforce prod deploy approvals
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, review_requested, review_request_removed]
   pull_request_review:
-    types: [submitted, edited, dismissed]
 
 jobs:
   check-approvals:
