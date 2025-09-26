@@ -2,7 +2,9 @@ name: Enforce prod deploy approvals
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, review_requested, review_request_removed]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
 
 jobs:
   check-approvals:
@@ -29,23 +31,21 @@ jobs:
             const pull_number = context.payload.pull_request.number;
             const { owner, repo } = context.repo;
             core.info(`Checking PR #${pull_number} in ${owner}/${repo}`);
-
+            
             const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner,
-              repo,
-              pull_number,
+             owner,
+             repo,
+             pull_number,
             });
             core.info(`Found ${files.length} changed files`);
             core.info(`Changed files: ${files.map(f => f.filename).join(', ')}`);
-
             const touchesProdDeploy = files.some((file) =>
-              file.filename === protectedPath || file.filename.startsWith(`${protectedPath}/`)
+             file.filename === protectedPath || file.filename.startsWith(`${protectedPath}/`)
             );
             core.info(`Touches ${protectedPath}: ${touchesProdDeploy}`);
-
             if (!touchesProdDeploy) {
-              core.info(`No changes in ${protectedPath} detected. Skipping approval requirements.`);
-              return;
+             core.info(`No changes in ${protectedPath} detected. Skipping approval requirements.`);
+             return;
             }
             core.info(`Changes in ${protectedPath} detected. Checking approval requirements.`);
 
