@@ -99,7 +99,7 @@ impl Aby3Store {
     /// Assumes that the first iris of each pair is preprocessed.
     /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub(crate) async fn eval_pairwise_distances(
+    pub async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
