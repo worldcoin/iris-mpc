@@ -59,10 +59,10 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ secrets.AWS_ECR }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR }}:latest
+            ${{ secrets.AWS_ECR_IRIS_MPC }}:${{ github.sha }}
+            ${{ secrets.AWS_ECR_IRIS_MPC }}:latest
             ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
-            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR, github.event.release.tag_name) || '' }}
+            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_IRIS_MPC, github.event.release.tag_name) || '' }}
           build-args: |
             ARCHITECTURE=x86_64
           platforms: linux/amd64
