@@ -1,6 +1,6 @@
 hnsw-smpc-0:
   fullnameOverride: "hnsw-smpc-0"
-  image: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
+  image: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
   environment: $ENV
   replicaCount: 1
@@ -247,7 +247,7 @@ hnsw-smpc-0:
       value: "hnsw-0"
 
     - name: SMPC__IMAGE_NAME
-      value: "ghcr.io/worldcoin/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
+      value: "$IMAGE_REGISTRY_IRIS_MPC/iris-mpc-cpu:$IRIS_MPC_CPU_IMAGE_TAG"
 
     - name: SMPC__ENABLE_MODIFICATIONS_SYNC
       value: "true"
@@ -257,7 +257,7 @@ hnsw-smpc-0:
 
   initContainer:
     enabled: true
-    image: "ghcr.io/worldcoin/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
+    image: "$IMAGE_REGISTRY_INIT_CONTAINER/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "hnsw-mpc-dns-records-updater-0"
     env:
       - name: PARTY_ID
