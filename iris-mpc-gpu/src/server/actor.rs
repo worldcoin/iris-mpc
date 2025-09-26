@@ -2117,21 +2117,23 @@ impl ServerActor {
                 &self.device_manager,
                 &resort_uni,
                 match_distances_buffers_codes,
+                0u16,
                 // Use max per-device length, function slices per device internally
                 self.match_distances_buffer_size,
                 streams,
             );
             let match_distances_buffers_codes_view =
                 shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
-            let shares = sort_shares_by_indices(
+            let masks = sort_shares_by_indices(
                 &self.device_manager,
                 &resort_uni,
                 match_distances_buffers_masks,
+                1u16,
                 self.match_distances_buffer_size,
                 streams,
             );
             let match_distances_buffers_masks_view =
-                shares.iter().map(|x| x.as_view()).collect::<Vec<_>>();
+                masks.iter().map(|x| x.as_view()).collect::<Vec<_>>();
 
             // Reset buckets before computing a new set
             reset_single_share(self.device_manager.devices(), &self.buckets, 0, streams, 0);
@@ -2226,6 +2228,7 @@ impl ServerActor {
                     &self.device_manager,
                     &resort_reauth,
                     match_distances_buffers_codes,
+                    0u16,
                     self.match_distances_buffer_size,
                     streams,
                 );
@@ -2237,6 +2240,7 @@ impl ServerActor {
                     &self.device_manager,
                     &resort_reauth,
                     match_distances_buffers_masks,
+                    1u16,
                     self.match_distances_buffer_size,
                     streams,
                 );
@@ -3741,6 +3745,7 @@ fn sort_shares_by_indices(
     device_manager: &DeviceManager,
     resort_indices: &[Vec<usize>],
     shares: &[ChunkShare<u16>],
+    pad_value: u16,
     length: usize,
     streams: &[CudaStream],
 ) -> Vec<ChunkShare<u16>> {
@@ -3763,7 +3768,7 @@ fn sort_shares_by_indices(
                 .map(|&j| a[i][j])
                 .collect::<Vec<_>>();
             // Pad to exactly `length` entries (zeros) to satisfy kernel chunking (multiple of 64)
-            let mut pad_a = vec![0u16; length];
+            let mut pad_a = vec![pad_value; length];
             let copy_len = new_a.len().min(length);
             pad_a[..copy_len].copy_from_slice(&new_a[..copy_len]);
             let a = htod_on_stream_sync(&pad_a, &device_manager.device(i), &streams[i]).unwrap();
@@ -3772,7 +3777,7 @@ fn sort_shares_by_indices(
                 .iter()
                 .map(|&j| b[i][j])
                 .collect::<Vec<_>>();
-            let mut pad_b = vec![0u16; length];
+            let mut pad_b = vec![pad_value; length];
             let copy_len_b = new_b.len().min(length);
             pad_b[..copy_len_b].copy_from_slice(&new_b[..copy_len_b]);
             let b = htod_on_stream_sync(&pad_b, &device_manager.device(i), &streams[i]).unwrap();
