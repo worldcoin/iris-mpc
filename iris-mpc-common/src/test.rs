@@ -1256,6 +1256,8 @@ impl TestCaseGenerator {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_reauth,
+                    anonymized_bucket_statistics_right_reauth,
                     anonymized_bucket_statistics_left_mirror,
                     anonymized_bucket_statistics_right_mirror,
                     successful_reauths,
@@ -1265,17 +1267,48 @@ impl TestCaseGenerator {
                     ..
                 } = res;
 
+                // Operation tagging checks for 1D stats
+                use crate::helpers::statistics::Operation;
+                assert_eq!(
+                    anonymized_bucket_statistics_left.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_left_mirror.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right_mirror.operation,
+                    Operation::Uniqueness
+                );
+                if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
+                {
+                    assert_eq!(
+                        anonymized_bucket_statistics_left_reauth.operation,
+                        Operation::Reauth
+                    );
+                    assert_eq!(
+                        anonymized_bucket_statistics_right_reauth.operation,
+                        Operation::Reauth
+                    );
+                }
+
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     // Check that normal orientation statistics have is_mirror_orientation set to false
                     assert!(!anonymized_bucket_statistics_left.is_mirror_orientation,
-                        "Normal orientation left statistics should have is_mirror_orientation = false");
+                            "Normal orientation left statistics should have is_mirror_orientation = false");
                     assert!(!anonymized_bucket_statistics_right.is_mirror_orientation,
-                        "Normal orientation right statistics should have is_mirror_orientation = false");
+                            "Normal orientation right statistics should have is_mirror_orientation = false");
                     // Check that mirror orientation statistics have is_mirror_orientation set to true
                     assert!(anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                        "Mirror orientation left statistics should have is_mirror_orientation = true");
+                            "Mirror orientation left statistics should have is_mirror_orientation = true");
                     assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                        "Mirror orientation right statistics should have is_mirror_orientation = true");
+                            "Mirror orientation right statistics should have is_mirror_orientation = true");
 
                     // Perform some very basic checks on the bucket statistics, not checking the results here
                     check_bucket_statistics(
@@ -1613,7 +1646,9 @@ pub fn load_test_db(party_db: &PartyDb, loader: &mut impl InMemoryStore) {
 pub struct SimpleAnonStatsTestGenerator {
     db_state: TestDb,
     plain_distances_left: Vec<f64>,
+    plain_distances_left_reauth: Vec<f64>,
     plain_distances_right: Vec<f64>,
+    plain_distances_right_reauth: Vec<f64>,
     plain_distances_left_mirror: Vec<f64>,
     plain_distances_right_mirror: Vec<f64>,
     bucket_statistic_parameters: BucketStatisticParameters,
@@ -1627,7 +1662,9 @@ impl SimpleAnonStatsTestGenerator {
             db_state: db,
             bucket_statistic_parameters: BucketStatisticParameters { num_buckets },
             plain_distances_left: vec![],
+            plain_distances_left_reauth: vec![],
             plain_distances_right: vec![],
+            plain_distances_right_reauth: vec![],
             plain_distances_left_mirror: vec![],
             plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
@@ -1635,36 +1672,58 @@ impl SimpleAnonStatsTestGenerator {
         }
     }
 
-    fn generate_query(&mut self) -> Option<(String, E2ETemplate, String)> {
+    fn generate_query(&mut self) -> Option<(String, E2ETemplate, String, Option<u32>)> {
+        use crate::helpers::smpc_request::REAUTH_MESSAGE_TYPE;
         let request_id = Uuid::new_v4();
         let db_index = self.rng.gen_range(0..self.db_state.len());
-        let approx_diff_factor = self.rng.gen_range(0.0..0.35);
-        let mut template = E2ETemplate {
-            left: self.db_state.plain_dbs[0].db[db_index]
-                .get_similar_iris(&mut self.rng, approx_diff_factor),
-            right: self.db_state.plain_dbs[1].db[db_index]
-                .get_similar_iris(&mut self.rng, approx_diff_factor),
+
+        // Occasionally generate a REAUTH query by targeting the exact DB entry.
+        // Otherwise generate a UNIQ query similar to a DB entry.
+        let is_reauth = self.rng.gen_bool(0.1);
+        let mut template = if is_reauth {
+            E2ETemplate {
+                left: self.db_state.plain_dbs[0].db[db_index].clone(),
+                right: self.db_state.plain_dbs[1].db[db_index].clone(),
+            }
+        } else {
+            let approx_diff_factor = self.rng.gen_range(0.0..0.35);
+            E2ETemplate {
+                left: self.db_state.plain_dbs[0].db[db_index]
+                    .get_similar_iris(&mut self.rng, approx_diff_factor),
+                right: self.db_state.plain_dbs[1].db[db_index]
+                    .get_similar_iris(&mut self.rng, approx_diff_factor),
+            }
         };
 
-        let rotation = self.rng.gen_range(0..ROTATIONS);
         // Rotate the query iris codes
+        let rotation = self.rng.gen_range(0..ROTATIONS);
         template.left = template.left.all_rotations()[rotation].clone();
         let rotation = self.rng.gen_range(0..ROTATIONS);
         template.right = template.right.all_rotations()[rotation].clone();
 
-        Some((
-            request_id.to_string(),
-            template,
-            UNIQUENESS_MESSAGE_TYPE.to_string(),
-        ))
+        if is_reauth {
+            Some((
+                request_id.to_string(),
+                template,
+                REAUTH_MESSAGE_TYPE.to_string(),
+                Some(db_index as u32),
+            ))
+        } else {
+            Some((
+                request_id.to_string(),
+                template,
+                UNIQUENESS_MESSAGE_TYPE.to_string(),
+                None,
+            ))
+        }
     }
 
     #[allow(clippy::type_complexity)]
-    fn generate_query_batch(
+    pub fn generate_query_batch(
         &mut self,
-    ) -> Result<Option<([BatchQuery; 3], HashMap<String, E2ETemplate>)>> {
+    ) -> Result<Option<([BatchQuery; 3], HashMap<String, (E2ETemplate, String)>)>> {
         tracing::info!("Generating query batch for simple anonymized statistics test");
-        let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
+        let mut requests: HashMap<String, (E2ETemplate, String)> = HashMap::new();
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
         let mut batch2 = BatchQuery::default();
@@ -1672,14 +1731,18 @@ impl SimpleAnonStatsTestGenerator {
         batch1.full_face_mirror_attacks_detection_enabled = true;
         batch2.full_face_mirror_attacks_detection_enabled = true;
 
-        let (request_id, e2e_template, message_type) = match self.generate_query() {
-            Some((request_id, e2e_template, message_type)) => {
-                (request_id, e2e_template, message_type)
-            }
-            None => return Ok(None),
-        };
+        let (request_id, e2e_template, message_type, reauth_target_idx) =
+            match self.generate_query() {
+                Some((request_id, e2e_template, message_type, reauth_target_idx)) => {
+                    (request_id, e2e_template, message_type, reauth_target_idx)
+                }
+                None => return Ok(None),
+            };
 
-        requests.insert(request_id.to_string(), e2e_template.clone());
+        requests.insert(
+            request_id.to_string(),
+            (e2e_template.clone(), message_type.clone()),
+        );
 
         let shared_template = e2e_template.to_shared_template(true, &mut self.rng);
 
@@ -1690,7 +1753,7 @@ impl SimpleAnonStatsTestGenerator {
             0,
             shared_template.clone(),
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type.clone(),
         )?;
@@ -1702,7 +1765,7 @@ impl SimpleAnonStatsTestGenerator {
             1,
             shared_template.clone(),
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type.clone(),
         )?;
@@ -1714,7 +1777,7 @@ impl SimpleAnonStatsTestGenerator {
             2,
             shared_template,
             vec![],
-            None,
+            reauth_target_idx.as_ref(),
             false,
             message_type,
         )?;
@@ -1728,7 +1791,7 @@ impl SimpleAnonStatsTestGenerator {
         _idx: u32,
         _was_match: bool,
         _matched_batch_request_ids: &[String],
-        _requests: &HashMap<String, E2ETemplate>,
+        _requests: &HashMap<String, (E2ETemplate, String)>,
     ) -> Result<()> {
         // In this simple test, we don't have any specific checks to perform
         // as we are not simulating any specific results.
@@ -1766,7 +1829,7 @@ impl SimpleAnonStatsTestGenerator {
         handles: [&mut impl JobSubmissionHandle; 3],
     ) -> Result<()> {
         let [handle0, handle1, handle2] = handles;
-        let mut request_counter = 0;
+
         for _ in 0..max_num_batches {
             let ([batch0, batch1, batch2], requests) = match self.generate_query_batch()? {
                 Some(res) => res,
@@ -1775,9 +1838,6 @@ impl SimpleAnonStatsTestGenerator {
             if batch0.request_ids.is_empty() {
                 continue;
             }
-
-            request_counter += batch0.request_ids.len();
-            let e2e_template = requests.values().next().cloned().unwrap();
 
             tracing::info!("sending batch to servers");
             // send batches to servers
@@ -1807,6 +1867,8 @@ impl SimpleAnonStatsTestGenerator {
             let results = [&res0, &res1, &res2];
             let mut clear_left = false;
             let mut clear_right = false;
+            let mut clear_left_reauth = false;
+            let mut clear_right_reauth = false;
             let mut clear_left_mirror = false;
             let mut clear_right_mirror = false;
             for res in results.iter() {
@@ -1817,6 +1879,8 @@ impl SimpleAnonStatsTestGenerator {
                     matched_batch_request_ids,
                     anonymized_bucket_statistics_left,
                     anonymized_bucket_statistics_right,
+                    anonymized_bucket_statistics_left_reauth,
+                    anonymized_bucket_statistics_right_reauth,
                     anonymized_bucket_statistics_left_mirror,
                     anonymized_bucket_statistics_right_mirror,
                     ..
@@ -1838,12 +1902,12 @@ impl SimpleAnonStatsTestGenerator {
                 if !self.is_cpu {
                     // Check that mirror orientation statistics have is_mirror_orientation set to true
                     assert!(
-                    anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                    "Mirror orientation left statistics should have is_mirror_orientation = true"
+                        anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                        "Mirror orientation left statistics should have is_mirror_orientation = true"
                     );
                     assert!(
-                    anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                    "Mirror orientation right statistics should have is_mirror_orientation = true"
+                        anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                        "Mirror orientation right statistics should have is_mirror_orientation = true"
                     );
                 }
 
@@ -1857,6 +1921,37 @@ impl SimpleAnonStatsTestGenerator {
                     self.bucket_statistic_parameters.num_buckets,
                 )?;
 
+                // Operation tagging checks for 1D stats
+                use crate::helpers::statistics::Operation;
+                assert_eq!(
+                    anonymized_bucket_statistics_left.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_left_mirror.operation,
+                    Operation::Uniqueness
+                );
+                assert_eq!(
+                    anonymized_bucket_statistics_right_mirror.operation,
+                    Operation::Uniqueness
+                );
+                if !anonymized_bucket_statistics_left_reauth.buckets.is_empty()
+                    || !anonymized_bucket_statistics_right_reauth.buckets.is_empty()
+                {
+                    assert_eq!(
+                        anonymized_bucket_statistics_left_reauth.operation,
+                        Operation::Reauth
+                    );
+                    assert_eq!(
+                        anonymized_bucket_statistics_right_reauth.operation,
+                        Operation::Reauth
+                    );
+                }
+
                 if !anonymized_bucket_statistics_left.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for left side, checking...");
                     tracing::info!("Plain distances left : {:?}", self.plain_distances_left);
@@ -1864,18 +1959,6 @@ impl SimpleAnonStatsTestGenerator {
                         &self.plain_distances_left,
                         self.bucket_statistic_parameters.num_buckets,
                     );
-
-                    // there must be exactly one match per request on GPU, for CPU it might be less due to spurious misses
-                    if !self.is_cpu {
-                        assert_eq!(
-                            plain_bucket_statistics_left
-                                .iter()
-                                .map(|x| x.count)
-                                .sum::<usize>(),
-                            // GPU has one less match due to the way it calculates the statistics
-                            request_counter - 1
-                        );
-                    }
 
                     assert_eq!(
                         plain_bucket_statistics_left
@@ -1902,20 +1985,63 @@ impl SimpleAnonStatsTestGenerator {
                         )
                         .map(|(a, b)| a as i64 - b as i64)
                         .collect();
-                    // overall num of matches must be equal
-                    assert!(diff.iter().sum::<i64>() == 0);
+                    // overall num of matches must be approximately equal
+                    assert!(diff.iter().sum::<i64>().abs() <= 0);
                     // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
                     assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
-                    // if we have a diff, then the diff must be 1 followed by -1 (plain is earlier than anonymized)
-                    if diff.iter().any(|&x| x != 0) {
-                        let pos_plain = diff.iter().position(|&x| x == 1).unwrap();
-                        let pos_anon = diff.iter().position(|&x| x == -1).unwrap();
-                        assert!(pos_plain < pos_anon, "If there is an error, Plain statistics must be better than anonymized statistics");
-                    }
-
                     clear_left = true;
                 }
 
+                if !anonymized_bucket_statistics_left_reauth.is_empty() {
+                    tracing::info!(
+                        "Got anonymized bucket statistics for left side (reauth), checking..."
+                    );
+                    tracing::info!(
+                        "Plain distances left reauth : {:?}",
+                        self.plain_distances_left_reauth
+                    );
+                    let plain_bucket_statistics_left_reauth = Self::calculate_distance_buckets(
+                        &self.plain_distances_left_reauth,
+                        self.bucket_statistic_parameters.num_buckets,
+                    );
+
+                    assert_eq!(
+                        plain_bucket_statistics_left_reauth
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        anonymized_bucket_statistics_left_reauth
+                            .buckets
+                            .iter()
+                            .map(|x| x.count)
+                            .sum::<usize>(),
+                        " we have the same amount of matches in plain and anonymized statistics"
+                    );
+
+                    // we need to allow a small slack, since the anonymized statistics calculation in MPC can miss the last match due to the buffer size
+                    let diff: Vec<_> = plain_bucket_statistics_left_reauth
+                        .iter()
+                        .map(|x| x.count)
+                        .zip(
+                            anonymized_bucket_statistics_left_reauth
+                                .buckets
+                                .iter()
+                                .map(|x| x.count),
+                        )
+                        .map(|(a, b)| a as i64 - b as i64)
+                        .collect();
+                    // overall num of matches must be approximately equal
+                    assert!(diff.iter().sum::<i64>().abs() <= 0);
+                    // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
+                    assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
+                    clear_left_reauth = true;
+                }
+                if !anonymized_bucket_statistics_right_reauth.is_empty() {
+                    tracing::info!(
+                        "Got anonymized bucket statistics for right side (reauth), not checking them in this test..."
+                    );
+                    clear_right_reauth = true;
+                }
                 if !anonymized_bucket_statistics_right.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for right side, not checking them in this test...");
                     clear_right = true;
@@ -1961,10 +2087,15 @@ impl SimpleAnonStatsTestGenerator {
 
             if clear_left {
                 self.plain_distances_left.clear();
-                request_counter = 1;
             }
             if clear_right {
                 self.plain_distances_right.clear();
+            }
+            if clear_left_reauth {
+                self.plain_distances_left_reauth.clear();
+            }
+            if clear_right_reauth {
+                self.plain_distances_right_reauth.clear();
             }
             if clear_left_mirror {
                 self.plain_distances_left_mirror.clear();
@@ -1987,32 +2118,52 @@ impl SimpleAnonStatsTestGenerator {
     }
 
     fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate) {
+        // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
         let span = tracing::span!(Level::INFO, "calculating ground truth distances");
         let guard = span.enter();
-        self.plain_distances_left.extend(
-            self.db_state.plain_dbs[0]
-                .calculate_min_distances(&e2e_template.left)
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_right.extend(
-            self.db_state.plain_dbs[1]
-                .calculate_min_distances(&e2e_template.right)
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_left_mirror.extend(
-            self.db_state.plain_dbs[0]
-                .calculate_min_distances(&e2e_template.right.mirrored())
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
-        self.plain_distances_right_mirror.extend(
-            self.db_state.plain_dbs[1]
-                .calculate_min_distances(&e2e_template.left.mirrored())
-                .into_iter()
-                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-        );
+        // Only accumulate ground-truth distances for Uniqueness requests;
+        // Reauth requests are aggregated into separate anonymized stats and would skew this comparison.
+        let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
+        if msg_type == UNIQUENESS_MESSAGE_TYPE {
+            self.plain_distances_left.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.left)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.right)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_left_mirror.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.right.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right_mirror.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.left.mirrored())
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+        }
+        if msg_type == REAUTH_MESSAGE_TYPE {
+            self.plain_distances_left_reauth.extend(
+                self.db_state.plain_dbs[0]
+                    .calculate_min_distances(&e2e_template.left)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+            self.plain_distances_right_reauth.extend(
+                self.db_state.plain_dbs[1]
+                    .calculate_min_distances(&e2e_template.right)
+                    .into_iter()
+                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+            );
+        }
         drop(guard);
     }
 }

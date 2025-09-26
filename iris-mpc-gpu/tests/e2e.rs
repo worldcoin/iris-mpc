@@ -21,6 +21,8 @@ mod e2e_test {
     const MATCH_DISTANCES_BUFFER_SIZE: usize = 1 << 7;
     const MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: usize = 100;
     const MATCH_DISTANCES_2D_BUFFER_SIZE: usize = 1 << 6;
+    // Keep low to ensure reauth stats get produced during the test
+    const REAUTH_MATCH_DISTANCES_MIN_COUNT: usize = 1;
     const MAX_DELETIONS_PER_BATCH: usize = 10;
     const MAX_RESET_UPDATES_PER_BATCH: usize = 10;
 
@@ -112,6 +114,7 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
+                REAUTH_MATCH_DISTANCES_MIN_COUNT,
                 true,
                 false,
                 false,
@@ -147,6 +150,7 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
+                REAUTH_MATCH_DISTANCES_MIN_COUNT,
                 true,
                 false,
                 false,
@@ -182,6 +186,7 @@ mod e2e_test {
                 MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
                 MATCH_DISTANCES_2D_BUFFER_SIZE,
                 N_BUCKETS,
+                REAUTH_MATCH_DISTANCES_MIN_COUNT,
                 true,
                 false,
                 false,
