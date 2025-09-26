@@ -60,14 +60,14 @@ env:
   - name: SMPC__HAWK_REQUEST_PARALLELISM
     value: "1024"
 
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "32"
+
   - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "48"
+    value: "8"
 
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
-
-  - name: SMPC__OVERRIDE_MAX_BATCH_SIZE
-    value: "false"
 
   - name: SMPC__DISABLE_PERSISTENCE
     value: "false"
