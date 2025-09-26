@@ -1618,10 +1618,11 @@ pub struct SimpleAnonStatsTestGenerator {
     plain_distances_right_mirror: Vec<f64>,
     bucket_statistic_parameters: BucketStatisticParameters,
     rng: StdRng,
+    is_cpu: bool,
 }
 
 impl SimpleAnonStatsTestGenerator {
-    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize) -> Self {
+    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize, is_cpu: bool) -> Self {
         Self {
             db_state: db,
             bucket_statistic_parameters: BucketStatisticParameters { num_buckets },
@@ -1630,6 +1631,7 @@ impl SimpleAnonStatsTestGenerator {
             plain_distances_left_mirror: vec![],
             plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
+            is_cpu,
         }
     }
 
@@ -1795,6 +1797,12 @@ impl SimpleAnonStatsTestGenerator {
                 resp_counters.insert(req, 0);
             }
 
+            // for CPU variant, we calculate the distances here, since it does the bucket calculation after the matching
+            // while GPU does it beforehand. GPU branch is at the end of this loop
+            if self.is_cpu {
+                self.calculate_gt_distances(&e2e_template);
+            }
+
             tracing::info!("checking results");
             let results = [&res0, &res1, &res2];
             let mut clear_left = false;
@@ -1826,15 +1834,18 @@ impl SimpleAnonStatsTestGenerator {
                     !anonymized_bucket_statistics_right.is_mirror_orientation,
                     "Normal orientation right statistics should have is_mirror_orientation = false"
                 );
-                // Check that mirror orientation statistics have is_mirror_orientation set to true
-                assert!(
+
+                if !self.is_cpu {
+                    // Check that mirror orientation statistics have is_mirror_orientation set to true
+                    assert!(
                     anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
                     "Mirror orientation left statistics should have is_mirror_orientation = true"
-                );
-                assert!(
+                    );
+                    assert!(
                     anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
                     "Mirror orientation right statistics should have is_mirror_orientation = true"
-                );
+                    );
+                }
 
                 // Perform some very basic checks on the bucket statistics, not checking the results here
                 check_bucket_statistics(
@@ -1854,14 +1865,17 @@ impl SimpleAnonStatsTestGenerator {
                         self.bucket_statistic_parameters.num_buckets,
                     );
 
-                    // there must be exactly one match per request
-                    assert_eq!(
-                        plain_bucket_statistics_left
-                            .iter()
-                            .map(|x| x.count)
-                            .sum::<usize>(),
-                        request_counter - 1,
-                    );
+                    // there must be exactly one match per request on GPU, for CPU it might be less due to spurious misses
+                    if !self.is_cpu {
+                        assert_eq!(
+                            plain_bucket_statistics_left
+                                .iter()
+                                .map(|x| x.count)
+                                .sum::<usize>(),
+                            // GPU has one less match due to the way it calculates the statistics
+                            request_counter - 1
+                        );
+                    }
 
                     assert_eq!(
                         plain_bucket_statistics_left
@@ -1965,34 +1979,40 @@ impl SimpleAnonStatsTestGenerator {
             }
 
             // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
-            let span = tracing::span!(Level::INFO, "calculating ground truth distances");
-            let guard = span.enter();
-            self.plain_distances_left.extend(
-                self.db_state.plain_dbs[0]
-                    .calculate_min_distances(&e2e_template.left)
-                    .into_iter()
-                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-            );
-            self.plain_distances_right.extend(
-                self.db_state.plain_dbs[1]
-                    .calculate_min_distances(&e2e_template.right)
-                    .into_iter()
-                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-            );
-            self.plain_distances_left_mirror.extend(
-                self.db_state.plain_dbs[0]
-                    .calculate_min_distances(&e2e_template.right.mirrored())
-                    .into_iter()
-                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-            );
-            self.plain_distances_right_mirror.extend(
-                self.db_state.plain_dbs[1]
-                    .calculate_min_distances(&e2e_template.left.mirrored())
-                    .into_iter()
-                    .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
-            );
-            drop(guard);
+            if !self.is_cpu {
+                self.calculate_gt_distances(&e2e_template);
+            }
         }
         Ok(())
+    }
+
+    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate) {
+        let span = tracing::span!(Level::INFO, "calculating ground truth distances");
+        let guard = span.enter();
+        self.plain_distances_left.extend(
+            self.db_state.plain_dbs[0]
+                .calculate_min_distances(&e2e_template.left)
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_right.extend(
+            self.db_state.plain_dbs[1]
+                .calculate_min_distances(&e2e_template.right)
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_left_mirror.extend(
+            self.db_state.plain_dbs[0]
+                .calculate_min_distances(&e2e_template.right.mirrored())
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        self.plain_distances_right_mirror.extend(
+            self.db_state.plain_dbs[1]
+                .calculate_min_distances(&e2e_template.left.mirrored())
+                .into_iter()
+                .filter(|&x| x <= MATCH_THRESHOLD_RATIO),
+        );
+        drop(guard);
     }
 }
