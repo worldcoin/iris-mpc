@@ -1363,9 +1363,9 @@ pub(crate) async fn open_bin_fss_from_rss(
 
 fn to_bit_from_u32(msb_xored: RingElement<u32>) -> Result<Bit, Error> {
     if (msb_xored.is_zero()) {
-        return Ok(Bit::new(false));
+        Ok(Bit::new(false))
     } else if (msb_xored.is_one()) {
-        return Ok(Bit::new(true));
+        Ok(Bit::new(true))
     } else {
         Err(eyre!("expected a Bit (0/1), got {}", msb_xored))
     }
@@ -1373,44 +1373,15 @@ fn to_bit_from_u32(msb_xored: RingElement<u32>) -> Result<Bit, Error> {
 
 fn to_bit_from_u128(msb_xored: RingElement<u128>) -> Result<Bit, Error> {
     if (msb_xored.is_zero()) {
-        return Ok(Bit::new(false));
+        Ok(Bit::new(false))
     } else if (msb_xored.is_one()) {
-        return Ok(Bit::new(true));
+        Ok(Bit::new(true))
     } else {
         Err(eyre!("expected a Bit (0/1), got {}", msb_xored))
     }
 }
 
-/// Just splitting vals into shares, to test the extract_msb_u32 functions
-fn make_replicated_shares_u32(vals: &[u32], rng: &mut AesRng) -> [Vec<Share<u32>>; 3] {
-    let mut p0 = Vec::with_capacity(vals.len());
-    let mut p1 = Vec::with_capacity(vals.len());
-    let mut p2 = Vec::with_capacity(vals.len());
-
-    for &v in vals {
-        let d0: u32 = thread_rng().gen();
-        let d1: u32 = thread_rng().gen();
-        let d2: u32 = v.wrapping_sub(d0).wrapping_sub(d1);
-
-        // Party 0: (d0, d2)
-        p0.push(Share {
-            a: RingElement(d0),
-            b: RingElement(d2),
-        });
-        // Party 1: (d1, d0)
-        p1.push(Share {
-            a: RingElement(d1),
-            b: RingElement(d0),
-        });
-        // Party 2: (d2, d1)
-        p2.push(Share {
-            a: RingElement(d2),
-            b: RingElement(d1),
-        });
-    }
-    [p0, p1, p2]
-}
-
+#[cfg(test)]
 fn prepare_shares_correct_msbs(total_shares: usize) -> (Vec<Vec<Share<u32>>>, Vec<Bit>) {
     // Generate random and fixed values to check their msbs
     let mut rng = AesRng::seed_from_u64(0xC0FFEE);
@@ -1442,6 +1413,36 @@ fn prepare_shares_correct_msbs(total_shares: usize) -> (Vec<Vec<Share<u32>>>, Ve
         .collect();
 
     (party_i_shares, correct_msbs)
+}
+#[cfg(test)]
+/// Just splitting vals into shares, to test the extract_msb_u32 functions
+fn make_replicated_shares_u32(vals: &[u32], rng: &mut AesRng) -> [Vec<Share<u32>>; 3] {
+    let mut p0 = Vec::with_capacity(vals.len());
+    let mut p1 = Vec::with_capacity(vals.len());
+    let mut p2 = Vec::with_capacity(vals.len());
+
+    for &v in vals {
+        let d0: u32 = thread_rng().gen();
+        let d1: u32 = thread_rng().gen();
+        let d2: u32 = v.wrapping_sub(d0).wrapping_sub(d1);
+
+        // Party 0: (d0, d2)
+        p0.push(Share {
+            a: RingElement(d0),
+            b: RingElement(d2),
+        });
+        // Party 1: (d1, d0)
+        p1.push(Share {
+            a: RingElement(d1),
+            b: RingElement(d0),
+        });
+        // Party 2: (d2, d1)
+        p2.push(Share {
+            a: RingElement(d2),
+            b: RingElement(d1),
+        });
+    }
+    [p0, p1, p2]
 }
 #[cfg(test)]
 mod tests_fss {
