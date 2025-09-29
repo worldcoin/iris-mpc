@@ -536,7 +536,10 @@ async fn handle_inbound_traffic<T: NetworkConnection>(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("failed to deserialize message: {e}");
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("failed to deserialize message: {e}"),
+                    ));
                 }
             };
         } else {
