@@ -149,7 +149,7 @@ pub async fn build_network_handle(
             tcp_config
         );
         let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-        let connector = BoxTcpClient(TcpClient::new());
+        let connector = BoxTcpClient(TcpClient::default());
         build_network_handle!(listener, connector)
     }
 }
@@ -221,7 +221,7 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
-        let connector = TcpClient::new();
+        let connector = TcpClient::default();
         let ct = CancellationToken::new();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
             let listener = TcpServer::new(*addr).await?;

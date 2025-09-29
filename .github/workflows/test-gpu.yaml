@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  gpu-e2e:
     runs-on: arc-gpu-amd64-runner
     timeout-minutes: 25
     steps:
@@ -29,7 +29,7 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
-#              - .github/workflows/test-gpu.yaml -- bring this back after Canonical incident
+              - .github/workflows/test-gpu.yaml
 
       # The following steps will only run if any of the src files have changed
       - name: Validate presence of GPU devices

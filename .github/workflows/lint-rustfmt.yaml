@@ -8,8 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # TODO: change this to lint-rustfmt once we've updated required jobs
-  lint:
+  fmt:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -28,7 +27,7 @@ jobs:
               - rust-toolchain.toml
               - rustfmt.toml
               - iris-*/**
-#              - .github/workflows/lint-rustfmt.yaml -- bring this back after Canonical incident
+              - .github/workflows/lint-rustfmt.yaml
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

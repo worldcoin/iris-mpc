@@ -72,9 +72,9 @@ use tokio_util::sync::CancellationToken;
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod insert;
+pub mod insert;
 mod intra_batch;
-pub(crate) mod iris_worker;
+pub mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
@@ -1492,6 +1492,15 @@ impl HawkHandle {
             mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
+
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);

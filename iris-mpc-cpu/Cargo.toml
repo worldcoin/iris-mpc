@@ -122,9 +122,5 @@ name = "init-test-dbs"
 path = "bin/init_test_dbs.rs"
 
 [[bin]]
-name = "graph-mem-cli"
-path = "bin/graph_mem_cli.rs"
-
-[[bin]]
 name = "local_hnsw"
 path = "bin/local_hnsw.rs"
