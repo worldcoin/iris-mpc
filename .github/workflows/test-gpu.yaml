@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  gpu-e2e:
     runs-on: arc-gpu-amd64-runner
     timeout-minutes: 25
     steps:

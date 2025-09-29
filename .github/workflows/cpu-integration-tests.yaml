@@ -11,7 +11,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  integration-tests:
+  cpu-integration-tests:
     timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
