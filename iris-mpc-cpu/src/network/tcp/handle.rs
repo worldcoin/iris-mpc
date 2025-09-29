@@ -13,8 +13,15 @@ use async_trait::async_trait;
 use bytes::BytesMut;
 use eyre::Result;
 use iris_mpc_common::fast_metrics::FastHistogram;
-use std::{collections::HashMap, sync::Once, time::Instant};
-use std::{io, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    io,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     sync::{
@@ -26,8 +33,6 @@ use tokio_util::sync::CancellationToken;
 
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
-
-static RECONNECTING: LazyLock<Counter> = LazyLock::new(Counter::new);
 
 /// spawns a task for each TCP connection (there are x connections per peer and each of the x
 /// connections has y sessions, of the same session id)
@@ -76,6 +81,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
     ) -> Self {
         let peers = connections.keys().cloned().collect();
         let mut ch_map = HashMap::new();
+        let conn_state = ConnectionState::new();
         for (peer_id, connections) in connections {
             let mut m = HashMap::new();
             for (stream_id, connection) in connections {
@@ -90,6 +96,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
                     config.get_sessions_for_stream(&stream_id),
                     cmd_rx,
                     ct2,
+                    conn_state.clone(),
                 ));
             }
             ch_map.insert(peer_id.clone(), m);
@@ -227,6 +234,7 @@ async fn manage_connection<T: NetworkConnection>(
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
     ct: CancellationToken,
+    conn_state: ConnectionState,
 ) {
     let Connection {
         peer,
@@ -280,11 +288,10 @@ async fn manage_connection<T: NetworkConnection>(
                     Some(cmd) => Evt::Cmd(cmd),
                     None => {
                         // basically means the networking stack was shut down before a command was received.
-                        static EMIT_LOG: Once = Once::new();
-                        EMIT_LOG.call_once(|| {
+                        if conn_state.exited() {
                             tracing::info!("cmd channel closed");
-                            ct.cancel();
-                        });
+                        };
+                        ct.cancel();
                         return;
                     }
                 }
@@ -293,7 +300,7 @@ async fn manage_connection<T: NetworkConnection>(
                 if ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
-                    if RECONNECTING.increment().await {
+                    if conn_state.incr_reconnect().await {
                         tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
                     }
                     Evt::Disconnected
@@ -305,7 +312,7 @@ async fn manage_connection<T: NetworkConnection>(
                 if ct.is_cancelled() {
                     Evt::Shutdown
                 } else if let Err(e) = r {
-                     if RECONNECTING.increment().await {
+                     if conn_state.incr_reconnect().await {
                         tracing::error!(e=%e, "TCP/TLS connection closed unexpectedly. reconnecting...");
                     }
                     Evt::Disconnected
@@ -354,18 +361,19 @@ async fn manage_connection<T: NetworkConnection>(
                     reconnect_and_replace(&reconnector, &peer, stream_id, &mut reader, &mut writer)
                         .await
                 {
-                    tracing::debug!("reconnect failed: {e:?}");
+                    if conn_state.exited() {
+                        tracing::error!("reconnect failed: {e:?}");
+                    }
                     return;
-                } else if RECONNECTING.decrement().await {
+                } else if conn_state.decr_reconnect().await {
                     tracing::info!("all connections re-established");
                 }
             }
             Evt::Shutdown => {
-                static EMIT_LOG: Once = Once::new();
-                EMIT_LOG.call_once(|| {
+                if conn_state.exited() {
                     tracing::info!("shutting down TCP/TLS networking stack");
-                });
-                break;
+                }
+                return;
             }
         }
     }
@@ -545,6 +553,50 @@ async fn write_buf<T: NetworkConnection>(
     stream.flush().await?;
     buf.clear();
     Ok(())
+}
+
+// state which is shared by all connections. used to reduce the number of logs
+// emitted upon loss of network connectivity.
+#[derive(Clone)]
+struct ConnectionState {
+    inner: Arc<ConnectionStateInner>,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(ConnectionStateInner::new()),
+        }
+    }
+
+    fn exited(&self) -> bool {
+        self.inner
+            .exited
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
+    async fn incr_reconnect(&self) -> bool {
+        self.inner.reconnecting.increment().await
+    }
+
+    async fn decr_reconnect(&self) -> bool {
+        self.inner.reconnecting.decrement().await
+    }
+}
+
+struct ConnectionStateInner {
+    reconnecting: Counter,
+    exited: AtomicBool,
+}
+
+impl ConnectionStateInner {
+    fn new() -> Self {
+        Self {
+            reconnecting: Counter::new(),
+            exited: AtomicBool::new(false),
+        }
+    }
 }
 
 struct Counter {
