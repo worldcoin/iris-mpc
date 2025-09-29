@@ -253,11 +253,11 @@ async fn manage_connection<T: NetworkConnection>(
         Some(Cmd::NewSessions {
             inbound_forwarder,
             outbound_rx,
-            ct,
+            ct: err_ct,
             rsp,
         }) => {
             let _ = rsp.send(());
-            (inbound_forwarder, outbound_rx, ct)
+            (inbound_forwarder, outbound_rx, err_ct)
         }
         #[cfg(test)]
         Some(_) => {
