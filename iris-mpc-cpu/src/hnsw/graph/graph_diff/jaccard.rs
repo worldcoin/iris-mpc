@@ -1,7 +1,8 @@
-use super::*;
-use std::{collections::HashSet, ops::Add};
+use super::Differ;
+use crate::hnsw::{graph::neighborhood::SortedEdgeIds, vector_store::Ref};
+use std::{collections::HashSet, fmt::Display, ops::Add, str::FromStr};
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct JaccardState {
     pub intersection: usize,
     pub union: usize,
@@ -54,98 +55,85 @@ impl Display for JaccardState {
     }
 }
 
-/// Computes Jaccard similarity for edges.
-/// Aggregated over graphs, individual layers or individual nodes
-pub struct JaccardND;
+/// A differ that computes detailed Jaccard similarity, including the `n` most dissimilar nodes per layer.
+pub struct DetailedJaccardDiffer<V: Ref> {
+    n: usize,
+    graph_state: JaccardState,
+    current_layer_details: Vec<(V, JaccardState)>,
+    per_layer_results: Vec<(JaccardState, Vec<(V, JaccardState)>)>,
+}
 
-impl<V: Ref + Display + FromStr> NeighborhoodDiffer<V> for JaccardND {
-    type NeighborhoodDiff = JaccardState;
-
-    fn diff_neighborhood(lhs: &SortedEdgeIds<V>, rhs: &SortedEdgeIds<V>) -> Self::NeighborhoodDiff {
-        let lhs: HashSet<_> = lhs.0.iter().cloned().collect();
-        let rhs: HashSet<_> = rhs.0.iter().cloned().collect();
-        JaccardState::new(lhs.intersection(&rhs).count(), lhs.union(&rhs).count())
+impl<V: Ref> DetailedJaccardDiffer<V> {
+    pub fn new(n: usize) -> Self {
+        Self {
+            n,
+            graph_state: JaccardState::default(),
+            current_layer_details: Vec::new(),
+            per_layer_results: Vec::new(),
+        }
     }
 }
 
-pub struct JaccardLD;
+pub struct DetailedJaccardReport<V>(
+    pub (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>),
+);
 
-// Aggregates JaccardStates to compute similarity for entire layers
-impl<V: Ref + Display + FromStr> LayerDiffer<V> for JaccardLD {
-    type LayerDiff = JaccardState;
-    type ND = JaccardND;
-    fn accumulate_neighborhoods(
-        &self,
-        per_nb: Vec<(V, <Self::ND as NeighborhoodDiffer<V>>::NeighborhoodDiff)>,
-    ) -> Self::LayerDiff {
-        let mut ret = JaccardState::default();
-        for (_, jacc_nb) in per_nb.into_iter() {
-            ret = ret + jacc_nb;
+impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (graph_state, per_layer_results) = &self.0;
+        writeln!(f, "GRAPH aggregate: {}", graph_state)?;
+        for (layer_idx, layer_result) in per_layer_results.iter().enumerate() {
+            writeln!(f, "  LAYER {} aggregate: {}", layer_idx, layer_result.0)?;
+            writeln!(f, "  Top {} most dissimilar nodes:", layer_result.1.len())?;
+            for (node, node_state) in &layer_result.1 {
+                writeln!(f, "    Node {}: {}", node, node_state)?;
+            }
+            writeln!(f)?;
         }
-        ret
+        Ok(())
     }
 }
 
-pub struct JaccardGD;
+impl<V: Ref + Display + FromStr> Differ<V> for DetailedJaccardDiffer<V> {
+    type Output = DetailedJaccardReport<V>;
 
-// Aggregates JaccardStates to compute similarity for entire graphs
-impl<V: Ref + Display + FromStr> GraphDiffer<V> for JaccardGD {
-    type GraphDiff = JaccardState;
-    type LD = JaccardLD;
-
-    fn accumulate_layers(
-        &self,
-        per_nb: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>,
-    ) -> Self::GraphDiff {
-        let mut acc = JaccardState::default();
-        for jacc_lay in per_nb.into_iter() {
-            acc = acc + jacc_lay;
-        }
-        acc
+    fn start_layer(&mut self, _layer_index: usize) {
+        self.current_layer_details.clear();
     }
-}
 
-/// Jaccard similarity for edges of entire graph, individual layers
-/// and `n` most dissimilar nodes for each individual layer
-#[derive(Clone, Default)]
-pub struct DetailedJaccardLD {
-    pub n: usize,
-}
-
-impl<V: Ref + Display + FromStr> LayerDiffer<V> for DetailedJaccardLD {
-    type LayerDiff = (JaccardState, Vec<(V, JaccardState)>);
-    type ND = JaccardND;
-
-    fn accumulate_neighborhoods(
-        &self,
-        per_nb: Vec<(V, <Self::ND as NeighborhoodDiffer<V>>::NeighborhoodDiff)>,
-    ) -> Self::LayerDiff {
-        let mut per_nb = per_nb;
-        per_nb.sort_by(|lhs, rhs| lhs.1.compare_as_fractions(&rhs.1));
-        let mut acc = JaccardState::default();
-        for (_, val) in per_nb.iter() {
-            acc = acc + val.clone();
-        }
-        per_nb.truncate(self.n);
-
-        (acc, per_nb)
+    fn diff_neighborhood(
+        &mut self,
+        _layer_index: usize,
+        node: &V,
+        lhs: &SortedEdgeIds<V>,
+        rhs: &SortedEdgeIds<V>,
+    ) {
+        let lhs_set: HashSet<_> = lhs.0.iter().collect();
+        let rhs_set: HashSet<_> = rhs.0.iter().collect();
+        let intersection = lhs_set.intersection(&rhs_set).count();
+        let union = lhs_set.union(&rhs_set).count();
+        let node_state = JaccardState::new(intersection, union);
+        self.current_layer_details.push((node.clone(), node_state));
     }
-}
 
-pub struct DetailedJaccard;
+    fn end_layer(&mut self, _layer_index: usize) {
+        let layer_total_state = self
+            .current_layer_details
+            .iter()
+            .fold(JaccardState::default(), |acc, (_, state)| acc + *state);
+        self.graph_state = self.graph_state + layer_total_state;
 
-impl<V: Ref + Display + FromStr> GraphDiffer<V> for DetailedJaccard {
-    type GraphDiff = (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>);
-    type LD = DetailedJaccardLD;
+        self.current_layer_details
+            .sort_by(|a, b| a.1.compare_as_fractions(&b.1));
+        self.current_layer_details.truncate(self.n);
 
-    fn accumulate_layers(
-        &self,
-        per_layer: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>,
-    ) -> Self::GraphDiff {
-        let mut acc = JaccardState::default();
-        for (lacc, _) in per_layer.iter() {
-            acc = acc + lacc.clone();
-        }
-        (acc, per_layer)
+        self.per_layer_results.push((
+            layer_total_state,
+            std::mem::take(&mut self.current_layer_details),
+        ));
+    }
+
+    fn finish(self) -> Self::Output {
+        DetailedJaccardReport((self.graph_state, self.per_layer_results))
     }
 }

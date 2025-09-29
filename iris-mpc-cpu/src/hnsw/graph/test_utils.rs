@@ -8,7 +8,10 @@ use crate::{
     hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::graph_diff::{
-            self, jaccard::DetailedJaccardLD, node_equiv::ensure_node_equivalence, GraphDiffer,
+            explicit::{ExplicitNeighborhoodDiffer, SortBy},
+            jaccard::DetailedJaccardDiffer,
+            node_equiv::ensure_node_equivalence,
+            run_diff,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -19,6 +22,7 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
+use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -28,6 +32,16 @@ use rand::SeedableRng;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum DiffMethod {
+    /// Use the detailed Jaccard differ.
+    DetailedJaccard,
+    /// Use the explicit neighborhood differ, sorted by node index.
+    ExplicitByIndex,
+    /// Use the explicit neighborhood differ, sorted by Jaccard similarity.
+    ExplicitByJaccard,
+}
 
 /// Number of secret-shared iris code pairs to persist to Postgres per transaction.
 const SECRET_SHARING_PG_TX_SIZE: usize = 100;
@@ -186,7 +200,12 @@ impl DbContext {
     }
 
     /// load a graph from the file and compare it against the database
-    pub async fn compare_to_db(&self, path: &Path, dbg: bool) -> Result<()> {
+    pub async fn compare_to_db(
+        &self,
+        path: &Path,
+        diff_method: DiffMethod,
+        dbg: bool,
+    ) -> Result<()> {
         let db_graph = self.get_both_eyes().await?;
         if dbg {
             println!("graph from database:");
@@ -213,33 +232,23 @@ impl DbContext {
                         side, err
                     );
                 } else {
-                    let edge_differ = graph_diff::jaccard::DetailedJaccard;
-                    // Show top `n` most dissimilar nodes for each layer, in addition to aggregated values
-                    let n = 15;
-                    let result = edge_differ.diff_graph(
-                        DetailedJaccardLD { n },
-                        &db_graph[side],
-                        &loaded_graph[side],
-                    );
-
-                    if result.0.is_one() {
-                        println!(
-                            "Verdict: Side {} graphs are identical (modulo ordering of neighborhoods)",
-                            side
-                        )
-                    } else {
-                        println!("Verdict: Side {} graphs differ in at least one edge; detailed similarity report follows:\n", side);
-                        println!("GRAPH aggregate (side {}): {}", side, result.0);
-
-                        for (layer_idx, layer_result) in result.1.iter().enumerate() {
-                            println!("  LAYER {} aggregate: {}", layer_idx, layer_result.0);
-                            println!("  Top {} most dissimilar nodes:", n);
-                            for (node_idx, node_result) in layer_result.1.iter() {
-                                println!("    Node {}: {}", node_idx.serial_id(), node_result,);
-                            }
-                            println!("\n");
+                    match diff_method {
+                        DiffMethod::DetailedJaccard => {
+                            let differ = DetailedJaccardDiffer::new(15);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
                         }
-                    }
+                        DiffMethod::ExplicitByIndex => {
+                            let differ = ExplicitNeighborhoodDiffer::new(SortBy::Index);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
+                        }
+                        DiffMethod::ExplicitByJaccard => {
+                            let differ = ExplicitNeighborhoodDiffer::new(SortBy::Jaccard);
+                            let result = run_diff(&db_graph[side], &loaded_graph[side], differ);
+                            println!("{result}");
+                        }
+                    };
                 }
             }
         }

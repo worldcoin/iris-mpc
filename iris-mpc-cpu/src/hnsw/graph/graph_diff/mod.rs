@@ -1,72 +1,63 @@
-use std::{
-    fmt::{Debug, Display},
-    str::FromStr,
-};
+use std::fmt::Display;
+use std::str::FromStr;
 
-use crate::hnsw::{
-    graph::{layered_graph::Layer, neighborhood::SortedEdgeIds},
-    vector_store::Ref,
-    GraphMem,
-};
+use crate::hnsw::graph::neighborhood::SortedEdgeIds;
+use crate::hnsw::{vector_store::Ref, GraphMem};
 
+pub mod explicit;
 pub mod jaccard;
 pub mod node_equiv;
 
-pub trait NeighborhoodDiffer<V> {
-    type NeighborhoodDiff: Debug + Clone;
+/// A trait that defines a graph diffing strategy using a visitor pattern.
+///
+/// A `Differ` implementation can maintain internal state and update it as the
+/// `run_diff` function traverses the layers and nodes of the graphs.
+pub trait Differ<V: Ref + Display + FromStr> {
+    /// The final output type of the diffing operation.
+    type Output: Display;
 
-    // User defined method to diff two neighborhoods
-    fn diff_neighborhood(lhs: &SortedEdgeIds<V>, rhs: &SortedEdgeIds<V>) -> Self::NeighborhoodDiff;
+    /// Called once before graph traversal begins.
+    fn start_graph(&mut self) {}
+
+    /// Called before traversing each layer.
+    fn start_layer(&mut self, _layer_index: usize) {}
+
+    /// Called for each node that exists in both the `lhs` and `rhs` layer.
+    fn diff_neighborhood(
+        &mut self,
+        layer_index: usize,
+        node: &V,
+        lhs: &SortedEdgeIds<V>,
+        rhs: &SortedEdgeIds<V>,
+    );
+
+    /// Called after traversing each layer.
+    fn end_layer(&mut self, _layer_index: usize) {}
+
+    /// Called at the very end to consume the differ and produce the final result.
+    fn finish(self) -> Self::Output;
 }
 
-pub trait LayerDiffer<V: Ref + Display + FromStr> {
-    type LayerDiff: Debug + Clone;
-    type ND: NeighborhoodDiffer<V>;
+/// Traverses two graphs and applies a `Differ` to compute a result.
+///
+/// It's recommended to run `ensure_node_equivalence` before using this function
+/// to ensure the graphs have a comparable structure.
+pub fn run_diff<V, D>(lhs: &GraphMem<V>, rhs: &GraphMem<V>, mut differ: D) -> D::Output
+where
+    V: Ref + Display + FromStr,
+    D: Differ<V>,
+{
+    differ.start_graph();
 
-    /// User-defined method of combining neighborhood results into a layer result
-    fn accumulate_neighborhoods(
-        &self,
-        per_nb: Vec<(V, <Self::ND as NeighborhoodDiffer<V>>::NeighborhoodDiff)>,
-    ) -> Self::LayerDiff;
-
-    /// Main method to diff two layers; defaults to calling `accumulate_neighborhoods`
-    /// on all neighborhoods of nodes present in layer `lhs`.
-    fn diff_layer(&self, lhs: &Layer<V>, rhs: &Layer<V>) -> Self::LayerDiff {
-        self.accumulate_neighborhoods(
-            lhs.links
-                .iter()
-                .filter_map(|(v, ne)| {
-                    rhs.links
-                        .get(v)
-                        .map(|ner| (v.clone(), Self::ND::diff_neighborhood(ne, ner)))
-                })
-                .collect(),
-        )
+    for (i, (lhs_layer, rhs_layer)) in lhs.layers.iter().zip(rhs.layers.iter()).enumerate() {
+        differ.start_layer(i);
+        for (node, lhs_nbhd) in lhs_layer.links.iter() {
+            if let Some(rhs_nbhd) = rhs_layer.links.get(node) {
+                differ.diff_neighborhood(i, node, lhs_nbhd, rhs_nbhd);
+            }
+        }
+        differ.end_layer(i);
     }
-}
 
-pub trait GraphDiffer<V: Ref + Display + FromStr> {
-    type GraphDiff: Debug + Clone;
-    type LD: LayerDiffer<V>;
-
-    /// User-defined method of combining layer results into a graph result
-    fn accumulate_layers(
-        &self,
-        per_l: Vec<<Self::LD as LayerDiffer<V>>::LayerDiff>,
-    ) -> Self::GraphDiff;
-
-    /// Main method to diff two graphs; defaults to calling `accumulate_layers`
-    /// on all layers present in graph `lhs`.
-    ///
-    /// Note that this default may return unexpected results if the two graphs are not node-equivalent.
-    /// To adress this issue, use the method in conjunction with `ensure_node_equivalence`.
-    fn diff_graph(&self, ld: Self::LD, lhs: &GraphMem<V>, rhs: &GraphMem<V>) -> Self::GraphDiff {
-        self.accumulate_layers(
-            lhs.layers
-                .iter()
-                .zip(rhs.layers.iter())
-                .map(|(lhs_layer, rhs_layer)| ld.diff_layer(lhs_layer, rhs_layer))
-                .collect(),
-        )
-    }
+    differ.finish()
 }
