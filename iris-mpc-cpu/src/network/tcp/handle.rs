@@ -239,7 +239,7 @@ async fn manage_connection<T: NetworkConnection>(
     reconnector: Reconnector<T>,
     num_sessions: usize,
     mut cmd_ch: UnboundedReceiver<Cmd>,
-    ct: CancellationToken,
+    shutdown_ct: CancellationToken,
     conn_state: ConnectionState,
 ) {
     let Connection {
@@ -299,7 +299,7 @@ async fn manage_connection<T: NetworkConnection>(
                         if conn_state.exited() {
                             tracing::info!("cmd channel closed");
                         };
-                        ct.cancel();
+                        shutdown_ct.cancel();
                         return;
                     }
                 }
@@ -377,7 +377,7 @@ async fn manage_connection<T: NetworkConnection>(
                         .await
                 {
                     if conn_state.exited() {
-                        if ct.is_cancelled() {
+                        if shutdown_ct.is_cancelled() {
                             tracing::info!("shutting down TCP/TLS networking stack");
                         } else {
                             tracing::error!("reconnect failed: {e:?}");
