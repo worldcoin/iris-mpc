@@ -1856,11 +1856,12 @@ impl SimpleAnonStatsTestGenerator {
             for req in requests.keys() {
                 resp_counters.insert(req, 0);
             }
+            let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
 
             // for CPU variant, we calculate the distances here, since it does the bucket calculation after the matching
             // while GPU does it beforehand. GPU branch is at the end of this loop
             if self.is_cpu {
-                self.calculate_gt_distances(&e2e_template);
+                self.calculate_gt_distances(&e2e_template, &msg_type);
             }
 
             tracing::info!("checking results");
@@ -2111,19 +2112,19 @@ impl SimpleAnonStatsTestGenerator {
 
             // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
             if !self.is_cpu {
-                self.calculate_gt_distances(&e2e_template);
+                self.calculate_gt_distances(&e2e_template, &msg_type);
             }
         }
         Ok(())
     }
 
-    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate) {
+    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate, msg_type: &str) {
         // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
         let span = tracing::span!(Level::INFO, "calculating ground truth distances");
         let guard = span.enter();
         // Only accumulate ground-truth distances for Uniqueness requests;
         // Reauth requests are aggregated into separate anonymized stats and would skew this comparison.
-        let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
+
         if msg_type == UNIQUENESS_MESSAGE_TYPE {
             self.plain_distances_left.extend(
                 self.db_state.plain_dbs[0]
