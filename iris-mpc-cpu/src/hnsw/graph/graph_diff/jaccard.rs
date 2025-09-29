@@ -75,7 +75,8 @@ impl<V: Ref> DetailedJaccardDiffer<V> {
 }
 
 pub struct DetailedJaccardReport<V>(
-    pub (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>),
+    #[allow(clippy::type_complexity)]
+    pub  (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>),
 );
 
 impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
