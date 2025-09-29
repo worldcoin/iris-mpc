@@ -67,6 +67,7 @@ use tokio::{
     join,
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
+use tokio_util::sync::CancellationToken;
 
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
@@ -292,9 +293,10 @@ impl HawkInsertPlan {
 }
 
 impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs) -> Result<Self> {
+    pub async fn from_cli(args: &HawkArgs, ct: CancellationToken) -> Result<Self> {
         Self::from_cli_with_graph_and_store(
             args,
+            ct,
             [(); 2].map(|_| GraphMem::new()),
             [(); 2].map(|_| Aby3Store::new_storage(None)),
         )
@@ -303,6 +305,7 @@ impl HawkActor {
 
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
+        ct: CancellationToken,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
@@ -326,7 +329,8 @@ impl HawkActor {
         let my_index = args.party_index;
 
         let networking =
-            build_network_handle(args, &identities, SessionGroups::N_SESSIONS_PER_REQUEST).await?;
+            build_network_handle(args, ct, &identities, SessionGroups::N_SESSIONS_PER_REQUEST)
+                .await?;
         let graph_store = graph.map(GraphMem::to_arc);
         let iris_store = iris_store.map(SharedIrises::to_arc);
         let workers_handle = [LEFT, RIGHT]
@@ -1653,7 +1657,7 @@ impl HawkHandle {
 
 pub async fn hawk_main(args: HawkArgs) -> Result<HawkHandle> {
     println!("🦅 Starting Hawk node {}", args.party_index);
-    let hawk_actor = HawkActor::from_cli(&args).await?;
+    let hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
     HawkHandle::new(hawk_actor).await
 }
 
@@ -2049,7 +2053,7 @@ mod tests_db {
             disable_persistence: false,
             tls: None,
         };
-        let mut hawk_actor = HawkActor::from_cli(&args).await?;
+        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
         let (_, graph_loader) = hawk_actor.as_iris_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 
