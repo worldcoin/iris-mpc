@@ -1358,8 +1358,6 @@ impl JobSubmissionHandle for HawkHandle {
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
-        // add a channel that sends...something that tells when an error happens and resets when
-        // new sessions are created...
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         // Validate the common state before starting.
