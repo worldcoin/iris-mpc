@@ -2,6 +2,8 @@ name: Rust GPU Tests
 
 on:
   pull_request:
+    branches-ignore:
+      - dev
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
