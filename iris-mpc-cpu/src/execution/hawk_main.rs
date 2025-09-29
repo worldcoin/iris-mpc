@@ -71,9 +71,9 @@ use tokio::{
 pub type GraphStore = graph_store::GraphPg<Aby3Store>;
 pub type GraphTx<'a> = graph_store::GraphTx<'a, Aby3Store>;
 
-pub(crate) mod insert;
+pub mod insert;
 mod intra_batch;
-pub(crate) mod iris_worker;
+pub mod iris_worker;
 mod is_match_batch;
 mod matching;
 mod reset;
@@ -647,6 +647,9 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
 
 pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
+/// Extra space to reserve in the iris store to avoid reallocations during insertion.
+const IRIS_STORE_RESERVE_EXTRA: f64 = 0.2;
+
 pub struct IrisLoader<'a> {
     party_id: usize,
     db_size: &'a mut usize,
@@ -690,6 +693,7 @@ impl<'a> InMemoryStore for IrisLoader<'a> {
     }
 
     fn reserve(&mut self, additional: usize) {
+        let additional = additional + (additional as f64 * IRIS_STORE_RESERVE_EXTRA) as usize;
         for side in &self.iris_pools {
             side.reserve(additional).unwrap();
         }
@@ -1484,6 +1488,15 @@ impl HawkHandle {
             mutations,
             hawk_actor.anonymized_bucket_statistics.clone(),
         );
+
+        // if we sent the bucket statistics, clear them.
+        for side in [LEFT, RIGHT] {
+            if !hawk_actor.anonymized_bucket_statistics[side].is_empty() {
+                hawk_actor.anonymized_bucket_statistics[side]
+                    .buckets
+                    .clear();
+            }
+        }
 
         metrics::histogram!("job_duration").record(now.elapsed().as_secs_f64());
         metrics::gauge!("db_size").set(hawk_actor.db_size().await as f64);

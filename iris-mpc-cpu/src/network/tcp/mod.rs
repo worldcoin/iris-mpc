@@ -150,7 +150,7 @@ pub async fn build_network_handle(
             tcp_config
         );
         let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-        let connector = BoxTcpClient(TcpClient::new());
+        let connector = BoxTcpClient(TcpClient::default());
         let connection_builder =
             PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
                 .await?;
@@ -236,7 +236,7 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
-        let connector = TcpClient::new();
+        let connector = TcpClient::default();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
             let listener = TcpServer::new(*addr).await?;
             builders.push(
@@ -288,7 +288,7 @@ pub mod testing {
     }
 
     /// Interleaves a Vec of Vecs into a single Vec by taking one element from each inner Vec in turn.
-    /// For example, interleaving [[1,2,3],[4,5,6],[7,8,9]] yields [1,4,7,2,5,8,3,6,9].
+    /// For example, interleaving `[[1,2,3],[4,5,6],[7,8,9]]` yields `[1,4,7,2,5,8,3,6,9]`.
     pub fn interleave_vecs<T>(vecs: Vec<Vec<T>>) -> Vec<T> {
         let mut result = Vec::new();
         let mut iters: Vec<_> = vecs.into_iter().map(|v| v.into_iter()).collect();

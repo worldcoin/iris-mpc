@@ -11,7 +11,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  e2e:
+  cpu-e2e:
     timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
@@ -32,6 +32,7 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
+              - .github/workflows/cpu-genesis-e2e-tests.yaml
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
