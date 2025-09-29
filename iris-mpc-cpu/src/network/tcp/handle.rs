@@ -362,7 +362,11 @@ async fn manage_connection<T: NetworkConnection>(
                         .await
                 {
                     if conn_state.exited() {
-                        tracing::error!("reconnect failed: {e:?}");
+                        if ct.is_cancelled() {
+                            tracing::info!("shutting down TCP/TLS networking stack");
+                        } else {
+                            tracing::error!("reconnect failed: {e:?}");
+                        }
                     }
                     return;
                 } else if conn_state.decr_reconnect().await {
