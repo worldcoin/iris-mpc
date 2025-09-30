@@ -56,7 +56,7 @@ pub trait Server: Send {
 
 pub async fn build_network_handle(
     args: &HawkArgs,
-    ct: CancellationToken,
+    shutdown_ct: CancellationToken,
     identities: &[Identity],
     sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
@@ -91,7 +91,7 @@ pub async fn build_network_handle(
                 tcp_config.clone(),
                 $listener,
                 $connector,
-                ct.clone(),
+                shutdown_ct.clone(),
             )
             .await?;
 
@@ -104,7 +104,8 @@ pub async fn build_network_handle(
             }
 
             let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
+            let networking =
+                TcpNetworkHandle::new(reconnector, connections, tcp_config, shutdown_ct);
             Ok(Box::new(networking))
         }};
     }
