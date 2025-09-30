@@ -26,6 +26,7 @@ aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+bitvec.workspace = true
 dotenvy.workspace = true
 clap.workspace = true
 rand.workspace = true

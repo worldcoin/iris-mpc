@@ -1,7 +1,13 @@
 use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
+use crate::IRIS_CODE_LENGTH;
+use crate::ROTATIONS;
 use base64::{prelude::BASE64_STANDARD, Engine};
+use bitvec::array::BitArray;
+use bitvec::slice::BitSlice;
+use bitvec::vec::BitVec;
 use eyre::bail;
 use eyre::Result;
+use itertools::izip;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -180,6 +186,121 @@ impl Default for IrisCode {
             code: IrisCodeArray::ZERO,
             mask: IrisCodeArray::ONES,
         }
+    }
+}
+
+pub struct RotExtIrisCodeArray(pub [BitVec; 16]);
+
+impl From<IrisCodeArray> for RotExtIrisCodeArray {
+    fn from(value: IrisCodeArray) -> Self {
+        let code = value.bits().collect::<Vec<_>>();
+        Self(
+            code.chunks_exact(IrisCode::CODE_COLS * 4)
+                .map(|chunk| {
+                    let mut extended = [false;
+                        IrisCode::CODE_COLS * 4 + 2 * IrisCode::ROTATIONS_PER_DIRECTION * 4];
+                    let left_len = IrisCode::ROTATIONS_PER_DIRECTION * 4;
+                    let chunk_len = IrisCode::CODE_COLS * 4;
+                    let right_len = IrisCode::ROTATIONS_PER_DIRECTION * 4;
+
+                    extended[..left_len].copy_from_slice(&chunk[chunk_len - left_len..chunk_len]);
+                    extended[left_len..left_len + chunk_len].copy_from_slice(chunk);
+                    extended[left_len + chunk_len..].copy_from_slice(&chunk[..right_len]);
+                    let extended: BitVec = extended.into_iter().collect();
+                    extended
+                })
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap(),
+        )
+    }
+}
+
+impl RotExtIrisCodeArray {
+    pub const CENTER_START: usize = 4 * IrisCode::ROTATIONS_PER_DIRECTION;
+    pub const ROW_LEN: usize = 800;
+
+    fn get_rotation_slice(&self, by: isize) -> [&BitSlice; 16] {
+        let start = (Self::CENTER_START as isize + 4 * by)
+            .try_into()
+            .expect("Invalid rotation delta");
+        let ret_vec = self
+            .0
+            .iter()
+            .map(|row| &row[start..start + Self::ROW_LEN])
+            .collect::<Vec<_>>();
+        ret_vec.try_into().unwrap()
+    }
+}
+
+pub struct RotExtIrisCode {
+    code: RotExtIrisCodeArray,
+    mask: RotExtIrisCodeArray,
+}
+
+impl From<IrisCode> for RotExtIrisCode {
+    fn from(value: IrisCode) -> Self {
+        RotExtIrisCode {
+            code: value.code.into(),
+            mask: value.mask.into(),
+        }
+    }
+}
+
+struct RotExtIrisCodeRef<'a> {
+    code: [&'a BitSlice; 16],
+    mask: [&'a BitSlice; 16],
+}
+
+impl RotExtIrisCode {
+    fn get_rotation<'a>(&'a self, by: isize) -> RotExtIrisCodeRef<'a> {
+        RotExtIrisCodeRef {
+            code: self.code.get_rotation_slice(by),
+            mask: self.mask.get_rotation_slice(by),
+        }
+    }
+}
+
+impl RotExtIrisCodeRef<'_> {
+    fn get_distance_fraction(&self, other: &RotExtIrisCodeRef) -> (u16, u16) {
+        izip!(self.code, self.mask, other.code, other.mask).fold(
+            (0, 0),
+            |(num, denom), (lhs_code, lhs_mask, rhs_code, rhs_mask)| {
+                let combined_mask = lhs_mask.to_owned() & rhs_mask;
+                let combined_mask_len = combined_mask.count_ones();
+
+                let combined_code = (lhs_code.to_owned() ^ rhs_code) & combined_mask;
+                let code_distance = combined_code.count_ones();
+
+                (
+                    num + (code_distance as u16),
+                    denom + (combined_mask_len as u16),
+                )
+            },
+        )
+    }
+}
+
+pub fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
+    let (a, b) = *dist_1; // a/b
+    let (c, d) = *dist_2; // c/d
+    ((a as u32) * (d as u32)) < ((b as u32) * (c as u32))
+}
+
+impl RotExtIrisCode {
+    pub fn min_fhe(&self, other: &RotExtIrisCode) -> (u16, u16) {
+        let other_center = other.get_rotation(0);
+
+        let mut ret = (0, 1);
+        for rot in -15..16 {
+            let self_rotated = self.get_rotation(rot);
+            let dist = self_rotated.get_distance_fraction(&other_center);
+            if fraction_less_than(&dist, &ret) {
+                ret = dist;
+            }
+        }
+
+        ret
     }
 }
 

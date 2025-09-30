@@ -30,6 +30,7 @@ axum = "0.7"
 clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22.1"
 bytemuck = { version = "1.17", features = ["derive"] }
+bitvec = "1.0.1"
 dotenvy = "0.15"
 eyre = "0.6"
 futures = "0.3.30"

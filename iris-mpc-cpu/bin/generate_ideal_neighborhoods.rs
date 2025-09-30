@@ -5,9 +5,11 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::iris_db::iris::{IrisCode, RotExtIrisCode};
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{naive_knn, KNNResult},
+    hawkers::naive_knn_plaintext::{
+        naive_knn, naive_knn_min_fhd, naive_knn_min_fhd1, naive_knn_min_fhd2, KNNResult,
+    },
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
 use metrics::IntoF64;
@@ -21,6 +23,12 @@ enum IrisSelection {
     All,
     Even,
     Odd,
+}
+
+#[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
+enum DistanceUsed {
+    Normal,
+    MinFHD,
 }
 
 /// A struct to hold the metadata stored in the first line of the results file.
@@ -57,6 +65,10 @@ struct Args {
     /// Selection of irises to process
     #[arg(long, value_enum, default_value_t = IrisSelection::All)]
     irises_selection: IrisSelection,
+
+    /// Selection of irises to process
+    #[arg(long, value_enum, default_value_t = DistanceUsed::Normal)]
+    distance_used: DistanceUsed,
 }
 #[tokio::main]
 async fn main() {
@@ -202,9 +214,42 @@ async fn main() {
     println!("Starting work at serial id: {}", start);
     let mut evaluated_pairs = 0usize;
 
+    let rot_ext_irises = irises
+        .iter()
+        .map(|iris| RotExtIrisCode::from(iris.clone()))
+        .collect::<Vec<_>>();
+
+    let irises_with_rotations = irises
+        .iter()
+        .map(|iris| iris.all_rotations().try_into().unwrap())
+        .collect::<Vec<_>>();
+
+    let self_rots: Vec<[_; 31]> = irises_with_rotations
+        .iter()
+        .map(|rotations: &[IrisCode; 31]| {
+            rotations
+                .iter()
+                .map(|rotation| rotation.get_distance_fraction(&rotations[15]))
+                .collect::<Vec<_>>()
+                .try_into()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+
     while start < num_irises {
         let end = (start + chunk_size).min(num_irises);
-        let results = naive_knn(&irises, args.k, start, end, &pool);
+        let results = match args.distance_used {
+            DistanceUsed::Normal => naive_knn(&irises, args.k, start, end, &pool),
+            DistanceUsed::MinFHD => naive_knn_min_fhd2(
+                &irises_with_rotations,
+                &irises,
+                &self_rots,
+                args.k,
+                start,
+                end,
+                &pool,
+            ),
+        };
         evaluated_pairs += (end - start) * num_irises;
 
         let mut file = OpenOptions::new()
