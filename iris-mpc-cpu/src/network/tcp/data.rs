@@ -1,10 +1,9 @@
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
-
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::value::NetworkValue,
 };
 use std::collections::HashMap;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 // session multiplexing over a socket requires a SessionId
 pub type OutboundMsg = (SessionId, NetworkValue);
