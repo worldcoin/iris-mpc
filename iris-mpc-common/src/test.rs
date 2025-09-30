@@ -1268,14 +1268,14 @@ impl TestCaseGenerator {
                 if let Some(bucket_statistic_parameters) = &self.bucket_statistic_parameters {
                     // Check that normal orientation statistics have is_mirror_orientation set to false
                     assert!(!anonymized_bucket_statistics_left.is_mirror_orientation,
-                        "Normal orientation left statistics should have is_mirror_orientation = false");
+                            "Normal orientation left statistics should have is_mirror_orientation = false");
                     assert!(!anonymized_bucket_statistics_right.is_mirror_orientation,
-                        "Normal orientation right statistics should have is_mirror_orientation = false");
+                            "Normal orientation right statistics should have is_mirror_orientation = false");
                     // Check that mirror orientation statistics have is_mirror_orientation set to true
                     assert!(anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                        "Mirror orientation left statistics should have is_mirror_orientation = true");
+                            "Mirror orientation left statistics should have is_mirror_orientation = true");
                     assert!(anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                        "Mirror orientation right statistics should have is_mirror_orientation = true");
+                            "Mirror orientation right statistics should have is_mirror_orientation = true");
 
                     // Perform some very basic checks on the bucket statistics, not checking the results here
                     check_bucket_statistics(
@@ -1619,8 +1619,7 @@ pub struct SimpleAnonStatsTestGenerator {
     bucket_statistic_parameters: BucketStatisticParameters,
     rng: StdRng,
     is_cpu: bool,
-    // When true, disable anonymized stats and expect empty stats in results
-    disable_anonymized_stats: bool,
+    disable_anonymized_stats_batch_percent: f64,
 }
 
 impl SimpleAnonStatsTestGenerator {
@@ -1629,7 +1628,7 @@ impl SimpleAnonStatsTestGenerator {
         internal_seed: u64,
         num_buckets: usize,
         is_cpu: bool,
-        disable_anonymized_stats: bool,
+        disable_anonymized_stats_batch_percent: f64,
     ) -> Self {
         Self {
             db_state: db,
@@ -1640,7 +1639,7 @@ impl SimpleAnonStatsTestGenerator {
             plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
             is_cpu,
-            disable_anonymized_stats,
+            disable_anonymized_stats_batch_percent,
         }
     }
 
@@ -1673,6 +1672,11 @@ impl SimpleAnonStatsTestGenerator {
         &mut self,
     ) -> Result<Option<([BatchQuery; 3], HashMap<String, E2ETemplate>)>> {
         tracing::info!("Generating query batch for simple anonymized statistics test");
+
+        let batch_disable_anon_stats = self
+            .rng
+            .gen_bool(self.disable_anonymized_stats_batch_percent);
+
         let mut requests: HashMap<String, E2ETemplate> = HashMap::new();
         let mut batch0 = BatchQuery::default();
         let mut batch1 = BatchQuery::default();
@@ -1681,9 +1685,9 @@ impl SimpleAnonStatsTestGenerator {
         batch1.full_face_mirror_attacks_detection_enabled = true;
         batch2.full_face_mirror_attacks_detection_enabled = true;
         // Apply disable flag across all parties in this batch
-        batch0.disable_anonymized_stats = self.disable_anonymized_stats;
-        batch1.disable_anonymized_stats = self.disable_anonymized_stats;
-        batch2.disable_anonymized_stats = self.disable_anonymized_stats;
+        batch0.disable_anonymized_stats = batch_disable_anon_stats;
+        batch1.disable_anonymized_stats = batch_disable_anon_stats;
+        batch2.disable_anonymized_stats = batch_disable_anon_stats;
 
         let (request_id, e2e_template, message_type) = match self.generate_query() {
             Some((request_id, e2e_template, message_type)) => {
@@ -1789,7 +1793,19 @@ impl SimpleAnonStatsTestGenerator {
                 continue;
             }
 
-            request_counter += batch0.request_ids.len();
+            let disable_anonymized_stats = batch0.disable_anonymized_stats;
+
+            tracing::info!(
+                "Generated batch with {} requests, disable_anonymized_stats: {}",
+                batch0.request_ids.len(),
+                disable_anonymized_stats
+            );
+
+            request_counter += if !disable_anonymized_stats {
+                batch0.request_ids.len()
+            } else {
+                0
+            };
             let e2e_template = requests.values().next().cloned().unwrap();
 
             tracing::info!("sending batch to servers");
@@ -1813,7 +1829,7 @@ impl SimpleAnonStatsTestGenerator {
             // for CPU variant, we calculate the distances here, since it does the bucket calculation after the matching
             // while GPU does it beforehand. GPU branch is at the end of this loop
             if self.is_cpu {
-                self.calculate_gt_distances(&e2e_template);
+                self.calculate_gt_distances(&e2e_template, false);
             }
 
             tracing::info!("checking results");
@@ -1851,30 +1867,24 @@ impl SimpleAnonStatsTestGenerator {
                 if !self.is_cpu {
                     // Check that mirror orientation statistics have is_mirror_orientation set to true
                     assert!(
-                    anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
-                    "Mirror orientation left statistics should have is_mirror_orientation = true"
+                        anonymized_bucket_statistics_left_mirror.is_mirror_orientation,
+                        "Mirror orientation left statistics should have is_mirror_orientation = true"
                     );
                     assert!(
-                    anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
-                    "Mirror orientation right statistics should have is_mirror_orientation = true"
+                        anonymized_bucket_statistics_right_mirror.is_mirror_orientation,
+                        "Mirror orientation right statistics should have is_mirror_orientation = true"
                     );
                 }
 
-                // When disabled, all stats should be empty; otherwise perform checks
-                if self.disable_anonymized_stats {
-                    assert!(anonymized_bucket_statistics_left.is_empty());
-                    assert!(anonymized_bucket_statistics_right.is_empty());
-                } else {
-                    // Perform some very basic checks on the bucket statistics, not checking the results here
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_left,
-                        self.bucket_statistic_parameters.num_buckets,
-                    )?;
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_right,
-                        self.bucket_statistic_parameters.num_buckets,
-                    )?;
-                }
+                // Perform some very basic checks on the bucket statistics, not checking the results here
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_left,
+                    self.bucket_statistic_parameters.num_buckets,
+                )?;
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_right,
+                    self.bucket_statistic_parameters.num_buckets,
+                )?;
 
                 if !anonymized_bucket_statistics_left.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for left side, checking...");
@@ -1941,19 +1951,14 @@ impl SimpleAnonStatsTestGenerator {
                 }
 
                 // Also check mirror orientation statistics
-                if self.disable_anonymized_stats {
-                    assert!(anonymized_bucket_statistics_left_mirror.is_empty());
-                    assert!(anonymized_bucket_statistics_right_mirror.is_empty());
-                } else {
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_left_mirror,
-                        self.bucket_statistic_parameters.num_buckets,
-                    )?;
-                    check_bucket_statistics(
-                        anonymized_bucket_statistics_right_mirror,
-                        self.bucket_statistic_parameters.num_buckets,
-                    )?;
-                }
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_left_mirror,
+                    self.bucket_statistic_parameters.num_buckets,
+                )?;
+                check_bucket_statistics(
+                    anonymized_bucket_statistics_right_mirror,
+                    self.bucket_statistic_parameters.num_buckets,
+                )?;
 
                 if !anonymized_bucket_statistics_left_mirror.is_empty() {
                     tracing::info!(
@@ -2004,13 +2009,19 @@ impl SimpleAnonStatsTestGenerator {
 
             // we can only calculate GT after we the actor has run, since it will try to produce the stats before processing the current item
             if !self.is_cpu {
-                self.calculate_gt_distances(&e2e_template);
+                self.calculate_gt_distances(&e2e_template, disable_anonymized_stats);
             }
         }
         Ok(())
     }
 
-    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate) {
+    fn calculate_gt_distances(&mut self, e2e_template: &E2ETemplate, is_disabled: bool) {
+        // if disabled, skip accruing anon plain-text stats, should mirror the MPC behavior
+        if is_disabled {
+            tracing::info!("Skipping accruing plain-text stats since anonymized stats are disabled for this batch");
+            return;
+        }
+
         let span = tracing::span!(Level::INFO, "calculating ground truth distances");
         let guard = span.enter();
         self.plain_distances_left.extend(
