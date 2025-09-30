@@ -13,12 +13,13 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     marker::PhantomData,
+    sync::Arc,
     time::Duration,
 };
 use tokio::{
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
-        oneshot,
+        oneshot, Mutex,
     },
     time::sleep,
 };
@@ -183,6 +184,9 @@ struct Worker<T: NetworkConnection, C: Client<Output = T>, S: Server<Output = T>
 
     state: State,
 
+    // used for logging purposes
+    connection_state: ConnectionState,
+
     _marker: PhantomData<S>,
 }
 
@@ -214,6 +218,7 @@ where
             requested_reconnections: HashMap::new(),
             reconnect_rsp: None,
             state: State::Connect,
+            connection_state: ConnectionState::new(),
             _marker: PhantomData,
         };
 
@@ -232,8 +237,10 @@ where
         let own_id = self.id.clone();
         let pending_tx2 = self.pending_tx.clone();
         let ct2 = self.ct.clone();
+        let connection_state = self.connection_state.clone();
+
         tokio::spawn(async move {
-            accept_loop(own_id.clone(), listener, pending_tx2, ct2).await;
+            accept_loop(own_id.clone(), listener, pending_tx2, ct2, connection_state).await;
             tracing::debug!("{:?}: connection manager's accept_loop exited", own_id);
             let _ = accept_tx.send(());
         });
@@ -245,14 +252,14 @@ where
                         tracing::error!("{:?} connection manager failed: pending_rx dropped",self.id);
                         break;
                     };
-                    self.handle_pending_connection(c);
+                    self.handle_pending_connection(c).await;
                 }
                 opt = self.cmd_rx.recv() => {
                     let Some(cmd) = opt else {
                         tracing::error!("{:?} connection manager failed: cmd_rx dropped",self.id);
                         break;
                     };
-                    self.handle_cmd(cmd);
+                    self.handle_cmd(cmd).await;
                 }
                 _ = &mut accept_rx => {
                     break;
@@ -271,7 +278,7 @@ where
         Ok(())
     }
 
-    fn handle_pending_connection(&mut self, c: Connection<T>) {
+    async fn handle_pending_connection(&mut self, c: Connection<T>) {
         if self
             .pending_connections
             .get(&c.peer_id())
@@ -293,6 +300,7 @@ where
                     .unwrap_or(false),
             };
             if should_insert {
+                self.connection_state.decr_connect().await;
                 self.pending_connections
                     .entry(c.peer_id())
                     .or_default()
@@ -303,7 +311,7 @@ where
         }
     }
 
-    fn handle_cmd(&mut self, cmd: Cmd<T>) {
+    async fn handle_cmd(&mut self, cmd: Cmd<T>) {
         match cmd {
             Cmd::Connect {
                 peer,
@@ -324,6 +332,7 @@ where
                     )));
                     return;
                 }
+                self.connection_state.incr_connect().await;
                 if self.id > peer {
                     self.initiate_connection(peer, url, stream_id);
                 }
@@ -337,10 +346,18 @@ where
                 stream_id,
                 rsp,
             } => {
-                self.requested_reconnections
+                if self
+                    .requested_reconnections
                     .entry(peer.clone())
                     .or_default()
-                    .insert(stream_id, rsp);
+                    .insert(stream_id, rsp)
+                    .is_some()
+                {
+                    // maybe log this. but don't start a new connection process.
+                    return;
+                }
+
+                self.connection_state.incr_connect().await;
                 if self.id > peer {
                     match self.peer_addrs.get(&peer) {
                         Some(url) => {
@@ -462,6 +479,7 @@ where
         let own_id = self.id.clone();
         let pending_tx = self.pending_tx.clone();
         let ct = self.ct.clone();
+        let connection_state = self.connection_state.clone();
         let connector = self.connector.clone();
 
         // don't want all the connections to come in at the same time
@@ -491,8 +509,11 @@ where
                     Ok(mut stream) => {
                         if let Err(e) = handshake::outbound(&mut stream, &own_id, &stream_id).await
                         {
-                            tracing::error!("{e:?}");
+                            if connection_state.is_outbound_err_new().await {
+                                tracing::error!("{e:?}");
+                            }
                         } else {
+                            connection_state.decr_connect().await;
                             let pending = Connection::new(peer, stream, stream_id);
                             if pending_tx.send(pending).is_err() {
                                 tracing::debug!("accept loop receiver dropped");
@@ -519,6 +540,7 @@ async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     listener: S,
     pending_tx: UnboundedSender<Connection<T>>,
     ct: CancellationToken,
+    connection_state: ConnectionState,
 ) {
     loop {
         let r = tokio::select! {
@@ -533,10 +555,13 @@ async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                 let (peer_id, stream_id) = match handshake::inbound(&mut stream).await {
                     Ok(r) => r,
                     Err(e) => {
-                        tracing::error!(error=%e, "application level handshake failed");
+                        if connection_state.is_inbound_err_new().await {
+                            tracing::error!(error=%e, "application level handshake failed");
+                        }
                         continue;
                     }
                 };
+                connection_state.decr_connect().await;
                 if pending_tx
                     .send(Connection::new(peer_id, stream, stream_id))
                     .is_err()
@@ -547,5 +572,78 @@ async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
         }
+    }
+}
+
+#[derive(Clone)]
+struct ConnectionState {
+    inner: Arc<Mutex<ConnectionStateInner>>,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ConnectionStateInner::new())),
+        }
+    }
+
+    async fn incr_connect(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.incr_connect();
+    }
+
+    async fn decr_connect(&self) {
+        let mut inner = self.inner.lock().await;
+        inner.decr_connect();
+    }
+
+    async fn is_inbound_err_new(&self) -> bool {
+        let mut inner = self.inner.lock().await;
+        inner.is_inbound_err_new()
+    }
+
+    async fn is_outbound_err_new(&self) -> bool {
+        let mut inner = self.inner.lock().await;
+        inner.is_outbound_err_new()
+    }
+}
+
+struct ConnectionStateInner {
+    connecting: usize,
+    inbound_err_logged: bool,
+    outbound_err_logged: bool,
+}
+
+impl ConnectionStateInner {
+    fn new() -> Self {
+        Self {
+            connecting: 0,
+            inbound_err_logged: false,
+            outbound_err_logged: false,
+        }
+    }
+
+    fn incr_connect(&mut self) {
+        self.connecting += 1;
+    }
+
+    fn decr_connect(&mut self) {
+        if self.connecting == 1 {
+            self.inbound_err_logged = false;
+            self.outbound_err_logged = false;
+        }
+        self.connecting = self.connecting.saturating_sub(1);
+    }
+
+    fn is_inbound_err_new(&mut self) -> bool {
+        let r = !self.inbound_err_logged;
+        self.inbound_err_logged = true;
+        r
+    }
+
+    fn is_outbound_err_new(&mut self) -> bool {
+        let r = !self.outbound_err_logged;
+        self.outbound_err_logged = true;
+        r
     }
 }
