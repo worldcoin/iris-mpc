@@ -1,5 +1,6 @@
 mod tests {
     use chrono::{TimeZone, Utc};
+    use iris_mpc_common::helpers::statistics::Operation;
     use iris_mpc_common::{
         helpers::statistics::{Bucket2DResult, BucketResult, BucketStatistics, BucketStatistics2D},
         job::Eye,
@@ -14,6 +15,7 @@ mod tests {
 
         // Create a struct with some data
         let stats = BucketStatistics {
+            operation: Operation::Uniqueness,
             buckets: vec![
                 BucketResult {
                     count: 10,
@@ -74,6 +76,7 @@ mod tests {
         assert_eq!(value["n_buckets"], json!(2));
         assert_eq!(value["match_distances_buffer_size"], json!(128));
         assert_eq!(value["is_mirror_orientation"], json!(false));
+        assert_eq!(value["operation"], json!("Uniqueness"));
     }
 
     #[test]
@@ -94,7 +97,8 @@ mod tests {
             "eye": "Left",
             "start_time_utc_timestamp": 1700000000,
             "end_time_utc_timestamp": null,
-            "is_mirror_orientation": false
+            "is_mirror_orientation": false,
+            "operation": "Uniqueness"
         })
         .to_string();
 
@@ -133,6 +137,7 @@ mod tests {
                 hamming_distance_bucket: [0.33, 0.66],
             }],
             n_buckets: 1,
+            operation: Operation::Uniqueness,
             match_distances_buffer_size: 42,
             party_id: 777,
             eye: Eye::Right,

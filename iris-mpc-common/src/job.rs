@@ -410,6 +410,10 @@ pub struct ServerJobResult<A = ()> {
     // 2D anonymized statistics across both eyes (only for matches on both sides)
     // Only for Normal orientation
     pub anonymized_bucket_statistics_2d: BucketStatistics2D,
+    // Reauth-only anonymized stats (Normal orientation only)
+    pub anonymized_bucket_statistics_left_reauth: BucketStatistics,
+    pub anonymized_bucket_statistics_right_reauth: BucketStatistics,
+    pub anonymized_bucket_statistics_2d_reauth: BucketStatistics2D,
     // Mirror orientation bucket statistics
     pub anonymized_bucket_statistics_left_mirror: BucketStatistics,
     pub anonymized_bucket_statistics_right_mirror: BucketStatistics,
