@@ -94,8 +94,13 @@ pub struct HawkArgs {
     #[clap(short, long)]
     pub party_index: usize,
 
+    // address to listen on (listen and connect addresses are not identical to allow for a proxy)
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
+
+    // address to connect to
+    #[clap(short, long, value_delimiter = ',')]
+    pub outbound_addrs: Vec<String>,
 
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,

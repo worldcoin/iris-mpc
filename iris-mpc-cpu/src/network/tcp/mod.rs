@@ -73,6 +73,7 @@ pub async fn build_network_handle(
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
+    let my_outbound_addr = &args.outbound_addrs[my_index];
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
 
     let tcp_config = TcpConfig::new(
@@ -94,8 +95,8 @@ pub async fn build_network_handle(
             )
             .await?;
 
-            for (identity, url) in
-                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+            for (identity, url) in izip!(identities, &args.outbound_addrs)
+                .filter(|(_, address)| address != &my_outbound_addr)
             {
                 connection_builder
                     .include_peer(identity.clone(), url.clone())
