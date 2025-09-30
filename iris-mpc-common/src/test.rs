@@ -1830,6 +1830,9 @@ impl SimpleAnonStatsTestGenerator {
     ) -> Result<()> {
         let [handle0, handle1, handle2] = handles;
 
+        let mut uniq_counter: i32 = 0;
+        let mut reauth_counter: i32 = 0;
+
         for _ in 0..max_num_batches {
             let ([batch0, batch1, batch2], requests) = match self.generate_query_batch()? {
                 Some(res) => res,
@@ -1838,6 +1841,16 @@ impl SimpleAnonStatsTestGenerator {
             if batch0.request_ids.is_empty() {
                 continue;
             }
+
+            batch0.request_types.iter().for_each(|t| match t.as_str() {
+                UNIQUENESS_MESSAGE_TYPE => uniq_counter += 1,
+                REAUTH_MESSAGE_TYPE => reauth_counter += 1,
+                _ => {}
+            });
+
+            let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(batch0.request_types.len(), 1);
 
             tracing::info!("sending batch to servers");
             // send batches to servers
@@ -1856,7 +1869,6 @@ impl SimpleAnonStatsTestGenerator {
             for req in requests.keys() {
                 resp_counters.insert(req, 0);
             }
-            let (e2e_template, msg_type) = requests.values().next().cloned().unwrap();
 
             // for CPU variant, we calculate the distances here, since it does the bucket calculation after the matching
             // while GPU does it beforehand. GPU branch is at the end of this loop
@@ -1960,6 +1972,17 @@ impl SimpleAnonStatsTestGenerator {
                         &self.plain_distances_left,
                         self.bucket_statistic_parameters.num_buckets,
                     );
+                    // there must be exactly one match per request on GPU, for CPU it might be less due to spurious misses
+                    if !self.is_cpu {
+                        assert_eq!(
+                            plain_bucket_statistics_left
+                                .iter()
+                                .map(|x| x.count as i32)
+                                .sum::<i32>(),
+                            // GPU has one less match due to the way it calculates the statistics
+                            uniq_counter.saturating_sub(1)
+                        );
+                    }
 
                     assert_eq!(
                         plain_bucket_statistics_left
@@ -1986,11 +2009,18 @@ impl SimpleAnonStatsTestGenerator {
                         )
                         .map(|(a, b)| a as i64 - b as i64)
                         .collect();
-                    // overall num of matches must be approximately equal
-                    assert!(diff.iter().sum::<i64>().abs() <= 0);
+                    // overall num of matches must be equal
+                    assert!(diff.iter().sum::<i64>().abs() == 0);
                     // overall slack is just 1 wrong element in a bucket (abs diff of sum 2)
                     assert!(diff.iter().map(|x| x.abs()).sum::<i64>() <= 2);
+                    // if we have a diff, then the diff must be 1 followed by -1 (plain is earlier than anonymized)
+                    if diff.iter().any(|&x| x != 0) {
+                        let pos_plain = diff.iter().position(|&x| x == 1).unwrap();
+                        let pos_anon = diff.iter().position(|&x| x == -1).unwrap();
+                        assert!(pos_plain < pos_anon, "If there is an error, Plain statistics must be better than anonymized statistics");
+                    }
                     clear_left = true;
+                    clear_left_reauth = true;
                 }
 
                 if !anonymized_bucket_statistics_left_reauth.is_empty() {
@@ -2005,6 +2035,16 @@ impl SimpleAnonStatsTestGenerator {
                         &self.plain_distances_left_reauth,
                         self.bucket_statistic_parameters.num_buckets,
                     );
+                    if !self.is_cpu {
+                        assert_eq!(
+                            plain_bucket_statistics_left_reauth
+                                .iter()
+                                .map(|x| x.count as i32)
+                                .sum::<i32>(),
+                            // GPU has one less match due to the way it calculates the statistics
+                            reauth_counter.saturating_sub(1)
+                        );
+                    }
 
                     assert_eq!(
                         plain_bucket_statistics_left_reauth
@@ -2088,12 +2128,16 @@ impl SimpleAnonStatsTestGenerator {
 
             if clear_left {
                 self.plain_distances_left.clear();
+                self.plain_distances_left_reauth.clear();
+                uniq_counter = 1;
+                reauth_counter = 1;
             }
             if clear_right {
                 self.plain_distances_right.clear();
             }
             if clear_left_reauth {
                 self.plain_distances_left_reauth.clear();
+                reauth_counter = 1;
             }
             if clear_right_reauth {
                 self.plain_distances_right_reauth.clear();
