@@ -621,24 +621,30 @@ impl ConnectionStateInner {
     }
 }
 
-struct Counter {
+pub struct Counter {
     num: Mutex<usize>,
 }
 
+impl Default for Counter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Counter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { num: Mutex::new(0) }
     }
 
     // returns true if num was zero
-    async fn increment(&self) -> bool {
+    pub async fn increment(&self) -> bool {
         let mut l = self.num.lock().await;
         *l += 1;
         *l == 1
     }
 
     // returns true if num was one before decrementing
-    async fn decrement(&self) -> bool {
+    pub async fn decrement(&self) -> bool {
         let mut l = self.num.lock().await;
         let r = *l == 1;
         *l = l.saturating_sub(1);
