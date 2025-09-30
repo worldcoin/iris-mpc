@@ -205,6 +205,11 @@ fn make_channels(
     next_session_id: usize,
 ) -> SessionChannels {
     let mut sc = SessionChannels::default();
+    tracing::info!(
+        "creating {} sessions starting from id {}",
+        config.num_sessions,
+        next_session_id
+    );
 
     for peer_id in peers {
         let mut outbound_tx = HashMap::new();
