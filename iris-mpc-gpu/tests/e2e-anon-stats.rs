@@ -228,7 +228,6 @@ mod e2e_anon_stats_test {
 
     #[tokio::test]
     async fn e2e_test_disable_anon_stats() -> Result<()> {
-        install_tracing();
         env::set_var("NCCL_P2P_LEVEL", "LOC");
         env::set_var("NCCL_NET", "Socket");
 
@@ -376,7 +375,7 @@ mod e2e_anon_stats_test {
 
         tracing::info!("Setup done, starting tests with anonymized stats disabled");
         test_case_generator
-            .run_n_batches(1, [&mut handle0, &mut handle1, &mut handle2])
+            .run_n_batches(5, [&mut handle0, &mut handle1, &mut handle2])
             .await?;
 
         drop(handle0);
