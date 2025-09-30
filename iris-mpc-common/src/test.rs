@@ -1619,10 +1619,18 @@ pub struct SimpleAnonStatsTestGenerator {
     bucket_statistic_parameters: BucketStatisticParameters,
     rng: StdRng,
     is_cpu: bool,
+    // When true, disable anonymized stats and expect empty stats in results
+    disable_anonymized_stats: bool,
 }
 
 impl SimpleAnonStatsTestGenerator {
-    pub fn new(db: TestDb, internal_seed: u64, num_buckets: usize, is_cpu: bool) -> Self {
+    pub fn new(
+        db: TestDb,
+        internal_seed: u64,
+        num_buckets: usize,
+        is_cpu: bool,
+        disable_anonymized_stats: bool,
+    ) -> Self {
         Self {
             db_state: db,
             bucket_statistic_parameters: BucketStatisticParameters { num_buckets },
@@ -1632,6 +1640,7 @@ impl SimpleAnonStatsTestGenerator {
             plain_distances_right_mirror: vec![],
             rng: StdRng::seed_from_u64(internal_seed),
             is_cpu,
+            disable_anonymized_stats,
         }
     }
 
@@ -1671,6 +1680,10 @@ impl SimpleAnonStatsTestGenerator {
         batch0.full_face_mirror_attacks_detection_enabled = true;
         batch1.full_face_mirror_attacks_detection_enabled = true;
         batch2.full_face_mirror_attacks_detection_enabled = true;
+        // Apply disable flag across all parties in this batch
+        batch0.disable_anonymized_stats = self.disable_anonymized_stats;
+        batch1.disable_anonymized_stats = self.disable_anonymized_stats;
+        batch2.disable_anonymized_stats = self.disable_anonymized_stats;
 
         let (request_id, e2e_template, message_type) = match self.generate_query() {
             Some((request_id, e2e_template, message_type)) => {
@@ -1847,15 +1860,21 @@ impl SimpleAnonStatsTestGenerator {
                     );
                 }
 
-                // Perform some very basic checks on the bucket statistics, not checking the results here
-                check_bucket_statistics(
-                    anonymized_bucket_statistics_left,
-                    self.bucket_statistic_parameters.num_buckets,
-                )?;
-                check_bucket_statistics(
-                    anonymized_bucket_statistics_right,
-                    self.bucket_statistic_parameters.num_buckets,
-                )?;
+                // When disabled, all stats should be empty; otherwise perform checks
+                if self.disable_anonymized_stats {
+                    assert!(anonymized_bucket_statistics_left.is_empty());
+                    assert!(anonymized_bucket_statistics_right.is_empty());
+                } else {
+                    // Perform some very basic checks on the bucket statistics, not checking the results here
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_left,
+                        self.bucket_statistic_parameters.num_buckets,
+                    )?;
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_right,
+                        self.bucket_statistic_parameters.num_buckets,
+                    )?;
+                }
 
                 if !anonymized_bucket_statistics_left.is_empty() {
                     tracing::info!("Got anonymized bucket statistics for left side, checking...");
@@ -1922,14 +1941,19 @@ impl SimpleAnonStatsTestGenerator {
                 }
 
                 // Also check mirror orientation statistics
-                check_bucket_statistics(
-                    anonymized_bucket_statistics_left_mirror,
-                    self.bucket_statistic_parameters.num_buckets,
-                )?;
-                check_bucket_statistics(
-                    anonymized_bucket_statistics_right_mirror,
-                    self.bucket_statistic_parameters.num_buckets,
-                )?;
+                if self.disable_anonymized_stats {
+                    assert!(anonymized_bucket_statistics_left_mirror.is_empty());
+                    assert!(anonymized_bucket_statistics_right_mirror.is_empty());
+                } else {
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_left_mirror,
+                        self.bucket_statistic_parameters.num_buckets,
+                    )?;
+                    check_bucket_statistics(
+                        anonymized_bucket_statistics_right_mirror,
+                        self.bucket_statistic_parameters.num_buckets,
+                    )?;
+                }
 
                 if !anonymized_bucket_statistics_left_mirror.is_empty() {
                     tracing::info!(

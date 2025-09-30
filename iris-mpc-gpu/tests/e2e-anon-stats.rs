@@ -208,7 +208,7 @@ mod e2e_anon_stats_test {
         let mut handle2 = rx2.await??;
 
         let mut test_case_generator =
-            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, false);
+            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, false, false);
 
         tracing::info!("Setup done, starting tests");
         test_case_generator
@@ -223,6 +223,168 @@ mod e2e_anon_stats_test {
         actor1_task.await.unwrap();
         actor2_task.await.unwrap();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn e2e_test_disable_anon_stats() -> Result<()> {
+        install_tracing();
+        env::set_var("NCCL_P2P_LEVEL", "LOC");
+        env::set_var("NCCL_NET", "Socket");
+
+        let chacha_seeds0 = ([0u32; 8], [2u32; 8]);
+        let chacha_seeds1 = ([1u32; 8], [0u32; 8]);
+        let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
+
+        let (tx0, rx0) = oneshot::channel();
+        let (tx1, rx1) = oneshot::channel();
+        let (tx2, rx2) = oneshot::channel();
+
+        let device_manager = DeviceManager::init();
+        let mut device_managers = device_manager
+            .split_into_n_chunks(3)
+            .expect("have at least 3 devices");
+        let device_manager2 = Arc::new(device_managers.pop().unwrap());
+        let device_manager1 = Arc::new(device_managers.pop().unwrap());
+        let device_manager0 = Arc::new(device_managers.pop().unwrap());
+        let num_devices = device_manager0.devices().len();
+        let ids0 = (0..num_devices)
+            .map(|_| Id::new().unwrap())
+            .collect::<Vec<_>>();
+        let ids1 = ids0.clone();
+        let ids2 = ids0.clone();
+
+        let internal_seed = random();
+        let db_seed = random();
+
+        let test_db = generate_full_test_db(DB_SIZE, db_seed, true);
+        let party_db0 = test_db.party_db(0);
+        let party_db1 = test_db.party_db(1);
+        let party_db2 = test_db.party_db(2);
+
+        let actor0_task = tokio::task::spawn_blocking(move || {
+            let comms0 = device_manager0
+                .instantiate_network_from_ids(0, &ids0)
+                .unwrap();
+            let actor = match ServerActor::new_with_device_manager_and_comms(
+                0,
+                chacha_seeds0,
+                device_manager0,
+                comms0,
+                8,
+                DB_SIZE + DB_BUFFER,
+                MAX_BATCH_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
+                N_BUCKETS,
+                true,
+                false,
+                false,
+                Eye::Left,
+                false,
+            ) {
+                Ok((mut actor, handle)) => {
+                    load_test_db(&party_db0, &mut actor);
+                    actor.preprocess_db();
+                    tx0.send(Ok(handle)).unwrap();
+                    actor
+                }
+                Err(e) => {
+                    tx0.send(Err(e)).unwrap();
+                    return;
+                }
+            };
+            actor.run();
+        });
+        let actor1_task = tokio::task::spawn_blocking(move || {
+            let comms1 = device_manager1
+                .instantiate_network_from_ids(1, &ids1)
+                .unwrap();
+            let actor = match ServerActor::new_with_device_manager_and_comms(
+                1,
+                chacha_seeds1,
+                device_manager1,
+                comms1,
+                8,
+                DB_SIZE + DB_BUFFER,
+                MAX_BATCH_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
+                N_BUCKETS,
+                true,
+                false,
+                false,
+                Eye::Left,
+                false,
+            ) {
+                Ok((mut actor, handle)) => {
+                    load_test_db(&party_db1, &mut actor);
+                    actor.preprocess_db();
+                    tx1.send(Ok(handle)).unwrap();
+                    actor
+                }
+                Err(e) => {
+                    tx1.send(Err(e)).unwrap();
+                    return;
+                }
+            };
+            actor.run();
+        });
+        let actor2_task = tokio::task::spawn_blocking(move || {
+            let comms2 = device_manager2
+                .instantiate_network_from_ids(2, &ids2)
+                .unwrap();
+            let actor = match ServerActor::new_with_device_manager_and_comms(
+                2,
+                chacha_seeds2,
+                device_manager2,
+                comms2,
+                8,
+                DB_SIZE + DB_BUFFER,
+                MAX_BATCH_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE,
+                MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT,
+                MATCH_DISTANCES_2D_BUFFER_SIZE,
+                N_BUCKETS,
+                true,
+                false,
+                false,
+                Eye::Left,
+                false,
+            ) {
+                Ok((mut actor, handle)) => {
+                    load_test_db(&party_db2, &mut actor);
+                    actor.preprocess_db();
+                    tx2.send(Ok(handle)).unwrap();
+                    actor
+                }
+                Err(e) => {
+                    tx2.send(Err(e)).unwrap();
+                    return;
+                }
+            };
+            actor.run();
+        });
+        let mut handle0 = rx0.await??;
+        let mut handle1 = rx1.await??;
+        let mut handle2 = rx2.await??;
+
+        let mut test_case_generator =
+            SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, false, true);
+
+        tracing::info!("Setup done, starting tests with anonymized stats disabled");
+        test_case_generator
+            .run_n_batches(1, [&mut handle0, &mut handle1, &mut handle2])
+            .await?;
+
+        drop(handle0);
+        drop(handle1);
+        drop(handle2);
+        actor0_task.await.unwrap();
+        actor1_task.await.unwrap();
+        actor2_task.await.unwrap();
         Ok(())
     }
 }
