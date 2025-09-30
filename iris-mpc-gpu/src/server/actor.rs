@@ -2150,9 +2150,7 @@ impl ServerActor {
         orientation: Orientation,
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        if !self.disable_anonymized_stats_for_current_batch {
-            self.try_calculate_bucket_stats(eye_db, orientation);
-        }
+        self.try_calculate_bucket_stats(eye_db, orientation);
 
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
@@ -2401,9 +2399,7 @@ impl ServerActor {
         orientation: Orientation,
     ) -> (PartialResultsWithRotations, Vec<OneSidedDistanceCache>) {
         // we try to calculate the bucket stats here if we have collected enough of them
-        if !self.disable_anonymized_stats_for_current_batch {
-            self.try_calculate_bucket_stats(eye_db, orientation);
-        }
+        self.try_calculate_bucket_stats(eye_db, orientation);
 
         let old_distance_cache_counters = match orientation {
             Orientation::Normal => Some(
