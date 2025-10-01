@@ -5,7 +5,7 @@ mod listener; // accept inbound connections
 mod server; // trait for accepting connections. hides details of TCP vs TLS // used to determine the peer id and connection id
 
 pub use connection_state::ConnectionState;
-pub use listener::ConnectionRequest;
+pub use listener::{accept_loop, ConnectionRequest};
 
 use crate::{
     execution::player::Identity,
@@ -61,13 +61,13 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new<T: NetworkConnection, C: Client>(
+    pub fn new<T: NetworkConnection + 'static, C: Client + 'static>(
         connection_id: ConnectionId,
         own_id: Arc<Identity>,
         peer: Arc<Peer>,
         connection_state: ConnectionState,
         client: C,
-        conn_req_tx: mpsc::UnboundedSender<ConnectionRequest<T>>,
+        conn_req_tx: mpsc::Sender<ConnectionRequest<T>>,
     ) -> Self {
         let inner = ConnectionInner {
             connection_id,
@@ -77,13 +77,13 @@ impl Connection {
             client,
             conn_req_tx,
         };
-        let (cmd_tx, cmd_rx) = mspc::channel(1);
+        let (cmd_tx, cmd_rx) = mpsc::channel(1);
         tokio::spawn(manage_connection(inner, cmd_rx));
         Self { cmd_tx }
     }
 
     async fn connect(&self) {
-        let _ = cmd_tx.send(InnerCmd::Connect).await;
+        let _ = self.cmd_tx.send(InnerCmd::Connect).await;
     }
 
     async fn disconect(&self) {
@@ -110,7 +110,7 @@ struct ConnectionInner<T: NetworkConnection, C: Client> {
     // initiates the connection
     client: C,
     // listens for the connection
-    conn_req_tx: mpsc::UnboundedSender<ConnectionRequest<T>>,
+    conn_req_tx: mpsc::Sender<ConnectionRequest<T>>,
 }
 
 impl<T: NetworkConnection, C: Client> ConnectionInner<T, C> {
