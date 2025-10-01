@@ -1,10 +1,8 @@
-use crate::network::tcp::config::TcpConfig;
-use eyre::Result;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
 // want every connection to be able to do the following:
@@ -56,12 +54,12 @@ impl ConnectionState {
             .is_ok()
     }
 
-    pub async fn incr_reconnect(&self) -> bool {
-        self.inner.read().await.reconnecting.increment().await
+    pub async fn incr_ready(&self) -> bool {
+        self.inner.read().await.incr_ready().await
     }
 
-    pub async fn decr_reconnect(&self) -> bool {
-        self.inner.read().await.decr_reconnect().await
+    pub async fn decr_ready(&self) -> bool {
+        self.inner.read().await.decr_ready().await
     }
 
     pub async fn shutdown_ct(&self) -> CancellationToken {
@@ -74,7 +72,7 @@ impl ConnectionState {
 }
 
 struct ConnectionStateInner {
-    reconnecting: Counter,
+    not_ready: Counter,
     exited: AtomicBool,
     shutdown_ct: CancellationToken,
     err_ct: CancellationToken,
@@ -88,7 +86,7 @@ impl ConnectionStateInner {
         err_ct: CancellationToken,
     ) -> Self {
         Self {
-            reconnecting: Counter::new(num_connections),
+            not_ready: Counter::new(num_connections),
             exited: AtomicBool::new(false),
             shutdown_ct,
             err_ct,
@@ -100,8 +98,8 @@ impl ConnectionStateInner {
         self.err_ct = err_ct;
     }
 
-    async fn decr_reconnect(&self) -> bool {
-        let r = self.reconnecting.decrement().await;
+    async fn incr_ready(&self) -> bool {
+        let r = self.not_ready.decrement().await;
         if r {
             if let Some(tx) = self.ready_tx.as_ref() {
                 // don't want to block if ConnectionState isn't waiting for this to be ready.
@@ -111,8 +109,12 @@ impl ConnectionStateInner {
         r
     }
 
+    pub async fn decr_ready(&self) -> bool {
+        self.not_ready.increment().await
+    }
+
     pub async fn is_ready(&self) -> bool {
-        self.reconnecting.is_zero().await
+        self.not_ready.is_zero().await
     }
 }
 
