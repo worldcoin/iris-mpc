@@ -121,41 +121,49 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
     }
 
     async fn do_idle(&self, cmd_rx: &mut mpsc::Receiver<InnerCmd>) -> Option<()> {
-        let err_ct = self.connection_state.err_ct().await;
-        let shutdown_ct = self.connection_state.shutdown_ct().await;
-
         loop {
-            tokio::select! {
-                opt = cmd_rx.recv() => match opt {
-                    Some(cmd) => {
-                        match cmd {
-                            InnerCmd::Connect => {
-                                return Some(());
-                            }
-                            InnerCmd::Close => {}
-                        }
-                    },
-                    None => return None,
-                },
-                _ = err_ct.cancelled() => {},
+            let err_ct = self.connection_state.err_ct().await;
+            let shutdown_ct = self.connection_state.shutdown_ct().await;
+
+            let opt = tokio::select! {
+                o = cmd_rx.recv() => o,
+                _ = err_ct.cancelled() => continue,
                 _ = shutdown_ct.cancelled() => {
                     return None;
                 }
+            };
+
+            match opt {
+                Some(cmd) => match cmd {
+                    InnerCmd::Connect => {
+                        return Some(());
+                    }
+                    InnerCmd::Close => continue,
+                },
+                None => return None,
             }
         }
     }
 
-    async fn do_connect(&self) -> Option<T> {
+    async fn do_connect(&self, cmd_rx: &mut mpsc::Receiver<InnerCmd>) -> Option<T> {
         let err_ct = self.connection_state.err_ct().await;
         let shutdown_ct = self.connection_state.shutdown_ct().await;
 
-        tokio::select! {
-            r = self.connect_loop() => Some(r),
-            _ = err_ct.cancelled() => {
-                None
-            }
-            _ = shutdown_ct.cancelled() => {
-                None
+        loop {
+            let opt = tokio::select! {
+                r = self.connect_loop() => return Some(r),
+                _ = err_ct.cancelled() => {
+                    return None;
+                },
+                _ = shutdown_ct.cancelled() => {
+                    return None;
+                },
+                o = cmd_rx.recv() => o,
+            };
+
+            match opt {
+                Some(InnerCmd::Connect) => continue,
+                _ => return None,
             }
         }
     }
@@ -181,7 +189,7 @@ async fn manage_connection<T: NetworkConnection, C: Client<Output = T>>(
                 Some(_) => inner_state = InnerState::Connecting,
                 None => break,
             },
-            InnerState::Connecting => match inner.do_connect().await {
+            InnerState::Connecting => match inner.do_connect(&mut cmd_rx).await {
                 Some(stream) => {
                     connection.replace(stream);
                     inner_state = InnerState::Ready;
