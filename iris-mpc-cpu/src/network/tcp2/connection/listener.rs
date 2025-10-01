@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -25,9 +25,9 @@ impl<T: NetworkConnection> ConnectionRequest<T> {
 }
 
 pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
-    id: Identity,
+    id: Arc<Identity>,
     listener: S,
-    mut cmd_ch: mpsc::UnboundedReceiver<ConnectionRequest<T>>,
+    mut cmd_ch: mpsc::Receiver<ConnectionRequest<T>>,
     shutdown_ct: CancellationToken,
 ) {
     let mut connection_requests: HashMap<Identity, HashMap<ConnectionId, oneshot::Sender<T>>> =
@@ -61,8 +61,10 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     }
                 };
 
+                let mut success = false;
                 if let Some(peer_map) = connection_requests.get_mut(&peer_id) {
                     if let Some(rsp) = peer_map.remove(&connection_id) {
+                        success = true;
                         let _ = rsp.send(stream);
                     } else {
                         tracing::debug!(
@@ -71,6 +73,10 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     }
                 } else {
                     tracing::debug!("no pending requests from peer {peer_id:?}");
+                }
+
+                if !success {
+                    stream.close();
                 }
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
