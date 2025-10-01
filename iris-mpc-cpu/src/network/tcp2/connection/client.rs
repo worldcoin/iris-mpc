@@ -1,6 +1,5 @@
-use crate::network::{
-    tcp::{Client, NetworkConnection},
-    tcp2::connection::configure_tcp_stream,
+use crate::network::tcp2::{
+    connection::configure_tcp_stream, Client, DynStreamConn, TcpStreamConn, TlsStreamConn,
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
@@ -41,7 +40,7 @@ impl TlsClient {
 
 #[async_trait]
 impl Client for TlsClient {
-    type Output = TlsStream<TcpStream>;
+    type Output = TlsStreamConn;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let hostname = url
             .split(':')
@@ -54,29 +53,25 @@ impl Client for TlsClient {
         configure_tcp_stream(&stream)?;
 
         let tls_stream = self.tls_connector.connect(domain, stream).await?;
-        Ok(TlsStream::Client(tls_stream))
+        Ok(TlsStreamConn(TlsStream::Client(tls_stream)))
     }
 }
 
 #[async_trait]
 impl Client for TcpClient {
-    type Output = TcpStream;
+    type Output = TcpStreamConn;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let stream = TcpStream::connect(url).await?;
         configure_tcp_stream(&stream)?;
-        Ok(stream)
+        Ok(TcpStreamConn(stream))
     }
 }
-
-// allow mixing TLS client and TCP server by boxing connections
-/// Dynamic stream type for mixed connectors and listeners
-pub type DynStream = Box<dyn NetworkConnection>;
 
 #[derive(Clone)]
 pub struct BoxTcpClient(pub TcpClient);
 #[async_trait]
 impl Client for BoxTcpClient {
-    type Output = DynStream;
+    type Output = DynStreamConn;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let stream = self.0.connect(url).await?;
         Ok(Box::new(stream))
@@ -87,7 +82,7 @@ impl Client for BoxTcpClient {
 pub struct BoxTlsClient(pub TlsClient);
 #[async_trait]
 impl Client for BoxTlsClient {
-    type Output = DynStream;
+    type Output = DynStreamConn;
     async fn connect(&self, url: String) -> Result<Self::Output> {
         let stream = self.0.connect(url).await?;
         Ok(Box::new(stream))

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
