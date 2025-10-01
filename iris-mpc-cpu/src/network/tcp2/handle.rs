@@ -5,8 +5,8 @@ use crate::{
     network::{
         tcp::config::TcpConfig,
         tcp2::{
-            connection::{accept_loop, Connection, ConnectionRequest, ConnectionState, Peer},
-            data::ConnectionId,
+            connection::{accept_loop, Connection, ConnectionRequest, ConnectionState},
+            data::{ConnectionId, Peer},
             Client, NetworkConnection, Server,
         },
     },

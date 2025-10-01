@@ -1,4 +1,4 @@
-use crate::network::tcp2::connection::configure_tcp_stream;
+use crate::network::tcp2::data::configure_tcp_stream;
 use crate::network::tcp2::{DynStreamConn, Server, TcpStreamConn, TlsStreamConn};
 use async_trait::async_trait;
 use eyre::{eyre, Result};
