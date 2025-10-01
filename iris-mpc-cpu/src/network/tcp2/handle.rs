@@ -1,31 +1,40 @@
+use std::{marker::PhantomData, sync::Arc};
+
 use crate::{
     execution::player::Identity,
     network::{
         tcp::config::TcpConfig,
         tcp2::{
-            connection::{Connection, ConnectionState},
+            connection::{Connection, ConnectionRequest, ConnectionState, Peer},
             NetworkConnection,
         },
     },
 };
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 pub struct TcpNetworkHandle<T: NetworkConnection> {
-    peers: [Identity; 2],
-    connections0: Vec<Connection<T>>,
-    connections1: Vec<Connection<T>>,
+    connections0: Vec<Connection>,
+    connections1: Vec<Connection>,
     connection_state: ConnectionState,
     config: TcpConfig,
+    _marker: PhantomData<T>,
 }
 
 impl<T: NetworkConnection> TcpNetworkHandle<T> {
-    pub fn new<I>(mut identities: I, config: TcpConfig, shutdown_ct: CancellationToken) -> Self
+    pub fn new<I>(
+        my_id: Identity,
+        mut peers: I,
+        config: TcpConfig,
+        shutdown_ct: CancellationToken,
+    ) -> Self
     where
-        I: Iterator<Item = Identity>,
+        I: Iterator<Item = (Identity, String)>,
     {
-        let peers: [Identity; 2] = [
-            identities.next().expect("expected at least 2 identities"),
-            identities.next().expect("expected at least 2 identities"),
+        let my_id = Arc::new(Identity);
+        let peers: [Arc<Peer>; 2] = [
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
+            Arc::new(peers.next().expect("expected at least 2 identities").into()),
         ];
         let mut connections0 = Vec::new();
         let mut connections1 = Vec::new();
@@ -36,6 +45,9 @@ impl<T: NetworkConnection> TcpNetworkHandle<T> {
             CancellationToken::new(),
         );
 
+        let (conn_cmd_tx, conn_cmd_rx) =
+            mpsc::channel::<ConnectionRequest<T>>(config.num_connections);
+
         for _ in 0..config.num_connections {
             // connect to peers[0]
             // connect to peers[1]
@@ -43,12 +55,12 @@ impl<T: NetworkConnection> TcpNetworkHandle<T> {
 
         assert_eq!(connections0.len(), config.num_connections);
         assert_eq!(connections1.len(), config.num_connections);
-        TcpNetworkHandle {
-            peers,
+        Self {
             connections0,
             connections1,
             connection_state,
             config,
+            _marker: PhantomData,
         }
     }
 }
