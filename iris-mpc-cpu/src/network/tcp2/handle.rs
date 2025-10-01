@@ -45,7 +45,7 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         let mut connections1 = Vec::new();
 
         let connection_state = ConnectionState::new(
-            config.num_connections,
+            config.num_connections * 2, // 2 peers
             shutdown_ct,
             CancellationToken::new(),
         );
@@ -84,8 +84,6 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
         assert_eq!(connections0.len(), config.num_connections);
         assert_eq!(connections1.len(), config.num_connections);
 
-        // todo: tell the connections to connect and wait for them to be ready
-
         Self {
             connections0,
             connections1,
@@ -93,5 +91,22 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             config,
             _marker: PhantomData,
         }
+    }
+
+    // returns None if cancelled
+    pub async fn wait_for_ready(&self) -> Option<()> {
+        for conn in self.connections0.iter().chain(self.connections1.iter()) {
+            conn.connect().await;
+        }
+
+        let shutdown_ct = self.connection_state.shutdown_ct().await;
+        tokio::select! {
+            _ = self.connection_state.wait_for_ready() => Some(()),
+            _ = shutdown_ct.cancelled() => None,
+        }
+    }
+
+    pub async fn get_err_ct(&self) -> CancellationToken {
+        self.connection_state.err_ct().await
     }
 }

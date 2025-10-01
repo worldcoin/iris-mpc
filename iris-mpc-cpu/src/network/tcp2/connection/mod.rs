@@ -87,11 +87,11 @@ impl Connection {
         Self { cmd_tx }
     }
 
-    async fn connect(&self) {
+    pub async fn connect(&self) {
         let _ = self.cmd_tx.send(InnerCmd::Connect).await;
     }
 
-    async fn disconect(&self) {
+    pub async fn disconect(&self) {
         let _ = self.cmd_tx.send(InnerCmd::Close).await;
     }
 }
