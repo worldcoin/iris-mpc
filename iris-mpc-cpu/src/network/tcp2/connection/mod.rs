@@ -14,7 +14,10 @@ use crate::{
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
 use std::{sync::Arc, time::Duration};
-use tokio::{net::TcpStream, sync::mpsc};
+use tokio::{
+    net::TcpStream,
+    sync::{mpsc, oneshot},
+};
 
 /// set no_delay and keepalive
 fn configure_tcp_stream(stream: &TcpStream) -> Result<()> {
@@ -61,7 +64,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new<T: NetworkConnection + 'static, C: Client + 'static>(
+    pub fn new<T: NetworkConnection + 'static, C: Client<Output = T> + 'static>(
         connection_id: ConnectionId,
         own_id: Arc<Identity>,
         peer: Arc<Peer>,
@@ -113,13 +116,21 @@ struct ConnectionInner<T: NetworkConnection, C: Client> {
     conn_req_tx: mpsc::Sender<ConnectionRequest<T>>,
 }
 
-impl<T: NetworkConnection, C: Client> ConnectionInner<T, C> {
-    async fn connect(&self) -> T {
-        todo!()
+impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
+    async fn connect(&self) -> Result<T> {
+        if &*self.own_id > self.peer.id() {
+            self.client.connect(self.peer.url().to_string()).await
+        } else {
+            let (rsp_tx, rsp_rx) = oneshot::channel();
+            let req = ConnectionRequest::new(self.peer.id().clone(), self.connection_id, rsp_tx);
+            let _ = self.conn_req_tx.send(req).await;
+            let r = rsp_rx.await?;
+            Ok(r)
+        }
     }
 }
 
-async fn manage_connection<T: NetworkConnection, C: Client>(
+async fn manage_connection<T: NetworkConnection, C: Client<Output = T>>(
     inner: ConnectionInner<T, C>,
     cmd_rx: mpsc::Receiver<InnerCmd>,
 ) {
