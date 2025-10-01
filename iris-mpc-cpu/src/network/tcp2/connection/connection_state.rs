@@ -77,6 +77,7 @@ struct ConnectionStateInner {
     shutdown_ct: CancellationToken,
     err_ct: CancellationToken,
     ready_tx: Option<mpsc::Sender<()>>,
+    // perhaps add flag for err_logged and reset on ready
 }
 
 impl ConnectionStateInner {
