@@ -55,4 +55,5 @@ impl NetworkType {
 pub mod grpc;
 pub mod local;
 pub mod tcp;
+pub mod tcp2;
 pub mod value;
