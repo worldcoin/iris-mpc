@@ -7,6 +7,7 @@ use std::net::SocketAddr;
 
 use crate::network::tcp2::session::TcpSession;
 use async_trait::async_trait;
+use eyre::Result;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::sync::CancellationToken;
 
