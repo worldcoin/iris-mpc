@@ -61,11 +61,10 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     }
                 };
 
-                let mut success = false;
                 if let Some(peer_map) = connection_requests.get_mut(&peer_id) {
                     if let Some(rsp) = peer_map.remove(&connection_id) {
-                        success = true;
                         let _ = rsp.send(stream);
+                        continue;
                     } else {
                         tracing::debug!(
                             "no pending request for connection_id {connection_id:?} from peer {peer_id:?}"
@@ -75,9 +74,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     tracing::debug!("no pending requests from peer {peer_id:?}");
                 }
 
-                if !success {
-                    stream.close();
-                }
+                stream.close();
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
         }
