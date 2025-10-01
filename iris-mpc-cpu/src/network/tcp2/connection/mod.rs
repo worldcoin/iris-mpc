@@ -10,7 +10,10 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
     execution::player::Identity,
-    network::tcp2::{data::ConnectionId, Client, NetworkConnection},
+    network::tcp2::{
+        data::{ConnectionId, Peer},
+        Client, NetworkConnection,
+    },
 };
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
@@ -20,46 +23,6 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::sleep,
 };
-
-/// set no_delay and keepalive
-fn configure_tcp_stream(stream: &TcpStream) -> Result<()> {
-    let params = TcpKeepalive::new()
-        // idle time before keepalives get sent. NGINX default is 60 seconds. want to be less than that.
-        .with_time(Duration::from_secs(30))
-        // how often to send keepalives
-        .with_interval(Duration::from_secs(30))
-        // how many unanswered probes before the connection is closed
-        .with_retries(4);
-    let socket_ref = SockRef::from(&stream);
-    socket_ref.set_tcp_nodelay(true)?;
-    socket_ref.set_tcp_keepalive(&params)?;
-    Ok(())
-}
-
-pub struct Peer {
-    id: Identity,
-    url: String,
-}
-
-impl Peer {
-    pub fn new(id: Identity, url: String) -> Self {
-        Peer { id, url }
-    }
-
-    pub fn id(&self) -> &Identity {
-        &self.id
-    }
-
-    pub fn url(&self) -> &str {
-        &self.url
-    }
-}
-
-impl From<(Identity, String)> for Peer {
-    fn from((id, url): (Identity, String)) -> Self {
-        Peer::new(id, url)
-    }
-}
 
 pub struct Connection {
     cmd_tx: mpsc::Sender<InnerCmd>,
@@ -133,7 +96,6 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
             Ok(r)
         }
     }
-
     async fn connect_loop(&self) -> T {
         let mut rng: StdRng =
             StdRng::from_rng(&mut rand::thread_rng()).expect("Failed to seed RNG");
