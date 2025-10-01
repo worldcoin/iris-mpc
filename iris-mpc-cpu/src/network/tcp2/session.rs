@@ -1,6 +1,6 @@
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::{value::NetworkValue, Networking},
+    network::{tcp::config::TcpConfig, value::NetworkValue, Networking},
 };
 use async_trait::async_trait;
 use eyre::Result;
