@@ -6,6 +6,7 @@ mod server; // trait for accepting connections. hides details of TCP vs TLS // u
 
 pub use connection_state::ConnectionState;
 pub use listener::{accept_loop, ConnectionRequest};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
     execution::player::Identity,
@@ -17,6 +18,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot},
+    time::sleep,
 };
 
 /// set no_delay and keepalive
@@ -94,6 +96,7 @@ impl Connection {
     }
 }
 
+#[derive(PartialEq, Eq)]
 enum InnerState {
     Idle,
     Connecting,
@@ -119,7 +122,9 @@ struct ConnectionInner<T: NetworkConnection, C: Client> {
 impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
     async fn connect(&self) -> Result<T> {
         if &*self.own_id > self.peer.id() {
-            self.client.connect(self.peer.url().to_string()).await
+            let mut stream = self.client.connect(self.peer.url().to_string()).await?;
+            handshake::outbound(&mut stream, &self.own_id, &self.connection_id).await?;
+            Ok(stream)
         } else {
             let (rsp_tx, rsp_rx) = oneshot::channel();
             let req = ConnectionRequest::new(self.peer.id().clone(), self.connection_id, rsp_tx);
@@ -128,11 +133,109 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
             Ok(r)
         }
     }
+
+    async fn connect_loop(&self) -> T {
+        let mut rng: StdRng =
+            StdRng::from_rng(&mut rand::thread_rng()).expect("Failed to seed RNG");
+
+        // backoff when retrying
+        let mut retry_sec = 2;
+
+        sleep(Duration::from_millis(rng.gen_range(0..=3000))).await;
+
+        loop {
+            match self.connect().await {
+                Ok(stream) => return stream,
+                Err(e) => {
+                    tracing::debug!("connect failed: {e:?}");
+                }
+            }
+
+            sleep(Duration::from_secs(retry_sec)).await;
+            if retry_sec < 32 {
+                retry_sec *= 2;
+            }
+        }
+    }
+
+    async fn do_idle(&self, cmd_rx: &mut mpsc::Receiver<InnerCmd>) -> Option<()> {
+        let err_ct = self.connection_state.err_ct().await;
+        let shutdown_ct = self.connection_state.shutdown_ct().await;
+
+        loop {
+            tokio::select! {
+                opt = cmd_rx.recv() => match opt {
+                    Some(cmd) => {
+                        match cmd {
+                            InnerCmd::Connect => {
+                                return Some(());
+                            }
+                            InnerCmd::Close => {}
+                        }
+                    },
+                    None => return None,
+                },
+                _ = err_ct.cancelled() => {},
+                _ = shutdown_ct.cancelled() => {
+                    return None;
+                }
+            }
+        }
+    }
+
+    async fn do_connect(&self) -> Option<T> {
+        let err_ct = self.connection_state.err_ct().await;
+        let shutdown_ct = self.connection_state.shutdown_ct().await;
+
+        tokio::select! {
+            r = self.connect_loop() => Some(r),
+            _ = err_ct.cancelled() => {
+                None
+            }
+            _ = shutdown_ct.cancelled() => {
+                None
+            }
+        }
+    }
+
+    async fn do_run(&self, connection: T) {
+        let err_ct = self.connection_state.err_ct().await;
+        let shutdown_ct = self.connection_state.shutdown_ct().await;
+
+        todo!();
+    }
 }
 
 async fn manage_connection<T: NetworkConnection, C: Client<Output = T>>(
     inner: ConnectionInner<T, C>,
-    cmd_rx: mpsc::Receiver<InnerCmd>,
+    mut cmd_rx: mpsc::Receiver<InnerCmd>,
 ) {
-    let mut inner_state = InnerState::Connecting;
+    let mut inner_state = InnerState::Idle;
+    let mut connection: Option<T> = None;
+
+    loop {
+        match inner_state {
+            InnerState::Idle => match inner.do_idle(&mut cmd_rx).await {
+                Some(_) => inner_state = InnerState::Connecting,
+                None => break,
+            },
+            InnerState::Connecting => match inner.do_connect().await {
+                Some(stream) => {
+                    connection.replace(stream);
+                    inner_state = InnerState::Ready;
+                    inner.connection_state.incr_ready().await;
+                }
+                None => {
+                    // if there was a shutdown, do_idle() will return None and this loop will exit.
+                    inner_state = InnerState::Idle;
+                }
+            },
+            InnerState::Ready => {
+                let c = connection.take().unwrap();
+                inner.do_run(c).await;
+                inner_state = InnerState::Idle;
+                inner.connection_state.decr_ready().await;
+            }
+        }
+    }
 }
