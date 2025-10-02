@@ -203,7 +203,6 @@ async fn main() {
     irises.extend(stream_iterator);
     assert!(irises.len() == num_irises);
 
-    let start_t = Instant::now();
     let pool = ThreadPoolBuilder::new()
         .num_threads(args.num_threads)
         .build()
@@ -214,41 +213,19 @@ async fn main() {
     println!("Starting work at serial id: {}", start);
     let mut evaluated_pairs = 0usize;
 
-    let rot_ext_irises = irises
-        .iter()
-        .map(|iris| RotExtIrisCode::from(iris.clone()))
-        .collect::<Vec<_>>();
-
     let irises_with_rotations = irises
         .iter()
         .map(|iris| iris.all_rotations().try_into().unwrap())
         .collect::<Vec<_>>();
 
-    let self_rots: Vec<[_; 31]> = irises_with_rotations
-        .iter()
-        .map(|rotations: &[IrisCode; 31]| {
-            rotations
-                .iter()
-                .map(|rotation| rotation.get_distance_fraction(&rotations[15]))
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-
+    let start_t = Instant::now();
     while start < num_irises {
         let end = (start + chunk_size).min(num_irises);
         let results = match args.distance_used {
             DistanceUsed::Normal => naive_knn(&irises, args.k, start, end, &pool),
-            DistanceUsed::MinFHD => naive_knn_min_fhd2(
-                &irises_with_rotations,
-                &irises,
-                &self_rots,
-                args.k,
-                start,
-                end,
-                &pool,
-            ),
+            DistanceUsed::MinFHD => {
+                naive_knn_min_fhd1(&irises_with_rotations, &irises, args.k, start, end, &pool)
+            }
         };
         evaluated_pairs += (end - start) * num_irises;
 

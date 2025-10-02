@@ -51,7 +51,6 @@ pub fn naive_knn(
 pub fn naive_knn_min_fhd1(
     irises: &[[IrisCode; 31]],
     centers: &[IrisCode],
-    self_rots: &[[(u16, u16); 31]],
     k: usize,
     start: usize,
     end: usize,
