@@ -567,15 +567,21 @@ impl DistanceComparator {
     ) -> PartialResultsWithRotations {
         let mut partial_results_with_rotations = HashMap::new();
         for i in 0..self.device_manager.device_count() {
-            let counter = min(
-                dtoh_on_stream_sync(
-                    &self.partial_match_counter[i],
-                    &self.device_manager.device(i),
-                    &streams[i],
-                )
-                .unwrap()[0] as usize,
-                ALL_MATCHES_LEN * self.query_length, // Don't exceed allocated buffer size
-            );
+            let partial_match_counter = dtoh_on_stream_sync(
+                &self.partial_match_counter[i],
+                &self.device_manager.device(i),
+                &streams[i],
+            )
+            .unwrap()[0] as usize;
+
+            let max_matches = ALL_MATCHES_LEN * self.query_length;
+
+            if partial_match_counter > max_matches {
+                tracing::warn!("Partial match counter exceeded allocated buffer size. Some matches may be lost.");
+            }
+
+            // Clamp to the max size of the allocated buffers
+            let counter = min(partial_match_counter, max_matches);
 
             if counter == 0 {
                 continue;
