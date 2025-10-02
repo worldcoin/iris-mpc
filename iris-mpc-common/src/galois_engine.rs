@@ -380,12 +380,23 @@ pub mod degree4 {
             };
 
             let mut sum = 0u16;
-            let mut left_coefs = self.coefs.iter();
-            for chunk in other.coefs.chunks_exact(CODE_COLS * 4) {
-                let right_coeffs = chunk.iter().skip(skip).chain(chunk.iter().take(skip));
-                for right in right_coeffs {
-                    let left = left_coefs.next().unwrap();
-                    sum = sum.wrapping_add(left.wrapping_mul(*right));
+            let chunk_size = CODE_COLS * 4;
+
+            for (chunk_idx, chunk) in other.coefs.chunks_exact(chunk_size).enumerate() {
+                let left_start = chunk_idx * chunk_size;
+                let left_slice = &self.coefs[left_start..left_start + chunk_size];
+
+                // Split the rotation into two contiguous loops,
+                // allowing the compiler to vectorize
+                let (part1, part2) = chunk.split_at(skip);
+                let (left1, left2) = left_slice.split_at(chunk_size - skip);
+
+                for (l, r) in left1.iter().zip(part2.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                }
+
+                for (l, r) in left2.iter().zip(part1.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
                 }
             }
             sum
