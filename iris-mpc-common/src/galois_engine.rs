@@ -382,20 +382,21 @@ pub mod degree4 {
             let mut sum = 0u16;
             let chunk_size = CODE_COLS * 4;
 
-            for (chunk_idx, chunk) in other.coefs.chunks_exact(chunk_size).enumerate() {
-                let left_start = chunk_idx * chunk_size;
-                let left_slice = &self.coefs[left_start..left_start + chunk_size];
-
+            for (self_slice, other_slice) in other
+                .coefs
+                .chunks_exact(chunk_size)
+                .zip(self.coefs.chunks_exact(chunk_size))
+            {
                 // Split the rotation into two contiguous loops,
                 // allowing the compiler to vectorize
-                let (part1, part2) = chunk.split_at(skip);
-                let (left1, left2) = left_slice.split_at(chunk_size - skip);
+                let (other1, other2) = other_slice.split_at(skip);
+                let (self1, self2) = self_slice.split_at(chunk_size - skip);
 
-                for (l, r) in left1.iter().zip(part2.iter()) {
+                for (l, r) in self1.iter().zip(other2.iter()) {
                     sum = sum.wrapping_add(l.wrapping_mul(*r));
                 }
 
-                for (l, r) in left2.iter().zip(part1.iter()) {
+                for (l, r) in self2.iter().zip(other1.iter()) {
                     sum = sum.wrapping_add(l.wrapping_mul(*r));
                 }
             }
