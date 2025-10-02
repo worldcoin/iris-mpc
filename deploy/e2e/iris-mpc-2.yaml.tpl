@@ -209,10 +209,10 @@ iris-mpc-2:
       value: "true"
 
     - name: SMPC__ENABLE_REAUTH
-      value: "false"
+      value: "true"
 
     - name: SMPC__ENABLE_RESET
-      value: "false"
+      value: "true"
 
     - name: SMPC__LUC_ENABLED
       value: "true"
