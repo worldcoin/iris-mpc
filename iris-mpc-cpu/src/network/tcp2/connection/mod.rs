@@ -9,20 +9,44 @@ pub use listener::{accept_loop, ConnectionRequest};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
-    execution::player::Identity,
+    execution::{player::Identity, session::SessionId},
     network::tcp2::{
-        data::{ConnectionId, Peer},
+        data::{ConnectionId, OutboundMsg, Peer},
         Client, NetworkConnection,
     },
 };
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot},
     time::sleep,
 };
+
+struct ConnectCmd {
+    num_sessions: usize,
+    session_start_idx: usize,
+    rsp: oneshot::Sender<Vec<ConnectRsp>>,
+}
+
+pub struct ConnectRsp {
+    pub session_id: SessionId,
+    pub session_tx: mpsc::Sender<OutboundMsg>,
+    pub session_rx: mpsc::Receiver<NetworkValue>,
+}
+
+enum InnerCmd {
+    Connect(ConnectCmd),
+    Close,
+}
+
+#[derive(PartialEq, Eq)]
+enum LoopState {
+    Idle,
+    Connecting,
+    Ready,
+}
 
 pub struct Connection {
     cmd_tx: mpsc::Sender<InnerCmd>,
@@ -50,25 +74,24 @@ impl Connection {
         Self { cmd_tx }
     }
 
-    pub async fn connect(&self) {
-        let _ = self.cmd_tx.send(InnerCmd::Connect).await;
+    pub async fn connect(
+        &self,
+        num_sessions: usize,
+        session_start_idx: usize,
+    ) -> Result<oneshot::Receiver<Result<Vec<ConnectRsp>>>> {
+        let (rsp_tx, rsp_rx) = oneshot::channel();
+        let cmd = InnerCmd::Connect {
+            num_sessions,
+            session_start_idx,
+            rsp: rsp_tx,
+        };
+        let _ = self.cmd_tx.send(cmd).await?;
+        Ok(rsp_rx)
     }
 
     pub async fn disconect(&self) {
         let _ = self.cmd_tx.send(InnerCmd::Close).await;
     }
-}
-
-#[derive(PartialEq, Eq)]
-enum InnerState {
-    Idle,
-    Connecting,
-    Ready,
-}
-
-enum InnerCmd {
-    Connect,
-    Close,
 }
 
 struct ConnectionInner<T: NetworkConnection, C: Client> {
@@ -120,27 +143,17 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
         }
     }
 
-    async fn do_idle(&self, cmd_rx: &mut mpsc::Receiver<InnerCmd>) -> Option<()> {
+    async fn do_idle(&self, cmd_rx: &mut mpsc::Receiver<InnerCmd>) -> Option<InnerCmd> {
         loop {
             let err_ct = self.connection_state.err_ct().await;
             let shutdown_ct = self.connection_state.shutdown_ct().await;
 
-            let opt = tokio::select! {
-                o = cmd_rx.recv() => o,
+            tokio::select! {
+                o = cmd_rx.recv() => return Some(o),
                 _ = err_ct.cancelled() => continue,
                 _ = shutdown_ct.cancelled() => {
                     return None;
                 }
-            };
-
-            match opt {
-                Some(cmd) => match cmd {
-                    InnerCmd::Connect => {
-                        return Some(());
-                    }
-                    InnerCmd::Close => continue,
-                },
-                None => return None,
             }
         }
     }
@@ -168,9 +181,30 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
         }
     }
 
-    async fn do_run(&self, connection: T) {
+    async fn do_run(
+        &self,
+        connection: T,
+        cmd: ConnectCmd,
+        conn_state: ConnectionState,
+        cmd_rx: &mut mpsc::Receiver<InnerCmd>,
+    ) {
         let err_ct = self.connection_state.err_ct().await;
         let shutdown_ct = self.connection_state.shutdown_ct().await;
+
+        let mut r = vec![];
+        let mut outbound_map: HashMap<u32, mpsc::Sender<NetworkValue>> = HashMap::new();
+        let (outbound_tx, outbound_rx) = mpsc::channel(cmd.num_sessions);
+
+        for session_id in cmd.session_start_idx..cmd.session_start_idx + cmd.num_sessions {
+            let (inbound_tx, inbound_rx) = mpsc::channel(1);
+            outbound_map.insert(session_id as u32, inbound_tx);
+
+            r.push(ConnectRsp {
+                session_id: SessionId::from(session_id as u32),
+                session_tx: outbound_tx.clone(),
+                session_rx: inbound_rx,
+            });
+        }
 
         todo!();
     }
@@ -180,31 +214,41 @@ async fn manage_connection<T: NetworkConnection, C: Client<Output = T>>(
     inner: ConnectionInner<T, C>,
     mut cmd_rx: mpsc::Receiver<InnerCmd>,
 ) {
-    let mut inner_state = InnerState::Idle;
+    let mut loop_state = LoopState::Idle;
     let mut connection: Option<T> = None;
+    let mut conn_cmd: Option<ConnectCmd> = None;
 
     loop {
-        match inner_state {
-            InnerState::Idle => match inner.do_idle(&mut cmd_rx).await {
-                Some(_) => inner_state = InnerState::Connecting,
+        match loop_state {
+            LoopState::Idle => match inner.do_idle(&mut cmd_rx).await {
+                Some(cmd) => match cmd {
+                    InnerCmd::Connect(c) => {
+                        conn_cmd.replace(c);
+                        loop_state = LoopState::Connecting;
+                    }
+                    InnerCmd::Close => continue,
+                },
                 None => break,
             },
-            InnerState::Connecting => match inner.do_connect(&mut cmd_rx).await {
+            LoopState::Connecting => match inner.do_connect(&mut cmd_rx).await {
                 Some(stream) => {
                     connection.replace(stream);
-                    inner_state = InnerState::Ready;
+                    loop_state = LoopState::Ready;
                     inner.connection_state.incr_ready().await;
                 }
                 None => {
                     // if there was a shutdown, do_idle() will return None and this loop will exit.
-                    inner_state = InnerState::Idle;
+                    loop_state = LoopState::Idle;
                 }
             },
-            InnerState::Ready => {
+            LoopState::Ready => {
                 let c = connection.take().unwrap();
-                inner.do_run(c).await;
-                inner_state = InnerState::Idle;
-                inner.connection_state.decr_ready().await;
+                let cmd = conn_cmd.take().unwrap();
+                inner
+                    .do_run(c, cmd, inner.connection_state.clone(), &mut cmd_rx)
+                    .await;
+                loop_state = LoopState::Idle;
+                // each connection needs to decr_ready on its own.
             }
         }
     }
