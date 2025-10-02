@@ -16,6 +16,7 @@ use iris_mpc_cpu::{
 };
 use rand::{random, rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 
 const DB_SIZE: usize = 1000;
@@ -147,7 +148,9 @@ async fn start_hawk_node(
     );
     let (graph, iris_store) =
         create_graph_from_plain_dbs(args.party_index, db_seed, left_db, right_db, &params).await?;
-    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
+    let hawk_actor =
+        HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+            .await?;
 
     let handle = HawkHandle::new(hawk_actor).await?;
 
@@ -226,7 +229,7 @@ async fn e2e_anon_stats_test() -> Result<()> {
     let mut handle1 = handle1?;
     let mut handle2 = handle2?;
     let mut test_case_generator =
-        SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, true);
+        SimpleAnonStatsTestGenerator::new(test_db, internal_seed, N_BUCKETS, true, 0.0);
 
     tracing::info!("Setup done, starting tests");
     test_case_generator

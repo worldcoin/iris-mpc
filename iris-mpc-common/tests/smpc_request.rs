@@ -92,6 +92,7 @@ mod tests {
             or_rule_serial_ids: None,
             skip_persistence: None,
             full_face_mirror_attacks_detection_enabled: Some(true),
+            disable_anonymized_stats: None,
         };
 
         let result = get_iris_data_by_party_id(
