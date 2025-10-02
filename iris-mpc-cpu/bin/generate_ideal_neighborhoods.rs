@@ -8,7 +8,7 @@ use clap::{Parser, ValueEnum};
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use iris_mpc_cpu::{
     hawkers::naive_knn_plaintext::{naive_knn, KNNResult},
-    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
+    py_bindings::plaintext_store::Base64IrisCode,
 };
 use metrics::IntoF64;
 use rayon::ThreadPoolBuilder;
