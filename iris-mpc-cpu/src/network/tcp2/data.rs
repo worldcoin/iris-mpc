@@ -1,6 +1,9 @@
 use crate::{
-    execution::player::Identity,
-    network::tcp2::{Client, NetworkConnection},
+    execution::{player::Identity, session::SessionId},
+    network::{
+        tcp2::{Client, NetworkConnection},
+        value::NetworkValue,
+    },
 };
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
@@ -10,6 +13,8 @@ use tokio::{
     sync::{mpsc, oneshot},
     time::sleep,
 };
+
+pub type OutboundMsg = (SessionId, NetworkValue);
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug, Hash)]
 pub struct ConnectionId(pub u32);
