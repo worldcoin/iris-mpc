@@ -2,13 +2,15 @@ name: Rust GPU Tests
 
 on:
   pull_request:
+    branches-ignore:
+      - dev
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
 jobs:
-  e2e:
+  gpu-e2e:
     runs-on: arc-gpu-amd64-runner
     timeout-minutes: 25
     steps:
@@ -17,7 +19,7 @@ jobs:
 
       - name: Get all test, doc and src files that have changed
         id: changed-files-yaml
-        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62
         with:
           files_yaml: |
             src:
@@ -29,7 +31,7 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
-#              - .github/workflows/test-gpu.yaml -- bring this back after Canonical incident
+              - .github/workflows/test-gpu.yaml
 
       # The following steps will only run if any of the src files have changed
       - name: Validate presence of GPU devices

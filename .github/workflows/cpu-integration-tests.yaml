@@ -11,7 +11,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  integration-tests:
+  cpu-integration-tests:
     timeout-minutes: 20
     runs-on:
       labels: ubuntu-22.04-16core
@@ -20,7 +20,7 @@ jobs:
 
       - name: Get all test, doc and src files that have changed
         id: changed-files-yaml
-        uses: tj-actions/changed-files@ed68ef82c095e0d48ec87eccea555d944a631a4c
+        uses: tj-actions/changed-files@24d32ffd492484c1d75e0c0b894501ddb9d30d62
         with:
           files_yaml: |
             src:
@@ -32,7 +32,7 @@ jobs:
               - iris-*/**
               - migrations/**
               - scripts/**
-#              - .github/workflows/cpu-integration-tests.yaml -- bring this back after Canonical incident
+              - .github/workflows/cpu-integration-tests.yaml
 
       - name: Cache Rust build
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
