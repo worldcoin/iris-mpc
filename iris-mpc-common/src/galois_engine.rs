@@ -382,10 +382,10 @@ pub mod degree4 {
             let mut sum = 0u16;
             let chunk_size = CODE_COLS * 4;
 
-            for (self_slice, other_slice) in other
+            for (self_slice, other_slice) in self
                 .coefs
                 .chunks_exact(chunk_size)
-                .zip(self.coefs.chunks_exact(chunk_size))
+                .zip(other.coefs.chunks_exact(chunk_size))
             {
                 // Split the rotation into two contiguous loops,
                 // allowing the compiler to vectorize
