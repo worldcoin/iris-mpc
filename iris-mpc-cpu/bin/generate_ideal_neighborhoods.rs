@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::iris_db::iris::IrisCode;
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use iris_mpc_cpu::{
     hawkers::naive_knn_plaintext::{naive_knn, KNNResult},
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
@@ -132,7 +132,7 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<usize> = deserialized_results
+            let nodes: Vec<IrisSerialId> = deserialized_results
                 .into_iter()
                 .map(|result| result.node)
                 .collect();
@@ -154,7 +154,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
+        let expected_nodes: Vec<IrisSerialId> = (1..(num_already_processed + 1) as u32).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
@@ -184,7 +184,8 @@ async fn main() {
         IrisSelection::Odd => (num_irises * 2, 1, 2),
     };
 
-    let stream_iterator = limited_iterator(stream, Some(limit))
+    let stream_iterator = stream
+        .take(limit)
         .skip(skip)
         .step_by(step)
         .map(|json_pt| (&json_pt.unwrap()).into());
