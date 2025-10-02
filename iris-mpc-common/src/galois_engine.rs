@@ -389,8 +389,8 @@ pub mod degree4 {
             {
                 // Split the rotation into two contiguous loops,
                 // allowing the compiler to vectorize
-                let (other1, other2) = other_slice.split_at(skip);
                 let (self1, self2) = self_slice.split_at(chunk_size - skip);
+                let (other1, other2) = other_slice.split_at(skip);
 
                 for (l, r) in self1.iter().zip(other2.iter()) {
                     sum = sum.wrapping_add(l.wrapping_mul(*r));
