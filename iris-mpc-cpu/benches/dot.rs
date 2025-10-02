@@ -348,7 +348,7 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
 
 pub fn bench_trick_dot(c: &mut Criterion) {
     let mut g = c.benchmark_group("trick_dot_vs_rotation_aware");
-    g.sample_size(10);
+    g.sample_size(50);
 
     let rng = &mut thread_rng();
     let iris_db = IrisCodeArray::random_rng(rng);
