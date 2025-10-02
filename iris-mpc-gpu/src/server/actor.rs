@@ -714,12 +714,13 @@ impl ServerActor {
             .filter(|x| *x == RESET_CHECK_MESSAGE_TYPE)
             .count();
         tracing::info!(
-            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests",
+            "Started processing batch: {} uniqueness, {} reauth, {} reset_check, {} reset_update, {} deletion requests. anon stats disabled for batch: {}",
             batch.request_types.len() - n_reauths - n_reset_checks,
             n_reauths,
             n_reset_checks,
             batch.reset_update_request_ids.len(),
             batch.deletion_requests_indices.len(),
+            self.disable_anonymized_stats_for_current_batch
         );
 
         let mut batch = batch;
