@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use iris_mpc_common::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
+use iris_mpc_common::iris_db::iris::IrisCodeArray;
 use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
@@ -344,8 +346,34 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
     g_parallel.finish();
 }
 
+pub fn bench_trick_dot(c: &mut Criterion) {
+    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware");
+    g.sample_size(10);
+
+    let rng = &mut thread_rng();
+    let iris_db = IrisCodeArray::random_rng(rng);
+    let iris_query = IrisCodeArray::random_rng(rng);
+    let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
+    let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
+    query_shares
+        .iter_mut()
+        .for_each(|share| share.preprocess_iris_code_query_share());
+
+    let left = &shares[0];
+    let right = &query_shares[0];
+
+    g.bench_function("trick_dot", |b| b.iter(|| black_box(left.trick_dot(right))));
+
+    g.bench_function("rotation_aware_trick_dot", |b| {
+        b.iter(|| black_box(left.rotation_aware_trick_dot(right, IrisRotation::Left(12))))
+    });
+
+    g.finish();
+}
+
 criterion_group!(
     benches,
+    bench_trick_dot,
     bench_galois_ring_pairwise_distance,
     search_layer_like_calls
 );
