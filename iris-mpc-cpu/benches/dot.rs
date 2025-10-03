@@ -353,6 +353,11 @@ pub fn bench_trick_dot(c: &mut Criterion) {
     let rng = &mut thread_rng();
     let iris_db = IrisCodeArray::random_rng(rng);
     let iris_query = IrisCodeArray::random_rng(rng);
+
+    let mut random_array = [0u16; 12800 + 119 * 16];
+    for elem in random_array.iter_mut() {
+        *elem = rng.gen();
+    }
     let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
     let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
     query_shares
@@ -366,6 +371,10 @@ pub fn bench_trick_dot(c: &mut Criterion) {
 
     g.bench_function("rotation_aware_trick_dot", |b| {
         b.iter(|| black_box(left.rotation_aware_trick_dot(right, IrisRotation::Left(12))))
+    });
+
+    g.bench_function("rotation_aware_trick_dot2", |b| {
+        b.iter(|| black_box(left.rotation_aware_trick_dot2(&random_array, IrisRotation::Left(12))))
     });
 
     g.finish();
