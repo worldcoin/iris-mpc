@@ -3,7 +3,7 @@ name: Branch - Build and push docker image
 on:
   push:
     branches:
-      - "POP-2892/setup-importer-for-dev"
+      - "ertugrulaypek-pop-2972-validate-e2e-diff-due-to-intra-batch-or-rule-is-fixed"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -36,6 +36,14 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE }}
+          aws-region: eu-central-1
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
         with:
@@ -43,6 +51,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ${{ secrets.AWS_ECR_IRIS_MPC }}:${{ github.sha }}
           platforms: linux/amd64
           build-args: |
             ARCHITECTURE=x86_64
