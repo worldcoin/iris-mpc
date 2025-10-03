@@ -3,7 +3,7 @@ name: Branch - Hawk Build and push docker image
 on:
   push:
     branches:
-      - "dev"
+      - "ertugrulaypek-pop-2972-validate-e2e-diff-due-to-intra-batch-or-rule-is-fixed"
     paths-ignore:
       - "deploy/**"
 
