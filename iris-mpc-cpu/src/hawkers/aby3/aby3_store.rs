@@ -6,7 +6,7 @@ use crate::{
         ops::{
             batch_signed_lift_vec, conditionally_swap_distances,
             conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
-            lte_threshold_and_open, oblivious_cross_compare,
+            lte_threshold_and_open, min_of_pair_batch, oblivious_cross_compare,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
@@ -171,6 +171,32 @@ impl Aby3Store {
         }
 
         conditionally_swap_distances(&mut self.session, swap_bits, list, indices).await
+    }
+
+    pub async fn oblivious_min_distance(
+        &mut self,
+        distances: &[Aby3DistanceRef],
+    ) -> Result<Aby3DistanceRef> {
+        if distances.is_empty() {
+            eyre::bail!("Cannot compute minimum of empty list");
+        }
+        let mut res = distances.to_vec();
+        while res.len() > 1 {
+            // if the length is odd, we save the last distance to add it back later
+            let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
+            // create pairs from the remaining distances
+            let pairs = res
+                .chunks(2)
+                .map(|chunk| (chunk[0].clone(), chunk[1].clone()))
+                .collect_vec();
+            // compute minimums of pairs
+            res = min_of_pair_batch(&mut self.session, &pairs).await?;
+            // if we saved a last distance, we need to add it back
+            if let Some(last_distance) = maybe_last_distance {
+                res.push(last_distance.clone());
+            }
+        }
+        Ok(res[0].clone())
     }
 }
 
@@ -658,6 +684,58 @@ mod tests {
             };
             assert_eq!(distance, exp.1);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_oblivious_min() -> Result<()> {
+        let list_len = 6_u32;
+        let mut plain_list = (0..list_len).map(|i| (i, 1)).collect_vec();
+        // place the smallest distance at index 3
+        plain_list.swap(5, 3);
+
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let store = store.clone();
+            let plain_list = plain_list.clone();
+            jobs.spawn(async move {
+                let mut store_lock = store.lock().await;
+                let role = store_lock.session.own_role();
+                let list = plain_list
+                    .iter()
+                    .map(|(code_dist, mask_dist)| {
+                        DistanceShare::new(
+                            Share::from_const(*code_dist, role),
+                            Share::from_const(*mask_dist, role),
+                        )
+                    })
+                    .collect_vec();
+                store_lock.oblivious_min_distance(&list).await
+            });
+        }
+        let res = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let expected = plain_list
+            .into_iter()
+            .min_by(|a, b| (b.0 * a.1).cmp(&(a.0 * b.1)))
+            .unwrap();
+
+        let distance = {
+            let code_dot = (res[0].clone().code_dot + &res[1].code_dot + &res[2].code_dot)
+                .get_a()
+                .convert();
+            let mask_dot = (res[0].clone().mask_dot + &res[1].mask_dot + &res[2].mask_dot)
+                .get_a()
+                .convert();
+            (code_dot, mask_dot)
+        };
+        assert_eq!(distance, expected);
 
         Ok(())
     }
