@@ -397,7 +397,7 @@ impl Step3 {
 ///
 /// LUC *OR* policy: "Local" irises match if either side matches.
 ///
-/// Intra-batch *OR* policy: match against requests before this request in the same batch.
+/// Intra-batch *AND* policy: match against requests before this request in the same batch.
 ///
 /// Partial matches: set `eyes: Only(Left)` or `eyes: Only(Right)`.
 ///
@@ -449,7 +449,7 @@ impl Filter {
     }
 
     fn intra_rule(&self, left: bool, right: bool) -> bool {
-        self.intra_batch && self.luc_rule(left, right)
+        self.intra_batch && self.search_rule(left, right)
     }
 }
 #[cfg(test)]
