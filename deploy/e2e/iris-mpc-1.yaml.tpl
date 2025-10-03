@@ -269,7 +269,7 @@ iris-mpc-1:
 
   initContainer:
     enabled: true
-    image: "$IMAGE_REGISTRY_INIT_CONTAINTER/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
+    image: "$IMAGE_REGISTRY_INIT_CONTAINER/iris-mpc:$IRIS_MPC_KEY_MANAGER_IMAGE_TAG" # no-cuda image
     name: "iris-mpc-1-copy-cuda-libs"
     env:
       - name: AWS_REGION
