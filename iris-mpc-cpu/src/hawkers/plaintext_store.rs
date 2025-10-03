@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -122,6 +122,12 @@ fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
     let (a, b) = *dist_1; // a/b
     let (c, d) = *dist_2; // c/d
     (a as u32) * (d as u32) < (b as u32) * (c as u32)
+}
+
+pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
+    let (a, b) = *dist_1; // a/b
+    let (c, d) = *dist_2; // c/d
+    ((a as u32) * (d as u32)).cmp(&((b as u32) * (c as u32)))
 }
 
 impl VectorStore for PlaintextStore {
