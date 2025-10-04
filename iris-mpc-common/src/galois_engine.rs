@@ -14,6 +14,12 @@ pub mod degree4 {
 
     const CODE_COLS: usize = 200;
 
+    pub enum IrisRotation {
+        Center,
+        Left(usize),
+        Right(usize),
+    }
+
     /// A representation of a 100% relative distance as a fraction.
     /// The numerator is chosen as -1 meaning 1 difference.
     /// The denominator is chosen as 1 meaning 1 unmasked bits.
@@ -359,6 +365,44 @@ pub mod degree4 {
             sum
         }
 
+        // iterate over other.coefs as though it has been rotated according to the iris rotation.
+        // this involves chunking by CODE_COLS * 4 and then rotating the chunk
+        // the rotation is accomplished by chaining iterators together
+        pub fn rotation_aware_trick_dot(
+            &self,
+            other: &GaloisRingIrisCodeShare,
+            rotation: IrisRotation,
+        ) -> u16 {
+            let skip = match rotation {
+                IrisRotation::Center => return self.trick_dot(other),
+                IrisRotation::Left(rot) => rot * 4,
+                IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
+            };
+
+            let mut sum = 0u16;
+            let chunk_size = CODE_COLS * 4;
+
+            for (self_slice, other_slice) in self
+                .coefs
+                .chunks_exact(chunk_size)
+                .zip(other.coefs.chunks_exact(chunk_size))
+            {
+                // Split the rotation into two contiguous loops,
+                // allowing the compiler to vectorize
+                let (self1, self2) = self_slice.split_at(chunk_size - skip);
+                let (other1, other2) = other_slice.split_at(skip);
+
+                for (l, r) in self1.iter().zip(other2.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                }
+
+                for (l, r) in self2.iter().zip(other1.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                }
+            }
+            sum
+        }
+
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
             let mut reference = self.clone();
             let mut result = vec![];
@@ -501,7 +545,10 @@ pub mod degree4 {
     #[cfg(test)]
     mod tests {
         use crate::{
-            galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
+            galois_engine::degree4::{
+                rotate_coefs_left, rotate_coefs_right, GaloisRingIrisCodeShare,
+                GaloisRingTrimmedMaskCodeShare, IrisRotation,
+            },
             iris_db::iris::IrisCodeArray,
             MASK_CODE_LENGTH,
         };
@@ -526,6 +573,42 @@ pub mod degree4 {
                 let dot = dot.iter().fold(0u16, |acc, x| acc.wrapping_add(*x));
                 let expected = (iris_db & iris_query).count_ones();
                 assert_eq!(dot, expected as u16);
+            }
+        }
+        #[test]
+        fn rotation_aware_dot_trick() {
+            let rng = &mut thread_rng();
+            for _ in 0..10 {
+                let iris_db = IrisCodeArray::random_rng(rng);
+                let iris_query = IrisCodeArray::random_rng(rng);
+                let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
+                let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
+                query_shares
+                    .iter_mut()
+                    .for_each(|share| share.preprocess_iris_code_query_share());
+
+                // use these for the  test
+                let left = &shares[0];
+                let right = &query_shares[0];
+
+                // do rotation aware trick dot first
+                let mut dots = vec![];
+                for idx in (1..=15).rev() {
+                    dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Left(idx)));
+                }
+                dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Center));
+                for idx in 1..=15 {
+                    dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Right(idx)));
+                }
+
+                let right = &mut query_shares[0];
+                let mut dots2 = vec![];
+                rotate_coefs_left(&mut right.coefs, 16);
+                for _ in 0..31 {
+                    rotate_coefs_right(&mut right.coefs, 1);
+                    dots2.push(left.trick_dot(right));
+                }
+                assert_eq!(dots, dots2);
             }
         }
         #[test]
