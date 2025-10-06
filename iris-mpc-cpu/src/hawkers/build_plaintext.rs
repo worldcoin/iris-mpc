@@ -6,16 +6,10 @@ use itertools::Itertools;
 use tokio::task::JoinSet;
 
 use crate::{
-    execution::hawk_main::{
-        insert::{self, InsertPlanV},
-        BothEyes,
-    },
+    execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{GraphMem, HnswSearcher},
 };
-
-pub type SharedPlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
-pub type SharedPlaintextStores = BothEyes<SharedPlaintextStore>;
 
 pub async fn plaintext_parallel_batch_insert(
     graph: Option<GraphMem<PlaintextVectorRef>>,

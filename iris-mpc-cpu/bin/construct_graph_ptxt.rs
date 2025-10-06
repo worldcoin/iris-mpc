@@ -1,18 +1,14 @@
-use std::{
-    fs::File,
-    io::{BufReader, BufWriter},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::path::PathBuf;
 
 use clap::Parser;
 use eyre::Result;
+use iris_mpc_common::IrisVectorId;
 use tracing::info;
 
 use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextStore,
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswParams, HnswSearcher},
-    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
+    hawkers::build_plaintext::plaintext_parallel_batch_insert,
+    hnsw::HnswParams,
+    py_bindings::{io::write_bin, plaintext_store::irises_from_ndjson_file},
 };
 
 #[allow(non_snake_case)]
@@ -70,51 +66,25 @@ async fn main() -> Result<()> {
     if let Some(q) = args.layer_probability {
         params.layer_probability = q;
     }
-
-    info!("Opening iris codes input stream");
-    let file = File::open(args.iris_codes_path.as_path()).unwrap();
-    let reader = BufReader::new(file);
-
-    let stream = serde_json::Deserializer::from_reader(reader).into_iter::<Base64IrisCode>();
-    let stream = limited_iterator(stream, args.graph_size);
-
-    info!("Building HNSW graph over iris codes...");
-    let searcher = HnswSearcher { params };
-    let mut counter = 0usize;
-
-    let mut vector_store = PlaintextStore::new();
-    let mut graph = GraphMem::new();
     let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
 
-    for json_ptxt in stream {
-        let query = Arc::new((&json_ptxt.unwrap()).into());
+    info!("Reading iris codes from file");
+    let irises = irises_from_ndjson_file(
+        args.iris_codes_path.as_os_str().to_str().unwrap(),
+        args.graph_size,
+    )?;
+    let irises = irises
+        .into_iter()
+        .enumerate()
+        .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
+        .collect();
 
-        let inserted_id = vector_store.insert(&query).await;
-
-        let insertion_layer = searcher.select_layer_prf(&prf_seed, &inserted_id)?;
-        let (neighbors, set_ep) = searcher
-            .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
-            .await?;
-        searcher
-            .insert_from_search_results(
-                &mut vector_store,
-                &mut graph,
-                inserted_id,
-                neighbors,
-                set_ep,
-            )
-            .await?;
-
-        counter += 1;
-        if counter % 1000 == 0 {
-            info!("Inserted {} plaintext entries", counter);
-        }
-    }
+    info!("Building HNSW graph over iris codes...");
+    let (graph, _) =
+        plaintext_parallel_batch_insert(None, None, irises, params, 1, &prf_seed).await?;
 
     info!("Persisting HNSW graph to file");
-    let file = File::create(args.graph_path.as_path()).unwrap();
-    let writer = BufWriter::new(file);
-    bincode::serialize_into(writer, &graph)?;
+    write_bin(&graph, args.graph_path.as_os_str().to_str().unwrap())?;
 
     Ok(())
 }
