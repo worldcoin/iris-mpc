@@ -357,12 +357,19 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn trick_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
-            let mut sum = 0u16;
-            for i in 0..IRIS_CODE_LENGTH {
-                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+            let mut sum0 = 0u16;
+            let mut sum1 = 0u16;
+            let half = IRIS_CODE_LENGTH / 2;
+
+            // create two memory streams to exploit memory level parallelism.
+            // this improves performance when the computation is RAM bound.
+            for i in 0..half {
+                sum0 = sum0.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+                sum1 = sum1.wrapping_add(self.coefs[half + i].wrapping_mul(other.coefs[half + i]));
             }
-            sum
+            sum0.wrapping_add(sum1)
         }
 
         // iterate over other.coefs as though it has been rotated according to the iris rotation.

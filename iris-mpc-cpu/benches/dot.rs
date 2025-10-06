@@ -14,9 +14,9 @@ use rand::seq::index::sample;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use rayon::{prelude::*, ThreadPoolBuilder};
 
+use num_format::{Locale, ToFormattedString};
 use perf_event::events::Hardware;
 use perf_event::{Builder, Counter, Group};
-use num_format::{Locale, ToFormattedString};
 
 pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
     // Generate a dataset larger than CPU caches.
@@ -528,7 +528,7 @@ pub struct PerfGroup {
     group: Group,
     cycles: Counter,
     instrs: Counter,
-    // stalled: Counter,
+    bus_cycles: Counter,
     cache_misses: Counter,
 }
 
@@ -538,7 +538,7 @@ impl PerfGroup {
 
         let cycles = Builder::new()
             .group(&mut group)
-            .kind(Hardware::CPU_CYCLES)
+            .kind(Hardware::REF_CPU_CYCLES)
             .build()
             .unwrap();
 
@@ -548,10 +548,11 @@ impl PerfGroup {
             .build()
             .unwrap();
 
-        /*let stalled = Builder::new()
-        .group(&mut group)
-        .kind(Hardware::STALLED_CYCLES_FRONTEND)
-        .build().unwrap();*/
+        let bus_cycles = Builder::new()
+            .group(&mut group)
+            .kind(Hardware::BUS_CYCLES)
+            .build()
+            .unwrap();
 
         let cache_misses = Builder::new()
             .group(&mut group)
@@ -563,7 +564,7 @@ impl PerfGroup {
             group,
             cycles,
             instrs,
-            //stalled,
+            bus_cycles,
             cache_misses,
         }
     }
@@ -576,23 +577,23 @@ impl PerfGroup {
         self.group.disable().unwrap();
 
         let counts = self.group.read().unwrap();
-        let (cycles, instrs, /*stalled,*/ cache_misses) = (
+        let (cycles, instrs, bus_cycles, cache_misses) = (
             counts[&self.cycles],
             counts[&self.instrs],
-            //counts[&self.stalled],
+            counts[&self.bus_cycles],
             counts[&self.cache_misses],
         );
 
         let ipc = instrs as f64 / cycles as f64;
-        // let stall_ratio = stalled as f64 / cycles as f64;
         let miss_rate = cache_misses as f64 / instrs as f64;
 
         let cycles = cycles.to_formatted_string(&Locale::en);
         let instrs = instrs.to_formatted_string(&Locale::en);
         let cache_misses = cache_misses.to_formatted_string(&Locale::en);
+        let bus_cycles = bus_cycles.to_formatted_string(&Locale::en);
 
         println!(
-            "cycles={cycles} instrs={instrs} misses={cache_misses} ipc={:.2} miss_rate={:.4}\n",
+            "cycles={cycles} bus_cycles={bus_cycles} instrs={instrs} misses={cache_misses} ipc={:.2} miss_rate={:.4}\n",
             ipc, miss_rate
         );
     }
