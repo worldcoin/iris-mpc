@@ -365,6 +365,44 @@ pub mod degree4 {
             sum
         }
 
+        // iterate over other.coefs as though it has been rotated according to the iris rotation.
+        // this involves chunking by CODE_COLS * 4 and then rotating the chunk
+        // the rotation is accomplished by operating over two slices
+        pub fn rotation_aware_trick_dot(
+            &self,
+            other: &GaloisRingIrisCodeShare,
+            rotation: IrisRotation,
+        ) -> u16 {
+            let skip = match rotation {
+                IrisRotation::Center => return self.trick_dot(other),
+                IrisRotation::Left(rot) => rot * 4,
+                IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
+            };
+
+            let mut sum = 0u16;
+            let chunk_size = CODE_COLS * 4;
+
+            for (self_slice, other_slice) in self
+                .coefs
+                .chunks_exact(chunk_size)
+                .zip(other.coefs.chunks_exact(chunk_size))
+            {
+                // Split the rotation into two contiguous loops,
+                // allowing the compiler to vectorize
+                let (self1, self2) = self_slice.split_at(chunk_size - skip);
+                let (other1, other2) = other_slice.split_at(skip);
+
+                for (l, r) in self1.iter().zip(other2.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                }
+
+                for (l, r) in self2.iter().zip(other1.iter()) {
+                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                }
+            }
+            sum
+        }
+
         pub fn rotation_aware_trick_dot_padded(
             &self,
             other: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
@@ -405,44 +443,6 @@ pub mod degree4 {
                 }
             }
 
-            sum
-        }
-
-        // iterate over other.coefs as though it has been rotated according to the iris rotation.
-        // this involves chunking by CODE_COLS * 4 and then rotating the chunk
-        // the rotation is accomplished by chaining iterators together
-        pub fn rotation_aware_trick_dot(
-            &self,
-            other: &GaloisRingIrisCodeShare,
-            rotation: IrisRotation,
-        ) -> u16 {
-            let skip = match rotation {
-                IrisRotation::Center => return self.trick_dot(other),
-                IrisRotation::Left(rot) => rot * 4,
-                IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
-            };
-
-            let mut sum = 0u16;
-            let chunk_size = CODE_COLS * 4;
-
-            for (self_slice, other_slice) in self
-                .coefs
-                .chunks_exact(chunk_size)
-                .zip(other.coefs.chunks_exact(chunk_size))
-            {
-                // Split the rotation into two contiguous loops,
-                // allowing the compiler to vectorize
-                let (self1, self2) = self_slice.split_at(chunk_size - skip);
-                let (other1, other2) = other_slice.split_at(skip);
-
-                for (l, r) in self1.iter().zip(other2.iter()) {
-                    sum = sum.wrapping_add(l.wrapping_mul(*r));
-                }
-
-                for (l, r) in self2.iter().zip(other1.iter()) {
-                    sum = sum.wrapping_add(l.wrapping_mul(*r));
-                }
-            }
             sum
         }
 
