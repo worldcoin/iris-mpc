@@ -3,7 +3,7 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
 use iris_mpc_common::iris_db::iris::IrisCodeArray;
-use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH};
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
@@ -354,7 +354,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
     let iris_db = IrisCodeArray::random_rng(rng);
     let iris_query = IrisCodeArray::random_rng(rng);
 
-    let mut random_array = [0u16; 12800 + 119 * 16];
+    let mut random_array = [0u16; PRE_PROC_IRIS_CODE_LENGTH];
     for elem in random_array.iter_mut() {
         *elem = rng.gen();
     }
@@ -373,8 +373,8 @@ pub fn bench_trick_dot(c: &mut Criterion) {
         b.iter(|| black_box(left.rotation_aware_trick_dot(right, IrisRotation::Left(12))))
     });
 
-    g.bench_function("rotation_aware_trick_dot2", |b| {
-        b.iter(|| black_box(left.rotation_aware_trick_dot2(&random_array, IrisRotation::Left(12))))
+    g.bench_function("rotation_aware_trick_dot_padded", |b| {
+        b.iter(|| black_box(left.rotation_aware_trick_dot_padded(&random_array, IrisRotation::Left(12))))
     });
 
     g.finish();

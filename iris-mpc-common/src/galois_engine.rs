@@ -4,7 +4,7 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::{IrisCode, IrisCodeArray},
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_MASK_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_ROW_PADDING
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use eyre::Result;
@@ -365,42 +365,42 @@ pub mod degree4 {
             sum
         }
 
-        pub fn rotation_aware_trick_dot2(
+        pub fn rotation_aware_trick_dot_padded(
             &self,
             other: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
             rotation: IrisRotation,
         ) -> u16 {
             let skip = match rotation {
-                IrisRotation::Center => 59, // Middle of the padding (119/2 = 59.5, rounded down)
-                IrisRotation::Left(rot) => 59 + (rot * 4),
-                IrisRotation::Right(rot) => 59 - (rot * 4),
+                IrisRotation::Center => 60, // no padding (60 added on each side)
+                IrisRotation::Left(rot) => 60 + (rot * 4),
+                IrisRotation::Right(rot) => 60 - (rot * 4),
             };
 
             let mut sum = 0u16;
-            let chunk_size = CODE_COLS * 4; // 800 elements per row
-            let padded_chunk_size = chunk_size + 119; // 919 elements per padded row
+            const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
+            let padded_chunk_size = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
 
             // Process each row
             for (row_idx, chunk) in other.chunks_exact(padded_chunk_size).enumerate() {
                 // Calculate the starting index in the padded chunk
-                // Each row used to be elements 0..799 but now has:
-                // - elements 741..799 prepended (59 elements)
-                // - elements 0..59 appended (60 elements)
+                // Each row used to be elements 0..=799 but now has:
+                // - elements 740..=799 prepended (60 elements)
+                // - elements 0..=59 appended (60 elements)
                 // So we need to start at index `skip` to get 800 consecutive elements
                 let start_idx = skip;
-                let end_idx = start_idx + chunk_size;
+                let end_idx = start_idx + UNPADDED_ROW_LEN;
 
                 // Extract the slice we need for this row
                 let other_slice = &chunk[start_idx..end_idx];
 
                 // Get corresponding slice from self
-                let self_start = row_idx * chunk_size;
-                let self_end = self_start + chunk_size;
+                let self_start = row_idx * UNPADDED_ROW_LEN;
+                let self_end = self_start + UNPADDED_ROW_LEN;
                 let self_slice = &self.coefs[self_start..self_end];
 
                 // Compute dot product for this row
-                for (l, r) in self_slice.iter().zip(other_slice.iter()) {
-                    sum = sum.wrapping_add(l.wrapping_mul(*r));
+                for i in 0..UNPADDED_ROW_LEN {
+                    sum = sum.wrapping_add(self_slice[i].wrapping_mul(other_slice[i]));
                 }
             }
 
