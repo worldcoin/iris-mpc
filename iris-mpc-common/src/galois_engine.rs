@@ -4,7 +4,7 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::{IrisCode, IrisCodeArray},
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_ROW_PADDING,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use eyre::Result;
@@ -357,17 +357,24 @@ pub mod degree4 {
             }
             sum
         }
+
         pub fn trick_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
-            let mut sum = 0u16;
-            for i in 0..IRIS_CODE_LENGTH {
-                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+            let mut sum0 = 0u16;
+            let mut sum1 = 0u16;
+            let half = IRIS_CODE_LENGTH / 2;
+
+            // create two memory streams to exploit memory level parallelism.
+            // this improves performance when the computation is RAM bound.
+            for i in 0..half {
+                sum0 = sum0.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
+                sum1 = sum1.wrapping_add(self.coefs[half + i].wrapping_mul(other.coefs[half + i]));
             }
-            sum
+            sum0.wrapping_add(sum1)
         }
 
         // iterate over other.coefs as though it has been rotated according to the iris rotation.
         // this involves chunking by CODE_COLS * 4 and then rotating the chunk
-        // the rotation is accomplished by chaining iterators together
+        // the rotation is accomplished by operating over two slices
         pub fn rotation_aware_trick_dot(
             &self,
             other: &GaloisRingIrisCodeShare,
@@ -400,6 +407,49 @@ pub mod degree4 {
                     sum = sum.wrapping_add(l.wrapping_mul(*r));
                 }
             }
+            sum
+        }
+
+        pub fn rotation_aware_trick_dot_padded(
+            &self,
+            other: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
+            rotation: IrisRotation,
+        ) -> u16 {
+            let skip = match rotation {
+                IrisRotation::Center => 60, // no padding (60 added on each side)
+                IrisRotation::Left(rot) => 60 + (rot * 4),
+                IrisRotation::Right(rot) => 60 - (rot * 4),
+            };
+
+            let mut sum = 0u16;
+            const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
+            const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
+
+            // Process each row
+            for (row_idx, chunk) in other.chunks_exact(PADDED_CHUNK_SIZE).enumerate() {
+                // Calculate the starting index in the padded chunk
+                // Each row used to be elements 0..=799 but now has:
+                // - elements 740..=799 prepended (60 elements)
+                // - elements 0..=59 appended (60 elements)
+                // So we need to start at index `skip` to get 800 consecutive elements
+                let start_idx = skip;
+                let end_idx = start_idx + UNPADDED_ROW_LEN;
+
+                // Extract the slice we need for this row
+                let other_slice = &chunk[start_idx..end_idx];
+
+                // Get corresponding slice from self
+                let self_start = row_idx * UNPADDED_ROW_LEN;
+                let self_end = self_start + UNPADDED_ROW_LEN;
+                let self_slice = &self.coefs[self_start..self_end];
+
+                // Compute dot product for this row
+                // use explicit indices for the loop to try to help the compiler optimize with SIMD
+                for i in 0..UNPADDED_ROW_LEN {
+                    sum = sum.wrapping_add(self_slice[i].wrapping_mul(other_slice[i]));
+                }
+            }
+
             sum
         }
 

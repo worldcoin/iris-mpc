@@ -3,7 +3,9 @@ use std::sync::Arc;
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
 use iris_mpc_common::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
 use iris_mpc_common::iris_db::iris::IrisCodeArray;
-use iris_mpc_common::{iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
+};
 use iris_mpc_cpu::protocol::{
     ops::galois_ring_pairwise_distance, shared_iris::GaloisRingSharedIris,
 };
@@ -347,25 +349,155 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
 }
 
 pub fn bench_trick_dot(c: &mut Criterion) {
-    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware");
-    g.sample_size(50);
-
+    let batch_size = 100;
     let rng = &mut thread_rng();
-    let iris_db = IrisCodeArray::random_rng(rng);
-    let iris_query = IrisCodeArray::random_rng(rng);
-    let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
-    let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
-    query_shares
-        .iter_mut()
-        .for_each(|share| share.preprocess_iris_code_query_share());
 
-    let left = &shares[0];
-    let right = &query_shares[0];
+    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware_w_cache");
+    g.sample_size(10);
+    g.throughput(Throughput::Elements(batch_size));
 
-    g.bench_function("trick_dot", |b| b.iter(|| black_box(left.trick_dot(right))));
+    // Prepare a large dataset of random iris codes and their shares
+    // should be divisible by 3
+    let dataset_size = 99999;
+    let iris_codes: Vec<_> = (0..dataset_size / 3)
+        .flat_map(|_| {
+            let iris = IrisCode::random_rng(rng);
+            // Mash up the 3 party shares; ok for benchmarking.
+            GaloisRingSharedIris::generate_shares_locally(rng, iris)
+        })
+        .collect();
 
-    g.bench_function("rotation_aware_trick_dot", |b| {
-        b.iter(|| black_box(left.rotation_aware_trick_dot(right, IrisRotation::Left(12))))
+    // Prepare random arrays for padded benchmarks
+    let random_arrays: Vec<[u16; PRE_PROC_IRIS_CODE_LENGTH]> = (0..dataset_size)
+        .map(|_| {
+            let mut arr = [0u16; PRE_PROC_IRIS_CODE_LENGTH];
+            for elem in arr.iter_mut() {
+                *elem = rng.gen();
+            }
+            arr
+        })
+        .collect();
+
+    // --- Compute-bound (cacheable) version ---
+    g.bench_function("trick_dot_compute_bound", |b| {
+        let left = &iris_codes[0];
+        let right = &iris_codes[1];
+        b.iter_batched(
+            || (0..batch_size).map(|_| (left, right)).collect::<Vec<_>>(),
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.code.trick_dot(&r.code));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_compute_bound", |b| {
+        let left = &iris_codes[0];
+        let right = &iris_codes[1];
+        b.iter_batched(
+            || (0..batch_size).map(|_| (left, right)).collect::<Vec<_>>(),
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(
+                        l.code
+                            .rotation_aware_trick_dot(&r.code, IrisRotation::Left(12)),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_padded_compute_bound", |b| {
+        let left = &iris_codes[0];
+        let random_array = &random_arrays[1];
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| (left, random_array))
+                    .collect::<Vec<_>>()
+            },
+            |pairs| {
+                for (l, arr) in pairs {
+                    black_box(
+                        l.code
+                            .rotation_aware_trick_dot_padded(arr, IrisRotation::Left(12)),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    // --- RAM-bound (non-cacheable) version ---
+    g.bench_function("trick_dot_ram_bound", |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = rng.gen_range(0..dataset_size);
+                        let b = rng.gen_range(0..dataset_size);
+                        (&iris_codes[a], &iris_codes[b])
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.code.trick_dot(&r.code));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_ram_bound", |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = rng.gen_range(0..dataset_size);
+                        let b = rng.gen_range(0..dataset_size);
+                        let c = rng.gen_range(1..16);
+                        (&iris_codes[a], &iris_codes[b], c)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |triples| {
+                for (l, r, rot) in triples {
+                    black_box(
+                        l.code
+                            .rotation_aware_trick_dot(&r.code, IrisRotation::Left(rot)),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_padded_ram_bound", |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = rng.gen_range(0..dataset_size);
+                        let b = rng.gen_range(0..dataset_size);
+                        let c = rng.gen_range(1..16);
+                        (&iris_codes[a], &random_arrays[b], c)
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |triples| {
+                for (l, arr, rot) in triples {
+                    black_box(
+                        l.code
+                            .rotation_aware_trick_dot_padded(arr, IrisRotation::Left(rot)),
+                    );
+                }
+            },
+            BatchSize::SmallInput,
+        )
     });
 
     g.finish();
