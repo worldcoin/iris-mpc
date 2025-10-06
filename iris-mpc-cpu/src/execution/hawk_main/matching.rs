@@ -549,10 +549,10 @@ mod tests {
     #[test]
     fn test_intra_rule() {
         for x in [false, true] {
-            // Matching within a batch: OR rule.
-            assert_eq!(FILTER_INTRA.intra_rule(true, x), true);
-            assert_eq!(FILTER_INTRA.intra_rule(x, true), true);
-            assert_eq!(FILTER_INTRA.intra_rule(false, false), false);
+            // Matching within a batch: AND rule.
+            assert_eq!(FILTER_INTRA.intra_rule(false, x), false);
+            assert_eq!(FILTER_INTRA.intra_rule(x, false), false);
+            assert_eq!(FILTER_INTRA.intra_rule(true, true), true);
 
             // If intra-batch is not requested, always false.
             for y in [false, true] {
