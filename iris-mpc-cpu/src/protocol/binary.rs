@@ -17,6 +17,7 @@ use eyre::{bail, eyre, Error, Result};
 use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
+use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::{cell::RefCell, ops::SubAssign};
 use tracing::{instrument, trace_span, Instrument};
@@ -1871,18 +1872,18 @@ mod tests_fss {
 
     #[tokio::test]
     async fn unit_test_add_3_fss_batch() -> Result<(), Error> {
-        // let total_shares = 10000;
-        // let batch_size = 16;
+        let total_shares = 1000;
+        let batch_size = 16;
 
-        let total_shares: usize = std::env::var("TOTAL_SHARES")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap();
+        // let total_shares: usize = std::env::var("TOTAL_SHARES")
+        //     .ok()
+        //     .and_then(|s| s.parse().ok())
+        //     .unwrap();
 
-        let batch_size: usize = std::env::var("BATCH_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap();
+        // let batch_size: usize = std::env::var("BATCH_SIZE")
+        //     .ok()
+        //     .and_then(|s| s.parse().ok())
+        //     .unwrap();
         let t0 = std::time::Instant::now();
         let (party_i_shares, correct_msbs) = prepare_shares_correct_msbs(total_shares);
 
@@ -1907,12 +1908,12 @@ mod tests_fss {
 
         // // wait the futures (otherwise they'll do nothing)
         let mut joined: Vec<Result<Vec<Share<Bit>>, Error>> = join_all(fut).await;
-        eprintln!(
-            "TIMING ({}, {}) = {:?}",
-            total_shares,
-            batch_size,
-            t0.elapsed()
-        );
+        // eprintln!(
+        //     "TIMING ({}, {}) = {:?}",
+        //     total_shares,
+        //     batch_size,
+        //     t0.elapsed()
+        // );
 
         let output0 = joined.remove(0)?;
         let output1 = joined.remove(0)?;
