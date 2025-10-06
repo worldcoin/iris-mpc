@@ -348,16 +348,17 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
     g_parallel.finish();
 }
 
-pub fn bench_trick_dot_w_cache(c: &mut Criterion) {
-    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware_w_cache");
-    g.sample_size(10);
-
+pub fn bench_trick_dot(c: &mut Criterion) {
     let batch_size = 100;
     let rng = &mut thread_rng();
 
+    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware_w_cache");
+    g.sample_size(10);
+    g.throughput(Throughput::Elements(batch_size));
+
     // Prepare a large dataset of random iris codes and their shares
     // should be divisible by 3
-    let dataset_size = 9999;
+    let dataset_size = 99999;
     let iris_codes: Vec<_> = (0..dataset_size / 3)
         .flat_map(|_| {
             let iris = IrisCode::random_rng(rng);
@@ -502,45 +503,8 @@ pub fn bench_trick_dot_w_cache(c: &mut Criterion) {
     g.finish();
 }
 
-pub fn bench_trick_dot(c: &mut Criterion) {
-    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware");
-    g.sample_size(50);
-
-    let rng = &mut thread_rng();
-    let iris_db = IrisCodeArray::random_rng(rng);
-    let iris_query = IrisCodeArray::random_rng(rng);
-
-    let mut random_array = [0u16; PRE_PROC_IRIS_CODE_LENGTH];
-    for elem in random_array.iter_mut() {
-        *elem = rng.gen();
-    }
-    let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
-    let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
-    query_shares
-        .iter_mut()
-        .for_each(|share| share.preprocess_iris_code_query_share());
-
-    let left = &shares[0];
-    let right = &query_shares[0];
-
-    g.bench_function("trick_dot", |b| b.iter(|| black_box(left.trick_dot(right))));
-
-    g.bench_function("rotation_aware_trick_dot", |b| {
-        b.iter(|| black_box(left.rotation_aware_trick_dot(right, IrisRotation::Left(12))))
-    });
-
-    g.bench_function("rotation_aware_trick_dot_padded", |b| {
-        b.iter(|| {
-            black_box(left.rotation_aware_trick_dot_padded(&random_array, IrisRotation::Left(12)))
-        })
-    });
-
-    g.finish();
-}
-
 criterion_group!(
     benches,
-    bench_trick_dot_w_cache,
     bench_trick_dot,
     bench_galois_ring_pairwise_distance,
     search_layer_like_calls
