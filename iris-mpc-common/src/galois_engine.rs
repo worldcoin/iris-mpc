@@ -4,8 +4,7 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::{IrisCode, IrisCodeArray},
-        IRIS_CODE_LENGTH, IRIS_CODE_ROWS, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
-        PRE_PROC_ROW_PADDING,
+        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_ROW_PADDING,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use eyre::Result;
@@ -382,7 +381,7 @@ pub mod degree4 {
             const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
 
             // Process each row
-            for (row_idx, chunk) in other.chunks_exact(PADDED_CHUNK_SIZE) {
+            for (row_idx, chunk) in other.chunks_exact(PADDED_CHUNK_SIZE).enumerate() {
                 // Calculate the starting index in the padded chunk
                 // Each row used to be elements 0..=799 but now has:
                 // - elements 740..=799 prepended (60 elements)
