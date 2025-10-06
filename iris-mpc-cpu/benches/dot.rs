@@ -348,6 +348,96 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
     g_parallel.finish();
 }
 
+pub fn bench_trick_dot_w_cache(c: &mut Criterion) {
+    let mut g = c.benchmark_group("trick_dot_vs_rotation_aware_w_cache");
+    g.sample_size(10);
+
+    let batch_size = 100;
+    let rng = &mut thread_rng();
+
+    // Prepare a large dataset of random iris codes and their shares
+    let dataset_size = 10000;
+    let iris_codes: Vec<_> = (0..dataset_size)
+        .map(|_| IrisCodeArray::random_rng(rng))
+        .collect();
+    let shares: Vec<_> = iris_codes
+        .iter()
+        .map(|code| GaloisRingIrisCodeShare::encode_mask_code(code, rng))
+        .collect();
+
+    // --- Compute-bound (cacheable) version ---
+    g.bench_function("trick_dot_compute_bound", |b| {
+        let left = &shares[0][0];
+        let right = &shares[1][0];
+        b.iter_batched(
+            || (0..batch_size).map(|_| (left, right)).collect::<Vec<_>>(),
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.trick_dot(r));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_compute_bound", |b| {
+        let left = &shares[0][0];
+        let right = &shares[1][0];
+        b.iter_batched(
+            || (0..batch_size).map(|_| (left, right)).collect::<Vec<_>>(),
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.rotation_aware_trick_dot(r, IrisRotation::Left(12)));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    // --- RAM-bound (non-cacheable) version ---
+    g.bench_function("trick_dot_ram_bound", |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = rng.gen_range(0..dataset_size);
+                        let b = rng.gen_range(0..dataset_size);
+                        (&shares[a][0], &shares[b][0])
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.trick_dot(r));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.bench_function("rotation_aware_trick_dot_ram_bound", |b| {
+        b.iter_batched(
+            || {
+                (0..batch_size)
+                    .map(|_| {
+                        let a = rng.gen_range(0..dataset_size);
+                        let b = rng.gen_range(0..dataset_size);
+                        (&shares[a][0], &shares[b][0])
+                    })
+                    .collect::<Vec<_>>()
+            },
+            |pairs| {
+                for (l, r) in pairs {
+                    black_box(l.rotation_aware_trick_dot(r, IrisRotation::Left(12)));
+                }
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    g.finish();
+}
+
 pub fn bench_trick_dot(c: &mut Criterion) {
     let mut g = c.benchmark_group("trick_dot_vs_rotation_aware");
     g.sample_size(50);
@@ -386,6 +476,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
 
 criterion_group!(
     benches,
+    bench_trick_dot_w_cache,
     bench_trick_dot,
     bench_galois_ring_pairwise_distance,
     search_layer_like_calls
