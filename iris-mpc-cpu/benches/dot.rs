@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
-use iris_mpc_common::galois_engine::degree4::{GaloisRingIrisCodeShare, IrisRotation};
-use iris_mpc_common::iris_db::iris::IrisCodeArray;
+use iris_mpc_common::galois_engine::degree4::IrisRotation;
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
