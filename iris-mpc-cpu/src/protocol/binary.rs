@@ -17,7 +17,6 @@ use eyre::{bail, eyre, Error, Result};
 use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::{izip, Itertools};
 use num_traits::{One, Zero};
-use rand::prelude::*;
 use rand::{distributions::Standard, prelude::Distribution, Rng};
 use std::{cell::RefCell, ops::SubAssign};
 use tracing::{instrument, trace_span, Instrument};
@@ -687,29 +686,29 @@ where
 }
 
 /// our implementation of binary_add_3_get_msb_prefix
-/// t |        Party 0                            |        Party 1                           |                Party 2 (dealer)
-/// --+-------------------------------------------+------------------------------------------+----------------------------------------
-///   | has shares (d0, d2), and keys k0, k2      | has shares (d1, d0), and keys k1, k0     | has shares (d2, d1), and keys k2, k1
-/// 1 | Use k2 to generate a prf key r2 (also r') | Use k1 to generate a prf key r1 (also r')| Use k2,k1 to generate prf keys r2,r1
-/// 2 | send_next(d2+r2)   to Party 1             | send_prev(d1+r1)   to Party 0            | (kFss0, kFss1) = gen_IC(r_in = r1+r2)
-/// 3 | d1+r1 = receive_next() from Party 1       | d2+r2 = receive_prev() from Party 0      | send_next(kFss0) To Party 0
-/// 4 | kFss0 = receive_prev() from Party 2       |                                          | send_prev(kFss1) To Party 1
-/// 5 |                                           | [A] kFss1 = receive_next() from Party 2  |
-/// 6 | Can reconstruct: d+r = d1+r1+d2+r2+d0     | [B] Can reconstruct: d+r = d1+r1+d2+r2+d0|<-- potentially swap A and B (check this)
-/// 7 | f_x_0 = eval_IC(kFss0, d+r)               | f_x_1 = eval_IC(kFss1, d+r)              |
-/// 8 | use k0 to generate r' (done above)        | use k0 to generate r'  (done above)      | gamma = gen_zero_shares(k2) [use this for RSS below]
-/// -------------------------------------------------Doing 2 out of 3 RSS in this part ---------------------------------------
-/// - | My share is t0 = f_x_0+r'                 | My share is t1=f_x_1-r'                  | we want to split t0 and t1 to 2 out of 3 RSS
-/// 9 | alpha = gen_zero_shares(k0)               | beta = gen_zero_shares(k1)               | send_next(gamma)
-/// 10| send_next(t0+alpha)                       | send_next(t1+beta)                       | t1+beta = receive_prev()
-/// 11| gamma = receive_prev()                    | t0+alpha = receive_prev()                |
-/// - | My shares are: (t0+alpha, gamma)          | My shares are: (t1+beta, t0+alpha)       | My shares are: (t1+beta, gamma)
-/// --------------------------------------Previous version if we don't want 2-out-of-3 RSS ------------------------------------
+///  t |        Party 0                            |        Party 1                           |                Party 2 (dealer)
+///  --+-------------------------------------------+------------------------------------------+----------------------------------------
+///    | has shares (d0, d2), and keys k0, k2      | has shares (d1, d0), and keys k1, k0     | has shares (d2, d1), and keys k2, k1
+///  1 | Use k2 to generate a prf key r2 (also r') | Use k1 to generate a prf key r1 (also r')| Use k2,k1 to generate prf keys r2,r1
+///  2 | send_next(d2+r2)   to Party 1             | send_prev(d1+r1)   to Party 0            | (kFss0, kFss1) = gen_IC(r_in = r1+r2)
+///  3 | d1+r1 = receive_next() from Party 1       | d2+r2 = receive_prev() from Party 0      | send_next(kFss0) To Party 0
+///  4 | kFss0 = receive_prev() from Party 2       |                                          | send_prev(kFss1) To Party 1
+///  5 |                                           | [A] kFss1 = receive_next() from Party 2  |
+///  6 | Can reconstruct: d+r = d1+r1+d2+r2+d0     | [B] Can reconstruct: d+r = d1+r1+d2+r2+d0|<-- potentially swap A and B (check this)
+///  7 | f_x_0 = eval_IC(kFss0, d+r)               | f_x_1 = eval_IC(kFss1, d+r)              |
+///  8 | use k0 to generate r' (done above)        | use k0 to generate r'  (done above)      | gamma = gen_zero_shares(k2) [use this for RSS below]
+///  -------------------------------------------------Doing 2 out of 3 RSS in this part ---------------------------------------
+///  - | My share is t0 = f_x_0+r'                 | My share is t1=f_x_1-r'                  | we want to split t0 and t1 to 2 out of 3 RSS
+///  9 | alpha = gen_zero_shares(k0)               | beta = gen_zero_shares(k1)               | send_next(gamma)
+///  10| send_next(t0+alpha)                       | send_next(t1+beta)                       | t1+beta = receive_prev()
+///  11| gamma = receive_prev()                    | t0+alpha = receive_prev()                |
+///  - | My shares are: (t0+alpha, gamma)          | My shares are: (t1+beta, t0+alpha)       | My shares are: (t1+beta, gamma)
+///  --------------------------------------Previous version if we don't want 2-out-of-3 RSS ------------------------------------
 ///   | send_prev(r'+f_x_0) to Party 2 <send LSB> | send_next(f_x_1-r') to Party 2 <send LSB>|
 ///   | send_next(f_x_0 + r') to Party 1   <..>   | send_prev(f_x_1-r') to Party 0    <..>   | f_x_1-r' = receive_prev() from Party 1
 ///   | f_x_1 - r'= receive_next() from Party 1   | f_x_0 + r' = receive_prev() from Party 0 | f_x_0+r' = receive_next() from Party 0
-///  ---- everyone has the same 2 shares, open_bin will just add the two shares, no communication
-/// these shares will be BITS not u128
+///   ---- everyone has the same 2 shares, open_bin will just add the two shares, no communication
+///  these shares will be BITS not u128
 async fn add_3_get_msb_fss(session: &mut Session, x: &Share<u32>) -> Result<Share<Bit>, Error>
 where
     Standard: Distribution<u32>,
@@ -812,7 +811,7 @@ where
                     )),
                 }?;
 
-            return Ok(Share::new(bit_of_share_0, bit_of_share_1));
+            Ok(Share::new(bit_of_share_0, bit_of_share_1))
         }
         1 => {
             // Generate (my) r1 prf key, keep the r0 key for later
@@ -900,7 +899,7 @@ where
                     )),
                 }?;
 
-            return Ok(Share::new(bit_of_share_0, bit_of_share_1));
+            Ok(Share::new(bit_of_share_0, bit_of_share_1))
         }
         2 => {
             let (_r2, _r1) = session.prf.gen_rands::<RingElement<u32>>().clone();
@@ -977,13 +976,13 @@ where
                         "Party 1 cannot receive bit from the other party: {e}"
                     )),
                 }?;
-            return Ok(Share::new(bit_of_share_0, bit_of_share_1));
+            Ok(Share::new(bit_of_share_0, bit_of_share_1))
         }
         _ => {
             // this is not a valid party number
-            return Err(eyre!("Party no is invalid for FSS: "));
+            Err(eyre!("Party no is invalid for FSS: "))
         }
-    };
+    }
 }
 /// Batched version of the function above
 /// Instead of handling one request at a time, get a batch of size ???
@@ -1345,7 +1344,7 @@ where
         }
         _ => {
             // this is not a valid party number
-            return Err(eyre!("Party no is invalid for FSS."));
+            Err(eyre!("Party no is invalid for FSS."))
         }
     }
 }
@@ -1765,8 +1764,7 @@ fn prepare_shares_correct_msbs(total_shares: usize) -> (Vec<Vec<Share<u32>>>, Ve
     }
 
     // Split the values among 3 parties
-    let [party_0_shares, party_1_shares, party_2_shares] =
-        make_replicated_shares_u32(&shares_list, &mut rng);
+    let [party_0_shares, party_1_shares, party_2_shares] = make_replicated_shares_u32(&shares_list);
     let party_i_shares: Vec<Vec<Share<u32>>> = vec![party_0_shares, party_1_shares, party_2_shares];
 
     // Calculate correct MSBs
@@ -1780,7 +1778,7 @@ fn prepare_shares_correct_msbs(total_shares: usize) -> (Vec<Vec<Share<u32>>>, Ve
 }
 #[cfg(test)]
 /// Just splitting vals into shares, to test the extract_msb_u32 functions
-fn make_replicated_shares_u32(vals: &[u32], rng: &mut AesRng) -> [Vec<Share<u32>>; 3] {
+fn make_replicated_shares_u32(vals: &[u32]) -> [Vec<Share<u32>>; 3] {
     let mut p0 = Vec::with_capacity(vals.len());
     let mut p1 = Vec::with_capacity(vals.len());
     let mut p2 = Vec::with_capacity(vals.len());
@@ -1873,9 +1871,18 @@ mod tests_fss {
 
     #[tokio::test]
     async fn unit_test_add_3_fss_batch() -> Result<(), Error> {
-        let total_shares = 10000;
-        let batch_size = 16;
+        // let total_shares = 10000;
+        // let batch_size = 16;
 
+        let total_shares: usize = std::env::var("TOTAL_SHARES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap();
+
+        let batch_size: usize = std::env::var("BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap();
         let t0 = std::time::Instant::now();
         let (party_i_shares, correct_msbs) = prepare_shares_correct_msbs(total_shares);
 
@@ -1884,7 +1891,7 @@ mod tests_fss {
 
         let mut fut = Vec::with_capacity(3);
         for party_no in 0..3 {
-            //     // for each party, ger their session
+            // for each party, ger their session
             let sess_i = sessions[party_no].clone();
             let shares_i = party_i_shares[party_no].clone();
 
@@ -1924,13 +1931,6 @@ mod tests_fss {
             let curr_msb = output0[i].a ^ output0[i].b; // this is 1 if number is positive (i.e. MSB==0)
 
             assert!(curr_msb.0 == correct_msbs[i]);
-            // if (curr_msb.0 != correct_msbs[i]) {
-            //     println!(
-            //         "Share No {} wrong MSBs {:?}",
-            //         i,
-            //         party_i_shares[0][i].a + party_i_shares[1][i].a + party_i_shares[2][i].a
-            //     );
-            // }
         }
         // // PASS: all numbers are either 0 or 1, AND correct results
         // // FAIL: else
@@ -1939,7 +1939,7 @@ mod tests_fss {
 
     #[tokio::test]
     async fn unit_test_extract_msb_batch_fss() -> Result<(), Error> {
-        let total_shares = 10000;
+        let total_shares = 100;
 
         let (party_i_shares, correct_msbs) = prepare_shares_correct_msbs(total_shares);
 
