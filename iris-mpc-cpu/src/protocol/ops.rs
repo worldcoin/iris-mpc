@@ -190,7 +190,7 @@ pub async fn compare_min_threshold_buckets(
             .map(|(new, reduced)| (new, reduced.clone()))
             .collect();
 
-        reduced_distances = cross_compare_and_swap(session, &distances_to_reduce).await?;
+        reduced_distances = min_of_pair_batch(session, &distances_to_reduce).await?;
     }
 
     // Now we have a single distance for each group, we can compare it to the thresholds
@@ -575,14 +575,12 @@ pub async fn oblivious_cross_compare(
 /// For every pair of distance shares (d1, d2), this computes the bit d2 < d1 uses it to return the lower of the two distances.
 ///
 /// Input values are assumed to be 16-bit shares that have been lifted to 32 bits.
-pub async fn cross_compare_and_swap(
+pub async fn min_of_pair_batch(
     session: &mut Session,
     distances: &[(DistanceShare<u32>, DistanceShare<u32>)],
 ) -> Result<Vec<DistanceShare<u32>>> {
-    // d2.code_dot * d1.mask_dot - d1.code_dot * d2.mask_dot
-    let diff = cross_mul(session, distances).await?;
-    // Compute the MSB of the above
-    let bits = extract_msb_u32_batch(session, &diff).await?;
+    // compute the secret-shared bits d1 < d2
+    let bits = oblivious_cross_compare(session, distances).await?;
     // inject bits to u32 shares
     let u32_bits = bit_inject_ot_2round(session, VecShare { shares: bits })
         .await?
