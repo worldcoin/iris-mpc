@@ -4,7 +4,8 @@ pub mod degree4 {
     use crate::{
         galois::degree4::{basis, GaloisRingElement, ShamirGaloisRingShare},
         iris_db::iris::{IrisCode, IrisCodeArray},
-        IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH, PRE_PROC_ROW_PADDING
+        IRIS_CODE_LENGTH, IRIS_CODE_ROWS, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
+        PRE_PROC_ROW_PADDING,
     };
     use base64::{prelude::BASE64_STANDARD, Engine};
     use eyre::Result;
@@ -378,10 +379,10 @@ pub mod degree4 {
 
             let mut sum = 0u16;
             const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
-            let padded_chunk_size = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
+            const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
 
             // Process each row
-            for (row_idx, chunk) in other.chunks_exact(padded_chunk_size).enumerate() {
+            for (row_idx, chunk) in other.chunks_exact(PADDED_CHUNK_SIZE) {
                 // Calculate the starting index in the padded chunk
                 // Each row used to be elements 0..=799 but now has:
                 // - elements 740..=799 prepended (60 elements)
@@ -399,6 +400,7 @@ pub mod degree4 {
                 let self_slice = &self.coefs[self_start..self_end];
 
                 // Compute dot product for this row
+                // use explicit indices for the loop to try to help the compiler optimize with SIMD
                 for i in 0..UNPADDED_ROW_LEN {
                     sum = sum.wrapping_add(self_slice[i].wrapping_mul(other_slice[i]));
                 }
