@@ -73,7 +73,9 @@ anyhow = "1.0.93"
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
+num-format = "0.4.4"
 metrics-logger = "0.22.1"
+perf-event = "0.4.8"
 
 [build-dependencies]
 tonic-build = "0.12.3"

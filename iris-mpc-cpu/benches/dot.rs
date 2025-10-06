@@ -14,6 +14,10 @@ use rand::seq::index::sample;
 use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use rayon::{prelude::*, ThreadPoolBuilder};
 
+use perf_event::events::Hardware;
+use perf_event::{Builder, Counter, Group};
+use num_format::{Locale, ToFormattedString};
+
 pub fn bench_galois_ring_pairwise_distance(c: &mut Criterion) {
     // Generate a dataset larger than CPU caches.
     let ram_size = 1_000_000_000; // 1 GB
@@ -351,6 +355,7 @@ pub fn search_layer_like_calls(c: &mut Criterion) {
 pub fn bench_trick_dot(c: &mut Criterion) {
     let batch_size = 100;
     let rng = &mut thread_rng();
+    let mut perf_counters = PerfGroup::new();
 
     let mut g = c.benchmark_group("trick_dot_vs_rotation_aware_w_cache");
     g.sample_size(10);
@@ -378,6 +383,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
         })
         .collect();
 
+    perf_counters.enable();
     // --- Compute-bound (cacheable) version ---
     g.bench_function("trick_dot_compute_bound", |b| {
         let left = &iris_codes[0];
@@ -392,7 +398,9 @@ pub fn bench_trick_dot(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    perf_counters.disable();
 
+    perf_counters.enable();
     g.bench_function("rotation_aware_trick_dot_compute_bound", |b| {
         let left = &iris_codes[0];
         let right = &iris_codes[1];
@@ -409,6 +417,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    perf_counters.disable();
 
     g.bench_function("rotation_aware_trick_dot_padded_compute_bound", |b| {
         let left = &iris_codes[0];
@@ -431,6 +440,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
         )
     });
 
+    perf_counters.enable();
     // --- RAM-bound (non-cacheable) version ---
     g.bench_function("trick_dot_ram_bound", |b| {
         b.iter_batched(
@@ -451,7 +461,9 @@ pub fn bench_trick_dot(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    perf_counters.disable();
 
+    perf_counters.enable();
     g.bench_function("rotation_aware_trick_dot_ram_bound", |b| {
         b.iter_batched(
             || {
@@ -475,6 +487,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
             BatchSize::SmallInput,
         )
     });
+    perf_counters.disable();
 
     g.bench_function("rotation_aware_trick_dot_padded_ram_bound", |b| {
         b.iter_batched(
@@ -510,3 +523,77 @@ criterion_group!(
     search_layer_like_calls
 );
 criterion_main!(benches);
+
+pub struct PerfGroup {
+    group: Group,
+    cycles: Counter,
+    instrs: Counter,
+    // stalled: Counter,
+    cache_misses: Counter,
+}
+
+impl PerfGroup {
+    pub fn new() -> Self {
+        let mut group = Group::new().unwrap();
+
+        let cycles = Builder::new()
+            .group(&mut group)
+            .kind(Hardware::CPU_CYCLES)
+            .build()
+            .unwrap();
+
+        let instrs = Builder::new()
+            .group(&mut group)
+            .kind(Hardware::INSTRUCTIONS)
+            .build()
+            .unwrap();
+
+        /*let stalled = Builder::new()
+        .group(&mut group)
+        .kind(Hardware::STALLED_CYCLES_FRONTEND)
+        .build().unwrap();*/
+
+        let cache_misses = Builder::new()
+            .group(&mut group)
+            .kind(Hardware::CACHE_MISSES)
+            .build()
+            .unwrap();
+
+        Self {
+            group,
+            cycles,
+            instrs,
+            //stalled,
+            cache_misses,
+        }
+    }
+
+    pub fn enable(&mut self) {
+        self.group.enable().unwrap();
+    }
+
+    pub fn disable(&mut self) {
+        self.group.disable().unwrap();
+
+        let counts = self.group.read().unwrap();
+        let (cycles, instrs, /*stalled,*/ cache_misses) = (
+            counts[&self.cycles],
+            counts[&self.instrs],
+            //counts[&self.stalled],
+            counts[&self.cache_misses],
+        );
+
+        let ipc = instrs as f64 / cycles as f64;
+        // let stall_ratio = stalled as f64 / cycles as f64;
+        let miss_rate = cache_misses as f64 / instrs as f64;
+
+        let cycles = cycles.to_formatted_string(&Locale::en);
+        let instrs = instrs.to_formatted_string(&Locale::en);
+        let cache_misses = cache_misses.to_formatted_string(&Locale::en);
+
+        println!(
+            "cycles={cycles} instrs={instrs} misses={cache_misses} ipc={:.2} miss_rate={:.4}\n",
+            ipc, miss_rate
+        );
+    }
+}
