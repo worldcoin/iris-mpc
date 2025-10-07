@@ -1,5 +1,5 @@
-use crate::{misc::limited_iterator, types::IrisCodeBase64};
-use iris_mpc_common::IrisVectorId;
+use crate::misc::limited_iterator;
+use iris_mpc_common::{iris_db::iris::IrisCodeBase64, IrisVectorId};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use std::{
     fs::File,
