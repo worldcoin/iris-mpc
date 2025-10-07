@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{vector_id::VectorId, ROTATIONS};
 use itertools::Itertools;
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
@@ -272,6 +272,26 @@ impl VectorStore for Aby3Store {
 
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &[Self::QueryRef; ROTATIONS],
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        // pairs (Query, Vector) where each vector is paired with all ROTATIONS queries
+        let pairs = vectors
+            .iter()
+            .flat_map(|v| query.iter().map(|q| (q.clone(), *v)).collect_vec())
+            .collect_vec();
+        let distances = self.eval_distance_pairs(&pairs).await?;
+        let mut results = Vec::with_capacity(vectors.len());
+        for rot_dists in distances.chunks(ROTATIONS) {
+            let min_dist = self.oblivious_min_distance(rot_dists).await?;
+            results.push(min_dist);
+        }
+        Ok(results)
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
