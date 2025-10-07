@@ -61,6 +61,9 @@ pub fn naive_knn_min_fhd1(
             .collect::<Vec<_>>()
             .into_par_iter()
             .map(|i| {
+                // for i // this part parallel
+                //    for j
+                //      all rotations of i vs. center of j
                 let current_iris = &irises[i - 1];
                 let mut neighbors = centers
                     .iter()
