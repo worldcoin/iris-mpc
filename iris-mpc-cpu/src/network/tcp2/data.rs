@@ -14,7 +14,10 @@ use tokio::{
     time::sleep,
 };
 
+// session multiplexing over a socket requires a SessionId
 pub type OutboundMsg = (SessionId, NetworkValue);
+pub type OutStream = mpsc::Sender<OutboundMsg>;
+pub type InStream = mpsc::Receiver<NetworkValue>;
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug, Hash)]
 pub struct ConnectionId(pub u32);

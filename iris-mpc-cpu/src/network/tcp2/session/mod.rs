@@ -1,3 +1,5 @@
+pub mod multiplexer;
+
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{tcp::config::TcpConfig, value::NetworkValue, Networking},

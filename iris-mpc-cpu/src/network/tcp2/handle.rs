@@ -11,28 +11,34 @@ use crate::{
         },
     },
 };
+use futures::future::join_all;
 use itertools::izip;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-pub struct TcpNetworkHandle<T: NetworkConnection + 'static> {
-    connections0: Vec<Connection>,
-    connections1: Vec<Connection>,
+pub struct TcpNetworkHandle<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> {
+    peers: [Arc<Peer>; 2],
+    my_id: Arc<Identity>,
+    connector: C,
+    conn_cmd_tx: mpsc::Sender<ConnectionRequest<T>>,
     connection_state: ConnectionState,
     config: TcpConfig,
-    // for session creation only
-    session_start_id: usize,
-    sessions: Option<Vec<TcpSession>>,
-    _marker: PhantomData<T>,
 }
 
 #[async_trait]
 impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)> {
-        tracing::debug!("make_sessions");
-        self.reconnector.wait_for_reconnections().await?;
-        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
-        Ok(self.make_sessions_inner(sc).await)
+        // set up the connection state
+        self.connection_state.err_ct().await.cancel();
+        self.connection_state
+            .replace_cancellation_token(CancellationToken::new());
+
+        // make the connections
+        let connections = self.make_connections().await?;
+
+        // pass them off to the session managers
+        // return the tcp sessions
+        todo!()
     }
 }
 
@@ -55,8 +61,6 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             Arc::new(peers.next().expect("expected at least 2 identities").into()),
             Arc::new(peers.next().expect("expected at least 2 identities").into()),
         ];
-        let mut connections0 = Vec::new();
-        let mut connections1 = Vec::new();
 
         let connection_state = ConnectionState::new(
             config.num_connections * 2, // 2 peers
@@ -75,39 +79,32 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             connection_state.shutdown_ct().await,
         ));
 
-        for idx in 0..config.num_connections {
-            let connection_id = ConnectionId(idx as u32);
-            let num_sessions = config.get_sessions_for_connection(idx);
-
-            connections0.push(Connection::new(
-                connection_id.clone(),
-                my_id.clone(),
-                peers[0].clone(),
-                connection_state.clone(),
-                connector.clone(),
-                conn_cmd_tx.clone(),
-            ));
-            connections1.push(Connection::new(
-                connection_id.clone(),
-                my_id.clone(),
-                peers[0].clone(),
-                connection_state.clone(),
-                connector.clone(),
-                conn_cmd_tx.clone(),
-            ));
-        }
-
-        assert_eq!(connections0.len(), config.num_connections);
-        assert_eq!(connections1.len(), config.num_connections);
-
         Self {
-            connections0,
-            connections1,
+            my_id,
+            peers,
+            connector,
+            conn_cmd_tx,
             connection_state,
-            config,
-            session_start_id: 0,
-            _marker: PhantomData,
         }
+    }
+
+    pub async fn make_connections(&self) -> Result<Vec<T>> {
+        let mut connect_futures = Vec::with_capacity(self.config.num_connections * 2);
+        for peer in self.peers.iter().cloned() {
+            for idx in 0..self.config.num_connections {
+                let conn_id = ConnectionId::new(idx as u32);
+                let fut = super::connection::connect(
+                    connection_id,
+                    self.my_id.clone(),
+                    peer,
+                    self.connection_state.clone(),
+                    self.connector.clone(),
+                    self.conn_cmd_tx.clone(),
+                )?;
+                connect_futures.push(fut);
+            }
+        }
+        join_all(connect_futures).await
     }
 
     // returns None if cancelled
