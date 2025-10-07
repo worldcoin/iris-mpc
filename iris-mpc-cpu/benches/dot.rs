@@ -401,7 +401,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                 for (l, r) in pairs {
                     black_box(
                         l.code
-                            .rotation_aware_trick_dot(&r.code, IrisRotation::Left(12)),
+                            .rotation_aware_trick_dot(&r.code, &IrisRotation::Left(12)),
                     );
                 }
             },
@@ -422,7 +422,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                 for (l, arr) in pairs {
                     black_box(
                         l.code
-                            .rotation_aware_trick_dot_padded(arr, IrisRotation::Left(12)),
+                            .rotation_aware_trick_dot_padded(arr, &IrisRotation::Left(12)),
                     );
                 }
             },
@@ -467,7 +467,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                 for (l, r, rot) in triples {
                     black_box(
                         l.code
-                            .rotation_aware_trick_dot(&r.code, IrisRotation::Left(rot)),
+                            .rotation_aware_trick_dot(&r.code, &IrisRotation::Left(rot)),
                     );
                 }
             },
@@ -491,7 +491,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                 for (l, arr, rot) in triples {
                     black_box(
                         l.code
-                            .rotation_aware_trick_dot_padded(arr, IrisRotation::Left(rot)),
+                            .rotation_aware_trick_dot_padded(arr, &IrisRotation::Left(rot)),
                     );
                 }
             },

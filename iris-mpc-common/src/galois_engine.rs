@@ -14,12 +14,6 @@ pub mod degree4 {
 
     const CODE_COLS: usize = 200;
 
-    pub enum IrisRotation {
-        Center,
-        Left(usize),
-        Right(usize),
-    }
-
     /// A representation of a 100% relative distance as a fraction.
     /// The numerator is chosen as -1 meaning 1 difference.
     /// The denominator is chosen as 1 meaning 1 unmasked bits.
@@ -55,6 +49,57 @@ pub mod degree4 {
         coefs
             .chunks_exact_mut(CODE_COLS * 4)
             .for_each(|chunk| chunk.rotate_left(by * 4));
+    }
+
+    fn trick_dot<const D: usize>(left: &[u16; D], right: &[u16; D]) -> u16 {
+        let mut sum0 = 0u16;
+        let mut sum1 = 0u16;
+        let half = IRIS_CODE_LENGTH / 2;
+
+        // create two memory streams to exploit memory level parallelism.
+        // this improves performance when the computation is RAM bound.
+        for i in 0..half {
+            sum0 = sum0.wrapping_add(left[i].wrapping_mul(right[i]));
+            sum1 = sum1.wrapping_add(left[half + i].wrapping_mul(right[half + i]));
+        }
+        sum0.wrapping_add(sum1)
+    }
+
+    // iterate over other.coefs as though it has been rotated according to the iris rotation.
+    // this involves chunking by CODE_COLS * 4 and then rotating the chunk
+    // the rotation is accomplished by operating over two slices
+    fn rotation_aware_trick_dot<const D: usize>(
+        left: &[u16; D],
+        right: &[u16; D],
+        rotation: &IrisRotation,
+    ) -> u16 {
+        let skip = match rotation {
+            IrisRotation::Center => return trick_dot(left, right),
+            IrisRotation::Left(rot) => rot * 4,
+            IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
+        };
+
+        let mut sum = 0u16;
+        let chunk_size = CODE_COLS * 4;
+
+        for (left_slice, right_slice) in left
+            .chunks_exact(chunk_size)
+            .zip(right.chunks_exact(chunk_size))
+        {
+            // Split the rotation into two contiguous loops,
+            // allowing the compiler to vectorize
+            let (left1, left2) = left_slice.split_at(chunk_size - skip);
+            let (right1, right2) = right_slice.split_at(skip);
+
+            for (l, r) in left1.iter().zip(right2.iter()) {
+                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            }
+
+            for (l, r) in left2.iter().zip(right1.iter()) {
+                sum = sum.wrapping_add(l.wrapping_mul(*r));
+            }
+        }
+        sum
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -124,11 +169,15 @@ pub mod degree4 {
         }
 
         pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
-            let mut sum = 0u16;
-            for i in 0..MASK_CODE_LENGTH {
-                sum = sum.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
-            }
-            sum
+            trick_dot(&self.coefs, &other.coefs)
+        }
+
+        pub fn rotation_aware_trick_dot(
+            &self,
+            other: &GaloisRingTrimmedMaskCodeShare,
+            rotation: &IrisRotation,
+        ) -> u16 {
+            rotation_aware_trick_dot(&self.coefs, &other.coefs, rotation)
         }
     }
 
@@ -359,61 +408,21 @@ pub mod degree4 {
         }
 
         pub fn trick_dot(&self, other: &GaloisRingIrisCodeShare) -> u16 {
-            let mut sum0 = 0u16;
-            let mut sum1 = 0u16;
-            let half = IRIS_CODE_LENGTH / 2;
-
-            // create two memory streams to exploit memory level parallelism.
-            // this improves performance when the computation is RAM bound.
-            for i in 0..half {
-                sum0 = sum0.wrapping_add(self.coefs[i].wrapping_mul(other.coefs[i]));
-                sum1 = sum1.wrapping_add(self.coefs[half + i].wrapping_mul(other.coefs[half + i]));
-            }
-            sum0.wrapping_add(sum1)
+            trick_dot(&self.coefs, &other.coefs)
         }
 
-        // iterate over other.coefs as though it has been rotated according to the iris rotation.
-        // this involves chunking by CODE_COLS * 4 and then rotating the chunk
-        // the rotation is accomplished by operating over two slices
         pub fn rotation_aware_trick_dot(
             &self,
             other: &GaloisRingIrisCodeShare,
-            rotation: IrisRotation,
+            rotation: &IrisRotation,
         ) -> u16 {
-            let skip = match rotation {
-                IrisRotation::Center => return self.trick_dot(other),
-                IrisRotation::Left(rot) => rot * 4,
-                IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
-            };
-
-            let mut sum = 0u16;
-            let chunk_size = CODE_COLS * 4;
-
-            for (self_slice, other_slice) in self
-                .coefs
-                .chunks_exact(chunk_size)
-                .zip(other.coefs.chunks_exact(chunk_size))
-            {
-                // Split the rotation into two contiguous loops,
-                // allowing the compiler to vectorize
-                let (self1, self2) = self_slice.split_at(chunk_size - skip);
-                let (other1, other2) = other_slice.split_at(skip);
-
-                for (l, r) in self1.iter().zip(other2.iter()) {
-                    sum = sum.wrapping_add(l.wrapping_mul(*r));
-                }
-
-                for (l, r) in self2.iter().zip(other1.iter()) {
-                    sum = sum.wrapping_add(l.wrapping_mul(*r));
-                }
-            }
-            sum
+            rotation_aware_trick_dot(&self.coefs, &other.coefs, rotation)
         }
 
         pub fn rotation_aware_trick_dot_padded(
             &self,
             other: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
-            rotation: IrisRotation,
+            rotation: &IrisRotation,
         ) -> u16 {
             let skip = match rotation {
                 IrisRotation::Center => 60, // no padding (60 added on each side)
@@ -592,6 +601,58 @@ pub mod degree4 {
         }
     }
 
+    pub enum IrisRotation {
+        Center,
+        Left(usize),
+        Right(usize),
+    }
+
+    impl IrisRotation {
+        pub fn all() -> IrisRotationIter {
+            IrisRotationIter::new()
+        }
+    }
+
+    pub struct IrisRotationIter {
+        idx: isize,
+    }
+
+    impl Default for IrisRotationIter {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl IrisRotationIter {
+        pub fn new() -> Self {
+            Self { idx: -15 }
+        }
+    }
+
+    impl Iterator for IrisRotationIter {
+        type Item = IrisRotation;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.idx {
+                -15..=-1 => {
+                    let rot = IrisRotation::Left(-self.idx as usize);
+                    self.idx += 1;
+                    Some(rot)
+                }
+                0 => {
+                    self.idx += 1;
+                    Some(IrisRotation::Center)
+                }
+                1..=15 => {
+                    let rot = IrisRotation::Right((self.idx) as usize);
+                    self.idx += 1;
+                    Some(rot)
+                }
+                _ => None,
+            }
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use crate::{
@@ -643,12 +704,8 @@ pub mod degree4 {
 
                 // do rotation aware trick dot first
                 let mut dots = vec![];
-                for idx in (1..=15).rev() {
-                    dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Left(idx)));
-                }
-                dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Center));
-                for idx in 1..=15 {
-                    dots.push(left.rotation_aware_trick_dot(right, IrisRotation::Right(idx)));
+                for rotation in IrisRotatoin::all() {
+                    dots.push(left.rotation_aware_trick_dot(right, &rotation));
                 }
 
                 let right = &mut query_shares[0];
