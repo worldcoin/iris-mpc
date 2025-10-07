@@ -1,4 +1,6 @@
 use eyre::Result;
+use iris_mpc_common::ROTATIONS;
+use itertools::Itertools;
 use serde::Serialize;
 use std::{
     fmt::{Debug, Display},
@@ -93,6 +95,26 @@ pub trait VectorStore: Debug {
         let mut results = Vec::with_capacity(vectors.len());
         for vector in vectors {
             results.push(self.eval_distance(query, vector).await?);
+        }
+        Ok(results)
+    }
+
+    /// Evaluate the minimal distance over all distances between rotations of the query and a vector in the input batch.
+    /// The default implementation is a simple iterative minimum search of linear depth.
+    /// Override for more efficient minimum distance evaluations.
+    async fn eval_minimal_rotation_distance_batch(&mut self, query: &[Self::QueryRef; ROTATIONS], vectors: &[Self::VectorRef]) -> Result<Vec<Self::DistanceRef>> {
+        // pairs (Query, Vector) where each vector is paired with all ROTATIONS queries
+        let pairs = vectors.iter().flat_map(|v| query.iter().map(|q| (q.clone(),v.clone())).collect_vec()).collect_vec();
+        let distances = self.eval_distance_pairs(&pairs).await?;
+        let mut results = Vec::with_capacity(vectors.len());
+        for rot_dists in distances.chunks(ROTATIONS) {
+            let mut min_dist = rot_dists[0].clone();
+            for dist in rot_dists {
+                if self.less_than(dist, &min_dist).await? {
+                    min_dist = dist.clone();
+                }
+            }
+            results.push(min_dist);
         }
         Ok(results)
     }
