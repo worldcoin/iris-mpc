@@ -52,17 +52,11 @@ pub mod degree4 {
     }
 
     fn trick_dot<const D: usize>(left: &[u16; D], right: &[u16; D]) -> u16 {
-        let mut sum0 = 0u16;
-        let mut sum1 = 0u16;
-        let half = IRIS_CODE_LENGTH / 2;
-
-        // create two memory streams to exploit memory level parallelism.
-        // this improves performance when the computation is RAM bound.
-        for i in 0..half {
-            sum0 = sum0.wrapping_add(left[i].wrapping_mul(right[i]));
-            sum1 = sum1.wrapping_add(left[half + i].wrapping_mul(right[half + i]));
+        let mut sum = 0u16;
+        for i in 0..D {
+            sum = sum.wrapping_add(left[i].wrapping_mul(right[i]));
         }
-        sum0.wrapping_add(sum1)
+        sum
     }
 
     // iterate over other.coefs as though it has been rotated according to the iris rotation.
@@ -74,7 +68,7 @@ pub mod degree4 {
         rotation: &IrisRotation,
     ) -> u16 {
         let skip = match rotation {
-            IrisRotation::Center => return trick_dot(left, right),
+            IrisRotation::Center => 0,
             IrisRotation::Left(rot) => rot * 4,
             IrisRotation::Right(rot) => (CODE_COLS * 4) - (rot * 4),
         };
@@ -704,7 +698,7 @@ pub mod degree4 {
 
                 // do rotation aware trick dot first
                 let mut dots = vec![];
-                for rotation in IrisRotatoin::all() {
+                for rotation in IrisRotation::all() {
                     dots.push(left.rotation_aware_trick_dot(right, &rotation));
                 }
 
