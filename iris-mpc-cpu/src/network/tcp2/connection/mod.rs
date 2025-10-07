@@ -10,15 +10,19 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::tcp2::{
-        data::{ConnectionId, OutboundMsg, Peer},
-        Client, NetworkConnection,
+    network::{
+        tcp2::{
+            data::{ConnectionId, OutboundMsg, Peer},
+            Client, NetworkConnection,
+        },
+        value::NetworkValue,
     },
 };
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
     net::TcpStream,
     sync::{mpsc, oneshot},
     time::sleep,
@@ -78,13 +82,13 @@ impl Connection {
         &self,
         num_sessions: usize,
         session_start_idx: usize,
-    ) -> Result<oneshot::Receiver<Result<Vec<ConnectRsp>>>> {
+    ) -> Result<oneshot::Receiver<Vec<ConnectRsp>>> {
         let (rsp_tx, rsp_rx) = oneshot::channel();
-        let cmd = InnerCmd::Connect {
+        let cmd = InnerCmd::Connect(ConnectCmd {
             num_sessions,
             session_start_idx,
             rsp: rsp_tx,
-        };
+        });
         let _ = self.cmd_tx.send(cmd).await?;
         Ok(rsp_rx)
     }
@@ -149,7 +153,7 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
             let shutdown_ct = self.connection_state.shutdown_ct().await;
 
             tokio::select! {
-                o = cmd_rx.recv() => return Some(o),
+                o = cmd_rx.recv() => return o,
                 _ = err_ct.cancelled() => continue,
                 _ = shutdown_ct.cancelled() => {
                     return None;
@@ -175,7 +179,7 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
             };
 
             match opt {
-                Some(InnerCmd::Connect) => continue,
+                Some(InnerCmd::Connect(_)) => continue,
                 _ => return None,
             }
         }
@@ -187,17 +191,23 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
         cmd: ConnectCmd,
         conn_state: ConnectionState,
         cmd_rx: &mut mpsc::Receiver<InnerCmd>,
-    ) {
+    ) -> Option<ConnectCmd> {
         let err_ct = self.connection_state.err_ct().await;
         let shutdown_ct = self.connection_state.shutdown_ct().await;
 
-        let mut r = vec![];
-        let mut outbound_map: HashMap<u32, mpsc::Sender<NetworkValue>> = HashMap::new();
-        let (outbound_tx, outbound_rx) = mpsc::channel(cmd.num_sessions);
+        let ConnectCmd {
+            num_sessions,
+            session_start_idx,
+            rsp,
+        } = cmd;
 
-        for session_id in cmd.session_start_idx..cmd.session_start_idx + cmd.num_sessions {
+        let mut r = vec![];
+        let mut inbound_map: HashMap<SessionId, mpsc::Sender<NetworkValue>> = HashMap::new();
+        let (outbound_tx, outbound_rx) = mpsc::channel(num_sessions);
+
+        for session_id in session_start_idx..session_start_idx + num_sessions {
             let (inbound_tx, inbound_rx) = mpsc::channel(1);
-            outbound_map.insert(session_id as u32, inbound_tx);
+            inbound_map.insert(SessionId::from(session_id as u32), inbound_tx);
 
             r.push(ConnectRsp {
                 session_id: SessionId::from(session_id as u32),
@@ -206,8 +216,38 @@ impl<T: NetworkConnection, C: Client<Output = T>> ConnectionInner<T, C> {
             });
         }
 
-        todo!();
+        let (reader, writer) = tokio::io::split(connection);
+        let reader = BufReader::new(reader);
+
+        let _ = rsp.send(r);
+
+        tokio::select! {
+            opt = cmd_rx.recv() => match opt {
+                Some(cmd) => match cmd {
+                    InnerCmd::Connect(cmd) => todo!(),
+                    _ => todo!(),
+                },
+                None => todo!(),
+            },
+            _ = err_ct.cancelled() => todo!(),
+            _ = shutdown_ct.cancelled() => todo!(),
+            _ = handle_outbound_traffic(writer, outbound_rx, num_sessions) => todo!(),
+            _ = handle_inbound_traffic(reader, inbound_map) => todo!(),
+        }
     }
+}
+
+async fn handle_outbound_traffic<T: NetworkConnection>(
+    mut stream: WriteHalf<T>,
+    mut outbound_rx: mpsc::Receiver<OutboundMsg>,
+    num_sessions: usize,
+) {
+}
+
+async fn handle_inbound_traffic<T: NetworkConnection>(
+    mut reader: BufReader<ReadHalf<T>>,
+    inbound_tx: HashMap<SessionId, mpsc::Sender<NetworkValue>>,
+) {
 }
 
 async fn manage_connection<T: NetworkConnection, C: Client<Output = T>>(

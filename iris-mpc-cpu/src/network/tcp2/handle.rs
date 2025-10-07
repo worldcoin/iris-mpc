@@ -11,6 +11,7 @@ use crate::{
         },
     },
 };
+use itertools::izip;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -19,7 +20,20 @@ pub struct TcpNetworkHandle<T: NetworkConnection + 'static> {
     connections1: Vec<Connection>,
     connection_state: ConnectionState,
     config: TcpConfig,
+    // for session creation only
+    session_start_id: usize,
+    sessions: Option<Vec<TcpSession>>,
     _marker: PhantomData<T>,
+}
+
+#[async_trait]
+impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
+    async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)> {
+        tracing::debug!("make_sessions");
+        self.reconnector.wait_for_reconnections().await?;
+        let sc = make_channels(&self.peers, &self.config, self.next_session_id);
+        Ok(self.make_sessions_inner(sc).await)
+    }
 }
 
 impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
@@ -63,6 +77,8 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
 
         for idx in 0..config.num_connections {
             let connection_id = ConnectionId(idx as u32);
+            let num_sessions = config.get_sessions_for_connection(idx);
+
             connections0.push(Connection::new(
                 connection_id.clone(),
                 my_id.clone(),
@@ -89,14 +105,30 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             connections1,
             connection_state,
             config,
+            session_start_id: 0,
             _marker: PhantomData,
         }
     }
 
     // returns None if cancelled
-    pub async fn wait_for_ready(&self) -> Option<()> {
-        for conn in self.connections0.iter().chain(self.connections1.iter()) {
-            conn.connect().await;
+    pub async fn wait_for_ready(&mut self) -> Option<()> {
+        let mut session_id = self.session_start_id;
+
+        self.session_start_id = self.session_start_id.wrapping_add(self.config.num_sessions);
+        if self.session_start_id >= usize::MAX - self.config.num_sessions {
+            self.session_start_id = 0;
+        }
+
+        let mut responses0 = vec![];
+        let mut responses1 = vec![];
+        for (idx, (conn0, conn1)) in izip!(self.connections0, self.connections1)
+            .enumerate()
+            .take(self.config.num_connections)
+        {
+            let num_sessions = self.config.get_sessions_for_connection(idx);
+            responses0.push(conn0.connect(num_sessions, session_id).await);
+            responses1.push(conn1.connect(num_sessions, session_id).await);
+            session_id += num_sessions;
         }
 
         let shutdown_ct = self.connection_state.shutdown_ct().await;

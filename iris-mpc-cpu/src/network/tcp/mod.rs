@@ -35,6 +35,9 @@ use data::*;
 #[async_trait]
 pub trait NetworkHandle: Send + Sync {
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)>;
+    async fn synchronize_parties(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
