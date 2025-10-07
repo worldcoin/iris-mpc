@@ -16,8 +16,8 @@ use tokio::{
 
 // session multiplexing over a socket requires a SessionId
 pub type OutboundMsg = (SessionId, NetworkValue);
-pub type OutStream = mpsc::Sender<OutboundMsg>;
-pub type InStream = mpsc::Receiver<NetworkValue>;
+pub type OutStream = mpsc::UnboundedSender<OutboundMsg>;
+pub type InStream = mpsc::UnboundedReceiver<NetworkValue>;
 
 #[derive(Clone, Copy, PartialOrd, Ord, PartialEq, Eq, Debug, Hash)]
 pub struct ConnectionId(pub u32);
