@@ -2,15 +2,16 @@
 
 use std::collections::HashMap;
 
+use itertools::izip;
 use tokio::{io::BufReader, sync::mpsc};
 
 use crate::{
-    execution::session::SessionId,
+    execution::{player::Identity, session::SessionId},
     network::{
         tcp::config::TcpConfig,
         tcp2::{
             connection::ConnectionState,
-            data::{InStream, OutStream},
+            data::{ConnectionId, InStream, OutStream},
             session::TcpSession,
             NetworkConnection,
         },
@@ -21,17 +22,7 @@ use crate::{
 const BUFFER_CAPACITY: usize = 32 * 1024;
 const READ_BUF_SIZE: usize = 2 * 1024 * 1024;
 
-pub async fn make_sessions<T: NetworkConnection>(
-    conn0: Vec<T>,
-    conn1: Vec<T>,
-    connection_state: ConnectionState,
-    config: TcpConfig,
-) -> Result<Vec<TcpSession>> {
-    // spawn multiplex() and return the sessions
-    todo!()
-}
-
-async fn multiplex<T: NetworkConnection>(
+pub async fn run<T: NetworkConnection>(
     stream: T,
     num_sessions: usize,
     connection_state: ConnectionState,

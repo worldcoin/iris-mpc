@@ -36,6 +36,8 @@ impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
         // make the connections
         let connections = self.make_connections().await?;
 
+        crate::network::tcp2::session::make_sessions()
+
         // pass them off to the session managers
         // return the tcp sessions
         todo!()
