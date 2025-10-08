@@ -5,13 +5,16 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{naive_knn, KNNResult},
-    py_bindings::plaintext_store::Base64IrisCode,
+    hawkers::naive_knn_plaintext::{naive_knn, naive_knn_min_fhd1, naive_knn_min_fhd2, KNNResult},
+    py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
 use metrics::IntoF64;
-use rayon::ThreadPoolBuilder;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    ThreadPoolBuilder,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use std::time::Instant;
@@ -21,6 +24,12 @@ enum IrisSelection {
     All,
     Even,
     Odd,
+}
+
+#[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
+enum DistanceUsed {
+    Normal,
+    MinFHD,
 }
 
 /// A struct to hold the metadata stored in the first line of the results file.
@@ -57,6 +66,10 @@ struct Args {
     /// Selection of irises to process
     #[arg(long, value_enum, default_value_t = IrisSelection::All)]
     irises_selection: IrisSelection,
+
+    /// Selection of irises to process
+    #[arg(long, value_enum, default_value_t = DistanceUsed::Normal)]
+    distance_used: DistanceUsed,
 }
 #[tokio::main]
 async fn main() {
@@ -132,7 +145,7 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<IrisSerialId> = deserialized_results
+            let nodes: Vec<usize> = deserialized_results
                 .into_iter()
                 .map(|result| result.node)
                 .collect();
@@ -154,7 +167,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<IrisSerialId> = (1..(num_already_processed + 1) as u32).collect();
+        let expected_nodes: Vec<usize> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
@@ -184,28 +197,40 @@ async fn main() {
         IrisSelection::Odd => (num_irises * 2, 1, 2),
     };
 
-    let stream_iterator = stream
-        .take(limit)
+    let stream_iterator = limited_iterator(stream, Some(limit))
         .skip(skip)
         .step_by(step)
         .map(|json_pt| (&json_pt.unwrap()).into());
     irises.extend(stream_iterator);
     assert!(irises.len() == num_irises);
 
-    let start_t = Instant::now();
     let pool = ThreadPoolBuilder::new()
         .num_threads(args.num_threads)
         .build()
         .unwrap();
 
-    let mut start = num_already_processed + 1;
-    let chunk_size = 1000;
-    println!("Starting work at serial id: {}", start);
+    let irises_with_rotations = pool.install(|| {
+        irises
+            .par_iter()
+            .map(|iris| iris.all_rotations().try_into().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    let chunk_size = 2000;
     let mut evaluated_pairs = 0usize;
 
-    while start < num_irises {
-        let end = (start + chunk_size).min(num_irises);
-        let results = naive_knn(&irises, args.k, start, end, &pool);
+    let mut start = num_already_processed + 1;
+    println!("Starting work at serial id: {}", start);
+
+    let start_t = Instant::now();
+    while start <= num_irises {
+        let end = (start + chunk_size).min(num_irises + 1);
+        let results = match args.distance_used {
+            DistanceUsed::Normal => naive_knn(&irises, args.k, start, end, &pool),
+            DistanceUsed::MinFHD => {
+                naive_knn_min_fhd2(&irises_with_rotations, &irises, args.k, start, end, &pool)
+            }
+        };
         evaluated_pairs += (end - start) * num_irises;
 
         let mut file = OpenOptions::new()
