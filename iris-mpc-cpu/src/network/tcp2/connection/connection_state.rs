@@ -54,6 +54,15 @@ impl ConnectionState {
             .is_ok()
     }
 
+    pub async fn cancelled(&self) -> bool {
+        self.inner
+            .read()
+            .await
+            .cancelled
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     pub async fn incr_ready(&self) -> bool {
         self.inner.read().await.incr_ready().await
     }
@@ -74,6 +83,7 @@ impl ConnectionState {
 struct ConnectionStateInner {
     not_ready: Counter,
     exited: AtomicBool,
+    cancelled: AtomicBool,
     shutdown_ct: CancellationToken,
     err_ct: CancellationToken,
     ready_tx: Option<mpsc::Sender<()>>,
@@ -89,6 +99,7 @@ impl ConnectionStateInner {
         Self {
             not_ready: Counter::new(num_connections),
             exited: AtomicBool::new(false),
+            cancelled: AtomicBool::new(false),
             shutdown_ct,
             err_ct,
             ready_tx: None,
@@ -96,6 +107,7 @@ impl ConnectionStateInner {
     }
 
     fn replace_cancellation_token(&mut self, err_ct: CancellationToken) {
+        self.cancelled = AtomicBool::new(false);
         self.err_ct = err_ct;
     }
 

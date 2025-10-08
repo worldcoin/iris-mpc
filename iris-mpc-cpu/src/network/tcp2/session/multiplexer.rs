@@ -12,11 +12,7 @@ use tokio::{
 use crate::{
     execution::session::SessionId,
     network::{
-        tcp2::{
-            connection::ConnectionState,
-            data::OutboundMsg,
-            NetworkConnection,
-        },
+        tcp2::{connection::ConnectionState, data::OutboundMsg, NetworkConnection},
         value::{DescriptorByte, NetworkValue},
     },
 };
@@ -38,10 +34,26 @@ pub async fn run<T: NetworkConnection>(
     let reader = BufReader::new(reader);
 
     tokio::select! {
-        _ = shutdown_ct.cancelled() => todo!(),
-        _ = err_ct.cancelled() => todo!(),
-        _ = handle_outbound_traffic(writer, outbound_rx, num_sessions) => todo!(),
-        _ = handle_inbound_traffic(reader, inbound_forwarder) => todo!(),
+        _ = shutdown_ct.cancelled() => {},
+        _ = err_ct.cancelled() => {},
+        e = handle_outbound_traffic(writer, outbound_rx, num_sessions) => {
+            tracing::debug!("handle_outbound_traffic: {:?}", e);
+            err_ct.cancel();
+        },
+        e = handle_inbound_traffic(reader, inbound_forwarder) => {
+            tracing::debug!("handle_inbound_traffic: {:?}",  e);
+            err_ct.cancel();
+        },
+    }
+
+    if shutdown_ct.is_cancelled() {
+        if connection_state.exited().await {
+            tracing::info!("shutting down TCP/TLS networking stack");
+        }
+    } else if err_ct.is_cancelled() {
+        if connection_state.cancelled().await {
+            tracing::info!("closing TCP/TLS connections");
+        }
     }
 }
 
