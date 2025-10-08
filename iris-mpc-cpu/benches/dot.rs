@@ -422,7 +422,7 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                 for (preprocessed_data, right) in pairs {
                     black_box(rotation_aware_trick_dot_padded(
                         preprocessed_data,
-                        &right,
+                        right,
                         &IrisRotation::Left(12),
                     ));
                 }
