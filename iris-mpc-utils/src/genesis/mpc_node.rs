@@ -2,7 +2,7 @@ use crate::{
     constants::N_PARTIES,
     irises::modifications::{self, ModificationInput},
     state::pgres::ops as db_ops1,
-    types::{GaloisRingSharedIrisPair, NetConfig},
+    types::NetConfig,
 };
 use eyre::{bail, Result};
 use iris_mpc_common::{
@@ -15,6 +15,7 @@ use iris_mpc_cpu::{
     genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
+    protocol::shared_iris::GaloisRingSharedIrisPair,
 };
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;

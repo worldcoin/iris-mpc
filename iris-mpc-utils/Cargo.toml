@@ -48,9 +48,5 @@ name = "graph-mem-cli"
 path = "bin/graph_mem_cli.rs"
 
 [[bin]]
-name = "initialise-test-dbs"
-path = "bin/initialise_test_dbs.rs"
-
-[[bin]]
 name = "write-node-config-toml"
 path = "bin/write_node_config_toml.rs"
