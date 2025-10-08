@@ -1,9 +1,14 @@
 //! multiplexes multiple sessions over a single connection
 
-use std::collections::HashMap;
+use std::{collections::HashMap, io, time::Instant};
 
+use bytes::BytesMut;
+use iris_mpc_common::fast_metrics::FastHistogram;
 use itertools::izip;
-use tokio::{io::BufReader, sync::mpsc};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
+    sync::mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
+};
 
 use crate::{
     execution::{player::Identity, session::SessionId},
@@ -11,11 +16,11 @@ use crate::{
         tcp::config::TcpConfig,
         tcp2::{
             connection::ConnectionState,
-            data::{ConnectionId, InStream, OutStream},
+            data::{ConnectionId, InStream, OutStream, OutboundMsg},
             session::TcpSession,
             NetworkConnection,
         },
-        value::NetworkValue,
+        value::{DescriptorByte, NetworkValue},
     },
 };
 
@@ -26,8 +31,8 @@ pub async fn run<T: NetworkConnection>(
     stream: T,
     num_sessions: usize,
     connection_state: ConnectionState,
-    inbound_forwarder: HashMap<SessionId, InStream>,
-    outbound_rx: OutStream,
+    inbound_forwarder: HashMap<SessionId, UnboundedSender<NetworkValue>>,
+    outbound_rx: UnboundedReceiver<OutboundMsg>,
 ) {
     let shutdown_ct = connection_state.shutdown_ct().await;
     let err_ct = connection_state.err_ct().await;
@@ -47,7 +52,7 @@ pub async fn run<T: NetworkConnection>(
 /// the sender needs to prepend the session id to the message.
 async fn handle_outbound_traffic<T: NetworkConnection>(
     mut stream: WriteHalf<T>,
-    mut outbound_rx: OutStream,
+    mut outbound_rx: UnboundedReceiver<OutboundMsg>,
     num_sessions: usize,
 ) -> io::Result<()> {
     // Time spent buffering between the first and last messages of a packet.
@@ -101,11 +106,11 @@ async fn handle_outbound_traffic<T: NetworkConnection>(
             }
         }
 
-        write_buf(stream, &mut buf).await?
+        write_buf(&mut stream, &mut buf).await?
     }
 
     if !buf.is_empty() {
-        write_buf(stream, &mut buf).await?
+        write_buf(&mut stream, &mut buf).await?
     }
     // the channel will not receive any more commands
     tracing::debug!("outbound_rx closed");

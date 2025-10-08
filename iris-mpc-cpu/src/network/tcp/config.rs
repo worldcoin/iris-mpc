@@ -32,11 +32,11 @@ impl TcpConfig {
     pub fn get_sessions_for_connection(&self, idx: usize) -> usize {
         let num_sessions = self.num_sessions;
         let num_connections = self.num_connections;
-        let sessions_for_connection = num_sessions / num_connections
+        num_sessions / num_connections
             + if idx < (num_sessions % num_connections) {
                 1
             } else {
                 0
-            };
+            }
     }
 }

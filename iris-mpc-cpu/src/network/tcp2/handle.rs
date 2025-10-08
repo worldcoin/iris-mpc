@@ -5,12 +5,15 @@ use crate::{
     network::{
         tcp::config::TcpConfig,
         tcp2::{
-            connection::{accept_loop, Connection, ConnectionRequest, ConnectionState},
+            connection::{accept_loop, ConnectionRequest, ConnectionState},
             data::{ConnectionId, Peer},
-            Client, NetworkConnection, Server,
+            session::TcpSession,
+            Client, NetworkConnection, NetworkHandle, Server,
         },
     },
 };
+use async_trait::async_trait;
+use eyre::Result;
 use futures::future::join_all;
 use itertools::izip;
 use tokio::sync::mpsc;
@@ -23,29 +26,44 @@ pub struct TcpNetworkHandle<T: NetworkConnection + 'static, C: Client<Output = T
     conn_cmd_tx: mpsc::Sender<ConnectionRequest<T>>,
     connection_state: ConnectionState,
     config: TcpConfig,
+    next_session_id: usize,
 }
 
 #[async_trait]
-impl<T: NetworkConnection + 'static> NetworkHandle for TcpNetworkHandle<T> {
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHandle
+    for TcpNetworkHandle<T, C>
+{
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)> {
-        // set up the connection state
+        let err_ct = CancellationToken::new();
+        // cancel the old token just in case
         self.connection_state.err_ct().await.cancel();
         self.connection_state
-            .replace_cancellation_token(CancellationToken::new());
+            .replace_cancellation_token(err_ct.clone())
+            .await;
 
-        // make the connections
-        let connections = self.make_connections().await?;
+        let (c0, c1) = self.make_connections(self.config.num_connections).await?;
 
-        crate::network::tcp2::session::make_sessions()
+        let sessions = crate::network::tcp2::session::make_sessions(
+            &self.peers,
+            c0,
+            c1,
+            self.connection_state.clone(),
+            &self.config,
+            self.next_session_id,
+        )
+        .await;
 
-        // pass them off to the session managers
-        // return the tcp sessions
-        todo!()
+        self.next_session_id = self.next_session_id.wrapping_add(self.config.num_sessions);
+        if self.next_session_id >= usize::MAX - self.config.num_sessions {
+            self.next_session_id = 0;
+        }
+
+        Ok((sessions, err_ct))
     }
 }
 
-impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
-    pub async fn new<I, C, S>(
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetworkHandle<T, C> {
+    pub async fn new<I, S>(
         my_id: Identity,
         mut peers: I,
         connector: C,
@@ -55,7 +73,6 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
     ) -> Self
     where
         I: Iterator<Item = (Identity, String)>,
-        C: Client<Output = T> + 'static,
         S: Server<Output = T> + 'static,
     {
         let my_id = Arc::new(my_id);
@@ -85,56 +102,45 @@ impl<T: NetworkConnection + 'static> TcpNetworkHandle<T> {
             my_id,
             peers,
             connector,
+            config,
             conn_cmd_tx,
             connection_state,
+            next_session_id: 0,
         }
     }
 
-    pub async fn make_connections(&self) -> Result<Vec<T>> {
-        let mut connect_futures = Vec::with_capacity(self.config.num_connections * 2);
+    // returns the connections for each peer
+    pub async fn make_connections(&self, conns_per_peer: usize) -> Result<(Vec<T>, Vec<T>)> {
+        assert_eq!(self.peers.len(), 2);
+        let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
+
         for peer in self.peers.iter().cloned() {
-            for idx in 0..self.config.num_connections {
-                let conn_id = ConnectionId::new(idx as u32);
+            for idx in 0..conns_per_peer {
+                let connection_id = ConnectionId::new(idx as u32);
                 let fut = super::connection::connect(
                     connection_id,
                     self.my_id.clone(),
-                    peer,
+                    peer.clone(),
                     self.connection_state.clone(),
                     self.connector.clone(),
                     self.conn_cmd_tx.clone(),
-                )?;
+                );
                 connect_futures.push(fut);
             }
         }
-        join_all(connect_futures).await
-    }
+        let results: Vec<T> = join_all(connect_futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
 
-    // returns None if cancelled
-    pub async fn wait_for_ready(&mut self) -> Option<()> {
-        let mut session_id = self.session_start_id;
-
-        self.session_start_id = self.session_start_id.wrapping_add(self.config.num_sessions);
-        if self.session_start_id >= usize::MAX - self.config.num_sessions {
-            self.session_start_id = 0;
-        }
-
-        let mut responses0 = vec![];
-        let mut responses1 = vec![];
-        for (idx, (conn0, conn1)) in izip!(self.connections0, self.connections1)
-            .enumerate()
-            .take(self.config.num_connections)
-        {
-            let num_sessions = self.config.get_sessions_for_connection(idx);
-            responses0.push(conn0.connect(num_sessions, session_id).await);
-            responses1.push(conn1.connect(num_sessions, session_id).await);
-            session_id += num_sessions;
-        }
-
-        let shutdown_ct = self.connection_state.shutdown_ct().await;
-        tokio::select! {
-            _ = self.connection_state.wait_for_ready() => Some(()),
-            _ = shutdown_ct.cancelled() => None,
-        }
+        // can't split a vec for a type that doesn't implement Clone.
+        let mid = results.len() / 2;
+        let (first, second) = results.split_at(mid);
+        let c0 = unsafe { Vec::from_raw_parts(first.as_ptr() as *mut T, first.len(), first.len()) };
+        let c1 =
+            unsafe { Vec::from_raw_parts(second.as_ptr() as *mut T, second.len(), second.len()) };
+        std::mem::forget(results);
+        Ok((c0, c1))
     }
 
     pub async fn get_err_ct(&self) -> CancellationToken {
