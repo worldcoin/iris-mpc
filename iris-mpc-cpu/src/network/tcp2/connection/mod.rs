@@ -1,8 +1,8 @@
-mod client; // trait for initiating a connection. hides details of TCP vs TLS
+pub mod client; // trait for initiating a connection. hides details of TCP vs TLS
 mod connection_state;
 mod handshake;
 mod listener; // accept inbound connections
-mod server; // trait for accepting connections. hides details of TCP vs TLS // used to determine the peer id and connection id
+pub mod server; // trait for accepting connections. hides details of TCP vs TLS // used to determine the peer id and connection id
 
 pub use connection_state::ConnectionState;
 pub use listener::{accept_loop, ConnectionRequest};
