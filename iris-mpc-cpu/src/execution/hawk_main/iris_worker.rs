@@ -48,6 +48,11 @@ enum IrisTask {
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    RotationAwareDotProductBatch {
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
     RingPairwiseDistance {
         input: Vec<Option<(ArcIris, ArcIris)>>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
@@ -107,6 +112,20 @@ impl IrisPoolHandle {
     ) -> Result<Vec<RingElement<u16>>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::DotProductBatch {
+            query,
+            vector_ids,
+            rsp: tx,
+        };
+        self.submit(task, rx).await
+    }
+
+    pub async fn rotation_aware_dot_product_batch(
+        &mut self,
+        query: ArcIris,
+        vector_ids: Vec<VectorId>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let (tx, rx) = oneshot::channel();
+        let task = IrisTask::RotationAwareDotProductBatch {
             query,
             vector_ids,
             rsp: tx,
@@ -227,6 +246,21 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::DotProductBatch {
+                query,
+                vector_ids,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+
+                let iris_pairs = vector_ids
+                    .iter()
+                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
+
+                let r = pairwise_distance(iris_pairs);
+                let _ = rsp.send(r);
+            }
+
+            IrisTask::RotationAwareDotProductBatch {
                 query,
                 vector_ids,
                 rsp,
