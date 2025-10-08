@@ -216,6 +216,15 @@ pub struct ConnectPlanLayer<Vector> {
     pub nb_links: Vec<SortedEdgeIds<Vector>>,
 }
 
+/// Represents the initialization mode for the HNSW search.
+enum InitMode {
+    /// Use the entry point of the graph as the initial search node.
+    EntryPoint,
+    /// Use a node from the top layer of the graph with the minimal distance to the query as the initial search node for the next layer.
+    #[allow(dead_code)]
+    BruteForce,
+}
+
 #[allow(non_snake_case)]
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed using
@@ -270,6 +279,48 @@ impl HnswSearcher {
         self.select_layer_rng(&mut rng)
     }
 
+    /// Return a tuple containing a distance-sorted list of neighbors in the top layer of the graph and the number of search layers.
+    /// The list is initialized according to the specified initialization mode.
+    #[allow(non_snake_case)]
+    #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
+    async fn search_init<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        query: &V::QueryRef,
+        mode: InitMode,
+    ) -> Result<(SortedNeighborhoodV<V>, usize)> {
+        match mode {
+            InitMode::BruteForce => self.search_init_bruteforce(store, graph, query).await,
+            InitMode::EntryPoint => self.search_init_entrypoint(store, graph, query).await,
+        }
+    }
+
+    /// Return a tuple containing a distance-sorted list initialized with the nearest neighbor and the number of search layers of the graph hierarchy.
+    /// The number of layers is equal to the index of the top layer.
+    #[allow(non_snake_case)]
+    #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
+    async fn search_init_bruteforce<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        query: &V::QueryRef,
+    ) -> Result<(SortedNeighborhoodV<V>, usize)> {
+        let num_layers = graph.num_layers().await;
+        if num_layers == 0 {
+            return Ok((SortedNeighborhood::new(), 0));
+        }
+        let top_layer = num_layers - 1;
+
+        let (min_vector, min_distance) =
+            Self::linear_search(store, graph, query, top_layer).await?;
+
+        let mut W = SortedNeighborhood::new();
+        W.insert(store, min_vector, min_distance).await?;
+
+        Ok((W, top_layer))
+    }
+
     /// Return a tuple containing a distance-sorted list initialized with the
     /// entry point for the HNSW graph search (with distance to the query
     /// pre-computed), and the number of search layers of the graph hierarchy,
@@ -278,7 +329,7 @@ impl HnswSearcher {
     /// If no entry point is initialized, returns an empty list and layer 0.
     #[allow(non_snake_case)]
     #[instrument(level = "trace", target = "searcher::cpu_time", skip_all)]
-    async fn search_init<V: VectorStore>(
+    async fn search_init_entrypoint<V: VectorStore>(
         &self,
         store: &mut V,
         graph: &GraphMem<V::VectorRef>,
@@ -773,6 +824,28 @@ impl HnswSearcher {
         }
     }
 
+    /// Linear search over all vectors in the given layer that returns a single nearest neighbor.
+    /// This is used in the top layer of the HNSW graph to hide relations between queries and the entry point.
+    async fn linear_search<V: VectorStore>(
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        query: &V::QueryRef,
+        lc: usize,
+    ) -> Result<(V::VectorRef, V::DistanceRef)> {
+        // retrieve all vectors in layer `lc`
+        let vectors: Vec<_> = graph.layers[lc].links.keys().cloned().collect();
+        // filter out any invalid vectors (wrong serial ids)
+        let vectors = store.only_valid_vectors(vectors).await;
+        if vectors.is_empty() {
+            bail!("No valid vectors found in layer {}", lc);
+        }
+        // compute distances from query to all vectors as a batch
+        let distances = store.eval_distance_batch(query, &vectors).await?;
+        let distances_with_ids = izip!(vectors, distances).collect_vec();
+        // find the minimum distance and the corresponding vector id
+        store.get_argmin_distance(&distances_with_ids).await
+    }
+
     /// Evaluate as a batch the distances between the unvisited neighbors of a given node at a given
     /// graph level with the query, marking unvisited neighbors as visited in the supplied
     /// hashset.
@@ -816,7 +889,9 @@ impl HnswSearcher {
         query: &V::QueryRef,
         k: usize,
     ) -> Result<SortedNeighborhoodV<V>> {
-        let (mut W, layer_count) = self.search_init(store, graph, query).await?;
+        let (mut W, layer_count) = self
+            .search_init(store, graph, query, InitMode::EntryPoint)
+            .await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..layer_count).rev() {
@@ -877,7 +952,9 @@ impl HnswSearcher {
     ) -> Result<(Vec<SortedNeighborhoodV<V>>, bool)> {
         let mut links = vec![];
 
-        let (mut W, n_layers) = self.search_init(store, graph, query).await?;
+        let (mut W, n_layers) = self
+            .search_init(store, graph, query, InitMode::EntryPoint)
+            .await?;
 
         // Search from the top layer down to layer 0
         for lc in (0..n_layers).rev() {

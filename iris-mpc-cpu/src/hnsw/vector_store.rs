@@ -122,6 +122,22 @@ pub trait VectorStore: Debug {
         }
         Ok(results)
     }
+
+    async fn get_argmin_distance(
+        &mut self,
+        distances: &[(Self::VectorRef, Self::DistanceRef)],
+    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        if distances.is_empty() {
+            return Err(eyre::eyre!("Cannot get min of empty list"));
+        }
+        let mut min_dist = distances[0].clone();
+        for (id, dist) in distances.iter().skip(1) {
+            if self.less_than(dist, &min_dist.1).await? {
+                min_dist = (id.clone(), dist.clone());
+            }
+        }
+        Ok(min_dist)
+    }
 }
 
 /// The operations exposed by a vector store, including mutations.
