@@ -1,20 +1,26 @@
 pub mod multiplexer;
 
-use std::collections::HashMap;
-
-use super::{InStream, OutboundMsg};
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
         tcp::config::TcpConfig,
-        tcp2::data::{ConnectionId, OutStream},
+        tcp2::{
+            connection::ConnectionState,
+            data::{ConnectionId, InStream, OutStream, OutboundMsg, Peer},
+            NetworkConnection,
+        },
         value::NetworkValue,
         Networking,
     },
 };
 use async_trait::async_trait;
 use eyre::{eyre, Result};
-use tokio::{sync::mpsc::UnboundedSender, time::timeout};
+use itertools::izip;
+use std::{collections::HashMap, sync::Arc};
+use tokio::{
+    sync::mpsc::{self, UnboundedSender},
+    time::timeout,
+};
 
 #[derive(Debug)]
 pub struct TcpSession {
@@ -75,14 +81,14 @@ impl Networking for TcpSession {
 
 #[derive(Default)]
 pub struct SessionChannels {
-    pub outbound_tx: HashMap<Identity, HashMap<ConnectionId, UnboundedSender<OutboundMsg>>>,
-    pub outbound_rx: HashMap<Identity, HashMap<ConnectionId, UnboundedReceiver<OutboundMsg>>>,
-    pub inbound_tx: HashMap<Identity, HashMap<SessionId, UnboundedSender<NetworkValue>>>,
-    pub inbound_rx: HashMap<Identity, HashMap<SessionId, UnboundedReceiver<NetworkValue>>>,
+    pub outbound_tx: HashMap<Identity, HashMap<ConnectionId, mpsc::UnboundedSender<OutboundMsg>>>,
+    pub outbound_rx: HashMap<Identity, HashMap<ConnectionId, mpsc::UnboundedReceiver<OutboundMsg>>>,
+    pub inbound_tx: HashMap<Identity, HashMap<SessionId, mpsc::UnboundedSender<NetworkValue>>>,
+    pub inbound_rx: HashMap<Identity, HashMap<SessionId, mpsc::UnboundedReceiver<NetworkValue>>>,
 }
 
-pub async fn make_sessions<T: NetworkConnection>(
-    peers: &[Identity],
+pub async fn make_sessions<T: NetworkConnection + 'static>(
+    peers: &[Arc<Peer>],
     mut conn0: Vec<T>,
     mut conn1: Vec<T>,
     connection_state: ConnectionState,
@@ -97,11 +103,13 @@ pub async fn make_sessions<T: NetworkConnection>(
         connection_state,
         config,
         next_session_id,
+        sc,
     )
+    .await
 }
 
 fn make_channels(
-    peers: &[Identity],
+    peers: &[Arc<Peer>],
     config: &TcpConfig,
     next_session_id: usize,
 ) -> SessionChannels {
@@ -112,7 +120,7 @@ fn make_channels(
         next_session_id
     );
 
-    for peer_id in peers {
+    for peer_id in peers.iter().map(|x| x.id()) {
         let mut outbound_tx = HashMap::new();
         let mut outbound_rx = HashMap::new();
         let mut inbound_tx = HashMap::new();
@@ -140,8 +148,8 @@ fn make_channels(
     sc
 }
 
-async fn make_sessions_inner<T: NetworkConnection>(
-    peers: &[Identity],
+async fn make_sessions_inner<T: NetworkConnection + 'static>(
+    peers: &[Arc<Peer>],
     mut conn0: Vec<T>,
     mut conn1: Vec<T>,
     connection_state: ConnectionState,
@@ -153,14 +161,14 @@ async fn make_sessions_inner<T: NetworkConnection>(
     let num_sessions = config.num_sessions;
 
     // spawn the forwarders
-    for (peer_id, mut conns) in izip!(peers, [conn0, conn1]) {
+    for (peer_id, mut conns) in izip!(peers.iter().map(|x| x.id()), [conn0, conn1]) {
         for (idx, connection) in conns.drain(..).enumerate() {
             let connection_id = ConnectionId::from(idx as u32);
             let outbound_rx = sc
                 .outbound_rx
                 .get_mut(peer_id)
                 .unwrap()
-                .remove(&stream_id)
+                .remove(&connection_id)
                 .unwrap();
 
             let inbound_forwarder = sc.inbound_tx.get(peer_id).cloned().unwrap();
@@ -184,14 +192,14 @@ async fn make_sessions_inner<T: NetworkConnection>(
     {
         let mut tx_map = HashMap::new();
         let mut rx_map = HashMap::new();
-        let stream_id = StreamId::from((idx % num_connections) as u32);
+        let connection_id = ConnectionId::from((idx % num_connections) as u32);
 
-        for peer_id in &peers {
+        for peer_id in peers.iter().map(|x| x.id()) {
             let outbound_tx = sc
                 .outbound_tx
                 .get(peer_id)
                 .unwrap()
-                .get(&stream_id)
+                .get(&connection_id)
                 .cloned()
                 .unwrap();
             tx_map.insert(peer_id.clone(), outbound_tx.clone());

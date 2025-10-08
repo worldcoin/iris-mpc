@@ -29,7 +29,7 @@ use tokio::{
 };
 
 // connect and perform handshake
-pub fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'static>(
+pub async fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'static>(
     connection_id: ConnectionId,
     own_id: Arc<Identity>,
     peer: Arc<Peer>,
@@ -45,13 +45,14 @@ pub fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'static>(
         client,
         conn_req_tx: conn_cmd_tx,
     };
-    let (rsp_tx, rsp_rx) = mpsc::channel(1);
+    let (rsp_tx, rsp_rx) = oneshot::channel();
     tokio::spawn(async move {
         if let Some(c) = connector.run().await {
-            rsp_tx.send(c);
+            let _ = rsp_tx.send(c);
         }
     });
-    rsp_rx.recv().await
+    let r = rsp_rx.await?;
+    Ok(r)
 }
 
 struct Connector<T: NetworkConnection, C: Client> {
