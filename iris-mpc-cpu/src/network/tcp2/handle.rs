@@ -42,7 +42,8 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
 
         let (c0, c1) = self.make_connections(self.config.num_connections).await?;
 
-        let sessions = crate::network::tcp2::session::make_sessions(
+        // calls multiplexer::run() on each TCP/TLS stream
+        let sessions = super::session::make_sessions(
             &self.peers,
             c0,
             c1,
@@ -80,11 +81,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             Arc::new(peers.next().expect("expected at least 2 identities").into()),
         ];
 
-        let connection_state = ConnectionState::new(
-            config.num_connections * 2, // 2 peers
-            shutdown_ct,
-            CancellationToken::new(),
-        );
+        let connection_state = ConnectionState::new(shutdown_ct, CancellationToken::new());
 
         let (conn_cmd_tx, conn_cmd_rx) =
             mpsc::channel::<ConnectionRequest<T>>(config.num_connections);
@@ -109,6 +106,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
     }
 
     // returns the connections for each peer
+    // when returned, the handshakes have successfully completed
     pub async fn make_connections(&self, conns_per_peer: usize) -> Result<(Vec<T>, Vec<T>)> {
         assert_eq!(self.peers.len(), 2);
         let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
@@ -138,9 +136,5 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         assert_eq!(c1.len(), c0.len());
 
         Ok((c0, c1))
-    }
-
-    pub async fn get_err_ct(&self) -> CancellationToken {
-        self.connection_state.err_ct().await
     }
 }
