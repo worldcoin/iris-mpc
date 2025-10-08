@@ -133,13 +133,11 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
 
-        // can't split a vec for a type that doesn't implement Clone.
-        let mid = results.len() / 2;
-        let (first, second) = results.split_at(mid);
-        let c0 = unsafe { Vec::from_raw_parts(first.as_ptr() as *mut T, first.len(), first.len()) };
-        let c1 =
-            unsafe { Vec::from_raw_parts(second.as_ptr() as *mut T, second.len(), second.len()) };
-        std::mem::forget(results);
+        let mut c1 = results;
+        let mut c0 = vec![];
+        c0.extend(c1.drain(0..c1.len() / 2));
+        assert_eq!(c1.len(), c0.len());
+
         Ok((c0, c1))
     }
 
