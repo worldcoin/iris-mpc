@@ -2,7 +2,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{mpsc, Mutex, RwLock};
+use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
 // want every connection to be able to do the following:
@@ -16,33 +16,13 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
-    pub fn new(
-        num_connections: usize,
-        shutdown_ct: CancellationToken,
-        err_ct: CancellationToken,
-    ) -> Self {
-        let inner = Arc::new(RwLock::new(ConnectionStateInner::new(
-            num_connections,
-            shutdown_ct,
-            err_ct,
-        )));
+    pub fn new(shutdown_ct: CancellationToken, err_ct: CancellationToken) -> Self {
+        let inner = Arc::new(RwLock::new(ConnectionStateInner::new(shutdown_ct, err_ct)));
         Self { inner }
     }
 
     pub async fn replace_cancellation_token(&self, err_ct: CancellationToken) {
         self.inner.write().await.replace_cancellation_token(err_ct);
-    }
-
-    pub async fn wait_for_ready(&self) {
-        let mut lock = self.inner.write().await;
-        let (tx, mut rx) = mpsc::channel(1);
-        if lock.is_ready().await {
-            return;
-        }
-        lock.ready_tx.replace(tx);
-        drop(lock);
-
-        let _ = rx.recv().await;
     }
 
     pub async fn exited(&self) -> bool {
@@ -63,14 +43,6 @@ impl ConnectionState {
             .is_ok()
     }
 
-    pub async fn incr_ready(&self) -> bool {
-        self.inner.read().await.incr_ready().await
-    }
-
-    pub async fn decr_ready(&self) -> bool {
-        self.inner.read().await.decr_ready().await
-    }
-
     pub async fn shutdown_ct(&self) -> CancellationToken {
         self.inner.read().await.shutdown_ct.clone()
     }
@@ -81,7 +53,6 @@ impl ConnectionState {
 }
 
 struct ConnectionStateInner {
-    not_ready: Counter,
     exited: AtomicBool,
     cancelled: AtomicBool,
     shutdown_ct: CancellationToken,
@@ -91,13 +62,8 @@ struct ConnectionStateInner {
 }
 
 impl ConnectionStateInner {
-    fn new(
-        num_connections: usize,
-        shutdown_ct: CancellationToken,
-        err_ct: CancellationToken,
-    ) -> Self {
+    fn new(shutdown_ct: CancellationToken, err_ct: CancellationToken) -> Self {
         Self {
-            not_ready: Counter::new(num_connections),
             exited: AtomicBool::new(false),
             cancelled: AtomicBool::new(false),
             shutdown_ct,
@@ -109,61 +75,5 @@ impl ConnectionStateInner {
     fn replace_cancellation_token(&mut self, err_ct: CancellationToken) {
         self.cancelled = AtomicBool::new(false);
         self.err_ct = err_ct;
-    }
-
-    async fn incr_ready(&self) -> bool {
-        let r = self.not_ready.decrement().await;
-        if r {
-            if let Some(tx) = self.ready_tx.as_ref() {
-                // don't want to block if ConnectionState isn't waiting for this to be ready.
-                let _ = tx.try_send(());
-            }
-        }
-        r
-    }
-
-    pub async fn decr_ready(&self) -> bool {
-        self.not_ready.increment().await
-    }
-
-    pub async fn is_ready(&self) -> bool {
-        self.not_ready.is_zero().await
-    }
-}
-
-pub struct Counter {
-    num: Mutex<usize>,
-}
-
-impl Default for Counter {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}
-
-impl Counter {
-    pub fn new(val: usize) -> Self {
-        Self {
-            num: Mutex::new(val),
-        }
-    }
-
-    pub async fn is_zero(&self) -> bool {
-        *self.num.lock().await == 0
-    }
-
-    // returns true if num was zero
-    pub async fn increment(&self) -> bool {
-        let mut l = self.num.lock().await;
-        *l += 1;
-        *l == 1
-    }
-
-    // returns true if num was one before decrementing
-    pub async fn decrement(&self) -> bool {
-        let mut l = self.num.lock().await;
-        let r = *l == 1;
-        *l = l.saturating_sub(1);
-        r
     }
 }

@@ -11,9 +11,9 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 use crate::{
     execution::player::Identity,
     network::tcp2::{
-            data::{ConnectionId, Peer},
-            Client, NetworkConnection,
-        },
+        data::{ConnectionId, Peer},
+        Client, NetworkConnection,
+    },
 };
 use eyre::Result;
 use std::{sync::Arc, time::Duration};
@@ -105,7 +105,6 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
 
         tokio::select! {
             r = self.connect_loop() => {
-                self.connection_state.incr_ready().await;
                 Some(r)
             },
             _ = err_ct.cancelled() => {
