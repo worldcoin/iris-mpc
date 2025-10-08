@@ -651,7 +651,10 @@ where
 /// Computes the dot products between a query iris and a batch of iris vectors.
 /// Returns a Vec of RingElement<u16> containing code and mask dot products for each pair.
 /// This is similar to `pairwise_distance`, but takes a single query and an iterator of targets.
-pub fn batch_dot_product<'a, I>(query: &'a ArcIris, targets: I) -> Vec<RingElement<u16>>
+pub fn rotation_aware_pairwise_distance<'a, I>(
+    query: &'a ArcIris,
+    targets: I,
+) -> Vec<RingElement<u16>>
 where
     I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
 {
