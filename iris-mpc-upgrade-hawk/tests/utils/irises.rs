@@ -4,7 +4,6 @@ use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     protocol::shared_iris::GaloisRingSharedIris, py_bindings::plaintext_store::Base64IrisCode,
-    utils::constants::N_PARTIES,
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
@@ -13,6 +12,9 @@ use crate::utils::logger::log_info;
 
 /// Component name for logging purposes.
 const COMPONENT: &str = "SystemState-PgresIrises";
+
+/// Number of MPC parties.
+const N_PARTIES: usize = 3;
 
 /// Number of iris code pairs to generate secret shares for at a time.
 const SECRET_SHARING_BATCH_SIZE: usize = 5000;

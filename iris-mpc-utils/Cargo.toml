@@ -44,5 +44,9 @@ tracing-test = "0.2.5"
 uuid.workspace = true
 
 [[bin]]
+name = "initialise-test-dbs"
+path = "bin/initialise_test_dbs.rs"
+
+[[bin]]
 name = "write-node-config-toml"
 path = "bin/write_node_config_toml.rs"
