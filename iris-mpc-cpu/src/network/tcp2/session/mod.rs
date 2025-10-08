@@ -18,7 +18,7 @@ use eyre::{eyre, Result};
 use itertools::izip;
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
-    sync::mpsc::{self, UnboundedSender},
+    sync::mpsc::{self},
     time::timeout,
 };
 
@@ -89,8 +89,8 @@ pub struct SessionChannels {
 
 pub async fn make_sessions<T: NetworkConnection + 'static>(
     peers: &[Arc<Peer>],
-    mut conn0: Vec<T>,
-    mut conn1: Vec<T>,
+    conn0: Vec<T>,
+    conn1: Vec<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
     next_session_id: usize,
@@ -150,8 +150,8 @@ fn make_channels(
 
 async fn make_sessions_inner<T: NetworkConnection + 'static>(
     peers: &[Arc<Peer>],
-    mut conn0: Vec<T>,
-    mut conn1: Vec<T>,
+    conn0: Vec<T>,
+    conn1: Vec<T>,
     connection_state: ConnectionState,
     config: &TcpConfig,
     next_session_id: usize,

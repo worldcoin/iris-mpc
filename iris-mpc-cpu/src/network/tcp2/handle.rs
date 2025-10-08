@@ -1,4 +1,4 @@
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
 use crate::{
     execution::player::Identity,
@@ -15,7 +15,6 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::join_all;
-use itertools::izip;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -114,7 +113,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
         assert_eq!(self.peers.len(), 2);
         let mut connect_futures = Vec::with_capacity(conns_per_peer * self.peers.len());
 
-        for peer in self.peers.iter().cloned() {
+        for peer in self.peers.iter() {
             for idx in 0..conns_per_peer {
                 let connection_id = ConnectionId::new(idx as u32);
                 let fut = super::connection::connect(
