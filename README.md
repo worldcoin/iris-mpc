@@ -29,6 +29,15 @@ We welcome contributions to this project! Please follow these guidelines when co
 - Include appropriate tests for new functionality
 - Update documentation as needed
 
+### Pre-commit hooks
+We use pre-commit hooks to ensure our changes adhere to the project's standards. Please set up pre-commit hooks by running:
+```bash
+./scripts/setup-pre-commit.sh
+pre-commit run --all-files
+```
+git config --global commit.gpgsign true
+```
+
 ## How to release
 
 New releases are created automagically by [Release Drafter GH action](https://github.com/worldcoin//gpu-iris-mpc/actions/workflows/release.yaml).
