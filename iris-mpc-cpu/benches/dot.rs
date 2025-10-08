@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
-use iris_mpc_common::galois_engine::degree4::IrisRotation;
+use iris_mpc_common::galois_engine::degree4::{rotation_aware_trick_dot_padded, IrisRotation};
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
@@ -410,20 +410,21 @@ pub fn bench_trick_dot(c: &mut Criterion) {
     });
 
     g.bench_function("rotation_aware_trick_dot_padded_compute_bound", |b| {
-        let left = &iris_codes[0];
-        let random_array = &random_arrays[1];
+        let right = &iris_codes[0].code.coefs;
+        let preprocessed_data = &random_arrays[1];
         b.iter_batched(
             || {
                 (0..batch_size)
-                    .map(|_| (left, random_array))
+                    .map(|_| (preprocessed_data, right))
                     .collect::<Vec<_>>()
             },
             |pairs| {
-                for (l, arr) in pairs {
-                    black_box(
-                        l.code
-                            .rotation_aware_trick_dot_padded(arr, &IrisRotation::Left(12)),
-                    );
+                for (preprocessed_data, right) in pairs {
+                    black_box(rotation_aware_trick_dot_padded(
+                        preprocessed_data,
+                        &right,
+                        &IrisRotation::Left(12),
+                    ));
                 }
             },
             BatchSize::SmallInput,
@@ -483,16 +484,17 @@ pub fn bench_trick_dot(c: &mut Criterion) {
                         let a = rng.gen_range(0..dataset_size);
                         let b = rng.gen_range(0..dataset_size);
                         let c = rng.gen_range(1..16);
-                        (&iris_codes[a], &random_arrays[b], c)
+                        (&random_arrays[b], &iris_codes[a], c)
                     })
                     .collect::<Vec<_>>()
             },
             |triples| {
-                for (l, arr, rot) in triples {
-                    black_box(
-                        l.code
-                            .rotation_aware_trick_dot_padded(arr, &IrisRotation::Left(rot)),
-                    );
+                for (preprocessed_data, r, rot) in triples {
+                    black_box(rotation_aware_trick_dot_padded(
+                        preprocessed_data,
+                        &r.code.coefs,
+                        &IrisRotation::Left(rot),
+                    ));
                 }
             },
             BatchSize::SmallInput,

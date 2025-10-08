@@ -59,7 +59,7 @@ pub mod degree4 {
         sum
     }
 
-    // iterate over other.coefs as though it has been rotated according to the iris rotation.
+    // iterate over left.coefs as though it has been rotated according to the iris rotation.
     // this involves chunking by CODE_COLS * 4 and then rotating the chunk
     // the rotation is accomplished by operating over two slices
     fn rotation_aware_trick_dot<const D: usize>(
@@ -82,8 +82,8 @@ pub mod degree4 {
         {
             // Split the rotation into two contiguous loops,
             // allowing the compiler to vectorize
-            let (left1, left2) = left_slice.split_at(chunk_size - skip);
-            let (right1, right2) = right_slice.split_at(skip);
+            let (left1, left2) = left_slice.split_at(skip);
+            let (right1, right2) = right_slice.split_at(chunk_size - skip);
 
             for (l, r) in left1.iter().zip(right2.iter()) {
                 sum = sum.wrapping_add(l.wrapping_mul(*r));
@@ -93,6 +93,49 @@ pub mod degree4 {
                 sum = sum.wrapping_add(l.wrapping_mul(*r));
             }
         }
+        sum
+    }
+
+    pub fn rotation_aware_trick_dot_padded(
+        left: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
+        right: &[u16; IRIS_CODE_LENGTH],
+        rotation: &IrisRotation,
+    ) -> u16 {
+        let skip = match rotation {
+            IrisRotation::Center => 60, // no padding (60 added on each side)
+            IrisRotation::Left(rot) => 60 + (rot * 4),
+            IrisRotation::Right(rot) => 60 - (rot * 4),
+        };
+
+        let mut sum = 0u16;
+        const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
+        const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
+
+        // Process each row
+        for (row_idx, chunk) in left.chunks_exact(PADDED_CHUNK_SIZE).enumerate() {
+            // Calculate the starting index in the padded chunk
+            // Each row used to be elements 0..=799 but now has:
+            // - elements 740..=799 prepended (60 elements)
+            // - elements 0..=59 appended (60 elements)
+            // So we need to start at index `skip` to get 800 consecutive elements
+            let start_idx = skip;
+            let end_idx = start_idx + UNPADDED_ROW_LEN;
+
+            // Extract the slice we need for this row
+            let left_slice = &chunk[start_idx..end_idx];
+
+            // Get corresponding slice from self
+            let right_start = row_idx * UNPADDED_ROW_LEN;
+            let right_end = right_start + UNPADDED_ROW_LEN;
+            let right_slice = &right[right_start..right_end];
+
+            // Compute dot product for this row
+            // use explicit indices for the loop to try to help the compiler optimize with SIMD
+            for i in 0..UNPADDED_ROW_LEN {
+                sum = sum.wrapping_add(left_slice[i].wrapping_mul(right_slice[i]));
+            }
+        }
+
         sum
     }
 
@@ -408,52 +451,10 @@ pub mod degree4 {
         pub fn rotation_aware_trick_dot(
             &self,
             other: &GaloisRingIrisCodeShare,
+            // rotation applied to self
             rotation: &IrisRotation,
         ) -> u16 {
             rotation_aware_trick_dot(&self.coefs, &other.coefs, rotation)
-        }
-
-        pub fn rotation_aware_trick_dot_padded(
-            &self,
-            other: &[u16; PRE_PROC_IRIS_CODE_LENGTH],
-            rotation: &IrisRotation,
-        ) -> u16 {
-            let skip = match rotation {
-                IrisRotation::Center => 60, // no padding (60 added on each side)
-                IrisRotation::Left(rot) => 60 + (rot * 4),
-                IrisRotation::Right(rot) => 60 - (rot * 4),
-            };
-
-            let mut sum = 0u16;
-            const UNPADDED_ROW_LEN: usize = CODE_COLS * 4; // 800 elements per row
-            const PADDED_CHUNK_SIZE: usize = UNPADDED_ROW_LEN + PRE_PROC_ROW_PADDING; // 920 elements per padded row
-
-            // Process each row
-            for (row_idx, chunk) in other.chunks_exact(PADDED_CHUNK_SIZE).enumerate() {
-                // Calculate the starting index in the padded chunk
-                // Each row used to be elements 0..=799 but now has:
-                // - elements 740..=799 prepended (60 elements)
-                // - elements 0..=59 appended (60 elements)
-                // So we need to start at index `skip` to get 800 consecutive elements
-                let start_idx = skip;
-                let end_idx = start_idx + UNPADDED_ROW_LEN;
-
-                // Extract the slice we need for this row
-                let other_slice = &chunk[start_idx..end_idx];
-
-                // Get corresponding slice from self
-                let self_start = row_idx * UNPADDED_ROW_LEN;
-                let self_end = self_start + UNPADDED_ROW_LEN;
-                let self_slice = &self.coefs[self_start..self_end];
-
-                // Compute dot product for this row
-                // use explicit indices for the loop to try to help the compiler optimize with SIMD
-                for i in 0..UNPADDED_ROW_LEN {
-                    sum = sum.wrapping_add(self_slice[i].wrapping_mul(other_slice[i]));
-                }
-            }
-
-            sum
         }
 
         pub fn all_rotations(&self) -> Vec<GaloisRingIrisCodeShare> {
@@ -686,7 +687,7 @@ pub mod degree4 {
             for _ in 0..10 {
                 let iris_db = IrisCodeArray::random_rng(rng);
                 let iris_query = IrisCodeArray::random_rng(rng);
-                let shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
+                let mut shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_db, rng);
                 let mut query_shares = GaloisRingIrisCodeShare::encode_mask_code(&iris_query, rng);
                 query_shares
                     .iter_mut()
@@ -702,11 +703,12 @@ pub mod degree4 {
                     dots.push(left.rotation_aware_trick_dot(right, &rotation));
                 }
 
-                let right = &mut query_shares[0];
+                let left = &mut shares[0];
+                let right = &query_shares[0];
                 let mut dots2 = vec![];
-                rotate_coefs_left(&mut right.coefs, 16);
+                rotate_coefs_left(&mut left.coefs, 16);
                 for _ in 0..31 {
-                    rotate_coefs_right(&mut right.coefs, 1);
+                    rotate_coefs_right(&mut left.coefs, 1);
                     dots2.push(left.trick_dot(right));
                 }
                 assert_eq!(dots, dots2);
