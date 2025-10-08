@@ -8,7 +8,9 @@ pub type SerialId = u32;
 pub type VersionId = i16;
 
 /// Unique identifier for an immutable pair of iris codes.
-#[derive(Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+    Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord,
+)]
 pub struct VectorId {
     id: SerialId,
     version: VersionId,
