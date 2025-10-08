@@ -67,7 +67,6 @@ pub async fn build_network_handle(
     let my_index = args.party_index;
     let my_identity = identities[my_index].clone();
     let my_address = &args.addresses[my_index];
-    let my_outbound_addr = &args.outbound_addrs[my_index];
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
 
     let tcp_config = TcpConfig::new(
@@ -308,11 +307,12 @@ pub mod testing {
             let peers = izip!(&parties, &addresses)
                 .enumerate()
                 .filter(|(idx, _)| *idx != peer_idx)
-                .map(|(_, (id, url))| (id.clone(), url.to_string()));
+                .map(|(_, (id, url))| (id.clone(), url.to_string()))
+                .collect::<Vec<_>>();
 
             let handle = TcpNetworkHandle::new(
                 id.clone(),
-                peers,
+                peers.into_iter(),
                 connector,
                 listener,
                 config.clone(),
@@ -322,14 +322,10 @@ pub mod testing {
             handles.push(handle);
         }
 
-        tracing::debug!("created handles");
-
         let results =
             futures::future::join_all(handles.iter_mut().map(|h| h.make_sessions())).await;
         let mut sessions = results.into_iter().collect::<Result<Vec<_>, _>>()?;
         let no_ct = sessions.drain(..).map(|(s, _ct)| s).collect::<Vec<_>>();
-
-        tracing::debug!("created sessions");
 
         Ok((handles, no_ct))
     }
