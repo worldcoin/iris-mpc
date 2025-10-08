@@ -22,7 +22,7 @@ repos:
 
   # Gitleaks - Secret detection
   - repo: https://github.com/gitleaks/gitleaks
-    rev: a9e1950fe247fbb08817393121691474c55a6cfa  # v8.21.2
+    rev: 4fb43823ef3d152d239e92d7d5cb04783b548062  # v8.28.0
     hooks:
       - id: gitleaks
 
