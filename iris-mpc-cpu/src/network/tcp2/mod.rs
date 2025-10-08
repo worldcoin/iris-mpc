@@ -3,11 +3,22 @@ mod data;
 mod handle;
 mod session;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::sync::Once;
+use std::time::Duration;
 
+use crate::execution::hawk_main::HawkArgs;
+use crate::execution::player::Identity;
+use crate::network::tcp::config::TcpConfig;
+use crate::network::tcp::networking::client::{BoxTcpClient, BoxTlsClient, TcpClient, TlsClient};
+use crate::network::tcp::networking::server::{BoxTcpServer, TcpServer, TlsServer};
+use crate::network::tcp2::data::Peer;
+use crate::network::tcp2::handle::TcpNetworkHandle;
 use crate::network::tcp2::session::TcpSession;
 use async_trait::async_trait;
 use eyre::Result;
+use itertools::izip;
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsStream;
@@ -35,6 +46,110 @@ pub trait Client: Send + Sync + Clone {
 pub trait Server: Send {
     type Output: NetworkConnection;
     async fn accept(&self) -> Result<(SocketAddr, Self::Output)>;
+}
+
+pub async fn build_network_handle(
+    args: &HawkArgs,
+    shutdown_ct: CancellationToken,
+    identities: &[Identity],
+    sessions_per_request: usize,
+) -> Result<Box<dyn NetworkHandle>> {
+    static INSTALL_CRYPTO_PROVIDER: Once = Once::new();
+    INSTALL_CRYPTO_PROVIDER.call_once(|| {
+        if tokio_rustls::rustls::crypto::aws_lc_rs::default_provider()
+            .install_default()
+            .is_err()
+        {
+            tracing::error!("failed to install CryptoProvider for rustls");
+        }
+    });
+
+    let my_index = args.party_index;
+    let my_identity = identities[my_index].clone();
+    let my_address = &args.addresses[my_index];
+    let my_outbound_addr = &args.outbound_addrs[my_index];
+    let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
+
+    let tcp_config = TcpConfig::new(
+        Duration::from_secs(10),
+        args.connection_parallelism,
+        args.request_parallelism * sessions_per_request,
+    );
+
+    let peers = izip!(identities, &args.outbound_addrs)
+        .enumerate()
+        .filter(|(idx, _)| *idx != my_index)
+        .map(|(_, (id, url))| (id.clone(), url.to_string()));
+
+    macro_rules! build_network_handle {
+        ($listener:expr, $connector:expr) => {
+            Ok(Box::new(
+                TcpNetworkHandle::new(
+                    my_identity,
+                    peers,
+                    $connector,
+                    $listener,
+                    tcp_config,
+                    shutdown_ct,
+                )
+                .await,
+            ))
+        };
+    }
+
+    if let Some(tls) = args.tls.as_ref() {
+        tracing::info!(
+            "Building NetworkHandle, with TLS, from configs: {:?} {:?}",
+            tcp_config,
+            tls,
+        );
+
+        let root_certs = tls.clone().root_certs;
+        if tls.with_nginx_sidecar {
+            tracing::info!("Running in client-only TLS mode.");
+
+            let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
+            let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
+            build_network_handle!(listener, connector)
+        } else {
+            tracing::info!("Running in full app TLS mode.");
+            if tls.private_key.is_none() || tls.leaf_cert.is_none() {
+                return Err(eyre::eyre!(
+                    "TLS configuration is required for this operation"
+                ));
+            }
+            let private_key = tls
+                .private_key
+                .as_ref()
+                .ok_or(eyre::eyre!("Private key is required for TLS"))?;
+
+            let leaf_cert = tls
+                .leaf_cert
+                .as_ref()
+                .ok_or(eyre::eyre!("Leaf certificate is required for TLS"))?;
+
+            let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
+            let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
+            build_network_handle!(listener, connector)
+        }
+    } else {
+        tracing::info!(
+            "Building NetworkHandle, without TLS, from config: {:?}",
+            tcp_config
+        );
+        let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
+        let connector = BoxTcpClient(TcpClient::default());
+        build_network_handle!(listener, connector)
+    }
+}
+
+fn to_inaddr_any(mut socket: SocketAddr) -> SocketAddr {
+    if socket.is_ipv4() {
+        socket.set_ip(IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+    } else {
+        socket.set_ip(IpAddr::V6(Ipv6Addr::UNSPECIFIED));
+    }
+    socket
 }
 
 //
