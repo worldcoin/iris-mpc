@@ -74,7 +74,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                     tracing::debug!("no pending requests from peer {peer_id:?}");
                 }
 
-                stream.close();
+                stream.close().await;
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
         }
