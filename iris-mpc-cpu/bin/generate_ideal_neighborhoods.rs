@@ -5,15 +5,16 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use iris_mpc_common::iris_db::iris::{IrisCode, RotExtIrisCode};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
-    hawkers::naive_knn_plaintext::{
-        naive_knn, naive_knn_min_fhd, naive_knn_min_fhd1, naive_knn_min_fhd2, KNNResult,
-    },
+    hawkers::naive_knn_plaintext::{naive_knn, naive_knn_min_fhd1, naive_knn_min_fhd2, KNNResult},
     py_bindings::{limited_iterator, plaintext_store::Base64IrisCode},
 };
 use metrics::IntoF64;
-use rayon::ThreadPoolBuilder;
+use rayon::{
+    iter::{IntoParallelRefIterator, ParallelIterator},
+    ThreadPoolBuilder,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Deserializer;
 use std::time::Instant;
@@ -208,23 +209,26 @@ async fn main() {
         .build()
         .unwrap();
 
-    let mut start = num_already_processed + 1;
-    let chunk_size = 1000;
-    println!("Starting work at serial id: {}", start);
+    let irises_with_rotations = pool.install(|| {
+        irises
+            .par_iter()
+            .map(|iris| iris.all_rotations().try_into().unwrap())
+            .collect::<Vec<_>>()
+    });
+
+    let chunk_size = 2000;
     let mut evaluated_pairs = 0usize;
 
-    let irises_with_rotations = irises
-        .iter()
-        .map(|iris| iris.all_rotations().try_into().unwrap())
-        .collect::<Vec<_>>();
+    let mut start = num_already_processed + 1;
+    println!("Starting work at serial id: {}", start);
 
     let start_t = Instant::now();
-    while start < num_irises {
-        let end = (start + chunk_size).min(num_irises);
+    while start <= num_irises {
+        let end = (start + chunk_size).min(num_irises + 1);
         let results = match args.distance_used {
             DistanceUsed::Normal => naive_knn(&irises, args.k, start, end, &pool),
             DistanceUsed::MinFHD => {
-                naive_knn_min_fhd1(&irises_with_rotations, &irises, args.k, start, end, &pool)
+                naive_knn_min_fhd2(&irises_with_rotations, &irises, args.k, start, end, &pool)
             }
         };
         evaluated_pairs += (end - start) * num_irises;

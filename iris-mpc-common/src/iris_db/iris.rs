@@ -1,27 +1,7 @@
-use std::arch::x86_64::__m256i;
-use std::arch::x86_64::_mm256_add_epi64;
-use std::arch::x86_64::_mm256_add_epi8;
-use std::arch::x86_64::_mm256_and_si256;
-use std::arch::x86_64::_mm256_loadu_si256;
-use std::arch::x86_64::_mm256_sad_epu8;
-use std::arch::x86_64::_mm256_set1_epi8;
-use std::arch::x86_64::_mm256_setr_epi8;
-use std::arch::x86_64::_mm256_setzero_si256;
-use std::arch::x86_64::_mm256_shuffle_epi8;
-use std::arch::x86_64::_mm256_srli_epi16;
-use std::arch::x86_64::_mm256_storeu_si256;
-use std::arch::x86_64::_mm256_xor_si256;
-
 use crate::galois_engine::degree4::GaloisRingIrisCodeShare;
-use crate::IRIS_CODE_LENGTH;
-use crate::ROTATIONS;
 use base64::{prelude::BASE64_STANDARD, Engine};
-use bitvec::array::BitArray;
-use bitvec::slice::BitSlice;
-use bitvec::vec::BitVec;
 use eyre::bail;
 use eyre::Result;
-use itertools::izip;
 use rand::{
     distributions::{Bernoulli, Distribution},
     Rng,
@@ -202,120 +182,10 @@ impl Default for IrisCode {
         }
     }
 }
-
-pub struct RotExtIrisCodeArray(pub [BitVec; 16]);
-
-impl From<IrisCodeArray> for RotExtIrisCodeArray {
-    fn from(value: IrisCodeArray) -> Self {
-        let code = value.bits().collect::<Vec<_>>();
-        Self(
-            code.chunks_exact(IrisCode::CODE_COLS * 4)
-                .map(|chunk| {
-                    let mut extended = [false;
-                        IrisCode::CODE_COLS * 4 + 2 * IrisCode::ROTATIONS_PER_DIRECTION * 4];
-                    let left_len = IrisCode::ROTATIONS_PER_DIRECTION * 4;
-                    let chunk_len = IrisCode::CODE_COLS * 4;
-                    let right_len = IrisCode::ROTATIONS_PER_DIRECTION * 4;
-
-                    extended[..left_len].copy_from_slice(&chunk[chunk_len - left_len..chunk_len]);
-                    extended[left_len..left_len + chunk_len].copy_from_slice(chunk);
-                    extended[left_len + chunk_len..].copy_from_slice(&chunk[..right_len]);
-                    let extended: BitVec = extended.into_iter().collect();
-                    extended
-                })
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap(),
-        )
-    }
-}
-
-impl RotExtIrisCodeArray {
-    pub const CENTER_START: usize = 4 * IrisCode::ROTATIONS_PER_DIRECTION;
-    pub const ROW_LEN: usize = 800;
-
-    fn get_rotation_slice(&self, by: isize) -> [&BitSlice; 16] {
-        let start = (Self::CENTER_START as isize + 4 * by)
-            .try_into()
-            .expect("Invalid rotation delta");
-        let ret_vec = self
-            .0
-            .iter()
-            .map(|row| &row[start..start + Self::ROW_LEN])
-            .collect::<Vec<_>>();
-        ret_vec.try_into().unwrap()
-    }
-}
-
-pub struct RotExtIrisCode {
-    code: RotExtIrisCodeArray,
-    mask: RotExtIrisCodeArray,
-}
-
-impl From<IrisCode> for RotExtIrisCode {
-    fn from(value: IrisCode) -> Self {
-        RotExtIrisCode {
-            code: value.code.into(),
-            mask: value.mask.into(),
-        }
-    }
-}
-
-struct RotExtIrisCodeRef<'a> {
-    code: [&'a BitSlice; 16],
-    mask: [&'a BitSlice; 16],
-}
-
-impl RotExtIrisCode {
-    fn get_rotation<'a>(&'a self, by: isize) -> RotExtIrisCodeRef<'a> {
-        RotExtIrisCodeRef {
-            code: self.code.get_rotation_slice(by),
-            mask: self.mask.get_rotation_slice(by),
-        }
-    }
-}
-
-impl RotExtIrisCodeRef<'_> {
-    fn get_distance_fraction(&self, other: &RotExtIrisCodeRef) -> (u16, u16) {
-        izip!(self.code, self.mask, other.code, other.mask).fold(
-            (0, 0),
-            |(num, denom), (lhs_code, lhs_mask, rhs_code, rhs_mask)| {
-                let combined_mask = lhs_mask.to_owned() & rhs_mask;
-                let combined_mask_len = combined_mask.count_ones();
-
-                let combined_code = (lhs_code.to_owned() ^ rhs_code) & combined_mask;
-                let code_distance = combined_code.count_ones();
-
-                (
-                    num + (code_distance as u16),
-                    denom + (combined_mask_len as u16),
-                )
-            },
-        )
-    }
-}
-
 pub fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
     let (a, b) = *dist_1; // a/b
     let (c, d) = *dist_2; // c/d
     ((a as u32) * (d as u32)) < ((b as u32) * (c as u32))
-}
-
-impl RotExtIrisCode {
-    pub fn min_fhe(&self, other: &RotExtIrisCode) -> (u16, u16) {
-        let other_center = other.get_rotation(0);
-
-        let mut ret = (0, 1);
-        for rot in -15..16 {
-            let self_rotated = self.get_rotation(rot);
-            let dist = self_rotated.get_distance_fraction(&other_center);
-            if fraction_less_than(&dist, &ret) {
-                ret = dist;
-            }
-        }
-
-        ret
-    }
 }
 
 impl IrisCode {
@@ -414,57 +284,6 @@ impl IrisCode {
         (code_distance as u16, combined_mask_len as u16)
     }
 
-    /// An unsafe worker function to calculate Hamming distance using AVX2.
-    /// It processes the 200 u64s in the IrisCodeArray in 50 chunks of 256 bits.
-    ///
-    /// SAFETY: This function MUST only be called after a runtime check confirms
-    /// that the CPU supports AVX2.
-    #[target_feature(enable = "avx2")]
-    pub unsafe fn get_distance_fraction_avx2(&self, other: &Self) -> (u16, u16) {
-        // Get pointers to the raw u64 arrays.
-        let self_code_ptr = self.code.0.as_ptr() as *const __m256i;
-        let other_code_ptr = other.code.0.as_ptr() as *const __m256i;
-        let self_mask_ptr = self.mask.0.as_ptr() as *const __m256i;
-        let other_mask_ptr = other.mask.0.as_ptr() as *const __m256i;
-
-        let mut total_code_distance: u32 = 0;
-        let mut total_mask_len: u32 = 0;
-
-        // A temporary array to store vector results for scalar popcounting.
-        let mut temp_storage: [u64; 4] = [0; 4];
-        let temp_storage_ptr = temp_storage.as_mut_ptr() as *mut __m256i;
-
-        // Loop 50 times (200 u64s / 4 u64s per __m256i vector = 50 iterations).
-        for i in 0..50 {
-            // Load 256 bits (4 u64s) for each of the four arrays.
-            let self_code_vec = _mm256_loadu_si256(self_code_ptr.add(i));
-            let other_code_vec = _mm256_loadu_si256(other_code_ptr.add(i));
-            let self_mask_vec = _mm256_loadu_si256(self_mask_ptr.add(i));
-            let other_mask_vec = _mm256_loadu_si256(other_mask_ptr.add(i));
-
-            // 1. Get combined_mask = self.mask & other.mask;
-            let combined_mask_vec = _mm256_and_si256(self_mask_vec, other_mask_vec);
-
-            // 2. Get combined_code = (self.code ^ other.code) & combined_mask;
-            let xor_code_vec = _mm256_xor_si256(self_code_vec, other_code_vec);
-            let combined_code_vec = _mm256_and_si256(xor_code_vec, combined_mask_vec);
-
-            // 3. Store the vector results to memory and use the fast scalar `count_ones` (`popcnt`).
-            _mm256_storeu_si256(temp_storage_ptr, combined_mask_vec);
-            total_mask_len += temp_storage[0].count_ones()
-                + temp_storage[1].count_ones()
-                + temp_storage[2].count_ones()
-                + temp_storage[3].count_ones();
-
-            _mm256_storeu_si256(temp_storage_ptr, combined_code_vec);
-            total_code_distance += temp_storage[0].count_ones()
-                + temp_storage[1].count_ones()
-                + temp_storage[2].count_ones()
-                + temp_storage[3].count_ones();
-        }
-
-        (total_code_distance as u16, total_mask_len as u16)
-    }
     /// Return the fractional Hamming distance between two iris codes, represented
     /// as the `i16` dot product of associated masked-bit vectors and the `u16` size
     /// of the common unmasked region.
