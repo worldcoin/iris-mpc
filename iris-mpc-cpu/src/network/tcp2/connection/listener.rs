@@ -38,7 +38,7 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
             res = listener.accept() => res,
             cmd = cmd_ch.recv() => {
                 if let Some(cmd) = cmd {
-                    let peer_map = connection_requests.entry(cmd.peer_id).or_insert_with(HashMap::new);
+                    let peer_map = connection_requests.entry(cmd.peer_id).or_default();
                     peer_map.insert(cmd.connection_id, cmd.rsp);
                     continue;
                 } else {

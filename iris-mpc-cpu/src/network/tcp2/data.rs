@@ -1,17 +1,13 @@
 use crate::{
     execution::{player::Identity, session::SessionId},
-    network::{
-        tcp2::{Client, NetworkConnection},
-        value::NetworkValue,
-    },
+    network::value::NetworkValue,
 };
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 use tokio::{
     net::TcpStream,
-    sync::{mpsc, oneshot},
-    time::sleep,
+    sync::mpsc,
 };
 
 // session multiplexing over a socket requires a SessionId

@@ -4,20 +4,17 @@ use std::{collections::HashMap, io, time::Instant};
 
 use bytes::BytesMut;
 use iris_mpc_common::fast_metrics::FastHistogram;
-use itertools::izip;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
-    sync::mpsc::{self, error::TryRecvError, UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{error::TryRecvError, UnboundedReceiver, UnboundedSender},
 };
 
 use crate::{
-    execution::{player::Identity, session::SessionId},
+    execution::session::SessionId,
     network::{
-        tcp::config::TcpConfig,
         tcp2::{
             connection::ConnectionState,
-            data::{ConnectionId, InStream, OutStream, OutboundMsg},
-            session::TcpSession,
+            data::OutboundMsg,
             NetworkConnection,
         },
         value::{DescriptorByte, NetworkValue},
@@ -37,8 +34,8 @@ pub async fn run<T: NetworkConnection>(
     let shutdown_ct = connection_state.shutdown_ct().await;
     let err_ct = connection_state.err_ct().await;
 
-    let (reader, mut writer) = tokio::io::split(stream);
-    let mut reader = BufReader::new(reader);
+    let (reader, writer) = tokio::io::split(stream);
+    let reader = BufReader::new(reader);
 
     tokio::select! {
         _ = shutdown_ct.cancelled() => todo!(),

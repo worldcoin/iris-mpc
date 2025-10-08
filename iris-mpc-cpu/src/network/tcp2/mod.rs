@@ -18,8 +18,9 @@ pub trait NetworkHandle: Send + Sync {
     async fn make_sessions(&mut self) -> Result<(Vec<TcpSession>, CancellationToken)>;
 }
 
+#[async_trait]
 pub trait NetworkConnection: AsyncRead + AsyncWrite + Send + Sync + Unpin {
-    fn close(&mut self);
+    async fn close(&mut self);
 }
 
 // used to establish an outbound connection
@@ -47,9 +48,10 @@ pub struct TlsStreamConn(pub TlsStream<TcpStream>);
 /// Dynamic stream type for mixed connectors and listeners
 pub type DynStreamConn = Box<dyn NetworkConnection>;
 
+#[async_trait]
 impl NetworkConnection for DynStreamConn {
-    fn close(&mut self) {
-        (**self).close();
+    async fn close(&mut self) {
+        (**self).close().await;
     }
 }
 
@@ -87,9 +89,10 @@ impl AsyncWrite for TcpStreamConn {
     }
 }
 
+#[async_trait]
 impl NetworkConnection for TcpStreamConn {
-    fn close(&mut self) {
-        let _ = self.0.shutdown();
+    async fn close(&mut self) {
+        let _ = self.0.shutdown().await;
     }
 }
 
@@ -127,8 +130,9 @@ impl AsyncWrite for TlsStreamConn {
     }
 }
 
+#[async_trait]
 impl NetworkConnection for TlsStreamConn {
-    fn close(&mut self) {
-        let _ = self.0.shutdown();
+    async fn close(&mut self) {
+        let _ = self.0.shutdown().await;
     }
 }

@@ -9,21 +9,15 @@ pub use listener::{accept_loop, ConnectionRequest};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 use crate::{
-    execution::{player::Identity, session::SessionId},
-    network::{
-        tcp2::{
-            data::{ConnectionId, OutboundMsg, Peer},
+    execution::player::Identity,
+    network::tcp2::{
+            data::{ConnectionId, Peer},
             Client, NetworkConnection,
         },
-        value::NetworkValue,
-    },
 };
 use eyre::Result;
-use socket2::{SockRef, TcpKeepalive};
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf},
-    net::TcpStream,
     sync::{mpsc, oneshot},
     time::sleep,
 };
