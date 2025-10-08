@@ -20,6 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::sync::CancellationToken;
 
 pub mod config;
 mod data;
@@ -55,6 +56,7 @@ pub trait Server: Send {
 
 pub async fn build_network_handle(
     args: &HawkArgs,
+    ct: CancellationToken,
     identities: &[Identity],
     sessions_per_request: usize,
 ) -> Result<Box<dyn NetworkHandle>> {
@@ -79,6 +81,33 @@ pub async fn build_network_handle(
         args.request_parallelism * sessions_per_request,
     );
 
+    // PeerConnectionBuilder is generic over listener and connector and don't want to use a boxed trait to
+    // reduce code duplication. instead, use a macro which makes use of local variables.
+    macro_rules! build_network_handle {
+        ($listener:expr, $connector:expr) => {{
+            let connection_builder = PeerConnectionBuilder::new(
+                my_identity,
+                tcp_config.clone(),
+                $listener,
+                $connector,
+                ct.clone(),
+            )
+            .await?;
+
+            for (identity, url) in
+                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
+            {
+                connection_builder
+                    .include_peer(identity.clone(), url.clone())
+                    .await?;
+            }
+
+            let (reconnector, connections) = connection_builder.build().await?;
+            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config, ct);
+            Ok(Box::new(networking))
+        }};
+    }
+
     if let Some(tls) = args.tls.as_ref() {
         tracing::info!(
             "Building NetworkHandle, with TLS, from configs: {:?} {:?}",
@@ -92,22 +121,7 @@ pub async fn build_network_handle(
 
             let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
             let connector = BoxTlsClient(TlsClient::new_with_ca_certs(&root_certs).await?);
-            let connection_builder =
-                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                    .await?;
-
-            // Connect to other players.
-            for (identity, url) in
-                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-            {
-                connection_builder
-                    .include_peer(identity.clone(), url.clone())
-                    .await?;
-            }
-
-            let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-            Ok(Box::new(networking))
+            build_network_handle!(listener, connector)
         } else {
             tracing::info!("Running in full app TLS mode.");
             if tls.private_key.is_none() || tls.leaf_cert.is_none() {
@@ -127,22 +141,7 @@ pub async fn build_network_handle(
 
             let listener = TlsServer::new(my_addr, private_key, leaf_cert, &root_certs).await?;
             let connector = TlsClient::new_with_ca_certs(&root_certs).await?;
-
-            let connection_builder =
-                PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                    .await?;
-            // Connect to other players.
-            for (identity, url) in
-                izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-            {
-                connection_builder
-                    .include_peer(identity.clone(), url.clone())
-                    .await?;
-            }
-
-            let (reconnector, connections) = connection_builder.build().await?;
-            let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-            Ok(Box::new(networking))
+            build_network_handle!(listener, connector)
         }
     } else {
         tracing::info!(
@@ -150,23 +149,8 @@ pub async fn build_network_handle(
             tcp_config
         );
         let listener = BoxTcpServer(TcpServer::new(my_addr).await?);
-        let connector = BoxTcpClient(TcpClient::new());
-        let connection_builder =
-            PeerConnectionBuilder::new(my_identity, tcp_config.clone(), listener, connector)
-                .await?;
-
-        // Connect to other players.
-        for (identity, url) in
-            izip!(identities, &args.addresses).filter(|(_, address)| address != &my_address)
-        {
-            connection_builder
-                .include_peer(identity.clone(), url.clone())
-                .await?;
-        }
-
-        let (reconnector, connections) = connection_builder.build().await?;
-        let networking = TcpNetworkHandle::new(reconnector, connections, tcp_config);
-        Ok(Box::new(networking))
+        let connector = BoxTcpClient(TcpClient::default());
+        build_network_handle!(listener, connector)
     }
 }
 
@@ -185,6 +169,7 @@ pub mod testing {
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
     use tokio::{net::TcpStream, sync::Mutex, time::sleep};
+    use tokio_util::sync::CancellationToken;
 
     use crate::{
         execution::player::Identity,
@@ -236,7 +221,8 @@ pub mod testing {
         let addresses = get_free_local_addresses(parties.len()).await?;
         // Create NetworkHandles for each party
         let mut builders = Vec::with_capacity(parties.len());
-        let connector = TcpClient::new();
+        let connector = TcpClient::default();
+        let ct = CancellationToken::new();
         for (party, addr) in izip!(parties.iter(), addresses.iter()) {
             let listener = TcpServer::new(*addr).await?;
             builders.push(
@@ -245,6 +231,7 @@ pub mod testing {
                     config.clone(),
                     listener,
                     connector.clone(),
+                    ct.clone(),
                 )
                 .await?,
             );
@@ -273,9 +260,10 @@ pub mod testing {
         }
         tracing::debug!("Players connected to each other");
 
+        let ct = CancellationToken::new();
         let mut handles = vec![];
         for (r, c) in connections {
-            handles.push(TcpNetworkHandle::new(r, c, config.clone()));
+            handles.push(TcpNetworkHandle::new(r, c, config.clone(), ct.clone()));
         }
 
         tracing::debug!("waiting for make_sessions to complete");

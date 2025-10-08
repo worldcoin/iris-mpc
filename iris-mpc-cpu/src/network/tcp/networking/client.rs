@@ -14,7 +14,7 @@ pub struct TlsClient {
     tls_connector: TlsConnector,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct TcpClient {}
 
 impl TlsClient {
@@ -33,12 +33,6 @@ impl TlsClient {
 
         let tls_connector = TlsConnector::from(Arc::new(client_config));
         Ok(Self { tls_connector })
-    }
-}
-
-impl TcpClient {
-    pub fn new() -> Self {
-        Self {}
     }
 }
 

@@ -16,6 +16,7 @@ use iris_mpc_cpu::{
 };
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const DB_SIZE: usize = 1000;
@@ -142,14 +143,16 @@ async fn start_hawk_node(
     );
     let (graph, iris_store) =
         create_graph_from_plain_dbs(args.party_index, left_db, right_db, &params).await?;
-    let hawk_actor = HawkActor::from_cli_with_graph_and_store(args, graph, iris_store).await?;
+    let hawk_actor =
+        HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+            .await?;
 
     let handle = HawkHandle::new(hawk_actor).await?;
 
     Ok(handle)
 }
 
-#[ignore = "Expected to fail for now"]
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[tokio::test]
 async fn e2e_test() -> Result<()> {
     install_tracing();

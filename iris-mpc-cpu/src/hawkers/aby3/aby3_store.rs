@@ -3,10 +3,17 @@ use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     hnsw::{vector_store::VectorStoreMut, VectorStore},
     protocol::{
-        ops::{batch_signed_lift_vec, cross_compare, galois_ring_to_rep3, lte_threshold_and_open},
+        ops::{
+            batch_signed_lift_vec, conditionally_swap_distances,
+            conditionally_swap_distances_plain_ids, cross_compare, galois_ring_to_rep3,
+            lte_threshold_and_open, oblivious_cross_compare,
+        },
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
-    shares::share::{DistanceShare, Share},
+    shares::{
+        bit::Bit,
+        share::{DistanceShare, Share},
+    },
 };
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
@@ -55,6 +62,7 @@ impl Aby3Query {
 }
 
 pub type Aby3VectorRef = <Aby3Store as VectorStore>::VectorRef;
+pub type Aby3DistanceRef = <Aby3Store as VectorStore>::DistanceRef;
 
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
 pub type Aby3SharedIrisesRef = SharedIrisesRef<ArcIris>;
@@ -99,7 +107,7 @@ impl Aby3Store {
     /// Assumes that the first iris of each pair is preprocessed.
     /// This first iris is usually preprocessed when a related query is created, see [Aby3Query] for more details.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub(crate) async fn eval_pairwise_distances(
+    pub async fn eval_pairwise_distances(
         &mut self,
         pairs: Vec<Option<(ArcIris, ArcIris)>>,
     ) -> Result<Vec<DistanceShare<u32>>> {
@@ -121,6 +129,48 @@ impl Aby3Store {
 
     pub async fn checksum(&self) -> u64 {
         self.storage.checksum().await
+    }
+
+    /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
+    /// If bit is 0, the elements are swapped, otherwise they are left unchanged.
+    /// Note that unchanged elements of the list are propagated as secret-shares.
+    pub async fn oblivious_swap_batch_plain_ids(
+        &mut self,
+        swap_bits: Vec<Share<Bit>>,
+        list: &[(u32, Aby3DistanceRef)],
+        indices: &[(usize, usize)],
+    ) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+        if list.is_empty() {
+            return Ok(vec![]);
+        }
+
+        conditionally_swap_distances_plain_ids(&mut self.session, swap_bits, list, indices).await
+    }
+
+    /// Obliviously compares pairs of distances in batch and returns a secret shared bit a < b for each pair.
+    pub async fn oblivious_less_than_batch(
+        &mut self,
+        distances: &[(Aby3DistanceRef, Aby3DistanceRef)],
+    ) -> Result<Vec<Share<Bit>>> {
+        if distances.is_empty() {
+            return Ok(vec![]);
+        }
+        oblivious_cross_compare(&mut self.session, distances).await
+    }
+
+    /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
+    /// If bit is 0, the elements are swapped, otherwise they are left unchanged.
+    pub async fn oblivious_swap_batch(
+        &mut self,
+        swap_bits: Vec<Share<Bit>>,
+        list: &[(Share<u32>, Aby3DistanceRef)],
+        indices: &[(usize, usize)],
+    ) -> Result<Vec<(Share<u32>, Aby3DistanceRef)>> {
+        if list.is_empty() {
+            return Ok(vec![]);
+        }
+
+        conditionally_swap_distances(&mut self.session, swap_bits, list, indices).await
     }
 }
 
@@ -251,7 +301,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        execution::hawk_main::scheduler::parallelize,
+        execution::{hawk_main::scheduler::parallelize, session::SessionHandles},
         hawkers::{
             aby3::test_utils::{
                 eval_vector_distance, get_owner_index, lazy_random_setup,
@@ -524,6 +574,91 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_oblivious_swap() -> Result<()> {
+        let list_len = 6_u32;
+        let plain_list = (0..list_len)
+            .map(|i| (VectorId::from_0_index(i), (i, i)))
+            .collect_vec();
+        let swap_bits_for_plain = vec![true, false];
+        let indices_for_plain = vec![(0, 1), (4, 5)];
+        let swap_bits_for_secret = vec![true, false, false];
+        let indices_for_secret = vec![(1, 2), (0, 4), (3, 5)];
+
+        let mut local_stores = setup_local_store_aby3_players(NetworkType::Local).await?;
+        let mut jobs = JoinSet::new();
+        for store in local_stores.iter_mut() {
+            let store = store.clone();
+            let swap_bits_for_plain = swap_bits_for_plain.clone();
+            let swap_bits_for_secret = swap_bits_for_secret.clone();
+            let plain_list = plain_list.clone();
+            let indices_for_plain = indices_for_plain.clone();
+            let indices_for_secret = indices_for_secret.clone();
+            jobs.spawn(async move {
+                let mut store_lock = store.lock().await;
+                let role = store_lock.session.own_role();
+                let swap_bits1 = swap_bits_for_plain
+                    .iter()
+                    .map(|b| Share::from_const(Bit::new(*b), role))
+                    .collect_vec();
+                let swap_bits2 = swap_bits_for_secret
+                    .iter()
+                    .map(|b| Share::from_const(Bit::new(*b), role))
+                    .collect_vec();
+                let list = plain_list
+                    .iter()
+                    .map(|(v, d)| {
+                        (
+                            v.index(),
+                            DistanceShare::new(
+                                Share::from_const(d.0, role),
+                                Share::from_const(d.1, role),
+                            ),
+                        )
+                    })
+                    .collect_vec();
+                let tmp_list = store_lock
+                    .oblivious_swap_batch_plain_ids(swap_bits1, &list, &indices_for_plain)
+                    .await?;
+                store_lock
+                    .oblivious_swap_batch(swap_bits2, &tmp_list, &indices_for_secret)
+                    .await
+            });
+        }
+        let res = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let mut expected_list = plain_list.clone();
+        expected_list.swap(4, 5);
+        expected_list.swap(0, 4);
+        expected_list.swap(3, 5);
+
+        for (i, exp) in expected_list.iter().enumerate() {
+            let id = (res[0][i].clone().0 + &res[1][i].0 + &res[2][i].0)
+                .get_a()
+                .convert();
+            assert_eq!(id, exp.0.index());
+
+            let distance = {
+                let code_dot =
+                    (res[0][i].clone().1.code_dot + &res[1][i].1.code_dot + &res[2][i].1.code_dot)
+                        .get_a()
+                        .convert();
+                let mask_dot =
+                    (res[0][i].clone().1.mask_dot + &res[1][i].1.mask_dot + &res[2][i].1.mask_dot)
+                        .get_a()
+                        .convert();
+                (code_dot, mask_dot)
+            };
+            assert_eq!(distance, exp.1);
+        }
+
         Ok(())
     }
 
