@@ -5,10 +5,7 @@ use crate::{
 use eyre::Result;
 use socket2::{SockRef, TcpKeepalive};
 use std::time::Duration;
-use tokio::{
-    net::TcpStream,
-    sync::mpsc,
-};
+use tokio::{net::TcpStream, sync::mpsc};
 
 // session multiplexing over a socket requires a SessionId
 pub type OutboundMsg = (SessionId, NetworkValue);
