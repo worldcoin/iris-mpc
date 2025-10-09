@@ -35,8 +35,6 @@ We use pre-commit hooks to ensure our changes adhere to the project's standards.
 ./scripts/setup-pre-commit.sh
 pre-commit run --all-files
 ```
-git config --global commit.gpgsign true
-```
 
 ## How to release
 
