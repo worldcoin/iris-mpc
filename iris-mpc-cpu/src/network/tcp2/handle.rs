@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{
     execution::player::Identity,
     network::{
-        tcp::config::TcpConfig,
+        tcp2::config::TcpConfig,
         tcp2::{
             connection::{accept_loop, ConnectionRequest, ConnectionState},
             data::{ConnectionId, Peer},
