@@ -192,7 +192,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         return Err(eyre::eyre!("Database size too large, max. 100,000"));
     }
     let generation_comment = "Please, generate benchmark data with cargo run --release --bin \
-                                  generate_benchmark_data.";
+                                  generate-benchmark-data.";
     let plaintext_vector_store = from_ndjson_file(plainstore_file, Some(database_size))
         .map_err(|e| eyre::eyre!("Cannot find store: {e}. {generation_comment}"))?;
     let plaintext_graph_store: GraphMem<PlaintextVectorRef> = read_bin(plaingraph_file)
