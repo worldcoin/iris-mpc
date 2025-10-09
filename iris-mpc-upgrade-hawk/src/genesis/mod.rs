@@ -366,7 +366,7 @@ async fn exec_setup(
     log_info(String::from("Store consistency checks OK"));
 
     // Initialise HNSW graph from previously indexed.
-    let mut hawk_actor = get_hawk_actor(config).await?;
+    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
     init_graph_from_stores(
         config,
         &iris_store,
@@ -867,7 +867,10 @@ pub async fn exec_use_backup_as_source(
 ///
 /// * `config` - Application configuration instance.
 ///
-async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
+async fn get_hawk_actor(
+    config: &Config,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<HawkActor> {
     let node_addresses: Vec<String> = config
         .node_hostnames
         .iter()
@@ -896,7 +899,7 @@ async fn get_hawk_actor(config: &Config) -> Result<HawkActor> {
         hawk_args.party_index, node_addresses
     ));
 
-    HawkActor::from_cli(&hawk_args).await
+    HawkActor::from_cli(&hawk_args, shutdown_handler.get_cancellation_token()).await
 }
 
 /// Returns service clients used downstream.
