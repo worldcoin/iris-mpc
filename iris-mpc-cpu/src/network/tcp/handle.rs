@@ -43,7 +43,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
         let (c0, c1) = self.make_connections(self.config.num_connections).await?;
 
         // calls multiplexer::run() on each TCP/TLS stream
-        let sessions = tcp::session::make_sessions(
+        let sessions = super::session::make_sessions(
             &self.peers,
             c0,
             c1,
