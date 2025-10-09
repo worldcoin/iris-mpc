@@ -74,7 +74,7 @@ pub async fn build_network_handle(
         args.request_parallelism * sessions_per_request,
     );
 
-    let peers = izip!(identities, &args.outbound_addrs)
+    let peers = izip!(identities, &args.addresses)
         .enumerate()
         .filter(|(idx, _)| *idx != my_index)
         .map(|(_, (id, url))| (id.clone(), url.to_string()));
