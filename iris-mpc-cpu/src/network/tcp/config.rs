@@ -1,4 +1,3 @@
-use crate::network::tcp::data::StreamId;
 use std::{cmp, time::Duration};
 
 #[derive(Default, Clone, Debug)]
@@ -22,10 +21,14 @@ impl TcpConfig {
         }
     }
 
-    // This function determines how many sessions are handled by a TcpStream based on the stream id
-    pub fn get_sessions_for_stream(&self, stream_id: &StreamId) -> usize {
-        (0..self.num_sessions)
-            .filter(|i| i % self.num_connections == stream_id.0 as usize)
-            .count()
+    pub fn get_sessions_for_connection(&self, idx: usize) -> usize {
+        let num_sessions = self.num_sessions;
+        let num_connections = self.num_connections;
+        num_sessions / num_connections
+            + if idx < (num_sessions % num_connections) {
+                1
+            } else {
+                0
+            }
     }
 }
