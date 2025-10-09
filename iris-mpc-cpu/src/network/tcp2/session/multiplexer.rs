@@ -50,10 +50,8 @@ pub async fn run<T: NetworkConnection>(
         if connection_state.exited().await {
             tracing::info!("shutting down TCP/TLS networking stack");
         }
-    } else if err_ct.is_cancelled() {
-        if connection_state.cancelled().await {
-            tracing::info!("closing TCP/TLS connections");
-        }
+    } else if err_ct.is_cancelled() && connection_state.cancelled().await {
+        tracing::info!("closing TCP/TLS connections");
     }
 }
 

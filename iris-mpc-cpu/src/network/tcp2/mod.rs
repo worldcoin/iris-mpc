@@ -12,13 +12,11 @@ use crate::execution::player::Identity;
 use crate::network::tcp::config::TcpConfig;
 use crate::network::tcp2::connection::client::{BoxTcpClient, BoxTlsClient, TcpClient, TlsClient};
 use crate::network::tcp2::connection::server::{BoxTcpServer, TcpServer, TlsServer};
-use crate::network::tcp2::data::Peer;
 use crate::network::tcp2::handle::TcpNetworkHandle;
 use crate::network::tcp2::session::TcpSession;
 use async_trait::async_trait;
 use eyre::Result;
 use itertools::izip;
-use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio_rustls::TlsStream;
@@ -258,7 +256,7 @@ pub mod testing {
 
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
-    use tokio::{net::TcpStream, sync::Mutex, time::sleep};
+    use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
     use crate::execution::player::Identity;
@@ -302,7 +300,7 @@ pub mod testing {
         let mut handles = vec![];
         for (peer_idx, (id, addr)) in izip!(&parties, &addresses).enumerate() {
             let connector = TcpClient::default();
-            let listener = TcpServer::new(addr.clone()).await?;
+            let listener = TcpServer::new(*addr).await?;
 
             let peers = izip!(&parties, &addresses)
                 .enumerate()
@@ -362,7 +360,7 @@ mod tests {
 
     use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
-    use crate::network::tcp2::data::ConnectionId;
+    
     use crate::network::value::NetworkValue;
     use crate::network::{tcp2::session::TcpSession, Networking};
     use rand::Rng;
