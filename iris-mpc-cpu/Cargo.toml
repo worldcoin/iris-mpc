@@ -103,7 +103,7 @@ harness = false
 name = "hnsw-ex"
 
 [[bin]]
-name = "generate_benchmark_data"
+name = "generate-benchmark-data"
 path = "bin/generate_benchmark_data.rs"
 
 [[bin]]
