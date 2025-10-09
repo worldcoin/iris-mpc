@@ -46,15 +46,6 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      - id: cargo-check
-        name: cargo check
-        description: Check Rust code compiles
-        entry: cargo check
-        args: ['--all-targets', '--all-features']
-        language: system
-        types: [rust]
-        pass_filenames: false
-
       - id: cargo-doc
         name: cargo doc
         description: Check Rust documentation
