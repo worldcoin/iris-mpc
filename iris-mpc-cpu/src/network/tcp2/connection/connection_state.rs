@@ -2,7 +2,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
 };
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 // want every connection to be able to do the following:

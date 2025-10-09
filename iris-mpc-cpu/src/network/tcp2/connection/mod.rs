@@ -15,7 +15,7 @@ use crate::{
         Client, NetworkConnection,
     },
 };
-use eyre::{eyre, Result};
+use eyre::Result;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::AsyncReadExt,
