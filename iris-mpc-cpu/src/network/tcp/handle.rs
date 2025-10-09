@@ -15,6 +15,7 @@ use crate::{
 use async_trait::async_trait;
 use eyre::Result;
 use futures::future::join_all;
+use itertools::Itertools;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +53,14 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> NetworkHan
             self.next_session_id,
         )
         .await;
+
+        let sessions_per_conn = (0..self.config.num_connections)
+            .map(|idx| self.config.get_sessions_for_connection(idx))
+            .collect_vec();
+        println!(
+            "made {} sessions over {} connections. totals were: {:?}",
+            self.config.num_sessions, self.config.num_connections, sessions_per_conn
+        );
 
         self.next_session_id = self.next_session_id.wrapping_add(self.config.num_sessions);
         if self.next_session_id >= usize::MAX - self.config.num_sessions {

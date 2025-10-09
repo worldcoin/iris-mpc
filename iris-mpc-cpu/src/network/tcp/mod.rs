@@ -352,21 +352,31 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use eyre::Result;
+    use tokio_util::sync::CancellationToken;
 
     use std::time::Duration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::task::JoinSet;
     use tokio::time::sleep;
     use tracing_test::traced_test;
 
-    use crate::execution::local::generate_local_identities;
+    use crate::execution::hawk_main::test_utils::setup_hawk_actors;
+    use crate::execution::hawk_main::HawkArgs;
+    use crate::execution::local::{generate_local_identities, get_free_local_addresses};
     use crate::execution::player::{Identity, Role};
 
+    use crate::network::tcp::connection::client::TcpClient;
+    use crate::network::tcp::connection::server::BoxTcpServer;
+    use crate::network::tcp::handle::TcpNetworkHandle;
+    use crate::network::tcp::{build_network_handle, TcpStreamConn};
     use crate::network::value::NetworkValue;
     use crate::network::{tcp::session::TcpSession, Networking};
     use rand::Rng;
 
     use super::testing::*;
+    use super::*;
 
     // can only send NetworkValue over the network. PrfKey is easy to make so this is used here.
     fn get_prf() -> NetworkValue {
@@ -486,6 +496,103 @@ mod tests {
 
         jobs.join_all().await;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[traced_test]
+    async fn test_tcp_network_handle() -> Result<()> {
+        const N_PARTIES: usize = 3;
+        let identities = generate_local_identities();
+        let addresses = get_free_local_addresses(N_PARTIES).await?;
+        let args = (0..N_PARTIES)
+            .map(|idx| {
+                HawkArgs::parse_from([
+                    "hawk_main",
+                    "--addresses",
+                    &addresses.join(","),
+                    "--party-index",
+                    &idx.to_string(),
+                ])
+            })
+            .collect::<Vec<_>>();
+
+        let shutdown_ct = CancellationToken::new();
+        let mut handles: Vec<TcpNetworkHandle<TcpStreamConn, TcpClient>> = vec![];
+        for arg in args.into_iter() {
+            let my_index = arg.party_index;
+            let my_identity = identities[my_index].clone();
+            let my_address = &arg.addresses[my_index];
+            let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
+
+            let tcp_config = TcpConfig::new(Duration::from_secs(30), arg.connection_parallelism, 1);
+
+            let peers = izip!(&identities, &arg.addresses)
+                .enumerate()
+                .filter(|(idx, _)| *idx != my_index)
+                .map(|(_, (id, url))| (id.clone(), url.to_string()));
+
+            let listener = TcpServer::new(my_addr).await?;
+            let connector = TcpClient::default();
+
+            let handle = TcpNetworkHandle::new(
+                my_identity,
+                peers,
+                connector,
+                listener,
+                tcp_config,
+                shutdown_ct.clone(),
+            )
+            .await;
+            handles.push(handle);
+        }
+
+        // for each peer, a vec of the connections to other peers
+        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> =
+            futures::future::join_all(handles.iter().map(|h| h.make_connections(1)))
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+
+        let mut jobs = JoinSet::new();
+        let peer_ids: [u8; 3] = [1, 2, 3];
+
+        tracing::debug!("connections created. sending data");
+
+        for (peer_idx, (p0, p1)) in connections.into_iter().enumerate() {
+            let my_peer_ids = peer_ids
+                .iter()
+                .enumerate()
+                .filter(|(idx, _)| *idx != peer_idx)
+                .map(|(_, id)| *id)
+                .collect::<Vec<_>>();
+
+            let p0_data = [my_peer_ids[0], 0];
+            let p1_data = [my_peer_ids[1], 0];
+
+            let mut c0 = p0.into_iter().next().unwrap();
+            let mut c1 = p1.into_iter().next().unwrap();
+
+            jobs.spawn(async move {
+                c0.write_all(&p0_data).await.unwrap();
+                c0.flush().await.unwrap();
+
+                let mut recv_data = [0u8; 2];
+                c0.read_exact(&mut recv_data).await.unwrap();
+                assert_eq!(&recv_data, &[peer_idx as u8, 0]);
+            });
+
+            jobs.spawn(async move {
+                c1.write_all(&p1_data).await.unwrap();
+                c1.flush().await.unwrap();
+
+                let mut recv_data = [0u8; 2];
+                c1.read_exact(&mut recv_data).await.unwrap();
+                assert_eq!(&recv_data, &[peer_idx as u8, 0]);
+            });
+        }
+
+        jobs.join_all().await;
         Ok(())
     }
 }

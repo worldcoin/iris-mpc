@@ -155,6 +155,7 @@ mod test {
     use crate::execution::hawk_main::scheduler::parallelize;
     use crate::execution::hawk_main::test_utils::{init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
+    use tracing_test::traced_test;
 
     #[tokio::test]
     async fn test_split_tasks() {
@@ -177,6 +178,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     async fn test_is_match_batch() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
