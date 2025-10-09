@@ -362,15 +362,14 @@ mod tests {
     use tokio::time::sleep;
     use tracing_test::traced_test;
 
-    use crate::execution::hawk_main::test_utils::setup_hawk_actors;
     use crate::execution::hawk_main::HawkArgs;
     use crate::execution::local::{generate_local_identities, get_free_local_addresses};
     use crate::execution::player::{Identity, Role};
 
     use crate::network::tcp::connection::client::TcpClient;
-    use crate::network::tcp::connection::server::BoxTcpServer;
+
     use crate::network::tcp::handle::TcpNetworkHandle;
-    use crate::network::tcp::{build_network_handle, TcpStreamConn};
+    use crate::network::tcp::TcpStreamConn;
     use crate::network::value::NetworkValue;
     use crate::network::{tcp::session::TcpSession, Networking};
     use rand::Rng;
