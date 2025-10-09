@@ -360,7 +360,7 @@ mod tests {
 
     use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
-    
+
     use crate::network::value::NetworkValue;
     use crate::network::{tcp2::session::TcpSession, Networking};
     use rand::Rng;

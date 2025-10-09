@@ -66,10 +66,6 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
         if &*self.own_id > self.peer.id() {
             let mut stream = self.client.connect(self.peer.url().to_string()).await?;
             handshake::outbound(&mut stream, &self.own_id, &self.connection_id).await?;
-            // need a signal to signify that the connection is accepted
-            // this is needed because now connections don't automatically retry
-            // and the other side needs to receive the peer id over the connection before
-            // deciding to 'accept' or not
             let mut rsp = [0; 3];
             let n = stream.read(&mut rsp[..]).await?;
             if n != rsp.len() || &rsp != b"2ok" {

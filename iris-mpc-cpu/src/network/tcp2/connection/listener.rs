@@ -26,10 +26,6 @@ impl<T: NetworkConnection> ConnectionRequest<T> {
     }
 }
 
-// the code expects the connection to be established by the time a handshake is completed. but if a connection
-// hasn't been requested, the handshake will complete and then the connection will be closed.
-// the other peer will get an EOF error.
-// use a second signal to deal with this.
 pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     id: Arc<Identity>,
     listener: S,
