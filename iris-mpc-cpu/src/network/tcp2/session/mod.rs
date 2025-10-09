@@ -3,7 +3,7 @@ pub mod multiplexer;
 use crate::{
     execution::{player::Identity, session::SessionId},
     network::{
-        tcp::config::TcpConfig,
+        tcp2::config::TcpConfig,
         tcp2::{
             connection::ConnectionState,
             data::{ConnectionId, InStream, OutStream, OutboundMsg, Peer},

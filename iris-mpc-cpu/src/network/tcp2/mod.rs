@@ -2,6 +2,7 @@ mod connection;
 mod data;
 mod handle;
 mod session;
+mod config;
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Once;
@@ -9,7 +10,7 @@ use std::time::Duration;
 
 use crate::execution::hawk_main::HawkArgs;
 use crate::execution::player::Identity;
-use crate::network::tcp::config::TcpConfig;
+use crate::network::tcp2::config::TcpConfig;
 use crate::network::tcp2::connection::client::{BoxTcpClient, BoxTlsClient, TcpClient, TlsClient};
 use crate::network::tcp2::connection::server::{BoxTcpServer, TcpServer, TlsServer};
 use crate::network::tcp2::handle::TcpNetworkHandle;
