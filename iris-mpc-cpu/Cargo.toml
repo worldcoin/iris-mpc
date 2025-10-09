@@ -106,6 +106,10 @@ name = "generate-benchmark-data"
 path = "bin/generate_benchmark_data.rs"
 
 [[bin]]
+name = "graph-mem-cli"
+path = "bin/graph_mem_cli.rs"
+
+[[bin]]
 name = "hawk_main"
 path = "bin/hawk_main.rs"
 
