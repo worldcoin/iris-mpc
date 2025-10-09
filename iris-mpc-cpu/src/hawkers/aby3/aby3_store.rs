@@ -198,6 +198,25 @@ impl Aby3Store {
         }
         Ok(res[0].clone())
     }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
+    async fn eval_rotation_distances_batch(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[Aby3VectorRef],
+    ) -> Result<Vec<Aby3DistanceRef>> {
+        if vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ds_and_ts = self
+            .workers
+            .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+            .await?;
+
+        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        self.lift_distances(dist).await
+    }
 }
 
 impl VectorStore for Aby3Store {
@@ -277,15 +296,14 @@ impl VectorStore for Aby3Store {
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
     async fn eval_minimal_rotation_distance_batch(
         &mut self,
-        query: &[Self::QueryRef; ROTATIONS],
+        query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
-        // pairs (Query, Vector) where each vector is paired with all ROTATIONS queries
-        let pairs = vectors
-            .iter()
-            .flat_map(|v| query.iter().map(|q| (q.clone(), *v)).collect_vec())
-            .collect_vec();
-        let distances = self.eval_distance_pairs(&pairs).await?;
+        if vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let distances = self.eval_rotation_distances_batch(query, vectors).await?;
         let mut results = Vec::with_capacity(vectors.len());
         for rot_dists in distances.chunks(ROTATIONS) {
             let min_dist = self.oblivious_min_distance(rot_dists).await?;
@@ -360,7 +378,7 @@ mod tests {
         protocol::shared_iris::GaloisRingSharedIris,
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
+    use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::{izip, Itertools};
     use rand::SeedableRng;
     use tokio::task::JoinSet;
@@ -764,7 +782,7 @@ mod tests {
     #[traced_test]
     async fn test_gr_aby3_store_plaintext_batch() -> Result<()> {
         let mut rng = AesRng::seed_from_u64(0_u64);
-        let db_size = 10 * ROTATIONS;
+        let db_size = 10;
         let plaintext_database = IrisDB::new_random_rng(db_size, &mut rng).db;
         let shared_irises: Vec<_> = plaintext_database
             .iter()
@@ -782,21 +800,11 @@ mod tests {
         }
 
         // compute distances in plaintext
-        let query1: [Arc<IrisCode>; ROTATIONS] = (0..ROTATIONS)
-            .map(|i| plaintext_preps[i].clone())
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        let query2: [Arc<IrisCode>; ROTATIONS] = (ROTATIONS..2 * ROTATIONS)
-            .map(|i| plaintext_preps[i].clone())
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
         let dist1_plain = plaintext_store
-            .eval_minimal_rotation_distance_batch(&query1, &plaintext_inserts)
+            .eval_minimal_rotation_distance_batch(&plaintext_preps[0], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_minimal_rotation_distance_batch(&query2, &plaintext_inserts)
+            .eval_minimal_rotation_distance_batch(&plaintext_preps[1], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -825,24 +833,14 @@ mod tests {
             let player_index = get_owner_index(store).await?;
             let player_inserts = aby3_inserts[player_index].clone();
             let player_preps = queries[player_index].clone();
-            let aby_query1: [Aby3Query; ROTATIONS] = (0..ROTATIONS)
-                .map(|i| player_preps[i].clone())
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap();
-            let aby_query2: [Aby3Query; ROTATIONS] = (ROTATIONS..2 * ROTATIONS)
-                .map(|i| player_preps[i].clone())
-                .collect::<Vec<_>>()
-                .try_into()
-                .unwrap();
             let store = store.clone();
             jobs.spawn(async move {
                 let mut store_lock = store.lock().await;
                 let dist1_aby3 = store_lock
-                    .eval_minimal_rotation_distance_batch(&aby_query1, &player_inserts)
+                    .eval_minimal_rotation_distance_batch(&player_preps[0], &player_inserts)
                     .await?;
                 let dist2_aby3 = store_lock
-                    .eval_minimal_rotation_distance_batch(&aby_query2, &player_inserts)
+                    .eval_minimal_rotation_distance_batch(&player_preps[1], &player_inserts)
                     .await?;
                 let dist_aby3 = dist1_aby3
                     .into_iter()
