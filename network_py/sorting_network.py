@@ -111,7 +111,7 @@ class SortingNetwork:
         summary = ["="*40, f"Sorting Network (N={self.N}, k={self.k})", "-"*40]
         summary.append(f"Depth: {self.depth}")
         summary.append(f"Total Comparators: {total_comparisons}")
-        summary.append(f"Final Permutation (Top {len(self.perm)} wires): {self.perm}")
+        #summary.append(f"Final Permutation (Top {len(self.perm)} wires): {self.perm}")
         summary.append("Layers:")
         if not self.comparators_by_layer:
             summary.append("  - No comparators in this network.")
@@ -119,7 +119,7 @@ class SortingNetwork:
             sorted_layers = sorted(self.comparators_by_layer.keys())
             for layer in sorted_layers:
                 sorted_comps = sorted(list(self.comparators_by_layer[layer]))
-                summary.append(f"  - Layer {layer}: {sorted_comps}")
+                summary.append(f"  - Layer {layer}: {len(sorted_comps)}")
         summary.append("="*40)
         return "\n".join(summary)
 
