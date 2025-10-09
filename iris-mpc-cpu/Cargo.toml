@@ -129,3 +129,7 @@ path = "bin/local_hnsw.rs"
 [[bin]]
 name = "generate_ideal_neighborhoods"
 path = "bin/generate_ideal_neighborhoods.rs"
+
+[[bin]]
+name = "construct-graph-ptxt"
+path = "bin/construct_graph_ptxt.rs"
