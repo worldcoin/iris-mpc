@@ -69,7 +69,7 @@ pub async fn build_network_handle(
     let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
 
     let tcp_config = TcpConfig::new(
-        Duration::from_secs(10),
+        Duration::from_secs(30),
         args.connection_parallelism,
         args.request_parallelism * sessions_per_request,
     );
