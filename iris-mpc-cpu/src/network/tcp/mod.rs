@@ -502,6 +502,8 @@ mod tests {
     #[traced_test]
     async fn test_tcp_network_handle() -> Result<()> {
         const N_PARTIES: usize = 3;
+        const CONNECTIONS_PER_PEER: usize = 2;
+
         let identities = generate_local_identities();
         let addresses = get_free_local_addresses(N_PARTIES).await?;
         let args = (0..N_PARTIES)
@@ -547,11 +549,14 @@ mod tests {
         }
 
         // for each peer, a vec of the connections to other peers
-        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> =
-            futures::future::join_all(handles.iter().map(|h| h.make_connections(1)))
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?;
+        let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(
+            handles
+                .iter()
+                .map(|h| h.make_connections(CONNECTIONS_PER_PEER)),
+        )
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
 
         let mut jobs = JoinSet::new();
         let peer_ids: [u8; 3] = [0, 1, 2];
@@ -566,29 +571,28 @@ mod tests {
                 .map(|(_, id)| *id)
                 .collect::<Vec<_>>();
 
-            let p0_data = [my_peer_ids[0], 0];
-            let p1_data = [my_peer_ids[1], 0];
+            for (conn_idx, (mut c0, mut c1)) in p0.into_iter().zip(p1.into_iter()).enumerate() {
+                let p0_data = [my_peer_ids[0], conn_idx as u8];
+                let p1_data = [my_peer_ids[1], conn_idx as u8];
 
-            let mut c0 = p0.into_iter().next().unwrap();
-            let mut c1 = p1.into_iter().next().unwrap();
+                jobs.spawn(async move {
+                    c0.write_all(&p0_data).await.unwrap();
+                    c0.flush().await.unwrap();
 
-            jobs.spawn(async move {
-                c0.write_all(&p0_data).await.unwrap();
-                c0.flush().await.unwrap();
+                    let mut recv_data = [0u8; 2];
+                    c0.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
 
-                let mut recv_data = [0u8; 2];
-                c0.read_exact(&mut recv_data).await.unwrap();
-                assert_eq!(&recv_data, &[peer_idx as u8, 0]);
-            });
+                jobs.spawn(async move {
+                    c1.write_all(&p1_data).await.unwrap();
+                    c1.flush().await.unwrap();
 
-            jobs.spawn(async move {
-                c1.write_all(&p1_data).await.unwrap();
-                c1.flush().await.unwrap();
-
-                let mut recv_data = [0u8; 2];
-                c1.read_exact(&mut recv_data).await.unwrap();
-                assert_eq!(&recv_data, &[peer_idx as u8, 0]);
-            });
+                    let mut recv_data = [0u8; 2];
+                    c1.read_exact(&mut recv_data).await.unwrap();
+                    assert_eq!(&recv_data, &[peer_idx as u8, conn_idx as u8]);
+                });
+            }
         }
 
         jobs.join_all().await;
