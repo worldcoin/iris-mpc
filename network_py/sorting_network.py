@@ -40,16 +40,22 @@ class SortingNetwork:
     def _alekseev_merge(self, v_perm: List[int], w_perm: List[int], k: int, start_layer: int) -> Tuple[List[int], int]:
         """
         (Optimization) A simple, non-sorting merge for the final step.
-        After these comparisons, the k smallest elements are guaranteed to be in the `v_perm` wires.
         """
-        assert(len(v_perm) == len(w_perm))
-        num_comparisons = min(len(v_perm), len(w_perm))
-        for i in range(num_comparisons):
-            comp = (v_perm[i], w_perm[len(w_perm) - 1 - i])
-            self.comparators_by_layer[start_layer].add(comp)
-            
-        # The property of this merge is that the k smallest items are now on the v_perm wires.
-        return v_perm, 1
+        n, m = len(v_perm), len(w_perm)
+        assert n <= k and m <= k
+        comps, res_perm = [], []
+
+        for i in range(k):
+            if i < n and k - i - 1 < m:
+                res_perm.append(v_perm[i])
+                comps.append((v_perm[i], w_perm[k - i - 1]))
+            elif i < n and k - i - 1 >= m:
+                res_perm.append(v_perm[i])
+            elif i >= n and k - i - 1 < m:
+                res_perm.append(w_perm[k - i - 1])
+
+        self.comparators_by_layer[start_layer].update(comps)
+        return res_perm, 1
 
     def _build_recursive_sort(self, x_indices: List[int], k: int, start_layer: int, is_top_level: bool = False) -> Tuple[List[int], int]:
         """
@@ -69,7 +75,7 @@ class SortingNetwork:
         recursive_depth = max(v_depth, w_depth)
         merge_start_layer = start_layer + recursive_depth
         
-        if False:
+        if is_top_level:
             # Top-level merge is always Alekseev's.
             final_perm, merge_depth = self._alekseev_merge(v_perm, w_perm, k, merge_start_layer)
         else:
