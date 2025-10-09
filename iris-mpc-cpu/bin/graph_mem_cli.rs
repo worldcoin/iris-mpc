@@ -39,16 +39,13 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let cli = Cli::parse();
-
     let Cli {
         db_url,
         schema,
         file,
         dbg,
         command,
-    } = cli;
-
+    } = Cli::parse();
     let db_context = DbContext::new(&db_url, &schema).await;
 
     match command {
@@ -69,7 +66,8 @@ async fn main() -> Result<()> {
             db_context.compare_to_db(&file, dbg).await?;
         }
     }
-    // this command has it own output
+
+    // N.B. this command has it own output
     if !matches!(command, Command::CompareToDb) {
         println!("Command succeeded");
     }
