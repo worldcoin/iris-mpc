@@ -555,7 +555,7 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()?;
 
         let mut jobs = JoinSet::new();
-        let peer_ids: [u8; 3] = [1, 2, 3];
+        let peer_ids: [u8; 3] = [0, 1, 2];
 
         tracing::debug!("connections created. sending data");
 
