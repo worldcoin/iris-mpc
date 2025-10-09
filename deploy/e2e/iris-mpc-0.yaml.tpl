@@ -263,7 +263,7 @@ iris-mpc-0:
 
     - name : SMPC__ENABLE_DEBUG_TIMING
       value: "true"
-    
+
     - name : SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED
       value: "false"
 
