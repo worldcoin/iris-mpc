@@ -1,6 +1,8 @@
 use std::{collections::HashMap, sync::Arc};
-
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    io::AsyncWriteExt,
+    sync::{mpsc, oneshot},
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -27,7 +29,7 @@ impl<T: NetworkConnection> ConnectionRequest<T> {
 // the code expects the connection to be established by the time a handshake is completed. but if a connection
 // hasn't been requested, the handshake will complete and then the connection will be closed.
 // the other peer will get an EOF error.
-// use a second handshake to deal with this.
+// use a second signal to deal with this.
 pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     id: Arc<Identity>,
     listener: S,
@@ -67,11 +69,11 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
 
                 if let Some(peer_map) = connection_requests.get_mut(&peer_id) {
                     if let Some(rsp) = peer_map.remove(&connection_id) {
-                        if handshake::inbound(&mut stream).await.is_ok() {
+                        if stream.write_all(b"2ok").await.is_err() {
+                            tracing::debug!("second handshake failed");
+                        } else {
                             let _ = rsp.send(stream);
                             continue;
-                        } else {
-                            tracing::debug!("second handshake failed");
                         }
                     } else {
                         tracing::debug!(
@@ -81,7 +83,6 @@ pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
                 } else {
                     tracing::debug!("no pending requests from peer {peer_id:?}");
                 }
-
                 stream.close().await;
             }
             Err(e) => tracing::error!(%e, "accept_loop error"),
