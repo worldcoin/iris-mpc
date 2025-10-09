@@ -98,10 +98,6 @@ pub struct HawkArgs {
     #[clap(short, long, value_delimiter = ',')]
     pub addresses: Vec<String>,
 
-    // address to connect to
-    #[clap(short, long, value_delimiter = ',')]
-    pub outbound_addrs: Vec<String>,
-
     #[clap(short, long, default_value_t = 2)]
     pub request_parallelism: usize,
 
