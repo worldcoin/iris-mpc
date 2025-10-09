@@ -94,4 +94,3 @@ jobs:
             --private-key $WEB_PRIVATE_KEY \
             --rpc-url https://worldchain-sepolia.g.alchemy.com/public \
             "addAllowedHash(bytes32)" ${DIGEST:7}
-
