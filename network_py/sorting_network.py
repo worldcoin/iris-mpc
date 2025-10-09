@@ -26,7 +26,18 @@ class SortingNetwork:
         
         initial_indices = list(range(N))
         # The initial call is marked as the top level to trigger Alekseev's merge.
-        self.perm, self.depth = self._build_recursive_sort(initial_indices, self.k, 0, is_top_level=True)
+        if k <= N - k:
+            # Get a Min(k) network
+            self.perm, self.depth = self._build_recursive_sort(initial_indices, k, 0, is_top_level=True)
+        else:
+            # Call with N - k
+            perm, self.depth = self._build_recursive_sort(initial_indices, N - k, 0, is_top_level=True)
+            # Invert all comparators so it becomes a Max(N - k) network
+            for layer in self.comparators_by_layer:
+                swapped = set((b, a) for (a, b) in self.comparators_by_layer[layer])
+                self.comparators_by_layer[layer] = swapped
+            # Complement the Max(N - k) outputs, thus obtaining a Min(k) network
+            self.perm = [i for i in range(N) if i not in set(perm)]
 
     def _chunk_size(self, d: int, k: int) -> int:
         """(Helper) Implements the ChunkSize function from Algorithm 3."""
@@ -61,6 +72,9 @@ class SortingNetwork:
         """
         Recursively implements Algorithm 3.
         """
+        if k == 0:
+            return [], 0
+
         d = len(x_indices)
         if d <= 1:
             return x_indices, 0
