@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 use tokio::{
     io::AsyncWriteExt,
-    sync::{mpsc, oneshot},
+    sync::{mpsc::UnboundedReceiver, oneshot},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -29,7 +29,7 @@ impl<T: NetworkConnection> ConnectionRequest<T> {
 pub async fn accept_loop<T: NetworkConnection, S: Server<Output = T>>(
     id: Arc<Identity>,
     listener: S,
-    mut cmd_ch: mpsc::Receiver<ConnectionRequest<T>>,
+    mut cmd_ch: UnboundedReceiver<ConnectionRequest<T>>,
     shutdown_ct: CancellationToken,
 ) {
     let mut connection_requests: HashMap<Identity, HashMap<ConnectionId, oneshot::Sender<T>>> =

@@ -16,17 +16,25 @@ use async_trait::async_trait;
 use eyre::Result;
 use futures::future::join_all;
 use itertools::Itertools;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
 pub struct TcpNetworkHandle<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> {
     peers: [Arc<Peer>; 2],
     my_id: Arc<Identity>,
     connector: C,
-    conn_cmd_tx: mpsc::Sender<ConnectionRequest<T>>,
+    conn_cmd_tx: UnboundedSender<ConnectionRequest<T>>,
     connection_state: ConnectionState,
     config: TcpConfig,
     next_session_id: usize,
+}
+
+impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> Drop
+    for TcpNetworkHandle<T, C>
+{
+    fn drop(&mut self) {
+        tracing::debug!("TcpNetworkHandle dropped");
+    }
 }
 
 #[async_trait]
@@ -92,8 +100,7 @@ impl<T: NetworkConnection + 'static, C: Client<Output = T> + 'static> TcpNetwork
 
         let connection_state = ConnectionState::new(shutdown_ct, CancellationToken::new());
 
-        let (conn_cmd_tx, conn_cmd_rx) =
-            mpsc::channel::<ConnectionRequest<T>>(config.num_connections);
+        let (conn_cmd_tx, conn_cmd_rx) = mpsc::unbounded_channel::<ConnectionRequest<T>>();
 
         // be sure not to make more than one network handle...
         tokio::spawn(accept_loop(

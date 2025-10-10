@@ -19,7 +19,7 @@ use eyre::Result;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::AsyncReadExt,
-    sync::{mpsc, oneshot},
+    sync::{mpsc::UnboundedSender, oneshot},
     time::sleep,
 };
 
@@ -30,7 +30,7 @@ pub async fn connect<T: NetworkConnection + 'static, C: Client<Output = T> + 'st
     peer: Arc<Peer>,
     connection_state: ConnectionState,
     client: C,
-    conn_cmd_tx: mpsc::Sender<ConnectionRequest<T>>,
+    conn_cmd_tx: UnboundedSender<ConnectionRequest<T>>,
 ) -> Result<T> {
     let connector = Connector {
         connection_id,
@@ -58,7 +58,7 @@ struct Connector<T: NetworkConnection, C: Client> {
     // initiates the connection
     client: C,
     // listens for the connection
-    conn_req_tx: mpsc::Sender<ConnectionRequest<T>>,
+    conn_req_tx: UnboundedSender<ConnectionRequest<T>>,
 }
 
 impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
@@ -76,7 +76,7 @@ impl<T: NetworkConnection, C: Client<Output = T>> Connector<T, C> {
         } else {
             let (rsp_tx, rsp_rx) = oneshot::channel();
             let req = ConnectionRequest::new(self.peer.id().clone(), self.connection_id, rsp_tx);
-            let _ = self.conn_req_tx.send(req).await;
+            let _ = self.conn_req_tx.send(req);
             let r = rsp_rx.await?;
             Ok(r)
         }

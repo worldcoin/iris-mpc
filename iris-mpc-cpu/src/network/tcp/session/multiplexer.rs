@@ -38,19 +38,29 @@ pub async fn run<T: NetworkConnection>(
         _ = err_ct.cancelled() => {},
         e = handle_outbound_traffic(writer, outbound_rx, num_sessions) => {
             tracing::debug!("handle_outbound_traffic: {:?}", e);
-            err_ct.cancel();
+            if e.is_err() {
+                err_ct.cancel();
+            } else {
+                // the sessions may have been dropped
+                // don't set the error logging flags in response to this.
+                return;
+            }
         },
         e = handle_inbound_traffic(reader, inbound_forwarder) => {
             tracing::debug!("handle_inbound_traffic: {:?}",  e);
-            err_ct.cancel();
+            if e.is_err() {
+                err_ct.cancel();
+            } else {
+                return;
+            }
         },
     }
 
     if shutdown_ct.is_cancelled() {
-        if connection_state.exited().await {
+        if connection_state.set_exited().await {
             tracing::info!("shutting down TCP/TLS networking stack");
         }
-    } else if err_ct.is_cancelled() && connection_state.cancelled().await {
+    } else if err_ct.is_cancelled() && connection_state.set_cancelled().await {
         tracing::info!("closing TCP/TLS connections");
     }
 }

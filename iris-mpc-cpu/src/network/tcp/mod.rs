@@ -252,15 +252,12 @@ impl NetworkConnection for TlsStreamConn {
 
 pub mod testing {
     use super::*;
-
+    use crate::execution::player::Identity;
     use eyre::Result;
-
     use itertools::izip;
     use std::{collections::HashSet, net::SocketAddr, sync::LazyLock, time::Duration};
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
-
-    use crate::execution::player::Identity;
 
     static USED_PORTS: LazyLock<Mutex<HashSet<SocketAddr>>> =
         LazyLock::new(|| Mutex::new(HashSet::new()));
@@ -288,10 +285,26 @@ pub mod testing {
         Vec<TcpNetworkHandle<TcpStreamConn, TcpClient>>,
         Vec<Vec<TcpSession>>,
     )> {
+        let mut handles =
+            get_local_tcp_handles(parties, connection_parallelism, request_parallelism).await?;
+
+        let results =
+            futures::future::join_all(handles.iter_mut().map(|h| h.make_sessions())).await;
+        let mut sessions = results.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let no_ct = sessions.drain(..).map(|(s, _ct)| s).collect::<Vec<_>>();
+
+        Ok((handles, no_ct))
+    }
+
+    pub async fn get_local_tcp_handles(
+        parties: Vec<Identity>,
+        connection_parallelism: usize,
+        request_parallelism: usize,
+    ) -> Result<Vec<TcpNetworkHandle<TcpStreamConn, TcpClient>>> {
         assert_eq!(parties.len(), 3);
 
         let config = TcpConfig::new(
-            Duration::from_secs(5),
+            Duration::from_secs(30),
             connection_parallelism,
             request_parallelism,
         );
@@ -321,12 +334,7 @@ pub mod testing {
             handles.push(handle);
         }
 
-        let results =
-            futures::future::join_all(handles.iter_mut().map(|h| h.make_sessions())).await;
-        let mut sessions = results.into_iter().collect::<Result<Vec<_>, _>>()?;
-        let no_ct = sessions.drain(..).map(|(s, _ct)| s).collect::<Vec<_>>();
-
-        Ok((handles, no_ct))
+        Ok(handles)
     }
 
     /// Interleaves a Vec of Vecs into a single Vec by taking one element from each inner Vec in turn.
@@ -352,30 +360,21 @@ pub mod testing {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
-    use eyre::Result;
-    use tokio_util::sync::CancellationToken;
+    use super::testing::*;
 
+    use eyre::Result;
+    use rand::Rng;
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::task::JoinSet;
     use tokio::time::sleep;
     use tracing_test::traced_test;
 
-    use crate::execution::hawk_main::HawkArgs;
-    use crate::execution::local::{generate_local_identities, get_free_local_addresses};
+    use crate::execution::local::generate_local_identities;
     use crate::execution::player::{Identity, Role};
-
-    use crate::network::tcp::connection::client::TcpClient;
-
-    use crate::network::tcp::handle::TcpNetworkHandle;
     use crate::network::tcp::TcpStreamConn;
     use crate::network::value::NetworkValue;
     use crate::network::{tcp::session::TcpSession, Networking};
-    use rand::Rng;
-
-    use super::testing::*;
-    use super::*;
 
     // can only send NetworkValue over the network. PrfKey is easy to make so this is used here.
     fn get_prf() -> NetworkValue {
@@ -501,52 +500,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_tcp_network_handle() -> Result<()> {
-        const N_PARTIES: usize = 3;
         const CONNECTIONS_PER_PEER: usize = 2;
 
         let identities = generate_local_identities();
-        let addresses = get_free_local_addresses(N_PARTIES).await?;
-        let args = (0..N_PARTIES)
-            .map(|idx| {
-                HawkArgs::parse_from([
-                    "hawk_main",
-                    "--addresses",
-                    &addresses.join(","),
-                    "--party-index",
-                    &idx.to_string(),
-                ])
-            })
-            .collect::<Vec<_>>();
-
-        let shutdown_ct = CancellationToken::new();
-        let mut handles: Vec<TcpNetworkHandle<TcpStreamConn, TcpClient>> = vec![];
-        for arg in args.into_iter() {
-            let my_index = arg.party_index;
-            let my_identity = identities[my_index].clone();
-            let my_address = &arg.addresses[my_index];
-            let my_addr = to_inaddr_any(my_address.parse::<SocketAddr>()?);
-
-            let tcp_config = TcpConfig::new(Duration::from_secs(30), arg.connection_parallelism, 1);
-
-            let peers = izip!(&identities, &arg.addresses)
-                .enumerate()
-                .filter(|(idx, _)| *idx != my_index)
-                .map(|(_, (id, url))| (id.clone(), url.to_string()));
-
-            let listener = TcpServer::new(my_addr).await?;
-            let connector = TcpClient::default();
-
-            let handle = TcpNetworkHandle::new(
-                my_identity,
-                peers,
-                connector,
-                listener,
-                tcp_config,
-                shutdown_ct.clone(),
-            )
-            .await;
-            handles.push(handle);
-        }
+        let handles = get_local_tcp_handles(identities, CONNECTIONS_PER_PEER, 1).await?;
 
         // for each peer, a vec of the connections to other peers
         let connections: Vec<(Vec<TcpStreamConn>, Vec<TcpStreamConn>)> = futures::future::join_all(

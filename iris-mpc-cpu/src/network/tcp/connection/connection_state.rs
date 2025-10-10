@@ -25,7 +25,7 @@ impl ConnectionState {
         self.inner.write().await.replace_cancellation_token(err_ct);
     }
 
-    pub async fn exited(&self) -> bool {
+    pub async fn set_exited(&self) -> bool {
         self.inner
             .read()
             .await
@@ -34,7 +34,7 @@ impl ConnectionState {
             .is_ok()
     }
 
-    pub async fn cancelled(&self) -> bool {
+    pub async fn set_cancelled(&self) -> bool {
         self.inner
             .read()
             .await

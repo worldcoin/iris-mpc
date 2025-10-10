@@ -50,6 +50,12 @@ impl TcpSession {
     }
 }
 
+impl Drop for TcpSession {
+    fn drop(&mut self) {
+        //tracing::debug!("dropping session id {:?}", self.session_id);
+    }
+}
+
 #[async_trait]
 impl Networking for TcpSession {
     async fn send(&mut self, value: NetworkValue, receiver: &Identity) -> Result<()> {
