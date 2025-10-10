@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -124,6 +124,12 @@ fn fraction_less_than(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> bool {
     (a as u32) * (d as u32) < (b as u32) * (c as u32)
 }
 
+pub fn fraction_ordering(dist_1: &(u16, u16), dist_2: &(u16, u16)) -> Ordering {
+    let (a, b) = *dist_1; // a/b
+    let (c, d) = *dist_2; // c/d
+    ((a as u32) * (d as u32)).cmp(&((b as u32) * (c as u32)))
+}
+
 impl VectorStore for PlaintextStore {
     type QueryRef = Arc<IrisCode>;
     type VectorRef = VectorId;
@@ -148,6 +154,27 @@ impl VectorStore for PlaintextStore {
             .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
+    }
+
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        debug!(event_type = EvaluateDistance.id());
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                self.storage.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| v.get_min_distance_fraction(query))
+            .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -247,6 +274,28 @@ impl VectorStore for SharedPlaintextStore {
             .get_vector(vector)
             .ok_or_else(|| eyre::eyre!("Vector ID not found in store for serial {}", serial_id))?;
         Ok(query.get_distance_fraction(vector_code))
+    }
+
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        debug!(event_type = EvaluateDistance.id());
+        let store = self.storage.read().await;
+        let vector_codes = vectors
+            .iter()
+            .map(|v| {
+                let serial_id = v.serial_id();
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(vector_codes
+            .into_iter()
+            .map(|v| v.get_min_distance_fraction(query))
+            .collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
