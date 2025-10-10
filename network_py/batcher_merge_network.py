@@ -2,7 +2,7 @@ import math
 from collections import defaultdict
 from typing import List, Tuple, Dict, Set
 
-class MergeNetwork:
+class BatcherMergeNetwork:
     """
     Implements the recursive truncated merge (Algorithm 2) as a sorting network.
 

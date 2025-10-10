@@ -1,9 +1,9 @@
 import unittest
 import random
-from sorting_network import SortingNetwork
+from batcher_network import BatcherNetwork
 from typing import List
 
-def simulate_sort(network: SortingNetwork, input_data: List[int]) -> List[int]:
+def simulate_sort(network: BatcherNetwork, input_data: List[int]) -> List[int]:
     """Simulates the full sorting network on an unsorted list of data."""
     # Start with a direct copy of the input data
     sim_data = list(input_data)
@@ -26,7 +26,7 @@ class TestSortingNetwork(unittest.TestCase):
 
     def run_sort_test_case(self, N, k, case_name):
         """Helper function to run a single test case for the sorting network."""
-        network = SortingNetwork(N, k)
+        network = BatcherNetwork(N, k)
         
         # Generate random, unsorted data
         input_data = random.sample(range(N * 3), N)

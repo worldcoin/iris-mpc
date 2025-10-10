@@ -3,9 +3,9 @@ from collections import defaultdict
 from typing import List, Tuple, Dict, Set
 
 # We import the MergeNetwork component we built in the previous step.
-from merge_network import MergeNetwork
+from batcher_merge_network import BatcherMergeNetwork
 
-class SortingNetwork:
+class BatcherNetwork:
     """
     Implements the recursive truncated odd-even merge sort.
     
@@ -94,7 +94,7 @@ class SortingNetwork:
             final_perm, merge_depth = self._alekseev_merge(v_perm, w_perm, k, merge_start_layer)
         else:
             # Internal steps use the standard MergeNetwork.
-            merge_net = MergeNetwork(v_perm, w_perm, k)
+            merge_net = BatcherMergeNetwork(v_perm, w_perm, k)
             
             for layer, comparators in merge_net.comparators_by_layer.items():
                 self.comparators_by_layer[merge_start_layer + layer].update(comparators)

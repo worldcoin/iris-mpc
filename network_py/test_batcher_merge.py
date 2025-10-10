@@ -1,9 +1,9 @@
 import unittest
 import random
-from merge_network import MergeNetwork
+from batcher_merge_network import BatcherMergeNetwork
 from typing import List
 
-def simulate_merge(network: MergeNetwork, x_data: List[int], y_data: List[int]) -> List[int]:
+def simulate_merge(network: BatcherMergeNetwork, x_data: List[int], y_data: List[int]) -> List[int]:
     """
     Simulates the merge network on actual sorted data lists.
     
@@ -48,7 +48,7 @@ class TestMergeNetwork(unittest.TestCase):
         x_indices = list(range(d1))
         y_indices = list(range(d1, d1 + d2))
         
-        network = MergeNetwork(x_indices, y_indices, k)
+        network = BatcherMergeNetwork(x_indices, y_indices, k)
         
         output_data = simulate_merge(network, x_data, y_data)
         
