@@ -16,7 +16,7 @@ use crate::{
     },
 };
 use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::{vector_id::VectorId, ROTATIONS};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, fmt::Debug, sync::Arc, vec};
 use tracing::instrument;
@@ -201,6 +201,7 @@ impl Aby3Store {
 
     /// Obliviously computes the minimum distance for each batch of given distances of the same size.
     /// The inner vector distances[i] contains the ith distances of each batch.
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_min_distance_batch(
         &mut self,
         distances: &[Vec<Aby3DistanceRef>],
@@ -218,16 +219,20 @@ impl Aby3Store {
         while res.len() > 1 {
             // if the length is odd, we save the last distance to add it back later
             let maybe_last_distance = if res.len() % 2 == 1 { res.pop() } else { None };
-            // create pairs from the remaining distances
-            let pairs = res
-                .chunks_exact(2)
-                .flat_map(|chunk| izip!(chunk[0].clone(), chunk[1].clone()).collect_vec())
-                .collect_vec();
+            let mut res1 = vec![];
+            std::mem::swap(&mut res1, &mut res);
+            let pairs: Vec<(_, _)> = res1
+                .into_iter()
+                .tuples()
+                .flat_map(|(a, b)| izip!(a, b).collect_vec())
+                .collect();
             // compute minimums of pairs
             let flattened_res = min_of_pair_batch(&mut self.session, &pairs).await?;
             res = flattened_res
-                .chunks_exact(len)
-                .map(|chunk| chunk.to_vec())
+                .into_iter()
+                .chunks(len)
+                .into_iter()
+                .map(|chunk| chunk.collect())
                 .collect_vec();
             // if we saved a last distance, we need to add it back
             if let Some(last_distance) = maybe_last_distance {
@@ -235,6 +240,25 @@ impl Aby3Store {
             }
         }
         Ok(res[0].clone())
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
+    async fn eval_rotation_distances_batch(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[Aby3VectorRef],
+    ) -> Result<Vec<Aby3DistanceRef>> {
+        if vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let ds_and_ts = self
+            .workers
+            .rotation_aware_dot_product_batch(query.iris_proc.clone(), vectors.to_vec())
+            .await?;
+
+        let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
+        self.lift_distances(dist).await
     }
 }
 
@@ -310,6 +334,31 @@ impl VectorStore for Aby3Store {
 
         let dist = galois_ring_to_rep3(&mut self.session, ds_and_ts).await?;
         self.lift_distances(dist).await
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = vectors.len()))]
+    async fn eval_minimal_rotation_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        if vectors.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let distances = self.eval_rotation_distances_batch(query, vectors).await?;
+        let distance_per_rotation: Vec<Vec<Aby3DistanceRef>> = (0..ROTATIONS)
+            .map(|i| {
+                distances
+                    .iter()
+                    .skip(i)
+                    .step_by(ROTATIONS)
+                    .cloned()
+                    .collect()
+            })
+            .collect();
+        self.oblivious_min_distance_batch(&distance_per_rotation)
+            .await
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -887,10 +936,10 @@ mod tests {
 
         // compute distances in plaintext
         let dist1_plain = plaintext_store
-            .eval_distance_batch(&Arc::new(plaintext_database[0].clone()), &plaintext_inserts)
+            .eval_minimal_rotation_distance_batch(&plaintext_preps[0], &plaintext_inserts)
             .await?;
         let dist2_plain = plaintext_store
-            .eval_distance_batch(&Arc::new(plaintext_database[1].clone()), &plaintext_inserts)
+            .eval_minimal_rotation_distance_batch(&plaintext_preps[1], &plaintext_inserts)
             .await?;
         let dist_plain = dist1_plain
             .into_iter()
@@ -923,10 +972,10 @@ mod tests {
             jobs.spawn(async move {
                 let mut store_lock = store.lock().await;
                 let dist1_aby3 = store_lock
-                    .eval_distance_batch(&player_preps[0].clone(), &player_inserts)
+                    .eval_minimal_rotation_distance_batch(&player_preps[0], &player_inserts)
                     .await?;
                 let dist2_aby3 = store_lock
-                    .eval_distance_batch(&player_preps[1].clone(), &player_inserts)
+                    .eval_minimal_rotation_distance_batch(&player_preps[1], &player_inserts)
                     .await?;
                 let dist_aby3 = dist1_aby3
                     .into_iter()
